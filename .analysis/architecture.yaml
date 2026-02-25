@@ -1,0 +1,10 @@
+project_name: "scout"
+updated: "2026-02-25T17:19:22Z"
+source: hook
+project_type: "rust"
+frameworks:
+  []
+entry_points:
+  []
+key_exports:
+  []

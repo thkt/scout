@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: scout-x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: scout-aarch64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: scout-x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: scout-aarch64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@56f84321dbccf38fb67ce29ab63e4754056677e0 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          cargo build --release --target "$TARGET"
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+        run: |
+          cp "target/$TARGET/release/scout" scout
+          chmod +x scout
+          tar czf "$NAME.tar.gz" scout
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Get and validate version
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: thkt/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Download artifacts for checksums
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Validate and update Formula
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Validate version format again
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid version format: $VERSION"
+            exit 1
+          fi
+
+          # Validate TAG matches VERSION
+          if [[ "$TAG" != "v$VERSION" ]]; then
+            echo "::error::TAG ($TAG) does not match VERSION (v$VERSION)"
+            exit 1
+          fi
+
+          # Calculate checksums
+          SHA_AARCH64_DARWIN=$(sha256sum artifacts/scout-aarch64-apple-darwin/scout-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_X86_64_DARWIN=$(sha256sum artifacts/scout-x86_64-apple-darwin/scout-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_AARCH64_LINUX=$(sha256sum artifacts/scout-aarch64-unknown-linux-gnu/scout-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_X86_64_LINUX=$(sha256sum artifacts/scout-x86_64-unknown-linux-gnu/scout-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+
+          # Ensure Formula directory exists
+          mkdir -p Formula
+
+          # Update Formula using sed on existing template
+          sed -e "s/__VERSION__/$VERSION/g" \
+              -e "s/__TAG__/$TAG/g" \
+              -e "s/__SHA_AARCH64_DARWIN__/$SHA_AARCH64_DARWIN/g" \
+              -e "s/__SHA_X86_64_DARWIN__/$SHA_X86_64_DARWIN/g" \
+              -e "s/__SHA_AARCH64_LINUX__/$SHA_AARCH64_LINUX/g" \
+              -e "s/__SHA_X86_64_LINUX__/$SHA_X86_64_LINUX/g" \
+              Formula/scout.rb.template > Formula/scout.rb
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/scout.rb
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "feat: update scout to v${VERSION}"
+          git push
