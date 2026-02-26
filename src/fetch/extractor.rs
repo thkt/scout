@@ -1,6 +1,6 @@
 use dom_smoothie::{Config, Readability};
 
-pub struct ExtractedArticle {
+pub(super) struct ExtractedArticle {
     pub title: Option<String>,
     pub byline: Option<String>,
     pub published_time: Option<String>,
@@ -8,20 +8,46 @@ pub struct ExtractedArticle {
     pub used_raw_fallback: bool,
 }
 
-pub fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
-    match try_readability(html, url, Config::default()) {
-        Some(article) => article,
-        None => ExtractedArticle {
-            title: extract_title_from_html(html),
-            byline: None,
-            published_time: None,
-            content_html: html.to_string(),
-            used_raw_fallback: true,
-        },
+pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
+    let mut readability = match Readability::new(html, url, Some(Config::default())) {
+        Ok(r) => r,
+        Err(_) => return raw_fallback(html),
+    };
+
+    let readable = readability.is_probably_readable();
+
+    match readability.parse() {
+        Ok(article) => {
+            let title = if article.title.is_empty() {
+                None
+            } else {
+                Some(article.title.to_string())
+            };
+
+            if readable {
+                ExtractedArticle {
+                    title,
+                    byline: article.byline.map(|b| b.to_string()),
+                    published_time: article.published_time.map(|t| t.to_string()),
+                    content_html: article.content.to_string(),
+                    used_raw_fallback: false,
+                }
+            } else {
+                // Not readable: use parser's title but keep original HTML.
+                ExtractedArticle {
+                    title,
+                    byline: None,
+                    published_time: None,
+                    content_html: html.to_string(),
+                    used_raw_fallback: true,
+                }
+            }
+        }
+        Err(_) => raw_fallback(html),
     }
 }
 
-pub fn extract_raw(html: &str) -> ExtractedArticle {
+pub(super) fn extract_raw(html: &str) -> ExtractedArticle {
     ExtractedArticle {
         title: extract_title_from_html(html),
         byline: None,
@@ -31,32 +57,23 @@ pub fn extract_raw(html: &str) -> ExtractedArticle {
     }
 }
 
-fn try_readability(html: &str, url: Option<&str>, cfg: Config) -> Option<ExtractedArticle> {
-    let mut readability = Readability::new(html, url, Some(cfg)).ok()?;
-
-    if !readability.is_probably_readable() {
-        return None;
+/// Last-resort fallback when readability initialization or parse fails.
+fn raw_fallback(html: &str) -> ExtractedArticle {
+    ExtractedArticle {
+        title: extract_title_from_html(html),
+        byline: None,
+        published_time: None,
+        content_html: html.to_string(),
+        used_raw_fallback: true,
     }
-
-    let article = readability.parse().ok()?;
-
-    Some(ExtractedArticle {
-        title: if article.title.is_empty() {
-            None
-        } else {
-            Some(article.title.to_string())
-        },
-        byline: article.byline.map(|b| b.to_string()),
-        published_time: article.published_time.map(|t| t.to_string()),
-        content_html: article.content.to_string(),
-        used_raw_fallback: false,
-    })
 }
 
+/// Simple `<title>` tag extraction via string search.
+/// Only used as fallback when dom_smoothie fails to parse the HTML.
 fn extract_title_from_html(html: &str) -> Option<String> {
     let lower = html.to_lowercase();
     let tag_start = lower.find("<title")?;
-    let content_start = tag_start + lower[tag_start..].find('>')?  + 1;
+    let content_start = tag_start + lower[tag_start..].find('>')? + 1;
     let content_end = content_start + lower[content_start..].find("</title>")?;
     let title = html[content_start..content_end].trim();
     if title.is_empty() {
@@ -146,6 +163,24 @@ mod tests {
         assert_eq!(
             extract_title_from_html(html),
             Some("Attributed Title".to_string())
+        );
+    }
+
+    #[test]
+    fn fallback_still_extracts_title_from_minimal_html() {
+        let html = "<html><head><title>Minimal Page</title></head><body><p>hi</p></body></html>";
+        let result = extract_article(html, None);
+
+        assert!(result.used_raw_fallback);
+        assert_eq!(result.title, Some("Minimal Page".to_string()));
+    }
+
+    #[test]
+    fn title_extraction_handles_multibyte() {
+        let html = "<html><head><title>日本語タイトル</title></head><body></body></html>";
+        assert_eq!(
+            extract_title_from_html(html),
+            Some("日本語タイトル".to_string())
         );
     }
 }

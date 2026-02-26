@@ -11,7 +11,7 @@ use crate::search::bilingual::expand_bilingual;
 use crate::tools::Lang;
 
 #[derive(Debug)]
-pub struct ResearchReport {
+pub(crate) struct ResearchReport {
     pub search_results: Vec<GroundedResult>,
     pub fetched_pages: Vec<FetchResult>,
     pub failed_urls: Vec<FailedUrl>,
@@ -19,13 +19,13 @@ pub struct ResearchReport {
 }
 
 #[derive(Debug)]
-pub struct FailedUrl {
+pub(crate) struct FailedUrl {
     pub url: String,
     pub reason: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ResearchError {
+pub(crate) enum ResearchError {
     #[error("{0}")]
     Gemini(#[from] GeminiError),
 }
@@ -60,7 +60,7 @@ pub async fn research(
         warn!(error = %e, "partial search failure (continuing with other results)");
     }
 
-    let search_results: Vec<_> = successes.into_iter().map(Result::unwrap).collect();
+    let search_results: Vec<_> = successes.into_iter().filter_map(Result::ok).collect();
 
     let all_sources = collect_unique_sources(&search_results);
     let urls: Vec<String> = all_sources

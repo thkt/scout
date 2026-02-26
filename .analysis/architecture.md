@@ -1,6 +1,6 @@
 # Architecture - scout
 
-> Updated: 2026-02-25T17:19:22Z | Type: rust | Frameworks: N/A
+> Updated: 2026-02-26T03:42:53Z | Type: rust | Frameworks: N/A
 
 ## Structure
 
@@ -15,6 +15,11 @@
 │   ├── grounding.rs
 │   ├── mod.rs
 │   └── types.rs
+├── github
+│   ├── format.rs
+│   ├── helpers.rs
+│   ├── mod.rs
+│   └── types.rs
 ├── main.rs
 ├── search
 │   ├── bilingual.rs
@@ -22,7 +27,7 @@
 │   └── mod.rs
 └── tools.rs
 
-4 directories, 12 files
+5 directories, 16 files
 ```
 
 ## Entry Points

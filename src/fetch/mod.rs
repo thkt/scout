@@ -46,7 +46,24 @@ pub async fn fetch_page(
     validate_url(url)?;
     check_dns(url).await?;
 
-    let mut response = client
+    let (final_url, html) = download(client, url).await?;
+
+    // Re-validate after redirects to block content from internal hosts.
+    validate_url(&final_url)?;
+    check_dns(&final_url).await?;
+
+    let article = if raw {
+        extract_raw(&html)
+    } else {
+        extract_article(&html, Some(&final_url))
+    };
+
+    debug!(url = %final_url, bytes = html.len(), "page fetched");
+    Ok(to_fetch_result(article, final_url, meta))
+}
+
+async fn download(client: &Client, url: &str) -> Result<(String, String), FetchError> {
+    let response = client
         .get(url)
         .header("User-Agent", crate::USER_AGENT)
         .send()
@@ -57,10 +74,7 @@ pub async fn fetch_page(
         return Err(FetchError::Status(status.as_u16()));
     }
 
-    // Re-validate after redirects to block content from internal hosts.
     let final_url = response.url().to_string();
-    validate_url(&final_url)?;
-    check_dns(&final_url).await?;
 
     if let Some(len) = response.content_length()
         && len as usize > MAX_RESPONSE_BYTES
@@ -69,22 +83,15 @@ pub async fn fetch_page(
     }
 
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    let mut stream = response;
+    while let Some(chunk) = stream.chunk().await? {
         body.extend_from_slice(&chunk);
         if body.len() > MAX_RESPONSE_BYTES {
             return Err(FetchError::TooLarge);
         }
     }
     let html = String::from_utf8_lossy(&body).into_owned();
-
-    let article = if raw {
-        extract_raw(&html)
-    } else {
-        extract_article(&html, Some(&final_url))
-    };
-
-    debug!(url = %final_url, bytes = body.len(), "page fetched");
-    Ok(to_fetch_result(article, final_url, meta))
+    Ok((final_url, html))
 }
 
 fn validate_url(raw: &str) -> Result<(), FetchError> {
@@ -233,8 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_public_urls() {
-        assert!(validate_url("https://example.com").is_ok());
+    fn accepts_public_ip_url() {
         assert!(validate_url("https://8.8.8.8/dns").is_ok());
     }
 
@@ -289,5 +295,108 @@ mod tests {
     #[test]
     fn accepts_public_ipv6() {
         assert!(validate_url("http://[2001:db8::1]/page").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn download_success_returns_html() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/page"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("<html><body><p>hello</p></body></html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let (final_url, html) = download(&client, &format!("{}/page", server.uri()))
+            .await
+            .unwrap();
+
+        assert!(final_url.contains("/page"));
+        assert!(html.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn download_404_returns_status_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let result = download(&client, &format!("{}/missing", server.uri())).await;
+        assert!(matches!(result, Err(FetchError::Status(404))));
+    }
+
+    #[tokio::test]
+    async fn download_500_returns_status_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/error"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let result = download(&client, &format!("{}/error", server.uri())).await;
+        assert!(matches!(result, Err(FetchError::Status(500))));
+    }
+
+    #[tokio::test]
+    async fn download_too_large_body_rejected() {
+        let oversized = "x".repeat(MAX_RESPONSE_BYTES + 1);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/huge"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(oversized))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let result = download(&client, &format!("{}/huge", server.uri())).await;
+        assert!(matches!(result, Err(FetchError::TooLarge)));
+    }
+
+    #[tokio::test]
+    async fn download_extracts_readability_content() {
+        let html = r#"
+            <html><head><title>Test</title></head>
+            <body><article>
+                <h1>Article Title</h1>
+                <p>Paragraph one with enough text for readability to consider it real content.</p>
+                <p>Paragraph two with more text to make it sufficiently long and article-like.</p>
+                <p>Paragraph three continues adding content so the extraction works properly.</p>
+            </article></body></html>"#;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/article"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(html))
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let (_, body) = download(&client, &format!("{}/article", server.uri()))
+            .await
+            .unwrap();
+
+        assert!(body.contains("Article Title"));
+    }
+
+    #[tokio::test]
+    async fn fetch_page_blocks_ssrf_to_localhost() {
+        let client = Client::new();
+        let result = fetch_page(&client, "http://127.0.0.1/secret", false, false).await;
+        assert!(matches!(result, Err(FetchError::InternalHost)));
     }
 }

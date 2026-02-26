@@ -51,7 +51,7 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
-    pub fn new(http: Client, api_key: String) -> Self {
+    fn new(http: Client, api_key: String) -> Self {
         Self {
             http,
             api_key: ApiKey(api_key),
@@ -67,7 +67,7 @@ impl GeminiClient {
         Ok(Self::new(http, api_key))
     }
 
-    pub async fn generate_with_search(
+    async fn generate_with_search(
         &self,
         query: &str,
     ) -> Result<GenerateContentResponse, GeminiError> {
@@ -101,12 +101,14 @@ impl GeminiClient {
         }
         if !status.is_success() {
             warn!(status = %status, "Gemini API error");
-            if let Ok(body) = response.json::<GenerateContentResponse>().await
-                && let Some(err) = &body.error
-            {
-                let classified = classify_api_error(err);
-                warn!(error = %classified, "Gemini API error in response body");
-                return Err(classified);
+            match response.json::<GenerateContentResponse>().await {
+                Ok(body) if body.error.is_some() => {
+                    let classified = classify_api_error(body.error.as_ref().unwrap());
+                    warn!(error = %classified, "Gemini API error in response body");
+                    return Err(classified);
+                }
+                Err(e) => debug!(error = %e, "failed to decode Gemini error body"),
+                _ => {}
             }
             return Err(GeminiError::Api {
                 code: status.as_u16(),

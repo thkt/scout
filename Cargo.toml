@@ -18,8 +18,14 @@ thiserror = "2"
 url = "2"
 futures = "0.3"
 schemars = "1"
+base64 = "0.22"
+globset = "0.4"
+percent-encoding = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+wiremock = "0.6"
 
 [profile.release]
 opt-level = 3

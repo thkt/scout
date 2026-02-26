@@ -1,5 +1,6 @@
 mod fetch;
 mod gemini;
+mod github;
 mod search;
 mod tools;
 

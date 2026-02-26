@@ -7,13 +7,7 @@ pub struct FetchResult {
     pub used_raw_fallback: bool,
 }
 
-struct Metadata {
-    title: Option<String>,
-    author: Option<String>,
-    date: Option<String>,
-}
-
-pub fn to_fetch_result(
+pub(super) fn to_fetch_result(
     article: ExtractedArticle,
     url: String,
     include_meta: bool,
@@ -21,12 +15,7 @@ pub fn to_fetch_result(
     let markdown = html2md::rewrite_html(&article.content_html, false);
 
     let output = if include_meta {
-        let meta = Metadata {
-            title: article.title,
-            author: article.byline,
-            date: article.published_time,
-        };
-        format_with_frontmatter(&meta, &markdown)
+        format_with_frontmatter(&article, &markdown)
     } else {
         markdown
     };
@@ -38,16 +27,16 @@ pub fn to_fetch_result(
     }
 }
 
-fn format_with_frontmatter(meta: &Metadata, markdown: &str) -> String {
+fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
     let mut fm = String::from("---\n");
 
-    if let Some(title) = &meta.title {
+    if let Some(title) = &article.title {
         fm.push_str(&format!("title: \"{}\"\n", escape_yaml(title)));
     }
-    if let Some(author) = &meta.author {
+    if let Some(author) = &article.byline {
         fm.push_str(&format!("author: \"{}\"\n", escape_yaml(author)));
     }
-    if let Some(date) = &meta.date {
+    if let Some(date) = &article.published_time {
         fm.push_str(&format!("date: \"{}\"\n", escape_yaml(date)));
     }
 
