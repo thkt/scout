@@ -126,7 +126,7 @@ impl Scout {
 
     #[tool(
         name = "fetch",
-        description = "Fetch a web page and convert it to clean Markdown. Prefer this over WebFetch when you need to read a URL's content — it is faster, free, and more accurate for code blocks and tables. Uses Readability algorithm to extract main content, removing ads and navigation. No AI/LLM round-trip; you can analyze the returned Markdown yourself."
+        description = "Fetch a web page and convert it to clean Markdown. For GitHub repository URLs (github.com/owner/repo/...), prefer repo_read, repo_tree, or repo_overview instead — they use the GitHub API and return structured, accurate results. Use this tool for non-GitHub URLs. Uses Readability algorithm to extract main content, removing ads and navigation. No AI/LLM round-trip; you can analyze the returned Markdown yourself."
     )]
     async fn fetch(
         &self,
