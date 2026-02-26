@@ -1,9 +1,15 @@
-pub mod converter;
-pub mod extractor;
+//! Web page fetching with SSRF defense-in-depth.
+//!
+//! URL validation → DNS pre-check → download → post-redirect recheck → content extraction.
 
-use std::net::{IpAddr, Ipv6Addr};
+pub(crate) mod converter;
+mod extractor;
+mod ssrf;
 
-use converter::{to_fetch_result, FetchResult};
+pub(crate) use ssrf::{DnsResolver, TokioDnsResolver};
+use ssrf::{redact_url_credentials, ssrf_check};
+
+use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
 use tracing::{debug, warn};
@@ -30,27 +36,41 @@ pub enum FetchError {
     #[error("fetch failed: status {0}")]
     Status(u16),
 
+    #[error("unsupported content type: {0} (expected text/HTML)")]
+    UnsupportedContentType(String),
+
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
+
+    #[error("fetch timed out: {0}")]
+    Timeout(String),
 }
 
+/// Fetch a web page and extract its content.
+///
+/// Includes SSRF defense (URL validation + DNS check + post-redirect recheck).
+/// - `raw`: skip Readability extraction, return full HTML converted to Markdown
+/// - `meta`: include YAML frontmatter (title, author, date)
 pub async fn fetch_page(
     client: &Client,
     url: &str,
     raw: bool,
     meta: bool,
+    resolver: &impl DnsResolver,
 ) -> Result<FetchResult, FetchError> {
     // SSRF defense-in-depth: URL validation + DNS check for private IPs.
     // TOCTOU gap: DNS may differ between check and reqwest's connection.
     // Acceptable for local MCP — full fix requires a custom resolver.
-    validate_url(url)?;
-    check_dns(url).await?;
+    //
+    // SECURITY ASSUMPTION: This server runs over local stdio transport only.
+    // If exposed over network (SSE/WebSocket), implement a custom DNS resolver
+    // that enforces the IP allowlist at connect time, and add per-tool rate limiting.
+    ssrf_check(url, resolver).await?;
 
     let (final_url, html) = download(client, url).await?;
 
     // Re-validate after redirects to block content from internal hosts.
-    validate_url(&final_url)?;
-    check_dns(&final_url).await?;
+    ssrf_check(&final_url, resolver).await?;
 
     let article = if raw {
         extract_raw(&html)
@@ -58,7 +78,7 @@ pub async fn fetch_page(
         extract_article(&html, Some(&final_url))
     };
 
-    debug!(url = %final_url, bytes = html.len(), "page fetched");
+    debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
     Ok(to_fetch_result(article, final_url, meta))
 }
 
@@ -74,15 +94,35 @@ async fn download(client: &Client, url: &str) -> Result<(String, String), FetchE
         return Err(FetchError::Status(status.as_u16()));
     }
 
+    let mut charset = None;
+    match response.headers().get("content-type") {
+        None => {
+            debug!(url = %redact_url_credentials(url), "no Content-Type header, proceeding as text")
+        }
+        Some(ct) => match ct.to_str() {
+            Ok(ct_str) => {
+                check_content_type(ct_str)?;
+                charset = extract_charset(ct_str);
+            }
+            Err(_) => {
+                debug!(url = %redact_url_credentials(url), "Content-Type header is not valid ASCII, proceeding as text")
+            }
+        },
+    }
+
     let final_url = response.url().to_string();
 
-    if let Some(len) = response.content_length()
+    let content_length = response.content_length();
+    if let Some(len) = content_length
         && len as usize > MAX_RESPONSE_BYTES
     {
         return Err(FetchError::TooLarge);
     }
 
-    let mut body = Vec::new();
+    let capacity = content_length
+        .map(|len| (len as usize).min(MAX_RESPONSE_BYTES))
+        .unwrap_or(8192);
+    let mut body = Vec::with_capacity(capacity);
     let mut stream = response;
     while let Some(chunk) = stream.chunk().await? {
         body.extend_from_slice(&chunk);
@@ -90,211 +130,156 @@ async fn download(client: &Client, url: &str) -> Result<(String, String), FetchE
             return Err(FetchError::TooLarge);
         }
     }
-    let html = String::from_utf8_lossy(&body).into_owned();
+    let html = decode_body(&body, charset.as_deref());
     Ok((final_url, html))
 }
 
-fn validate_url(raw: &str) -> Result<(), FetchError> {
-    let parsed = url::Url::parse(raw)?;
+fn extract_charset(content_type: &str) -> Option<String> {
+    content_type.split(';').skip(1).find_map(|param| {
+        let param = param.trim();
+        let lower = param.to_ascii_lowercase();
+        if let Some(value) = lower.strip_prefix("charset=") {
+            let value = value.trim().trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+        None
+    })
+}
 
-    match parsed.scheme() {
-        "http" | "https" => {}
-        _ => return Err(FetchError::InvalidScheme),
+fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
+    let label = charset.unwrap_or("utf-8");
+    let encoding = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or(encoding_rs::UTF_8);
+    if encoding == encoding_rs::UTF_8 {
+        return String::from_utf8_lossy(bytes).into_owned();
     }
-
-    if is_blocked_host(&parsed) {
-        warn!(url = %raw, "blocked fetch to internal/private host");
-        return Err(FetchError::InternalHost);
+    let (decoded, _, had_errors) = encoding.decode(bytes);
+    if had_errors {
+        warn!(
+            charset = label,
+            "lossy decoding: some bytes could not be decoded"
+        );
     }
+    decoded.into_owned()
+}
 
+fn check_content_type(content_type: &str) -> Result<(), FetchError> {
+    let mime = content_type.split(';').next().unwrap_or("").trim();
+    if !mime.is_empty()
+        && !mime.starts_with("text/")
+        && mime != "application/xhtml+xml"
+        && mime != "application/xml"
+        && mime != "application/json"
+    {
+        return Err(FetchError::UnsupportedContentType(mime.to_string()));
+    }
     Ok(())
-}
-
-async fn check_dns(raw: &str) -> Result<(), FetchError> {
-    let parsed = url::Url::parse(raw)?;
-    let domain = match parsed.host() {
-        Some(url::Host::Domain(d)) => d.to_string(),
-        _ => return Ok(()),
-    };
-
-    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let addrs = tokio::net::lookup_host(format!("{domain}:{port}"))
-        .await
-        .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
-
-    for addr in addrs {
-        if is_private_ip(addr.ip()) {
-            warn!(host = %domain, ip = %addr.ip(), "DNS resolves to private IP");
-            return Err(FetchError::InternalHost);
-        }
-    }
-
-    Ok(())
-}
-
-fn is_blocked_host(parsed: &url::Url) -> bool {
-    match parsed.host() {
-        Some(url::Host::Ipv4(v4)) => is_private_ip(IpAddr::V4(v4)),
-        Some(url::Host::Ipv6(v6)) => is_private_ip(IpAddr::V6(v6)),
-        Some(url::Host::Domain(domain)) => {
-            let lower = domain.to_ascii_lowercase();
-            lower == "localhost"
-                || lower.ends_with(".localhost")
-                || lower.ends_with(".local")
-                || lower.ends_with(".internal")
-        }
-        None => true,
-    }
-}
-
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-            || v4.is_private()
-            || v4.is_link_local()
-            || v4.is_unspecified()
-            || v4.is_broadcast()
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-            || v6.is_unspecified()
-            || is_ipv6_link_local(&v6)
-            || is_ipv6_unique_local(&v6)
-            || v6.to_ipv4_mapped().is_some_and(|v4| is_private_ip(IpAddr::V4(v4)))
-        }
-    }
-}
-
-fn is_ipv6_link_local(v6: &Ipv6Addr) -> bool {
-    (v6.segments()[0] & 0xffc0) == 0xfe80
-}
-
-fn is_ipv6_unique_local(v6: &Ipv6Addr) -> bool {
-    (v6.segments()[0] & 0xfe00) == 0xfc00
 }
 
 #[cfg(test)]
-mod tests {
+mod charset_tests {
     use super::*;
 
     #[test]
-    fn rejects_non_http_url() {
-        assert!(validate_url("ftp://example.com").is_err());
-        assert!(validate_url("file:///tmp/test").is_err());
+    fn extracts_charset_from_content_type() {
+        assert_eq!(
+            extract_charset("text/html; charset=utf-8").as_deref(),
+            Some("utf-8")
+        );
+        assert_eq!(
+            extract_charset("text/html; charset=Shift_JIS").as_deref(),
+            Some("shift_jis")
+        );
+        assert_eq!(
+            extract_charset("text/html; charset=\"EUC-KR\"").as_deref(),
+            Some("euc-kr")
+        );
     }
 
     #[test]
-    fn rejects_invalid_url() {
-        assert!(validate_url("not-a-url").is_err());
+    fn returns_none_when_no_charset() {
+        assert!(extract_charset("text/html").is_none());
+        assert!(extract_charset("text/plain; boundary=something").is_none());
     }
 
     #[test]
-    fn accepts_http_and_https() {
-        assert!(validate_url("http://example.com").is_ok());
-        assert!(validate_url("https://example.com").is_ok());
+    fn decode_body_handles_utf8() {
+        let bytes = "こんにちは".as_bytes();
+        assert_eq!(decode_body(bytes, Some("utf-8")), "こんにちは");
+        assert_eq!(decode_body(bytes, None), "こんにちは");
     }
 
     #[test]
-    fn rejects_localhost() {
-        assert!(matches!(
-            validate_url("http://localhost/secret"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://127.0.0.1/secret"),
-            Err(FetchError::InternalHost)
-        ));
+    fn decode_body_handles_shift_jis() {
+        let encoding = encoding_rs::SHIFT_JIS;
+        let (bytes, _, _) = encoding.encode("テスト");
+        assert_eq!(decode_body(&bytes, Some("shift_jis")), "テスト");
     }
 
     #[test]
-    fn rejects_private_ips() {
-        assert!(matches!(
-            validate_url("http://10.0.0.1/internal"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://192.168.1.1/router"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://172.16.0.1/internal"),
-            Err(FetchError::InternalHost)
-        ));
+    fn decode_body_handles_euc_jp() {
+        let encoding = encoding_rs::EUC_JP;
+        let (bytes, _, _) = encoding.encode("日本語");
+        assert_eq!(decode_body(&bytes, Some("euc-jp")), "日本語");
     }
 
     #[test]
-    fn rejects_cloud_metadata() {
-        assert!(matches!(
-            validate_url("http://169.254.169.254/latest/meta-data"),
-            Err(FetchError::InternalHost)
-        ));
+    fn decode_body_falls_back_to_utf8_for_unknown() {
+        let bytes = "hello".as_bytes();
+        assert_eq!(decode_body(bytes, Some("unknown-encoding")), "hello");
+    }
+}
+
+#[cfg(test)]
+mod content_type_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_text_html() {
+        assert!(check_content_type("text/html; charset=utf-8").is_ok());
     }
 
     #[test]
-    fn rejects_ipv6_loopback() {
-        assert!(matches!(
-            validate_url("http://[::1]/secret"),
-            Err(FetchError::InternalHost)
-        ));
+    fn accepts_text_plain() {
+        assert!(check_content_type("text/plain").is_ok());
     }
 
     #[test]
-    fn accepts_public_ip_url() {
-        assert!(validate_url("https://8.8.8.8/dns").is_ok());
+    fn accepts_xhtml() {
+        assert!(check_content_type("application/xhtml+xml").is_ok());
     }
 
     #[test]
-    fn rejects_localhost_subdomains() {
-        assert!(matches!(
-            validate_url("http://evil.localhost/secret"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://a.b.localhost/secret"),
-            Err(FetchError::InternalHost)
-        ));
+    fn accepts_xml() {
+        assert!(check_content_type("application/xml").is_ok());
     }
 
     #[test]
-    fn rejects_ipv4_mapped_ipv6() {
+    fn accepts_json() {
+        assert!(check_content_type("application/json").is_ok());
+    }
+
+    #[test]
+    fn rejects_pdf() {
         assert!(matches!(
-            validate_url("http://[::ffff:127.0.0.1]/secret"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://[::ffff:169.254.169.254]/metadata"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://[::ffff:10.0.0.1]/internal"),
-            Err(FetchError::InternalHost)
+            check_content_type("application/pdf"),
+            Err(FetchError::UnsupportedContentType(ref m)) if m == "application/pdf"
         ));
     }
 
     #[test]
-    fn rejects_ipv6_link_local() {
+    fn rejects_image() {
         assert!(matches!(
-            validate_url("http://[fe80::1]/secret"),
-            Err(FetchError::InternalHost)
+            check_content_type("image/png"),
+            Err(FetchError::UnsupportedContentType(_))
         ));
     }
 
     #[test]
-    fn rejects_ipv6_unique_local() {
-        assert!(matches!(
-            validate_url("http://[fd00::1]/secret"),
-            Err(FetchError::InternalHost)
-        ));
-        assert!(matches!(
-            validate_url("http://[fc00::1]/secret"),
-            Err(FetchError::InternalHost)
-        ));
-    }
-
-    #[test]
-    fn accepts_public_ipv6() {
-        assert!(validate_url("http://[2001:db8::1]/page").is_ok());
+    fn accepts_empty_mime_before_semicolon() {
+        // Edge case: "; charset=utf-8" → empty mime → allowed (permissive)
+        assert!(check_content_type("; charset=utf-8").is_ok());
     }
 }
 
@@ -310,7 +295,8 @@ mod download_tests {
         Mock::given(method("GET"))
             .and(path("/page"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_string("<html><body><p>hello</p></body></html>"),
+                ResponseTemplate::new(200)
+                    .set_body_string("<html><body><p>hello</p></body></html>"),
             )
             .mount(&server)
             .await;
@@ -325,31 +311,28 @@ mod download_tests {
     }
 
     #[tokio::test]
-    async fn download_404_returns_status_error() {
+    async fn download_non_success_returns_status_error() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/missing"))
+            .and(path("/404"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-
-        let client = Client::new();
-        let result = download(&client, &format!("{}/missing", server.uri())).await;
-        assert!(matches!(result, Err(FetchError::Status(404))));
-    }
-
-    #[tokio::test]
-    async fn download_500_returns_status_error() {
-        let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/error"))
+            .and(path("/500"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
 
         let client = Client::new();
-        let result = download(&client, &format!("{}/error", server.uri())).await;
-        assert!(matches!(result, Err(FetchError::Status(500))));
+        assert!(matches!(
+            download(&client, &format!("{}/404", server.uri())).await,
+            Err(FetchError::Status(404))
+        ));
+        assert!(matches!(
+            download(&client, &format!("{}/500", server.uri())).await,
+            Err(FetchError::Status(500))
+        ));
     }
 
     #[tokio::test]
@@ -394,9 +377,57 @@ mod download_tests {
     }
 
     #[tokio::test]
+    async fn download_rejects_non_html_content_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/binary"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/pdf")
+                    .set_body_bytes(b"fake pdf".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let result = download(&client, &format!("{}/binary", server.uri())).await;
+        assert!(
+            matches!(result, Err(FetchError::UnsupportedContentType(ref ct)) if ct == "application/pdf"),
+            "got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_accepts_text_html_content_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/html"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html; charset=utf-8")
+                    .set_body_string("<html><body>ok</body></html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let (_, html) = download(&client, &format!("{}/html", server.uri()))
+            .await
+            .unwrap();
+        assert!(html.contains("ok"));
+    }
+
+    #[tokio::test]
     async fn fetch_page_blocks_ssrf_to_localhost() {
         let client = Client::new();
-        let result = fetch_page(&client, "http://127.0.0.1/secret", false, false).await;
+        let result = fetch_page(
+            &client,
+            "http://127.0.0.1/secret",
+            false,
+            false,
+            &TokioDnsResolver,
+        )
+        .await;
         assert!(matches!(result, Err(FetchError::InternalHost)));
     }
 }

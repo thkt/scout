@@ -1,47 +1,79 @@
+use std::fmt::Write;
+use std::time::Duration;
+
 use futures::future::join_all;
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use tracing::warn;
 
 use crate::fetch;
+use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
 use crate::gemini::client::{GeminiError, SearchClient};
 use crate::gemini::types::{GroundedResult, Source};
+use crate::markdown::{escape_md_link, sanitize_heading};
+use crate::search::Lang;
 use crate::search::bilingual::expand_bilingual;
-use crate::tools::Lang;
 
+const MAX_PAGE_CHARS: usize = 3000;
+const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Aggregated output of a multi-source research session.
 #[derive(Debug)]
 pub(crate) struct ResearchReport {
-    pub search_results: Vec<GroundedResult>,
-    pub fetched_pages: Vec<FetchResult>,
-    pub failed_urls: Vec<FailedUrl>,
-    pub all_sources: Vec<Source>,
+    pub(crate) search_results: Vec<GroundedResult>,
+    pub(crate) fetched_pages: Vec<FetchResult>,
+    pub(crate) failed_urls: Vec<FailedUrl>,
+    pub(crate) all_sources: Vec<Source>,
 }
 
 #[derive(Debug)]
 pub(crate) struct FailedUrl {
-    pub url: String,
-    pub reason: String,
+    pub(crate) url: String,
+    pub(crate) reason: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ResearchError {
-    #[error("{0}")]
-    Gemini(#[from] GeminiError),
+/// Parameters for a research session (query, depth, language).
+pub(crate) struct ResearchRequest<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) depth: u8,
+    pub(crate) lang: Lang,
 }
 
 pub async fn research(
     gemini: &impl SearchClient,
     http: &Client,
-    query: &str,
-    depth: u8,
-    lang: Lang,
-) -> Result<ResearchReport, ResearchError> {
-    let queries = match lang {
-        Lang::Auto => expand_bilingual(query),
-        _ => vec![lang.apply_to_query(query)],
+    req: &ResearchRequest<'_>,
+    resolver: &impl DnsResolver,
+) -> Result<ResearchReport, GeminiError> {
+    let queries = match req.lang {
+        Lang::Auto => expand_bilingual(req.query),
+        _ => vec![req.lang.apply_to_query(req.query)],
     };
 
+    let search_results = run_searches(gemini, &queries).await?;
+    let all_sources = collect_unique_sources(&search_results);
+
+    let urls: Vec<String> = all_sources
+        .iter()
+        .take(req.depth as usize)
+        .map(|s| s.url.clone())
+        .collect();
+
+    let (fetched_pages, failed_urls) = fetch_sources(http, urls, resolver).await;
+
+    Ok(ResearchReport {
+        search_results,
+        fetched_pages,
+        failed_urls,
+        all_sources,
+    })
+}
+
+async fn run_searches(
+    gemini: &impl SearchClient,
+    queries: &[String],
+) -> Result<Vec<GroundedResult>, GeminiError> {
     let search_futures = queries.iter().map(|q| gemini.search(q));
     let search_outcomes = join_all(search_futures).await;
 
@@ -53,25 +85,40 @@ pub async fn research(
             .into_iter()
             .find_map(Result::err)
             .unwrap_or(GeminiError::RateLimited);
-        return Err(first_err.into());
+        warn!(
+            queries = ?queries,
+            error = %first_err,
+            "all search queries failed"
+        );
+        return Err(first_err);
     }
 
     for e in failures.iter().filter_map(|r| r.as_ref().err()) {
         warn!(error = %e, "partial search failure (continuing with other results)");
     }
 
-    let search_results: Vec<_> = successes.into_iter().filter_map(Result::ok).collect();
+    Ok(successes.into_iter().filter_map(Result::ok).collect())
+}
 
-    let all_sources = collect_unique_sources(&search_results);
-    let urls: Vec<String> = all_sources
-        .iter()
-        .take(depth as usize)
-        .map(|s| s.url.clone())
-        .collect();
-
+async fn fetch_sources(
+    http: &Client,
+    urls: Vec<String>,
+    resolver: &impl DnsResolver,
+) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(urls)
         .map(|url| async {
-            let result = fetch::fetch_page(http, &url, false, true).await;
+            let result = tokio::time::timeout(
+                FETCH_TIMEOUT,
+                fetch::fetch_page(http, &url, false, true, resolver),
+            )
+            .await;
+            let result = match result {
+                Ok(inner) => inner,
+                Err(_) => Err(fetch::FetchError::Timeout(format!(
+                    "page fetch timed out after {}s",
+                    FETCH_TIMEOUT.as_secs()
+                ))),
+            };
             (url, result)
         })
         .buffer_unordered(5)
@@ -91,12 +138,11 @@ pub async fn research(
         }
     }
 
-    Ok(ResearchReport {
-        search_results,
-        fetched_pages,
-        failed_urls,
-        all_sources,
-    })
+    if !failed_urls.is_empty() && fetched_pages.is_empty() {
+        warn!(failed = failed_urls.len(), "all page fetches failed");
+    }
+
+    (fetched_pages, failed_urls)
 }
 
 fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
@@ -115,47 +161,74 @@ fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
 }
 
 pub fn format_report(report: &ResearchReport, query: &str) -> String {
-    let mut output = format!("# Research: {query}\n\n");
+    let mut out = format!("# Research: {}\n\n", sanitize_heading(query));
+    format_search_results(&report.search_results, &mut out);
+    format_fetched_pages(&report.fetched_pages, &mut out);
+    format_failed_urls(&report.failed_urls, &mut out);
+    format_sources(&report.all_sources, &mut out);
+    out
+}
 
-    for (i, result) in report.search_results.iter().enumerate() {
-        if report.search_results.len() > 1 {
-            output.push_str(&format!("## Search Result {}\n\n", i + 1));
+fn format_search_results(results: &[GroundedResult], out: &mut String) {
+    for (i, result) in results.iter().enumerate() {
+        if results.len() > 1 {
+            let _ = writeln!(out, "## Search Result {}\n", i + 1);
         }
-        output.push_str(&result.answer);
-        output.push_str("\n\n");
-    }
-
-    if !report.fetched_pages.is_empty() {
-        output.push_str("---\n\n## Fetched Pages\n\n");
-        for page in &report.fetched_pages {
-            output.push_str(&format!("### {}\n\n", page.url));
-            let content = if page.markdown.len() > 3000 {
-                let end = page.markdown.floor_char_boundary(3000);
-                format!("{}...\n\n(truncated)", &page.markdown[..end])
-            } else {
-                page.markdown.clone()
-            };
-            output.push_str(&content);
-            output.push_str("\n\n");
+        match &result.answer {
+            Some(answer) => out.push_str(answer),
+            None => out.push_str(
+                "(No answer returned — the query may have been filtered by safety settings.)\n",
+            ),
         }
+        out.push_str("\n\n");
     }
+}
 
-    if !report.failed_urls.is_empty() {
-        output.push_str("## Failed URLs\n\n");
-        for failed in &report.failed_urls {
-            output.push_str(&format!("- {} ({})\n", failed.url, failed.reason));
+fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
+    if pages.is_empty() {
+        return;
+    }
+    out.push_str("---\n\n## Fetched Pages\n\n");
+    for page in pages {
+        let _ = writeln!(out, "### {}\n", escape_md_link(&page.url));
+        if page.used_raw_fallback {
+            out.push_str("> Note: Readability extraction failed. Showing raw page conversion.\n\n");
         }
-        output.push('\n');
-    }
-
-    if !report.all_sources.is_empty() {
-        output.push_str("## Sources\n\n");
-        for source in &report.all_sources {
-            output.push_str(&format!("- [{}]({})\n", source.title, source.url));
+        if page.markdown.len() > MAX_PAGE_CHARS {
+            let end = page.markdown.floor_char_boundary(MAX_PAGE_CHARS);
+            out.push_str(&page.markdown[..end]);
+            out.push_str("...\n\n(truncated)");
+        } else {
+            out.push_str(&page.markdown);
         }
+        out.push_str("\n\n");
     }
+}
 
-    output
+fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
+    if failed.is_empty() {
+        return;
+    }
+    out.push_str("## Failed URLs\n\n");
+    for f in failed {
+        let _ = writeln!(out, "- {} ({})", escape_md_link(&f.url), f.reason);
+    }
+    out.push('\n');
+}
+
+fn format_sources(sources: &[Source], out: &mut String) {
+    if sources.is_empty() {
+        return;
+    }
+    out.push_str("## Sources\n\n");
+    for source in sources {
+        let _ = writeln!(
+            out,
+            "- [{}]({})",
+            escape_md_link(&source.title),
+            escape_md_link(&source.url)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -209,7 +282,7 @@ mod tests {
 
     fn make_grounded(sources: Vec<(&str, &str)>) -> GroundedResult {
         GroundedResult {
-            answer: "test answer".into(),
+            answer: Some("test answer".into()),
             sources: sources
                 .into_iter()
                 .map(|(url, title)| Source {
@@ -236,10 +309,7 @@ mod tests {
 
     #[test]
     fn collect_sources_skips_empty_urls() {
-        let results = vec![make_grounded(vec![
-            ("", "Empty"),
-            ("https://a.com", "A"),
-        ])];
+        let results = vec![make_grounded(vec![("", "Empty"), ("https://a.com", "A")])];
 
         let sources = collect_unique_sources(&results);
         assert_eq!(sources.len(), 1);
@@ -324,21 +394,39 @@ mod tests {
         assert!(text.contains("## Search Result 2"));
     }
 
+    #[test]
+    fn format_report_sanitizes_query_newlines() {
+        let report = ResearchReport {
+            search_results: vec![make_grounded(vec![])],
+            fetched_pages: vec![],
+            failed_urls: vec![],
+            all_sources: vec![],
+        };
+
+        let text = format_report(&report, "line1\nline2");
+        assert!(text.contains("# Research: line1 line2"));
+        assert!(!text.contains("# Research: line1\n"));
+    }
+
     #[tokio::test]
     async fn research_with_mock_returns_report() {
-        let mock = MockSearch::with_results(vec![make_grounded(vec![
-            ("https://a.com", "A"),
-        ])]);
+        let mock = MockSearch::with_results(vec![make_grounded(vec![("https://a.com", "A")])]);
         let http = Client::new();
+        let resolver = fetch::TokioDnsResolver;
 
-        let report = research(&mock, &http, "test", 3, Lang::En).await.unwrap();
+        let req = ResearchRequest {
+            query: "test",
+            depth: 3,
+            lang: Lang::En,
+        };
+        let report = research(&mock, &http, &req, &resolver).await.unwrap();
 
         assert_eq!(report.search_results.len(), 1);
         assert_eq!(report.all_sources.len(), 1);
 
         let queries = mock.captured_queries();
         assert_eq!(queries.len(), 1);
-        assert!(queries[0].contains("test"));
+        assert_eq!(queries[0], "test (answer in English)");
     }
 
     #[tokio::test]
@@ -348,10 +436,14 @@ mod tests {
             GeminiError::RateLimited,
         );
         let http = Client::new();
+        let resolver = fetch::TokioDnsResolver;
 
-        let report = research(&mock, &http, "テスト query", 3, Lang::Auto)
-            .await
-            .unwrap();
+        let req = ResearchRequest {
+            query: "テスト query",
+            depth: 3,
+            lang: Lang::Auto,
+        };
+        let report = research(&mock, &http, &req, &resolver).await.unwrap();
 
         assert_eq!(report.search_results.len(), 1);
 
@@ -365,8 +457,14 @@ mod tests {
     async fn research_all_searches_fail_returns_error() {
         let mock = MockSearch::all_fail(GeminiError::RateLimited);
         let http = Client::new();
+        let resolver = fetch::TokioDnsResolver;
 
-        let err = research(&mock, &http, "test", 3, Lang::En).await.unwrap_err();
+        let req = ResearchRequest {
+            query: "test",
+            depth: 3,
+            lang: Lang::En,
+        };
+        let err = research(&mock, &http, &req, &resolver).await.unwrap_err();
         assert!(err.to_string().contains("rate limit"));
     }
 }

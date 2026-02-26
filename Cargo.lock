@@ -1771,7 +1771,9 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "dom_smoothie",
+ "encoding_rs",
  "fast_html2md",
+ "fastrand",
  "futures",
  "globset",
  "percent-encoding",

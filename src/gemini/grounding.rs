@@ -3,18 +3,15 @@ use tracing::warn;
 use super::types::{GenerateContentResponse, GroundedResult, Source};
 
 pub fn extract_grounded_result(response: &GenerateContentResponse) -> GroundedResult {
-    let candidate = response
-        .candidates
-        .as_ref()
-        .and_then(|c| c.first());
+    let candidate = response.candidates.as_ref().and_then(|c| c.first());
 
     let answer = candidate
         .and_then(|c| c.content.as_ref())
         .and_then(|content| content.parts.first())
         .map(|part| part.text.clone())
-        .unwrap_or_default();
+        .filter(|text| !text.is_empty());
 
-    if answer.is_empty() {
+    if answer.is_none() {
         warn!("Gemini returned empty answer (safety filter or empty response)");
     }
 
@@ -37,10 +34,7 @@ pub fn extract_grounded_result(response: &GenerateContentResponse) -> GroundedRe
         })
         .unwrap_or_default();
 
-    GroundedResult {
-        answer,
-        sources,
-    }
+    GroundedResult { answer, sources }
 }
 
 #[cfg(test)]
@@ -79,7 +73,10 @@ mod tests {
 
         let result = extract_grounded_result(&response);
 
-        assert_eq!(result.answer, "React 19 introduces new features.");
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("React 19 introduces new features.")
+        );
         assert_eq!(result.sources.len(), 1);
         assert_eq!(result.sources[0].url, "https://react.dev/blog");
         assert_eq!(result.sources[0].title, "React Blog");
@@ -119,7 +116,7 @@ mod tests {
 
         let result = extract_grounded_result(&response);
 
-        assert_eq!(result.answer, "");
+        assert!(result.answer.is_none());
         assert!(result.sources.is_empty());
     }
 
@@ -140,7 +137,7 @@ mod tests {
 
         let result = extract_grounded_result(&response);
 
-        assert_eq!(result.answer, "No grounding");
+        assert_eq!(result.answer.as_deref(), Some("No grounding"));
         assert!(result.sources.is_empty());
     }
 

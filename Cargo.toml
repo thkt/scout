@@ -23,6 +23,8 @@ globset = "0.4"
 percent-encoding = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+encoding_rs = "0.8"
+fastrand = "2"
 
 [dev-dependencies]
 wiremock = "0.6"

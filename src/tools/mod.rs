@@ -1,100 +1,49 @@
+mod errors;
+mod params;
+
+pub use params::{
+    FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
+};
+
 use std::time::Duration;
 
+use reqwest::Client;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{tool::ToolRouter, wrapper::Parameters},
-    model::*,
+    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
-use reqwest::Client;
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 use tracing::{info, warn};
 
+use errors::{
+    fetch_to_mcp_error, gemini_to_mcp_error, github_to_mcp_error, parse_repo_param,
+    unwrap_or_note,
+};
+
+use crate::fetch::TokioDnsResolver;
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient};
 use crate::github::{self, GitHubClient};
+use crate::markdown::escape_md_link;
 use crate::search::engine;
 
-#[derive(Deserialize, JsonSchema, Clone, Copy, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Lang {
-    Ja,
-    En,
-    #[default]
-    Auto,
-}
+/// TCP connection establishment timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Global HTTP client timeout covering DNS + connect + response body.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Tool-level timeout for fetch operations (SSRF check + download + extraction).
+const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum redirect hops before aborting.
+const MAX_REDIRECTS: usize = 5;
+const OVERVIEW_ITEMS: u8 = 5;
+const OVERVIEW_RELEASES: u8 = 3;
 
-impl Lang {
-    pub fn apply_to_query(self, query: &str) -> String {
-        match self {
-            Lang::Ja => format!("{query} (日本語で回答)"),
-            Lang::En => format!("{query} (answer in English)"),
-            Lang::Auto => query.to_string(),
-        }
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct SearchParams {
-    /// Search query
-    pub query: String,
-    /// Search language: "ja", "en", or "auto" (default)
-    pub lang: Option<Lang>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct FetchParams {
-    /// URL to fetch (must be HTTP or HTTPS)
-    pub url: String,
-    /// Skip Readability extraction and convert entire page (default: false)
-    pub raw: Option<bool>,
-    /// Include page metadata (title, author, date) as YAML frontmatter (default: false)
-    pub meta: Option<bool>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct ResearchParams {
-    /// Research query
-    pub query: String,
-    /// Number of URLs to fetch for deep analysis (1-10, default: 3)
-    pub depth: Option<u8>,
-    /// Search language: "ja", "en", or "auto" (default)
-    pub lang: Option<Lang>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct RepoTreeParams {
-    /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
-    /// Git ref: branch name, tag, or commit SHA (default: repository's default branch)
-    #[serde(rename = "ref")]
-    pub ref_: Option<String>,
-    /// Filter to files under this path prefix (e.g., "src/components/")
-    pub path: Option<String>,
-    /// Glob pattern to filter filenames (e.g., "*.rs", "*.{ts,tsx}")
-    pub pattern: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct RepoReadParams {
-    /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
-    /// File path within the repository (e.g., "src/index.ts")
-    pub path: String,
-    /// Git ref: branch name, tag, or commit SHA (default: repository's default branch)
-    #[serde(rename = "ref")]
-    pub ref_: Option<String>,
-    /// Line range: "1-80" (lines 1 to 80), "50-" (line 50 to end), "100" (first 100 lines). Omit to read entire file.
-    pub lines: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct RepoOverviewParams {
-    /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
-}
-
+/// MCP server handler providing search, fetch, and GitHub tools.
+///
+/// Configuration via environment variables:
+/// - `GEMINI_API_KEY`: enables search/research tools (optional)
+/// - `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token`: GitHub API auth (optional)
 #[derive(Clone)]
 pub struct Scout {
     http: Client,
@@ -105,12 +54,16 @@ pub struct Scout {
 
 #[tool_router]
 impl Scout {
-    pub fn new() -> Result<Self, reqwest::Error> {
+    pub async fn new() -> Result<Self, reqwest::Error> {
         let http = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()?;
-        let gemini = GeminiClient::from_env(http.clone()).ok();
-        let github = GitHubClient::from_env(http.clone());
+        let gemini = GeminiClient::from_env(http.clone())
+            .inspect_err(|e| warn!("Gemini client not available: {e}"))
+            .ok();
+        let github = GitHubClient::from_env(http.clone()).await;
         Ok(Self {
             http,
             gemini,
@@ -141,23 +94,29 @@ impl Scout {
 
         let gemini = self.gemini()?;
 
-        let search_query = params.lang.unwrap_or_default().apply_to_query(&params.query);
+        let search_query = params
+            .lang
+            .unwrap_or_default()
+            .apply_to_query(&params.query);
 
         let result = gemini
             .search(&search_query)
             .await
             .map_err(gemini_to_mcp_error)?;
 
-        let mut output = if result.answer.is_empty() {
-            "(No answer returned — the query may have been filtered by safety settings.)".to_string()
-        } else {
-            result.answer
-        };
+        let mut output = result.answer.unwrap_or_else(|| {
+            "(No answer returned — the query may have been filtered by safety settings.)"
+                .to_string()
+        });
 
         if !result.sources.is_empty() {
             output.push_str("\n\n---\n**Sources:**\n");
             for source in &result.sources {
-                output.push_str(&format!("- [{}]({})\n", source.title, source.url));
+                output.push_str(&format!(
+                    "- [{}]({})\n",
+                    escape_md_link(&source.title),
+                    escape_md_link(&source.url)
+                ));
             }
         }
 
@@ -173,16 +132,32 @@ impl Scout {
         &self,
         Parameters(params): Parameters<FetchParams>,
     ) -> Result<CallToolResult, McpError> {
+        if !params.url.starts_with("http://") && !params.url.starts_with("https://") {
+            return Err(McpError::invalid_params(
+                "URL must use http or https scheme",
+                None,
+            ));
+        }
+
         info!(url = %params.url, "tool:fetch");
 
         let raw = params.raw.unwrap_or(false);
         let meta = params.meta.unwrap_or(false);
 
-        let result = crate::fetch::fetch_page(&self.http, &params.url, raw, meta)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let result = tokio::time::timeout(
+            FETCH_TOOL_TIMEOUT,
+            crate::fetch::fetch_page(&self.http, &params.url, raw, meta, &TokioDnsResolver),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::fetch::FetchError::Timeout(format!(
+                "fetch timed out after {}s",
+                FETCH_TOOL_TIMEOUT.as_secs()
+            )))
+        })
+        .map_err(fetch_to_mcp_error)?;
 
-        let output = if result.used_raw_fallback {
+        let mut output = if result.used_raw_fallback {
             warn!(url = %params.url, "readability extraction failed, using raw fallback");
             format!(
                 "> Note: Readability extraction failed. Showing raw page conversion.\n\n{}",
@@ -191,6 +166,13 @@ impl Scout {
         } else {
             result.markdown
         };
+
+        const MAX_FETCH_OUTPUT_CHARS: usize = 100_000;
+        if output.len() > MAX_FETCH_OUTPUT_CHARS {
+            let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_CHARS);
+            output.truncate(end);
+            output.push_str("\n\n(truncated)");
+        }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
@@ -214,9 +196,14 @@ impl Scout {
 
         let gemini = self.gemini()?;
 
-        let report = engine::research(gemini, &self.http, &params.query, depth, lang)
+        let req = engine::ResearchRequest {
+            query: &params.query,
+            depth,
+            lang,
+        };
+        let report = engine::research(gemini, &self.http, &req, &TokioDnsResolver)
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .map_err(gemini_to_mcp_error)?;
 
         info!(
             pages = report.fetched_pages.len(),
@@ -238,8 +225,7 @@ impl Scout {
         &self,
         Parameters(params): Parameters<RepoTreeParams>,
     ) -> Result<CallToolResult, McpError> {
-        let (owner, repo) = github::parse_repo(&params.repository)
-            .map_err(github_to_mcp_error)?;
+        let (owner, repo) = parse_repo_param(&params.repository)?;
 
         info!(repository = %params.repository, "tool:repo_tree");
 
@@ -257,15 +243,15 @@ impl Scout {
             }
         };
 
+        if let Some(ref p) = params.path {
+            github::validate_path(p).map_err(github_to_mcp_error)?;
+        }
+
         let tree = self
             .github
             .get_tree(owner, repo, &ref_)
             .await
             .map_err(github_to_mcp_error)?;
-
-        if let Some(ref p) = params.path {
-            github::validate_path(p).map_err(github_to_mcp_error)?;
-        }
 
         let filtered = github::filter_tree_entries(
             &tree.tree,
@@ -274,8 +260,7 @@ impl Scout {
         )
         .map_err(github_to_mcp_error)?;
 
-        let output =
-            github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
+        let output = github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
 
         info!(files = filtered.len(), "repo_tree complete");
         Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -289,8 +274,7 @@ impl Scout {
         &self,
         Parameters(params): Parameters<RepoReadParams>,
     ) -> Result<CallToolResult, McpError> {
-        let (owner, repo) = github::parse_repo(&params.repository)
-            .map_err(github_to_mcp_error)?;
+        let (owner, repo) = parse_repo_param(&params.repository)?;
 
         info!(repository = %params.repository, path = %params.path, "tool:repo_read");
 
@@ -318,8 +302,7 @@ impl Scout {
 
         let total = raw.lines().count();
         let content = if let Some(ref range) = params.lines {
-            let (start, end) =
-                github::parse_line_range(range).map_err(github_to_mcp_error)?;
+            let (start, end) = github::parse_line_range(range).map_err(github_to_mcp_error)?;
             github::apply_line_range(&raw, start, end)
         } else {
             github::apply_line_range(&raw, 1, None)
@@ -339,49 +322,56 @@ impl Scout {
         &self,
         Parameters(params): Parameters<RepoOverviewParams>,
     ) -> Result<CallToolResult, McpError> {
-        let (owner, repo) = github::parse_repo(&params.repository)
-            .map_err(github_to_mcp_error)?;
+        let (owner, repo) = parse_repo_param(&params.repository)?;
 
         info!(repository = %params.repository, "tool:repo_overview");
 
         let (repo_info, readme, issues, pulls, releases) = tokio::join!(
             self.github.get_repo(owner, repo),
             self.github.get_readme(owner, repo),
-            self.github.get_issues(owner, repo, 5),
-            self.github.get_pulls(owner, repo, 5),
-            self.github.get_releases(owner, repo, 3),
+            self.github.get_issues(owner, repo, OVERVIEW_ITEMS),
+            self.github.get_pulls(owner, repo, OVERVIEW_ITEMS),
+            self.github.get_releases(owner, repo, OVERVIEW_RELEASES),
         );
 
         let repo_info = repo_info.map_err(github_to_mcp_error)?;
 
-        let readme_content = readme
-            .inspect_err(|e| warn!(%e, "failed to fetch README"))
-            .ok()
-            .and_then(|r| {
-                r.content.and_then(|c| {
-                    github::decode_content(&c)
-                        .inspect_err(|e| warn!(%e, "failed to decode README"))
-                        .ok()
-                })
-            });
+        let mut notes = Vec::new();
 
-        let issues = issues
-            .inspect_err(|e| warn!(%e, "failed to fetch issues"))
-            .unwrap_or_default();
-        let pulls = pulls
-            .inspect_err(|e| warn!(%e, "failed to fetch pulls"))
-            .unwrap_or_default();
-        let releases = releases
-            .inspect_err(|e| warn!(%e, "failed to fetch releases"))
-            .unwrap_or_default();
+        let readme_content = match readme {
+            Ok(r) => r.content.and_then(|c| match github::decode_content(&c) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    warn!(%e, "failed to decode README");
+                    notes.push(format!("README could not be decoded ({e})"));
+                    None
+                }
+            }),
+            Err(e) => {
+                if !matches!(e, github::GitHubError::NotFound(_)) {
+                    warn!(%e, "failed to fetch README");
+                    notes.push(format!("Could not fetch README ({e})"));
+                }
+                None
+            }
+        };
+        let issues = unwrap_or_note(issues, "issues", &mut notes);
+        let pulls = unwrap_or_note(pulls, "pull requests", &mut notes);
+        let releases = unwrap_or_note(releases, "releases", &mut notes);
 
-        let output = github::format::format_overview(
+        let mut output = github::format::format_overview(
             &repo_info,
             readme_content.as_deref(),
             &issues,
             &pulls,
             &releases,
         );
+
+        if !notes.is_empty() {
+            output.push_str("\n> **Note:** ");
+            output.push_str(&notes.join(". "));
+            output.push_str(".\n");
+        }
 
         info!(
             issues = issues.len(),
@@ -398,6 +388,11 @@ impl Scout {
 impl ServerHandler for Scout {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            server_info: Implementation {
+                name: "scout".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                ..Default::default()
+            },
             instructions: Some(
                 "scout provides web search (via Gemini Grounding), page fetching (local HTML→Markdown conversion), and GitHub repository exploration (repo_tree, repo_read, repo_overview) tools."
                     .into(),
@@ -408,46 +403,38 @@ impl ServerHandler for Scout {
     }
 }
 
-fn github_to_mcp_error(e: github::GitHubError) -> McpError {
-    match &e {
-        github::GitHubError::NotFound(_)
-        | github::GitHubError::InvalidRepo(_)
-        | github::GitHubError::InvalidRef(_)
-        | github::GitHubError::InvalidPath(_)
-        | github::GitHubError::InvalidLineRange(_)
-        | github::GitHubError::InvalidPattern(_) => {
-            McpError::invalid_params(e.to_string(), None)
-        }
-        github::GitHubError::RateLimited => {
-            McpError::internal_error(format!("{e} (retriable)"), None)
-        }
-        github::GitHubError::Forbidden(_) => McpError::internal_error(
-            format!("{e} — check that your GITHUB_TOKEN has the required scopes"),
-            None,
-        ),
-        _ => McpError::internal_error(e.to_string(), None),
-    }
-}
-
-fn gemini_to_mcp_error(e: GeminiError) -> McpError {
-    match &e {
-        GeminiError::RateLimited => McpError::internal_error(
-            format!("{e} (retriable)"),
-            None,
-        ),
-        _ => McpError::internal_error(e.to_string(), None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::Lang;
+    use wiremock::matchers::{method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_http_client() -> Client {
+        Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .build()
+            .unwrap()
+    }
 
     fn scout() -> Scout {
+        let http = test_http_client();
         Scout {
-            http: Client::new(),
+            http: http.clone(),
             gemini: None,
-            github: GitHubClient::from_env(Client::new()),
+            github: GitHubClient::with_base_url(http, "http://localhost:0"),
+            tool_router: Scout::tool_router(),
+        }
+    }
+
+    fn scout_with_gemini(gemini_uri: &str) -> Scout {
+        let http = test_http_client();
+        Scout {
+            http: http.clone(),
+            gemini: Some(GeminiClient::with_base_url(http.clone(), gemini_uri)),
+            github: GitHubClient::with_base_url(http, "http://localhost:0"),
             tool_router: Scout::tool_router(),
         }
     }
@@ -529,54 +516,97 @@ mod tests {
         assert!(err.message.contains("owner/repo"), "got: {}", err.message);
     }
 
-    #[test]
-    fn github_to_mcp_error_maps_not_found_to_invalid_params() {
-        let err = github_to_mcp_error(github::GitHubError::NotFound("test".into()));
-        assert!(err.message.contains("Not found"));
+    #[tokio::test]
+    async fn search_success_returns_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Rust is a systems programming language."}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": [{
+                            "web": {
+                                "uri": "https://rust-lang.org",
+                                "title": "Rust"
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_gemini(&server.uri());
+        let params = Parameters(SearchParams {
+            query: "What is Rust?".into(),
+            lang: None,
+        });
+
+        let result = s.search(params).await.unwrap();
+        assert!(!result.content.is_empty());
     }
 
-    #[test]
-    fn github_to_mcp_error_maps_invalid_repo_to_invalid_params() {
-        let err = github_to_mcp_error(github::GitHubError::InvalidRepo("bad".into()));
-        assert!(err.message.contains("owner/repo"));
+    #[tokio::test]
+    async fn fetch_rejects_non_http_scheme() {
+        let s = scout();
+        for url in [
+            "ftp://example.com",
+            "javascript:alert(1)",
+            "data:text/html,<h1>hi</h1>",
+        ] {
+            let params = Parameters(FetchParams {
+                url: url.into(),
+                raw: None,
+                meta: None,
+            });
+            let err = s.fetch(params).await.unwrap_err();
+            assert!(
+                err.message.contains("http or https"),
+                "should reject {url}, got: {}",
+                err.message
+            );
+        }
     }
 
-    #[test]
-    fn github_to_mcp_error_maps_invalid_ref_to_invalid_params() {
-        let err = github_to_mcp_error(github::GitHubError::InvalidRef("bad".into()));
-        assert!(err.message.contains("Invalid ref"));
-    }
+    #[tokio::test]
+    async fn research_success_returns_report() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Rust is a systems programming language focused on safety."}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": [{
+                            "web": {
+                                "uri": "https://rust-lang.org",
+                                "title": "Rust Language"
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
 
-    #[test]
-    fn github_to_mcp_error_maps_invalid_path_to_invalid_params() {
-        let err = github_to_mcp_error(github::GitHubError::InvalidPath("bad".into()));
-        assert!(err.message.contains("Invalid path"));
-    }
+        let s = scout_with_gemini(&server.uri());
+        let params = Parameters(ResearchParams {
+            query: "What is Rust?".into(),
+            depth: Some(1),
+            lang: None,
+        });
 
-    #[test]
-    fn github_to_mcp_error_maps_rate_limited_to_retriable() {
-        let err = github_to_mcp_error(github::GitHubError::RateLimited);
-        assert!(err.message.contains("retriable"));
-        assert!(err.message.contains("rate limit"));
-    }
-
-    #[test]
-    fn github_to_mcp_error_maps_forbidden_with_token_hint() {
-        let err = github_to_mcp_error(github::GitHubError::Forbidden("denied".into()));
-        assert!(err.message.contains("denied"));
-        assert!(err.message.contains("GITHUB_TOKEN"));
-    }
-
-    #[test]
-    fn github_to_mcp_error_maps_invalid_line_range() {
-        let err = github_to_mcp_error(github::GitHubError::InvalidLineRange("bad".into()));
-        assert!(err.message.contains("line range"));
-    }
-
-    #[test]
-    fn github_to_mcp_error_maps_invalid_pattern() {
-        let err = github_to_mcp_error(github::GitHubError::InvalidPattern("bad".into()));
-        assert!(err.message.contains("pattern"));
+        let result = s.research(params).await.unwrap();
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("Rust"), "report should contain search answer, got: {text}");
+        assert!(text.contains("rust-lang.org"), "report should reference source URL");
     }
 
     #[test]

@@ -1,22 +1,25 @@
-pub mod format;
+pub(crate) mod format;
 mod helpers;
-pub mod types;
+pub(crate) mod types;
 
+use helpers::encode_path;
 pub use helpers::{
     apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
     validate_path, validate_ref,
 };
-use helpers::encode_path;
 
 use reqwest::Client;
 use std::env;
-use tracing::{debug, warn};
+use tracing::{debug, info};
 
-use types::*;
+use types::{
+    BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
+};
 
 const API_BASE: &str = "https://api.github.com";
+/// Timeout for `gh auth token` subprocess.
+const TOKEN_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Errors returned by GitHub API operations.
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
     #[error("Not found: {0}")]
@@ -55,6 +58,15 @@ pub enum GitHubError {
     Decode(String),
 }
 
+#[derive(Clone)]
+struct Token(String);
+
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
 /// HTTP client for the GitHub REST API v3.
 ///
 /// Auth resolution order: `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` CLI → unauthenticated.
@@ -63,18 +75,19 @@ pub enum GitHubError {
 #[derive(Clone)]
 pub struct GitHubClient {
     http: Client,
-    token: Option<String>,
+    token: Option<Token>,
     base_url: String,
 }
 
 impl GitHubClient {
-    /// Create a client using standard GitHub API and auto-detected auth.
-    pub fn from_env(http: Client) -> Self {
-        let token = resolve_token();
+    pub async fn from_env(http: Client) -> Self {
+        let token = resolve_token().await;
         if token.is_some() {
             debug!("GitHub token configured");
         } else {
-            warn!("No GitHub token found. Rate limit: 60 req/hour. Set GITHUB_TOKEN or run `gh auth login`.");
+            info!(
+                "No GitHub token found. Rate limit: 60 req/hour. Set GITHUB_TOKEN or run `gh auth login`."
+            );
         }
         Self {
             http,
@@ -84,7 +97,7 @@ impl GitHubClient {
     }
 
     #[cfg(test)]
-    fn with_base_url(http: Client, base_url: &str) -> Self {
+    pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
             token: None,
@@ -101,17 +114,20 @@ impl GitHubClient {
             .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
-            req = req.header("Authorization", format!("Bearer {token}"));
+            debug_assert!(
+                url.starts_with("https://") || cfg!(test),
+                "Bearer token must only be sent over HTTPS"
+            );
+            req = req.header("Authorization", format!("Bearer {}", token.0));
         }
         req
     }
 
-    async fn get_json<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, GitHubError> {
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
+        debug!(path, "github API request");
         let response = self.request(path).send().await?;
         let status = response.status();
+        debug!(path, status = %status, "github API response");
         match status.as_u16() {
             200..=299 => Ok(response.json().await?),
             404 => Err(GitHubError::NotFound(path.to_string())),
@@ -201,6 +217,7 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<IssueInfo>, GitHubError> {
+        let per_page = per_page.min(100);
         self.get_json(&format!(
             "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -213,6 +230,7 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<PullInfo>, GitHubError> {
+        let per_page = per_page.min(100);
         self.get_json(&format!(
             "/repos/{owner}/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -225,6 +243,7 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<ReleaseInfo>, GitHubError> {
+        let per_page = per_page.min(100);
         self.get_json(&format!(
             "/repos/{owner}/{repo}/releases?per_page={per_page}"
         ))
@@ -239,31 +258,48 @@ fn extract_error_message(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
-fn resolve_token() -> Option<String> {
-    ["GITHUB_TOKEN", "GH_TOKEN"]
+async fn resolve_token() -> Option<Token> {
+    resolve_token_with(|var| env::var(var).ok()).await
+}
+
+async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Option<Token> {
+    let from_env = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
-        .filter_map(|var| env::var(var).ok())
+        .filter_map(|var| env_reader(var))
         .map(|t| t.trim().to_string())
-        .find(|t| !t.is_empty())
-        .or_else(|| {
-            std::process::Command::new("gh")
-                .args(["auth", "token"])
-                .output()
-                .ok()
-                .filter(|o| {
-                    if !o.status.success() {
-                        debug!(
-                            stderr = %String::from_utf8_lossy(&o.stderr).trim(),
-                            "gh auth token failed"
-                        );
-                    }
-                    o.status.success()
-                })
-                .and_then(|o| {
-                    let token = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    if token.is_empty() { None } else { Some(token) }
-                })
-        })
+        .find(|t| !t.is_empty());
+
+    if let Some(token) = from_env {
+        return Some(Token(token));
+    }
+
+    let output = tokio::time::timeout(
+        TOKEN_RESOLVE_TIMEOUT,
+        tokio::process::Command::new("gh")
+            .args(["auth", "token"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .inspect_err(|_| info!("gh auth token timed out after {}s", TOKEN_RESOLVE_TIMEOUT.as_secs()))
+    .ok()?
+    .inspect_err(|e| info!("gh auth token command failed: {e}"))
+    .ok()?;
+
+    if !output.status.success() {
+        info!(
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "gh auth token failed"
+        );
+        return None;
+    }
+
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(Token(token))
+    }
 }
 
 #[cfg(test)]
@@ -334,6 +370,28 @@ mod http_tests {
         let client = GitHubClient::with_base_url(Client::new(), &server.uri());
         let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
         assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
+    }
+
+    #[test]
+    fn token_debug_is_redacted() {
+        let token = Token("ghp_secret123".to_string());
+        assert_eq!(format!("{token:?}"), "[REDACTED]");
+    }
+
+    #[tokio::test]
+    async fn resolve_token_reads_env_var() {
+        let token = resolve_token_with(|key| {
+            if key == "GITHUB_TOKEN" {
+                Some("test-token-from-env".into())
+            } else {
+                None
+            }
+        })
+        .await;
+        assert_eq!(
+            token.as_ref().map(|t| t.0.as_str()),
+            Some("test-token-from-env")
+        );
     }
 
     #[tokio::test]

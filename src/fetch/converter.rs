@@ -1,5 +1,8 @@
+use std::fmt::Write;
+
 use super::extractor::ExtractedArticle;
 
+/// Fetched page content converted to Markdown.
 #[derive(Debug)]
 pub struct FetchResult {
     pub url: String,
@@ -31,13 +34,13 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     let mut fm = String::from("---\n");
 
     if let Some(title) = &article.title {
-        fm.push_str(&format!("title: \"{}\"\n", escape_yaml(title)));
+        let _ = writeln!(fm, "title: \"{}\"", escape_yaml(title));
     }
     if let Some(author) = &article.byline {
-        fm.push_str(&format!("author: \"{}\"\n", escape_yaml(author)));
+        let _ = writeln!(fm, "author: \"{}\"", escape_yaml(author));
     }
     if let Some(date) = &article.published_time {
-        fm.push_str(&format!("date: \"{}\"\n", escape_yaml(date)));
+        let _ = writeln!(fm, "date: \"{}\"", escape_yaml(date));
     }
 
     fm.push_str("---\n\n");
@@ -50,6 +53,8 @@ fn escape_yaml(s: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('\0', "")
 }
 
 #[cfg(test)]
@@ -114,5 +119,7 @@ mod tests {
         assert_eq!(escape_yaml(r"back\slash"), r"back\\slash");
         assert_eq!(escape_yaml("line\nbreak"), "line\\nbreak");
         assert_eq!(escape_yaml("cr\rreturn"), "cr\\rreturn");
+        assert_eq!(escape_yaml("tab\there"), "tab\\there");
+        assert_eq!(escape_yaml("null\0byte"), "nullbyte");
     }
 }

@@ -63,14 +63,15 @@ pub(crate) struct ApiError {
     pub(crate) message: Option<String>,
 }
 
+/// LLM answer with grounding sources from Google Search.
 #[derive(Debug)]
-pub struct GroundedResult {
-    pub answer: String,
-    pub sources: Vec<Source>,
+pub(crate) struct GroundedResult {
+    pub(crate) answer: Option<String>,
+    pub(crate) sources: Vec<Source>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Source {
-    pub url: String,
-    pub title: String,
+pub(crate) struct Source {
+    pub(crate) url: String,
+    pub(crate) title: String,
 }

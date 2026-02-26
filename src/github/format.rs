@@ -1,4 +1,9 @@
-use super::types::*;
+use std::fmt::Write;
+
+use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
+use crate::markdown::escape_md_link;
+
+const MAX_README_LINES: usize = 200;
 
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
@@ -10,7 +15,7 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn format_tree(
+pub(crate) fn format_tree(
     owner: &str,
     repo: &str,
     ref_: &str,
@@ -18,7 +23,7 @@ pub fn format_tree(
     truncated: bool,
 ) -> String {
     let mut out = format!("{owner}/{repo} (ref: {ref_})\n");
-    out.push_str(&format!("files: {}", entries.len()));
+    let _ = write!(out, "files: {}", entries.len());
     if truncated {
         out.push_str(" (tree truncated by GitHub — repository exceeds API limits)");
     }
@@ -27,7 +32,7 @@ pub fn format_tree(
     for entry in entries {
         out.push_str(&entry.path);
         if let Some(size) = entry.size {
-            out.push_str(&format!(" ({})", format_size(size)));
+            let _ = write!(out, " ({})", format_size(size));
         }
         out.push('\n');
     }
@@ -36,7 +41,7 @@ pub fn format_tree(
 }
 
 /// Format a comprehensive repository overview with metadata, README, issues, PRs, and releases.
-pub fn format_overview(
+pub(crate) fn format_overview(
     repo: &RepoInfo,
     readme: Option<&str>,
     issues: &[IssueInfo],
@@ -46,7 +51,7 @@ pub fn format_overview(
     let mut out = format!("# {}\n\n", repo.full_name);
 
     if let Some(ref desc) = repo.description {
-        out.push_str(&format!("{desc}\n\n"));
+        let _ = writeln!(out, "{desc}\n");
     }
 
     format_metadata_table(repo, &mut out);
@@ -61,33 +66,30 @@ pub fn format_overview(
 fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
     out.push_str("| Attribute | Value |\n|-----------|-------|\n");
     if let Some(ref lang) = repo.language {
-        out.push_str(&format!("| Language | {lang} |\n"));
+        let _ = writeln!(out, "| Language | {lang} |");
     }
-    out.push_str(&format!("| Stars | {} |\n", repo.stargazers_count));
-    out.push_str(&format!("| Forks | {} |\n", repo.forks_count));
-    out.push_str(&format!("| Open Issues | {} |\n", repo.open_issues_count));
+    let _ = writeln!(out, "| Stars | {} |", repo.stargazers_count);
+    let _ = writeln!(out, "| Forks | {} |", repo.forks_count);
+    let _ = writeln!(out, "| Open Issues | {} |", repo.open_issues_count);
     if let Some(ref license) = repo.license {
         let name = license.spdx_id.as_deref().unwrap_or(&license.name);
-        out.push_str(&format!("| License | {name} |\n"));
+        let _ = writeln!(out, "| License | {name} |");
     }
-    out.push_str(&format!("| Default Branch | {} |\n", repo.default_branch));
+    let _ = writeln!(out, "| Default Branch | {} |", repo.default_branch);
     let topics = repo.topics.as_deref().unwrap_or(&[]);
     if !topics.is_empty() {
-        out.push_str(&format!("| Topics | {} |\n", topics.join(", ")));
+        let _ = writeln!(out, "| Topics | {} |", topics.join(", "));
     }
-    out.push_str(&format!("| URL | {} |\n\n", repo.html_url));
+    let _ = writeln!(out, "| URL | {} |\n", repo.html_url);
 }
 
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
     let lines: Vec<_> = content.lines().collect();
-    if lines.len() > 200 {
-        out.push_str(&lines[..200].join("\n"));
-        out.push_str(&format!(
-            "\n\n... (truncated, {} lines total)",
-            lines.len()
-        ));
+    if lines.len() > MAX_README_LINES {
+        out.push_str(&lines[..MAX_README_LINES].join("\n"));
+        let _ = write!(out, "\n\n... (truncated, {} lines total)", lines.len());
     } else {
         out.push_str(content);
     }
@@ -119,10 +121,15 @@ fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
             .as_ref()
             .map(|u| format!(" — @{}", u.login))
             .unwrap_or_default();
-        out.push_str(&format!(
-            "- [#{}]({}) {}{}{}\n",
-            issue.number, issue.html_url, issue.title, labels, user
-        ));
+        let _ = writeln!(
+            out,
+            "- [#{}]({}) {}{}{}",
+            issue.number,
+            escape_md_link(&issue.html_url),
+            issue.title,
+            labels,
+            user
+        );
     }
     out.push('\n');
 }
@@ -143,10 +150,15 @@ fn format_pulls_section(pulls: &[PullInfo], out: &mut String) {
             .as_ref()
             .map(|u| format!(" — @{}", u.login))
             .unwrap_or_default();
-        out.push_str(&format!(
-            "- [#{}]({}) {}{}{}\n",
-            pr.number, pr.html_url, pr.title, draft, user
-        ));
+        let _ = writeln!(
+            out,
+            "- [#{}]({}) {}{}{}",
+            pr.number,
+            escape_md_link(&pr.html_url),
+            pr.title,
+            draft,
+            user
+        );
     }
     out.push('\n');
 }
@@ -168,10 +180,14 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
         } else {
             ""
         };
-        out.push_str(&format!(
-            "- [{}]({}) — {}{}\n",
-            name, release.html_url, date, pre
-        ));
+        let _ = writeln!(
+            out,
+            "- [{}]({}) — {}{}",
+            escape_md_link(name),
+            escape_md_link(&release.html_url),
+            date,
+            pre
+        );
     }
     out.push('\n');
 }
@@ -179,6 +195,7 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::types::{EntryType, LabelInfo, LicenseInfo, UserInfo};
 
     #[test]
     fn format_size_bytes() {
@@ -197,7 +214,7 @@ mod tests {
 
     #[test]
     fn format_tree_basic() {
-        let entries = vec![
+        let entries = [
             TreeEntry {
                 path: "src/main.rs".into(),
                 entry_type: EntryType::Blob,
@@ -275,7 +292,10 @@ mod tests {
     #[test]
     fn format_overview_truncates_long_readme() {
         let repo = sample_repo();
-        let long_readme = (0..250).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let long_readme = (0..250)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let output = format_overview(&repo, Some(&long_readme), &[], &[], &[]);
         assert!(output.contains("## README"));
         assert!(output.contains("truncated, 250 lines total"));
@@ -315,7 +335,9 @@ mod tests {
             title: "WIP feature".into(),
             html_url: "https://github.com/o/r/pull/10".into(),
             draft: Some(true),
-            user: Some(UserInfo { login: "dev".into() }),
+            user: Some(UserInfo {
+                login: "dev".into(),
+            }),
         }];
         let output = format_overview(&repo, None, &[], &pulls, &[]);
         assert!(output.contains("[draft]"));
@@ -346,14 +368,17 @@ mod tests {
             html_url: "https://github.com/o/r/issues/5".into(),
             labels: vec![
                 LabelInfo { name: "bug".into() },
-                LabelInfo { name: "urgent".into() },
+                LabelInfo {
+                    name: "urgent".into(),
+                },
             ],
-            user: Some(UserInfo { login: "reporter".into() }),
+            user: Some(UserInfo {
+                login: "reporter".into(),
+            }),
             pull_request: None,
         }];
         let output = format_overview(&repo, None, &issues, &[], &[]);
         assert!(output.contains("(bug, urgent)"));
         assert!(output.contains("@reporter"));
     }
-
 }

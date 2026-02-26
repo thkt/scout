@@ -1,17 +1,23 @@
 use dom_smoothie::{Config, Readability};
+use tracing::warn;
 
 pub(super) struct ExtractedArticle {
     pub title: Option<String>,
     pub byline: Option<String>,
     pub published_time: Option<String>,
     pub content_html: String,
+    /// True when readability extraction failed and raw HTML was used as fallback.
+    /// False for both successful extraction and explicit raw mode.
     pub used_raw_fallback: bool,
 }
 
 pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
     let mut readability = match Readability::new(html, url, Some(Config::default())) {
         Ok(r) => r,
-        Err(_) => return raw_fallback(html),
+        Err(e) => {
+            warn!(%e, "readability init failed, using raw fallback");
+            return raw_fallback(html);
+        }
     };
 
     let readable = readability.is_probably_readable();
@@ -33,7 +39,6 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
                     used_raw_fallback: false,
                 }
             } else {
-                // Not readable: use parser's title but keep original HTML.
                 ExtractedArticle {
                     title,
                     byline: None,
@@ -43,35 +48,35 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
                 }
             }
         }
-        Err(_) => raw_fallback(html),
+        Err(e) => {
+            warn!(%e, "readability parse failed, using raw fallback");
+            raw_fallback(html)
+        }
     }
 }
 
 pub(super) fn extract_raw(html: &str) -> ExtractedArticle {
-    ExtractedArticle {
-        title: extract_title_from_html(html),
-        byline: None,
-        published_time: None,
-        content_html: html.to_string(),
-        used_raw_fallback: false,
-    }
+    make_raw(html, false)
 }
 
-/// Last-resort fallback when readability initialization or parse fails.
 fn raw_fallback(html: &str) -> ExtractedArticle {
+    make_raw(html, true)
+}
+
+fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
     ExtractedArticle {
         title: extract_title_from_html(html),
         byline: None,
         published_time: None,
         content_html: html.to_string(),
-        used_raw_fallback: true,
+        used_raw_fallback,
     }
 }
 
 /// Simple `<title>` tag extraction via string search.
 /// Only used as fallback when dom_smoothie fails to parse the HTML.
 fn extract_title_from_html(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
+    let lower = html.to_ascii_lowercase();
     let tag_start = lower.find("<title")?;
     let content_start = tag_start + lower[tag_start..].find('>')? + 1;
     let content_end = content_start + lower[content_start..].find("</title>")?;
@@ -182,5 +187,13 @@ mod tests {
             extract_title_from_html(html),
             Some("日本語タイトル".to_string())
         );
+    }
+
+    #[test]
+    fn title_extraction_safe_with_unicode_case_expansion() {
+        // Turkish İ (U+0130) expands from 2→3 bytes under full to_lowercase().
+        // to_ascii_lowercase preserves byte offsets, preventing panic on slice.
+        let html = "<html><head><TITLE>My Title</TITLE></head><body>İİİ</body></html>";
+        assert_eq!(extract_title_from_html(html), Some("My Title".to_string()));
     }
 }

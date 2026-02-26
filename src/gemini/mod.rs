@@ -1,3 +1,5 @@
-pub mod client;
-pub mod grounding;
-pub mod types;
+//! Gemini API client with Google Search grounding.
+
+pub(crate) mod client;
+pub(crate) mod grounding;
+pub(crate) mod types;
