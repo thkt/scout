@@ -5,39 +5,48 @@ mod markdown;
 mod search;
 mod tools;
 
-pub const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"), " (MCP Server)");
+pub const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
-use std::time::Duration;
+use clap::Parser;
+use tools::{Command, Scout};
 
-use rmcp::{ServiceExt, transport::stdio};
-use tools::Scout;
-use tracing::info;
+#[derive(Parser)]
+#[command(name = "scout", version, about = "Web search, page fetching, and GitHub repository exploration")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive("scout=info".parse()?),
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("scout=info".parse().expect("valid tracing directive")),
         )
         .init();
 
-    info!("starting scout MCP server");
+    let cli = Cli::parse();
 
-    let service = Scout::new()
-        .await?
-        .serve(stdio())
-        .await
-        .inspect_err(|e| tracing::error!("failed to start server: {e}"))?;
+    let scout = match Scout::new().await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(e.exit_code());
+        }
+    };
 
-    tokio::select! {
-        result = service.waiting() => { result?; }
-        _ = tokio::signal::ctrl_c() => {
-            info!("received shutdown signal");
-            // Grace period: allow tokio runtime to complete in-flight tasks
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    match scout.run(cli.command).await {
+        Ok(output) => {
+            print!("{output}");
+            if !output.ends_with('\n') {
+                println!();
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(e.exit_code());
         }
     }
-    info!("server stopped");
-    Ok(())
 }

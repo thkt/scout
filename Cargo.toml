@@ -1,13 +1,13 @@
 [package]
 name = "scout"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
-description = "MCP server for web search (Gemini Grounding) and page fetching"
+description = "CLI tool for web search (Gemini Grounding), page fetching, and GitHub repository exploration"
 license = "MIT"
 repository = "https://github.com/thkt/scout"
 
 [dependencies]
-rmcp = { version = "0.16", features = ["server", "transport-io", "macros"] }
+clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json"] }
 dom_smoothie = "0.15"
 fast_html2md = "0.0.58"
@@ -17,7 +17,6 @@ serde_json = "1"
 thiserror = "2"
 url = "2"
 futures = "0.3"
-schemars = "1"
 base64 = "0.22"
 globset = "0.4"
 percent-encoding = "2"

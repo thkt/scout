@@ -60,11 +60,11 @@ pub async fn fetch_page(
 ) -> Result<FetchResult, FetchError> {
     // SSRF defense-in-depth: URL validation + DNS check for private IPs.
     // TOCTOU gap: DNS may differ between check and reqwest's connection.
-    // Acceptable for local MCP — full fix requires a custom resolver.
+    // Acceptable for a local CLI tool — full fix requires a custom resolver.
     //
-    // SECURITY ASSUMPTION: This server runs over local stdio transport only.
-    // If exposed over network (SSE/WebSocket), implement a custom DNS resolver
-    // that enforces the IP allowlist at connect time, and add per-tool rate limiting.
+    // SECURITY ASSUMPTION: This tool runs as a local CLI process.
+    // If wrapped in a network service, implement a custom DNS resolver
+    // that enforces the IP allowlist at connect time, and add rate limiting.
     ssrf_check(url, resolver).await?;
 
     let (final_url, html) = download(client, url).await?;

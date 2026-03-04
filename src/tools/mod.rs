@@ -1,29 +1,21 @@
 mod errors;
 mod params;
 
-pub use params::{
-    FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
-};
+pub use errors::ScoutError;
+pub use params::Command;
 
 use std::time::Duration;
 
 use reqwest::Client;
-use rmcp::{
-    ErrorData as McpError, ServerHandler,
-    handler::server::{tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router,
-};
-
 use tracing::{info, warn};
 
-use errors::{
-    fetch_to_mcp_error, gemini_to_mcp_error, github_to_mcp_error, parse_repo_param,
-    unwrap_or_note,
+use errors::{parse_repo_param, unwrap_or_note};
+use params::{
+    FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
 };
 
 use crate::fetch::TokioDnsResolver;
-use crate::gemini::client::{GeminiClient, GeminiError, SearchClient};
+use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
 use crate::github::{self, GitHubClient};
 use crate::markdown::escape_md_link;
 use crate::search::engine;
@@ -36,30 +28,28 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum redirect hops before aborting.
 const MAX_REDIRECTS: usize = 5;
+/// Maximum number of issues/PRs to show in overview.
 const OVERVIEW_ITEMS: u8 = 5;
+/// Maximum number of releases to show in overview.
 const OVERVIEW_RELEASES: u8 = 3;
+/// Maximum output bytes for fetch results.
+const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 
-/// MCP server handler providing search, fetch, and GitHub tools.
-///
-/// Configuration via environment variables:
-/// - `GEMINI_API_KEY`: enables search/research tools (optional)
-/// - `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token`: GitHub API auth (optional)
-#[derive(Clone)]
+/// CLI tool runner providing search, fetch, and GitHub tools.
 pub struct Scout {
     http: Client,
     gemini: Option<GeminiClient>,
     github: GitHubClient,
-    tool_router: ToolRouter<Self>,
 }
 
-#[tool_router]
 impl Scout {
-    pub async fn new() -> Result<Self, reqwest::Error> {
+    pub async fn new() -> Result<Self, ScoutError> {
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-            .build()?;
+            .build()
+            .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
         let gemini = GeminiClient::from_env(http.clone())
             .inspect_err(|e| warn!("Gemini client not available: {e}"))
             .ok();
@@ -68,45 +58,35 @@ impl Scout {
             http,
             gemini,
             github,
-            tool_router: Self::tool_router(),
         })
     }
 
-    fn gemini(&self) -> Result<&GeminiClient, McpError> {
+    fn gemini(&self) -> Result<&GeminiClient, ScoutError> {
         self.gemini
             .as_ref()
-            .ok_or_else(|| gemini_to_mcp_error(GeminiError::ApiKeyNotSet))
+            .ok_or_else(|| ScoutError::from(GeminiError::ApiKeyNotSet))
     }
 
-    #[tool(
-        name = "search",
-        description = "Search the web using Gemini Grounding with Google Search. Returns an AI-generated answer with source URLs. Use this for factual queries, current events, documentation lookups, and technical research."
-    )]
-    async fn search(
-        &self,
-        Parameters(params): Parameters<SearchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        if params.query.is_empty() {
-            return Err(McpError::invalid_params("query must not be empty", None));
+    pub async fn run(&self, cmd: Command) -> Result<String, ScoutError> {
+        match cmd {
+            Command::Search(params) => self.search(params).await,
+            Command::Fetch(params) => self.fetch(params).await,
+            Command::Research(params) => self.research(params).await,
+            Command::RepoTree(params) => self.repo_tree(params).await,
+            Command::RepoRead(params) => self.repo_read(params).await,
+            Command::RepoOverview(params) => self.repo_overview(params).await,
         }
+    }
 
-        info!(query = %params.query, "tool:search");
+    async fn search(&self, params: SearchParams) -> Result<String, ScoutError> {
+        info!(query = %params.query, "search");
 
         let gemini = self.gemini()?;
-
-        let search_query = params
-            .lang
-            .unwrap_or_default()
-            .apply_to_query(&params.query);
-
-        let result = gemini
-            .search(&search_query)
-            .await
-            .map_err(gemini_to_mcp_error)?;
+        let search_query = params.lang.apply_to_query(&params.query);
+        let result = gemini.search(&search_query).await?;
 
         let mut output = result.answer.unwrap_or_else(|| {
-            "(No answer returned — the query may have been filtered by safety settings.)"
-                .to_string()
+            "(No answer returned — the query may have been filtered by safety settings.)".to_string()
         });
 
         if !result.sources.is_empty() {
@@ -121,32 +101,21 @@ impl Scout {
         }
 
         info!(sources = result.sources.len(), "search complete");
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(output)
     }
 
-    #[tool(
-        name = "fetch",
-        description = "Fetch a web page and convert it to clean Markdown. For GitHub repository URLs (github.com/owner/repo/...), prefer repo_read, repo_tree, or repo_overview instead — they use the GitHub API and return structured, accurate results. Use this tool for non-GitHub URLs. Uses Readability algorithm to extract main content, removing ads and navigation. No AI/LLM round-trip; you can analyze the returned Markdown yourself."
-    )]
-    async fn fetch(
-        &self,
-        Parameters(params): Parameters<FetchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        if !params.url.starts_with("http://") && !params.url.starts_with("https://") {
-            return Err(McpError::invalid_params(
-                "URL must use http or https scheme",
-                None,
-            ));
-        }
-
-        info!(url = %params.url, "tool:fetch");
-
-        let raw = params.raw.unwrap_or(false);
-        let meta = params.meta.unwrap_or(false);
+    async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
+        info!(url = %params.url, "fetch");
 
         let result = tokio::time::timeout(
             FETCH_TOOL_TIMEOUT,
-            crate::fetch::fetch_page(&self.http, &params.url, raw, meta, &TokioDnsResolver),
+            crate::fetch::fetch_page(
+                &self.http,
+                &params.url,
+                params.raw,
+                params.meta,
+                &TokioDnsResolver,
+            ),
         )
         .await
         .unwrap_or_else(|_| {
@@ -154,8 +123,7 @@ impl Scout {
                 "fetch timed out after {}s",
                 FETCH_TOOL_TIMEOUT.as_secs()
             )))
-        })
-        .map_err(fetch_to_mcp_error)?;
+        })?;
 
         let mut output = if result.used_raw_fallback {
             warn!(url = %params.url, "readability extraction failed, using raw fallback");
@@ -167,43 +135,26 @@ impl Scout {
             result.markdown
         };
 
-        const MAX_FETCH_OUTPUT_CHARS: usize = 100_000;
-        if output.len() > MAX_FETCH_OUTPUT_CHARS {
-            let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_CHARS);
+        if output.len() > MAX_FETCH_OUTPUT_BYTES {
+            let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_BYTES);
             output.truncate(end);
             output.push_str("\n\n(truncated)");
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(output)
     }
 
-    #[tool(
-        name = "research",
-        description = "Deep research: search the web, fetch top results, and compile a comprehensive report with sources. Combines Gemini search with local page fetching for thorough investigation. Use for complex questions requiring multiple sources."
-    )]
-    async fn research(
-        &self,
-        Parameters(params): Parameters<ResearchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        if params.query.is_empty() {
-            return Err(McpError::invalid_params("query must not be empty", None));
-        }
-
-        let depth = params.depth.unwrap_or(3).clamp(1, 10);
-        let lang = params.lang.unwrap_or_default();
-
-        info!(query = %params.query, depth, "tool:research");
+    async fn research(&self, params: ResearchParams) -> Result<String, ScoutError> {
+        info!(query = %params.query, depth = params.depth, "research");
 
         let gemini = self.gemini()?;
 
         let req = engine::ResearchRequest {
             query: &params.query,
-            depth,
-            lang,
+            depth: params.depth,
+            lang: params.lang,
         };
-        let report = engine::research(gemini, &self.http, &req, &TokioDnsResolver)
-            .await
-            .map_err(gemini_to_mcp_error)?;
+        let report = engine::research(gemini, &self.http, &req, &TokioDnsResolver).await?;
 
         info!(
             pages = report.fetched_pages.len(),
@@ -212,97 +163,65 @@ impl Scout {
             "research complete"
         );
 
-        let output = engine::format_report(&report, &params.query);
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(engine::format_report(&report, &params.query))
     }
 
-    #[tool(
-        name = "repo_tree",
-        description = "List files in a remote GitHub repository. Returns the file tree with optional path prefix and glob pattern filtering. Use this to explore a repository's structure before reading specific files."
-    )]
-    async fn repo_tree(
-        &self,
-        Parameters(params): Parameters<RepoTreeParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn repo_tree(&self, params: RepoTreeParams) -> Result<String, ScoutError> {
         let (owner, repo) = parse_repo_param(&params.repository)?;
 
-        info!(repository = %params.repository, "tool:repo_tree");
+        info!(repository = %params.repository, "repo_tree");
 
         let ref_ = match params.ref_ {
             Some(r) => {
-                github::validate_ref(&r).map_err(github_to_mcp_error)?;
+                github::validate_ref(&r)?;
                 r
             }
-            None => {
-                self.github
-                    .get_repo(owner, repo)
-                    .await
-                    .map_err(github_to_mcp_error)?
-                    .default_branch
-            }
+            None => self.github.get_repo(owner, repo).await?.default_branch,
         };
 
         if let Some(ref p) = params.path {
-            github::validate_path(p).map_err(github_to_mcp_error)?;
+            github::validate_path(p)?;
         }
 
-        let tree = self
-            .github
-            .get_tree(owner, repo, &ref_)
-            .await
-            .map_err(github_to_mcp_error)?;
+        let tree = self.github.get_tree(owner, repo, &ref_).await?;
 
         let filtered = github::filter_tree_entries(
             &tree.tree,
             params.path.as_deref(),
             params.pattern.as_deref(),
-        )
-        .map_err(github_to_mcp_error)?;
+        )?;
 
         let output = github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
 
         info!(files = filtered.len(), "repo_tree complete");
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(output)
     }
 
-    #[tool(
-        name = "repo_read",
-        description = "Read a file from a remote GitHub repository. Returns file content with optional line range selection (e.g., '1-80', '50-', '100'). Supports large files via git blob fallback."
-    )]
-    async fn repo_read(
-        &self,
-        Parameters(params): Parameters<RepoReadParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn repo_read(&self, params: RepoReadParams) -> Result<String, ScoutError> {
         let (owner, repo) = parse_repo_param(&params.repository)?;
 
-        info!(repository = %params.repository, path = %params.path, "tool:repo_read");
+        info!(repository = %params.repository, path = %params.path, "repo_read");
 
-        github::validate_path(&params.path).map_err(github_to_mcp_error)?;
+        github::validate_path(&params.path)?;
         if let Some(ref r) = params.ref_ {
-            github::validate_ref(r).map_err(github_to_mcp_error)?;
+            github::validate_ref(r)?;
         }
 
         let contents = self
             .github
             .get_contents(owner, repo, &params.path, params.ref_.as_deref())
-            .await
-            .map_err(github_to_mcp_error)?;
+            .await?;
 
         let raw = if let Some(ref encoded) = contents.content {
-            github::decode_content(encoded).map_err(github_to_mcp_error)?
+            github::decode_content(encoded)?
         } else {
-            let blob = self
-                .github
-                .get_blob(owner, repo, &contents.sha)
-                .await
-                .map_err(github_to_mcp_error)?;
-            github::decode_content(&blob.content).map_err(github_to_mcp_error)?
+            let blob = self.github.get_blob(owner, repo, &contents.sha).await?;
+            github::decode_content(&blob.content)?
         };
 
         let total = raw.lines().count();
         let content = if let Some(ref range) = params.lines {
-            let (start, end) = github::parse_line_range(range).map_err(github_to_mcp_error)?;
+            let (start, end) = github::parse_line_range(range)?;
             github::apply_line_range(&raw, start, end)
         } else {
             github::apply_line_range(&raw, 1, None)
@@ -311,20 +230,13 @@ impl Scout {
         let output = format!("{} ({total} lines)\n\n{content}", params.path);
 
         info!(path = %params.path, lines = total, "repo_read complete");
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(output)
     }
 
-    #[tool(
-        name = "repo_overview",
-        description = "Get a comprehensive overview of a remote GitHub repository: metadata (stars, language, topics), README content, recent open issues, pull requests, and releases. Use this as the starting point when investigating a repository."
-    )]
-    async fn repo_overview(
-        &self,
-        Parameters(params): Parameters<RepoOverviewParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn repo_overview(&self, params: RepoOverviewParams) -> Result<String, ScoutError> {
         let (owner, repo) = parse_repo_param(&params.repository)?;
 
-        info!(repository = %params.repository, "tool:repo_overview");
+        info!(repository = %params.repository, "repo_overview");
 
         let (repo_info, readme, issues, pulls, releases) = tokio::join!(
             self.github.get_repo(owner, repo),
@@ -334,7 +246,7 @@ impl Scout {
             self.github.get_releases(owner, repo, OVERVIEW_RELEASES),
         );
 
-        let repo_info = repo_info.map_err(github_to_mcp_error)?;
+        let repo_info = repo_info?;
 
         let mut notes = Vec::new();
 
@@ -380,26 +292,7 @@ impl Scout {
             has_readme = readme_content.is_some(),
             "repo_overview complete"
         );
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-}
-
-#[tool_handler]
-impl ServerHandler for Scout {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            server_info: Implementation {
-                name: "scout".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                ..Default::default()
-            },
-            instructions: Some(
-                "scout provides web search (via Gemini Grounding), page fetching (local HTML→Markdown conversion), and GitHub repository exploration (repo_tree, repo_read, repo_overview) tools."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        Ok(output)
     }
 }
 
@@ -425,7 +318,6 @@ mod tests {
             http: http.clone(),
             gemini: None,
             github: GitHubClient::with_base_url(http, "http://localhost:0"),
-            tool_router: Scout::tool_router(),
         }
     }
 
@@ -435,85 +327,59 @@ mod tests {
             http: http.clone(),
             gemini: Some(GeminiClient::with_base_url(http.clone(), gemini_uri)),
             github: GitHubClient::with_base_url(http, "http://localhost:0"),
-            tool_router: Scout::tool_router(),
         }
-    }
-
-    #[tokio::test]
-    async fn search_rejects_empty_query() {
-        let s = scout();
-        let params = Parameters(SearchParams {
-            query: String::new(),
-            lang: None,
-        });
-
-        let err = s.search(params).await.unwrap_err();
-        assert!(err.message.contains("empty"), "got: {}", err.message);
-    }
-
-    #[tokio::test]
-    async fn research_rejects_empty_query() {
-        let s = scout();
-        let params = Parameters(ResearchParams {
-            query: String::new(),
-            depth: None,
-            lang: None,
-        });
-
-        let err = s.research(params).await.unwrap_err();
-        assert!(err.message.contains("empty"), "got: {}", err.message);
     }
 
     #[tokio::test]
     async fn search_without_api_key_returns_error() {
         let s = scout();
-        let params = Parameters(SearchParams {
+        let params = SearchParams {
             query: "test query".into(),
-            lang: None,
-        });
+            lang: Lang::Auto,
+        };
 
         let err = s.search(params).await.unwrap_err();
         assert!(
-            err.message.contains("GEMINI_API_KEY"),
+            err.to_string().contains("GEMINI_API_KEY"),
             "got: {}",
-            err.message
+            err
         );
     }
 
     #[tokio::test]
     async fn repo_tree_rejects_invalid_repo() {
         let s = scout();
-        let params = Parameters(RepoTreeParams {
+        let params = RepoTreeParams {
             repository: "invalid".into(),
             ref_: None,
             path: None,
             pattern: None,
-        });
+        };
         let err = s.repo_tree(params).await.unwrap_err();
-        assert!(err.message.contains("owner/repo"), "got: {}", err.message);
+        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
     }
 
     #[tokio::test]
     async fn repo_read_rejects_invalid_repo() {
         let s = scout();
-        let params = Parameters(RepoReadParams {
+        let params = RepoReadParams {
             repository: "invalid".into(),
             path: "README.md".into(),
             ref_: None,
             lines: None,
-        });
+        };
         let err = s.repo_read(params).await.unwrap_err();
-        assert!(err.message.contains("owner/repo"), "got: {}", err.message);
+        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
     }
 
     #[tokio::test]
     async fn repo_overview_rejects_invalid_repo() {
         let s = scout();
-        let params = Parameters(RepoOverviewParams {
+        let params = RepoOverviewParams {
             repository: "".into(),
-        });
+        };
         let err = s.repo_overview(params).await.unwrap_err();
-        assert!(err.message.contains("owner/repo"), "got: {}", err.message);
+        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
     }
 
     #[tokio::test]
@@ -541,13 +407,13 @@ mod tests {
             .await;
 
         let s = scout_with_gemini(&server.uri());
-        let params = Parameters(SearchParams {
+        let params = SearchParams {
             query: "What is Rust?".into(),
-            lang: None,
-        });
+            lang: Lang::Auto,
+        };
 
         let result = s.search(params).await.unwrap();
-        assert!(!result.content.is_empty());
+        assert!(!result.is_empty());
     }
 
     #[tokio::test]
@@ -558,16 +424,16 @@ mod tests {
             "javascript:alert(1)",
             "data:text/html,<h1>hi</h1>",
         ] {
-            let params = Parameters(FetchParams {
+            let params = FetchParams {
                 url: url.into(),
-                raw: None,
-                meta: None,
-            });
+                raw: false,
+                meta: false,
+            };
             let err = s.fetch(params).await.unwrap_err();
             assert!(
-                err.message.contains("http or https"),
+                err.to_string().contains("HTTP(S)"),
                 "should reject {url}, got: {}",
-                err.message
+                err
             );
         }
     }
@@ -597,27 +463,20 @@ mod tests {
             .await;
 
         let s = scout_with_gemini(&server.uri());
-        let params = Parameters(ResearchParams {
+        let params = ResearchParams {
             query: "What is Rust?".into(),
-            depth: Some(1),
-            lang: None,
-        });
+            depth: 1,
+            lang: Lang::Auto,
+        };
 
         let result = s.research(params).await.unwrap();
-        let text = &result.content[0].as_text().unwrap().text;
-        assert!(text.contains("Rust"), "report should contain search answer, got: {text}");
-        assert!(text.contains("rust-lang.org"), "report should reference source URL");
-    }
-
-    #[test]
-    fn lang_deserializes_from_json() {
-        let ja: Lang = serde_json::from_str(r#""ja""#).unwrap();
-        assert!(matches!(ja, Lang::Ja));
-
-        let en: Lang = serde_json::from_str(r#""en""#).unwrap();
-        assert!(matches!(en, Lang::En));
-
-        let auto: Lang = serde_json::from_str(r#""auto""#).unwrap();
-        assert!(matches!(auto, Lang::Auto));
+        assert!(
+            result.contains("Rust"),
+            "report should contain search answer, got: {result}"
+        );
+        assert!(
+            result.contains("rust-lang.org"),
+            "report should reference source URL"
+        );
     }
 }

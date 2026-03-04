@@ -1,42 +1,96 @@
-use rmcp::ErrorData as McpError;
+use std::fmt;
 use tracing::warn;
 
 use crate::fetch::FetchError;
 use crate::gemini::client::GeminiError;
 use crate::github;
 
-pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), McpError> {
-    github::parse_repo(repository).map_err(github_to_mcp_error)
+/// Unified error type for CLI tool execution.
+#[derive(Debug)]
+pub struct ScoutError {
+    message: String,
+    exit_code: i32,
 }
 
-pub(super) fn retriable_error(e: &impl std::fmt::Display) -> McpError {
-    McpError::internal_error(format!("{e} (retriable)"), None)
-}
-
-pub(super) fn github_to_mcp_error(e: github::GitHubError) -> McpError {
-    match &e {
-        github::GitHubError::NotFound(_)
-        | github::GitHubError::InvalidRepo(_)
-        | github::GitHubError::InvalidRef(_)
-        | github::GitHubError::InvalidPath(_)
-        | github::GitHubError::InvalidLineRange(_)
-        | github::GitHubError::InvalidPattern(_) => McpError::invalid_params(e.to_string(), None),
-        github::GitHubError::RateLimited => retriable_error(&e),
-        github::GitHubError::Forbidden(_) => McpError::internal_error(
-            format!("{e} — check that your GITHUB_TOKEN has the required scopes"),
-            None,
-        ),
-        _ => McpError::internal_error(e.to_string(), None),
+impl fmt::Display for ScoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
     }
 }
 
-pub(super) fn fetch_to_mcp_error(e: FetchError) -> McpError {
-    match &e {
-        FetchError::InvalidScheme
-        | FetchError::InvalidUrl(_)
-        | FetchError::InternalHost
-        | FetchError::UnsupportedContentType(_) => McpError::invalid_params(e.to_string(), None),
-        _ => McpError::internal_error(e.to_string(), None),
+impl std::error::Error for ScoutError {}
+
+impl ScoutError {
+    pub(super) fn user_error(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            exit_code: 1,
+        }
+    }
+
+    pub(super) fn internal(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutError> {
+    github::parse_repo(repository).map_err(ScoutError::from)
+}
+
+// A-001: Exhaustive match — no wildcard catch-all
+
+impl From<github::GitHubError> for ScoutError {
+    fn from(e: github::GitHubError) -> Self {
+        match &e {
+            github::GitHubError::NotFound(_)
+            | github::GitHubError::InvalidRepo(_)
+            | github::GitHubError::InvalidRef(_)
+            | github::GitHubError::InvalidPath(_)
+            | github::GitHubError::InvalidLineRange(_)
+            | github::GitHubError::InvalidPattern(_) => Self::user_error(e.to_string()),
+            github::GitHubError::RateLimited => Self::user_error(e.to_string()),
+            github::GitHubError::Forbidden(_) => Self::user_error(format!(
+                "{e} — check that your GITHUB_TOKEN has the required scopes"
+            )),
+            github::GitHubError::Api { .. }
+            | github::GitHubError::Network(_)
+            | github::GitHubError::Decode(_) => Self::internal(e.to_string()),
+        }
+    }
+}
+
+impl From<FetchError> for ScoutError {
+    fn from(e: FetchError) -> Self {
+        match &e {
+            FetchError::InvalidScheme
+            | FetchError::InvalidUrl(_)
+            | FetchError::InternalHost
+            | FetchError::UnsupportedContentType(_) => Self::user_error(e.to_string()),
+            FetchError::Timeout(_) | FetchError::DnsResolution(_) => Self::internal(e.to_string()),
+            FetchError::Http(_) | FetchError::Status(_) | FetchError::TooLarge => {
+                Self::internal(e.to_string())
+            }
+        }
+    }
+}
+
+impl From<GeminiError> for ScoutError {
+    fn from(e: GeminiError) -> Self {
+        match &e {
+            GeminiError::ApiKeyNotSet => Self::user_error(e.to_string()),
+            GeminiError::RateLimited => Self::user_error(e.to_string()),
+            GeminiError::QuotaExhausted(_) => Self::user_error(format!(
+                "{e} — check your API billing at https://aistudio.google.com"
+            )),
+            GeminiError::Api { .. } | GeminiError::Network(_) => Self::internal(e.to_string()),
+        }
     }
 }
 
@@ -55,44 +109,63 @@ pub(super) fn unwrap_or_note<T>(
     }
 }
 
-pub(super) fn gemini_to_mcp_error(e: GeminiError) -> McpError {
-    match &e {
-        GeminiError::ApiKeyNotSet => McpError::invalid_params(e.to_string(), None),
-        GeminiError::RateLimited => retriable_error(&e),
-        GeminiError::QuotaExhausted(_) => McpError::invalid_params(
-            format!("{e} — check your API billing at https://aistudio.google.com"),
-            None,
-        ),
-        _ => McpError::internal_error(e.to_string(), None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // A-010: Unit tests for error conversion
+
     #[test]
-    fn github_to_mcp_error_rate_limited_is_retriable() {
-        let err = github_to_mcp_error(github::GitHubError::RateLimited);
-        assert!(err.message.contains("retriable"));
+    fn github_not_found_is_user_error() {
+        let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
+        assert_eq!(err.exit_code(), 1);
     }
 
     #[test]
-    fn github_to_mcp_error_forbidden_hints_token() {
-        let err = github_to_mcp_error(github::GitHubError::Forbidden("denied".into()));
-        assert!(err.message.contains("GITHUB_TOKEN"));
+    fn github_rate_limited_is_user_error() {
+        let err = ScoutError::from(github::GitHubError::RateLimited);
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.to_string().contains("rate limit"));
     }
 
     #[test]
-    fn fetch_to_mcp_error_invalid_scheme_is_invalid_params() {
-        let err = fetch_to_mcp_error(FetchError::InvalidScheme);
-        assert!(err.message.contains("HTTP(S)"), "got: {}", err.message);
-        assert_eq!(err.code, rmcp::model::ErrorCode(-32602));
+    fn github_forbidden_hints_token() {
+        let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.to_string().contains("GITHUB_TOKEN"));
     }
 
     #[test]
-    fn fetch_to_mcp_error_http_is_internal_error() {
-        let err = fetch_to_mcp_error(FetchError::Status(500));
-        assert_eq!(err.code, rmcp::model::ErrorCode(-32603));
+    fn github_api_error_is_internal() {
+        let err = ScoutError::from(github::GitHubError::Api {
+            code: 500,
+            message: "server error".into(),
+        });
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn fetch_invalid_scheme_is_user_error() {
+        let err = ScoutError::from(FetchError::InvalidScheme);
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn fetch_status_is_internal() {
+        let err = ScoutError::from(FetchError::Status(500));
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn gemini_api_key_not_set_is_user_error() {
+        let err = ScoutError::from(GeminiError::ApiKeyNotSet);
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.to_string().contains("GEMINI_API_KEY"));
+    }
+
+    #[test]
+    fn gemini_rate_limited_is_user_error() {
+        let err = ScoutError::from(GeminiError::RateLimited);
+        assert_eq!(err.exit_code(), 1);
     }
 }

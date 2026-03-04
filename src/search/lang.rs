@@ -1,8 +1,6 @@
-use schemars::JsonSchema;
-use serde::Deserialize;
+use clap::ValueEnum;
 
-#[derive(Deserialize, JsonSchema, Clone, Copy, Default)]
-#[serde(rename_all = "lowercase")]
+#[derive(ValueEnum, Clone, Copy, Default)]
 pub enum Lang {
     Ja,
     En,

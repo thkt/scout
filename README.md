@@ -1,26 +1,26 @@
 # scout
 
-Web research and GitHub exploration for AI agents. Your agent reads the sources, not a summary of the sources.
+Web research and GitHub exploration — for humans and AI agents alike. Read the sources, not a summary of the sources.
 
 [日本語版](README.ja.md)
 
 ## The problem
 
-An agent needs to research how Next.js App Router handles authentication.
+You need to research how Next.js App Router handles authentication.
 
 **Without scout:**
 
 ```
-WebSearch("Next.js App Router authentication")  → Links and snippets.
-WebFetch(url, prompt="Explain the auth approaches")  → LLM summary. Prompt written before seeing the page.
+curl https://nextjs.org/docs/.../authentication | # wall of HTML
+gh api /repos/vercel/next.js/... | # raw JSON
 ```
 
-This works. But every page goes through WebFetch's prompt — a lossy filter written before the agent knows what's on the page. The agent reasons from summaries, not from the source material.
+Multiple tools, multiple formats, lots of noise.
 
 **With scout:**
 
-```
-research("Next.js App Router authentication best practices", depth=5)
+```sh
+scout research "Next.js App Router authentication best practices" --depth 5
 
   Grounded answer with citations...
 
@@ -39,9 +39,7 @@ research("Next.js App Router authentication best practices", depth=5)
   - ...
 ```
 
-The agent gets a grounded answer from Google Search, plus 5 source pages as Markdown. No LLM intermediary on the fetched content — your agent reads the primary sources and decides what matters.
-
-This isn't something built-in tools can't do at all. It's something they do with information loss at each step. scout removes that loss.
+One command, grounded answer from Google Search, plus 5 source pages as clean Markdown. No LLM intermediary — you read the primary sources and decide what matters.
 
 Japanese queries are handled automatically: "Next.js 認証 ベストプラクティス" expands to both the original and an English query extracted from the technical terms, so English-only documentation isn't missed.
 
@@ -50,14 +48,14 @@ Japanese queries are handled automatically: "Next.js 認証 ベストプラク�
 **Use scout when:**
 
 - You need to investigate a topic across multiple sources — `research` does the search → fetch → compile loop for you
-- You want the agent to see full page content, not an LLM summary — `fetch` returns raw Markdown
-- You need to explore a remote GitHub repo without cloning — `repo_tree`, `repo_read`, `repo_overview`
+- You want full page content, not an LLM summary — `fetch` returns raw Markdown
+- You need to explore a remote GitHub repo without cloning — `repo-tree`, `repo-read`, `repo-overview`
 
-**Use built-in tools when:**
+**Use existing tools when:**
 
-- You have a specific question about a specific page — WebFetch's prompt parameter is designed for that
-- A quick lookup is enough — WebSearch is lighter than `search`
-- The file is already on disk — `Read` needs no network
+- A quick `curl` is enough — scout adds Readability extraction and SSRF protection on top
+- The file is already on disk — no network needed
+- You need JS-rendered content — scout fetches static HTML only
 
 ## Setup
 
@@ -70,62 +68,77 @@ brew install thkt/tap/scout
 Or build from source (requires Rust 1.85+):
 
 ```sh
-cargo build --release
+cargo install --path .
 ```
 
 Pre-built binaries in [Releases](https://github.com/thkt/scout/releases) — macOS (Apple Silicon / Intel), Linux (x86_64 / ARM64).
 
-### Configure
+### Environment
 
 ```sh
-claude mcp add scout -- scout
+export GEMINI_API_KEY="..."   # Required for search/research (free tier: https://aistudio.google.com/apikey)
+export GITHUB_TOKEN="..."     # Optional: 5,000 req/hour vs 60/hour unauthenticated
 ```
 
-Or in `~/.claude/.mcp.json`:
+`GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` are all supported, in that order.
 
-```json
-{
-  "mcpServers": {
-    "scout": {
-      "command": "scout",
-      "env": {
-        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
-      }
-    }
-  }
-}
-```
+### Claude Code integration
 
-You need a [Gemini API key](https://aistudio.google.com/apikey) for `search` and `research` (free tier works). `fetch` and GitHub tools work without it.
+Add to your project's `CLAUDE.md`:
 
-Set `GITHUB_TOKEN` or `GH_TOKEN` for higher GitHub rate limits (5,000/hour vs 60/hour unauthenticated). Falls back to `gh auth token` if not set.
-
+```markdown
 ## Tools
 
-### `research` — Multi-source deep research
+- `scout search "query"` — web search via Gemini Grounding
+- `scout fetch URL` — web page to clean Markdown
+- `scout research "query" --depth N` — multi-source deep research
+- `scout repo-tree owner/repo` — list files in a GitHub repo
+- `scout repo-read owner/repo path` — read a file from a GitHub repo
+- `scout repo-overview owner/repo` — repository overview
+```
+
+Claude Code will pick up the commands naturally — no MCP configuration needed.
+
+## Commands
+
+### `scout research` — Multi-source deep research
 
 Searches the web via Gemini Grounding, fetches the top N source pages, and compiles a report — grounded answer, full page content, and deduplicated source list.
 
-- `depth`: number of pages to fetch (1–10, default 3)
-- `lang`: `"ja"`, `"en"`, or `"auto"` (default) — auto-detects Japanese and expands to bilingual queries
+```sh
+scout research "Rust async runtime comparison" --depth 5 --lang ja
+```
 
-### `search` — Grounded web search
+| Flag          | Description                                                                              |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `-d, --depth` | Pages to fetch (1–10, default 3)                                                         |
+| `-l, --lang`  | `ja`, `en`, or `auto` (default) — auto-detects Japanese and expands to bilingual queries |
+
+### `scout search` — Grounded web search
 
 Gemini Grounding with Google Search. Returns a synthesized answer with source URLs — not a list of links to follow.
 
-### `fetch` — Web page to Markdown
+```sh
+scout search "Next.js server actions security"
+```
+
+### `scout fetch` — Web page to Markdown
 
 Downloads a page, extracts main content via Readability, converts to Markdown. No LLM round-trip.
 
-- `raw`: skip Readability, convert entire page
-- `meta`: include title/author/date as YAML frontmatter
-
-### `repo_tree` — Remote file listing
-
-List files in a GitHub repository with path prefix and glob pattern filtering.
-
+```sh
+scout fetch https://react.dev/blog/2024/12/05/react-19 --meta
 ```
-repo_tree("denoland/deno", path="cli/", pattern="*.rs")
+
+| Flag     | Description                                   |
+| -------- | --------------------------------------------- |
+| `--raw`  | Skip Readability, convert entire page         |
+| `--meta` | Include title/author/date as YAML frontmatter |
+
+### `scout repo-tree` — Remote file listing
+
+```sh
+scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 
   denoland/deno (ref: main)
   files: 42
@@ -135,15 +148,32 @@ repo_tree("denoland/deno", path="cli/", pattern="*.rs")
   ...
 ```
 
-### `repo_read` — Read remote files
+| Flag         | Description                |
+| ------------ | -------------------------- |
+| `--ref`      | Branch, tag, or commit SHA |
+| `-p, --path` | Filter by path prefix      |
+| `--pattern`  | Glob pattern for filenames |
 
-Read a file with optional line range (`"1-80"`, `"50-"`, `"100"`). Handles large files via git blob fallback. No base64 decoding needed.
+### `scout repo-read` — Read remote files
 
-### `repo_overview` — Repository at a glance
+```sh
+scout repo-read facebook/react src/ReactElement.js --lines 1-50
+```
+
+| Flag          | Description                                         |
+| ------------- | --------------------------------------------------- |
+| `--ref`       | Branch, tag, or commit SHA                          |
+| `-l, --lines` | Line range: `1-80`, `50-`, or `100` (first N lines) |
+
+### `scout repo-overview` — Repository at a glance
+
+```sh
+scout repo-overview denoland/deno
+```
 
 Repo metadata, README, open issues, PRs, and recent releases — 5 concurrent API calls, one response.
 
-All GitHub tools accept `owner/repo`, full URLs (`https://github.com/denoland/deno`), and `.git`-suffixed URLs.
+All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland/deno`), and `.git`-suffixed URLs.
 
 ## How it works
 
@@ -155,7 +185,7 @@ All GitHub tools accept `owner/repo`, full URLs (`https://github.com/denoland/de
 URL validation → DNS pre-check → Download → Post-redirect recheck → Readability → Markdown
 ```
 
-Private/loopback IPs blocked at DNS and redirect stages. Credentials redacted from errors. 10 MB download cap, 100K character output.
+Private/loopback IPs blocked at DNS and redirect stages. Credentials redacted from errors. 10 MB download cap, 100K byte output.
 
 **Search** — Gemini `generateContent` with `google_search` grounding tool. The response includes both the generated answer and `groundingMetadata` with source URLs extracted from Google Search.
 
@@ -165,8 +195,8 @@ Private/loopback IPs blocked at DNS and redirect stages. Credentials redacted fr
 
 ```
 src/
-├── main.rs              MCP server (stdio transport)
-├── tools/               Tool handlers and parameter definitions
+├── main.rs              CLI entry point (clap)
+├── tools/               Command handlers, params, error types
 ├── search/
 │   ├── engine.rs        Research engine (search + fetch + compile)
 │   └── bilingual.rs     Japanese/English query expansion
@@ -185,8 +215,8 @@ Single binary, zero runtime dependencies.
 
 - **Gemini API key required** — `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day.
 - **No JavaScript rendering** — `fetch` downloads static HTML. SPAs that require client-side rendering return minimal content.
-- **GitHub rate limits** — Unauthenticated: 60/hour. With token: 5,000/hour. `repo_overview` uses 5 requests per call.
-- **Fetch size cap** — 10 MB download limit, 100K character output.
+- **GitHub rate limits** — Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call.
+- **Fetch size cap** — 10 MB download limit, 100K byte output.
 
 ## License
 
