@@ -1,8 +1,8 @@
+**English** | [日本語](README.ja.md)
+
 # scout
 
 Web research and GitHub exploration — for humans and AI agents alike. Read the sources, not a summary of the sources.
-
-[日本語版](README.ja.md)
 
 ## The problem
 
@@ -213,10 +213,12 @@ Single binary, zero runtime dependencies.
 
 ## Limitations
 
-- **Gemini API key required** — `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day.
-- **No JavaScript rendering** — `fetch` downloads static HTML. SPAs that require client-side rendering return minimal content.
-- **GitHub rate limits** — Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call.
-- **Fetch size cap** — 10 MB download limit, 100K byte output.
+| Limitation              | Details                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| Gemini API key required | `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day                        |
+| No JavaScript rendering | `fetch` downloads static HTML. SPAs that require client-side rendering return minimal content         |
+| GitHub rate limits      | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call           |
+| Fetch size cap          | 10 MB download limit, 100K byte output                                                               |
 
 ## License
 
