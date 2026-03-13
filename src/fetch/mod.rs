@@ -12,9 +12,12 @@ use ssrf::{redact_url_credentials, ssrf_check};
 use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
+
+const PLAYWRIGHT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -49,6 +52,8 @@ pub enum FetchError {
 /// Fetch a web page and extract its content.
 ///
 /// Includes SSRF defense (URL validation + DNS check + post-redirect recheck).
+/// If the page appears JS-dependent (SPA with empty body), automatically
+/// falls back to playwright-cli for JS rendering.
 /// - `raw`: skip Readability extraction, return full HTML converted to Markdown
 /// - `meta`: include YAML frontmatter (title, author, date)
 pub async fn fetch_page(
@@ -67,10 +72,23 @@ pub async fn fetch_page(
     // that enforces the IP allowlist at connect time, and add rate limiting.
     ssrf_check(url, resolver).await?;
 
-    let (final_url, html) = download(client, url).await?;
+    let (final_url, mut html) = download(client, url).await?;
 
     // Re-validate after redirects to block content from internal hosts.
     ssrf_check(&final_url, resolver).await?;
+
+    if is_js_dependent(&html) {
+        warn!("JS-dependent page detected, trying playwright-cli fallback");
+        match fetch_with_playwright(&final_url).await {
+            Ok(js_html) => {
+                debug!("playwright fallback succeeded");
+                html = js_html;
+            }
+            Err(e) => {
+                warn!(error = %e, "playwright fallback failed, using original HTML");
+            }
+        }
+    }
 
     let article = if raw {
         extract_raw(&html)
@@ -80,6 +98,225 @@ pub async fn fetch_page(
 
     debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
     Ok(to_fetch_result(article, final_url, meta))
+}
+
+const BODY_TEXT_THRESHOLD: usize = 100;
+
+const SPA_ROOT_IDS: &[&str] = &[
+    r#"id="root""#,
+    r#"id="app""#,
+    r#"id="__next""#,
+    r#"id="__nuxt""#,
+];
+
+fn is_js_dependent(html: &str) -> bool {
+    if !has_thin_body(html) {
+        return false;
+    }
+    html.contains("<script") || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
+}
+
+/// Skips `<script>`/`<style>` content; short-circuits at [`BODY_TEXT_THRESHOLD`].
+fn has_thin_body(html: &str) -> bool {
+    let lower = html.as_bytes();
+    let body_start = lower
+        .windows(5)
+        .position(|w| w.eq_ignore_ascii_case(b"<body"));
+    let body = if let Some(start) = body_start {
+        let after_tag = html[start..].find('>').map(|i| start + i + 1).unwrap_or(start);
+        let body_end = lower[after_tag..]
+            .windows(7)
+            .position(|w| w.eq_ignore_ascii_case(b"</body>"))
+            .map(|i| after_tag + i)
+            .unwrap_or(html.len());
+        &html[after_tag..body_end]
+    } else {
+        html
+    };
+
+    let mut visible_bytes = 0usize;
+    let mut in_tag = false;
+    let mut skip_text = false;
+    let mut tag_buf = [0u8; 16];
+    let mut tag_len = 0usize;
+    let mut reading_name = false;
+    let mut in_whitespace = true;
+
+    for ch in body.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                tag_len = 0;
+                reading_name = true;
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                reading_name = false;
+                let name = &tag_buf[..tag_len];
+                if name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style") {
+                    skip_text = true;
+                } else if name.eq_ignore_ascii_case(b"/script") || name.eq_ignore_ascii_case(b"/style") {
+                    skip_text = false;
+                }
+            }
+            _ if in_tag => {
+                if reading_name {
+                    if ch.is_ascii_alphanumeric() || ch == '/' {
+                        if tag_len < tag_buf.len() {
+                            tag_buf[tag_len] = ch as u8;
+                            tag_len += 1;
+                        }
+                    } else {
+                        reading_name = false;
+                    }
+                }
+            }
+            _ if skip_text => {}
+            _ if ch.is_whitespace() => {
+                if !in_whitespace && visible_bytes > 0 {
+                    visible_bytes += 1;
+                    in_whitespace = true;
+                }
+            }
+            _ => {
+                visible_bytes += ch.len_utf8();
+                in_whitespace = false;
+                if visible_bytes >= BODY_TEXT_THRESHOLD {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PlaywrightError {
+    #[error("playwright-cli not installed")]
+    NotInstalled,
+    #[error("playwright-cli timed out after {0}s")]
+    Timeout(u64),
+    #[error("playwright-cli failed: {0}")]
+    ProcessFailed(String),
+}
+
+async fn drain_pipe<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, limit: usize) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match tokio::io::AsyncReadExt::read(&mut pipe, &mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > limit {
+                    buf.truncate(limit);
+                    break;
+                }
+            }
+        }
+    }
+    buf
+}
+
+async fn resolve_playwright_cli() -> Result<String, PlaywrightError> {
+    for bin in ["playwright-cli", "npx"] {
+        let ok = tokio::process::Command::new("which")
+            .arg(bin)
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return Ok(if bin == "npx" {
+                "npx @playwright/cli".to_string()
+            } else {
+                bin.to_string()
+            });
+        }
+    }
+    Err(PlaywrightError::NotInstalled)
+}
+
+async fn fetch_with_playwright(url: &str) -> Result<String, PlaywrightError> {
+    let cli = resolve_playwright_cli().await?;
+
+    let escaped_url = shell_escape::escape(url.into());
+    let cmd = format!(
+        r#"{cli} open {escaped_url} && {cli} run-code "async page => {{ return await page.content(); }}" && {cli} close"#
+    );
+
+    let mut child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| PlaywrightError::ProcessFailed(e.to_string()))?;
+
+    // Drain pipes concurrently to avoid deadlock from full pipe buffers.
+    let stdout_pipe = child.stdout.take().unwrap();
+    let stderr_pipe = child.stderr.take().unwrap();
+    const MAX_STDERR_BYTES: usize = 65_536;
+    let stdout_drain = tokio::spawn(drain_pipe(stdout_pipe, MAX_RESPONSE_BYTES));
+    let stderr_drain = tokio::spawn(drain_pipe(stderr_pipe, MAX_STDERR_BYTES));
+
+    // wait() borrows &mut self, so child remains available for kill() on timeout.
+    match tokio::time::timeout(PLAYWRIGHT_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => {
+            if !status.success() {
+                stdout_drain.abort();
+                let stderr_buf = stderr_drain.await.unwrap_or_default();
+                let stderr = String::from_utf8_lossy(&stderr_buf);
+                return Err(PlaywrightError::ProcessFailed(stderr.into_owned()));
+            }
+            let stdout_buf = stdout_drain.await.unwrap_or_default();
+            stderr_drain.abort();
+            let stdout = String::from_utf8_lossy(&stdout_buf);
+            parse_playwright_output(&stdout)
+        }
+        Ok(Err(e)) => {
+            stdout_drain.abort();
+            stderr_drain.abort();
+            Err(PlaywrightError::ProcessFailed(e.to_string()))
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            stdout_drain.abort();
+            stderr_drain.abort();
+            Err(PlaywrightError::Timeout(PLAYWRIGHT_TIMEOUT.as_secs()))
+        }
+    }
+}
+
+fn parse_playwright_output(stdout: &str) -> Result<String, PlaywrightError> {
+    // playwright-cli run-code outputs: ### Result\n"<html>..."
+    let result_marker = "### Result\n";
+    let after_marker = stdout
+        .find(result_marker)
+        .map(|i| &stdout[i + result_marker.len()..])
+        .unwrap_or(stdout);
+
+    let trimmed = after_marker.trim();
+
+    if trimmed.starts_with('"') {
+        let json_str = if let Some(end) = trimmed.find("\n###") {
+            &trimmed[..end]
+        } else {
+            trimmed
+        };
+        if let Ok(html) = serde_json::from_str::<String>(json_str.trim()) {
+            return Ok(html);
+        }
+    }
+
+    if trimmed.contains("<html") || trimmed.contains("<body") {
+        return Ok(trimmed.to_string());
+    }
+
+    Err(PlaywrightError::ProcessFailed(
+        "could not parse playwright output".to_string(),
+    ))
 }
 
 async fn download(client: &Client, url: &str) -> Result<(String, String), FetchError> {
@@ -351,32 +588,6 @@ mod download_tests {
     }
 
     #[tokio::test]
-    async fn download_extracts_readability_content() {
-        let html = r#"
-            <html><head><title>Test</title></head>
-            <body><article>
-                <h1>Article Title</h1>
-                <p>Paragraph one with enough text for readability to consider it real content.</p>
-                <p>Paragraph two with more text to make it sufficiently long and article-like.</p>
-                <p>Paragraph three continues adding content so the extraction works properly.</p>
-            </article></body></html>"#;
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/article"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(html))
-            .mount(&server)
-            .await;
-
-        let client = Client::new();
-        let (_, body) = download(&client, &format!("{}/article", server.uri()))
-            .await
-            .unwrap();
-
-        assert!(body.contains("Article Title"));
-    }
-
-    #[tokio::test]
     async fn download_rejects_non_html_content_type() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -417,8 +628,14 @@ mod download_tests {
         assert!(html.contains("ok"));
     }
 
+}
+
+#[cfg(test)]
+mod fetch_page_tests {
+    use super::*;
+
     #[tokio::test]
-    async fn fetch_page_blocks_ssrf_to_localhost() {
+    async fn blocks_ssrf_to_localhost() {
         let client = Client::new();
         let result = fetch_page(
             &client,
@@ -429,5 +646,149 @@ mod download_tests {
         )
         .await;
         assert!(matches!(result, Err(FetchError::InternalHost)));
+    }
+}
+
+#[cfg(test)]
+mod js_dependent_tests {
+    use super::*;
+
+    #[test]
+    fn all_spa_frameworks_detected() {
+        for id in SPA_ROOT_IDS {
+            let html = format!(
+                r#"<html><head><script src="app.js"></script></head>
+                <body><div {id}></div></body></html>"#
+            );
+            assert!(is_js_dependent(&html), "should detect SPA with {id}");
+        }
+    }
+
+    #[test]
+    fn normal_html_not_detected() {
+        let html = r#"<html><body><article>
+        <h1>Title</h1><p>Long paragraph with enough content to exceed
+        the threshold of one hundred characters easily.</p>
+        </article></body></html>"#;
+        assert!(!is_js_dependent(html));
+    }
+
+    #[test]
+    fn script_without_spa_pattern_but_empty_body() {
+        let html = r#"<html><head><script src="bundle.js"></script></head>
+        <body><div class="app"></div></body></html>"#;
+        assert!(is_js_dependent(html));
+    }
+
+    #[test]
+    fn spa_pattern_without_script_but_empty_body() {
+        let html = r#"<html><body><div id="root"></div></body></html>"#;
+        assert!(is_js_dependent(html));
+    }
+
+    #[test]
+    fn rich_body_with_scripts_not_detected() {
+        let content = "x".repeat(200);
+        let html = format!(
+            r#"<html><head><script src="app.js"></script></head>
+            <body><div id="root"><p>{content}</p></div></body></html>"#
+        );
+        assert!(!is_js_dependent(&html));
+    }
+
+    #[test]
+    fn thin_body_without_script_or_spa_pattern_not_detected() {
+        let html = "<html><body><p>short</p></body></html>";
+        assert!(!is_js_dependent(html));
+    }
+
+    #[test]
+    fn no_body_tag_falls_back_to_full_html() {
+        let html = r#"<div id="root"></div><script src="app.js"></script>"#;
+        assert!(is_js_dependent(html));
+    }
+}
+
+#[cfg(test)]
+mod thin_body_tests {
+    use super::*;
+
+    #[test]
+    fn style_content_excluded_from_visible_text() {
+        let html = "<html><body><style>.big{font-size:9999px;color:red;margin:0 auto;padding:10px 20px 30px 40px}</style><p>hi</p></body></html>";
+        assert!(has_thin_body(html));
+    }
+
+    #[test]
+    fn uppercase_script_tag_excluded() {
+        let html = "<html><body><SCRIPT>var x = 'lots of javascript code that should be ignored by the parser';</SCRIPT><p>hi</p></body></html>";
+        assert!(has_thin_body(html));
+    }
+
+    #[test]
+    fn uppercase_body_tag_found() {
+        let content = "x".repeat(200);
+        let html = format!("<html><BODY><p>{content}</p></BODY></html>");
+        assert!(!has_thin_body(&html));
+    }
+
+    #[test]
+    fn exactly_at_threshold_is_not_thin() {
+        // 100 bytes of ASCII = 100 visible bytes = threshold reached
+        let content = "x".repeat(BODY_TEXT_THRESHOLD);
+        let html = format!("<html><body><p>{content}</p></body></html>");
+        assert!(!has_thin_body(&html));
+    }
+
+    #[test]
+    fn just_below_threshold_is_thin() {
+        let content = "x".repeat(BODY_TEXT_THRESHOLD - 1);
+        let html = format!("<html><body><p>{content}</p></body></html>");
+        assert!(has_thin_body(&html));
+    }
+
+    #[test]
+    fn whitespace_only_body_is_thin() {
+        let html = "<html><body>   \n\t  \n   </body></html>";
+        assert!(has_thin_body(&html));
+    }
+}
+
+#[cfg(test)]
+mod playwright_output_tests {
+    use super::*;
+
+    #[test]
+    fn parses_playwright_html_output() {
+        let stdout = "### Result\n\"<html><body><p>rendered</p></body></html>\"\n### Ran Playwright code\n```js\n...\n```";
+        let html = parse_playwright_output(stdout).unwrap();
+        assert!(html.contains("rendered"));
+    }
+
+    #[test]
+    fn parses_output_without_result_marker() {
+        let stdout = "\"<html><body>hello</body></html>\"";
+        let html = parse_playwright_output(stdout).unwrap();
+        assert!(html.contains("hello"));
+    }
+
+    #[test]
+    fn parses_raw_html_fallback() {
+        let stdout = "<html><body><p>direct html</p></body></html>";
+        let html = parse_playwright_output(stdout).unwrap();
+        assert!(html.contains("direct html"));
+    }
+
+    #[test]
+    fn malformed_json_falls_back_to_html_check() {
+        let stdout = "\"not valid json <html><body>fallback</body></html>";
+        let html = parse_playwright_output(stdout).unwrap();
+        assert!(html.contains("fallback"));
+    }
+
+    #[test]
+    fn rejects_unparseable_output() {
+        let stdout = "some random text without html";
+        assert!(parse_playwright_output(stdout).is_err());
     }
 }

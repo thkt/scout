@@ -24,8 +24,8 @@ use crate::search::engine;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Global HTTP client timeout covering DNS + connect + response body.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-/// Tool-level timeout for fetch operations (SSRF check + download + extraction).
-const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+/// HTTP_TIMEOUT (30s) + PLAYWRIGHT_TIMEOUT (60s) + 5s margin.
+const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(95);
 /// Maximum redirect hops before aborting.
 const MAX_REDIRECTS: usize = 5;
 /// Maximum number of issues/PRs to show in overview.
