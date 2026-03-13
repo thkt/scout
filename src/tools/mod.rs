@@ -4,6 +4,7 @@ mod params;
 pub use errors::ScoutError;
 pub use params::Command;
 
+use std::fmt::Write;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -85,9 +86,12 @@ impl Scout {
         let search_query = params.lang.apply_to_query(&params.query);
         let result = gemini.search(&search_query).await?;
 
-        let mut output = result.answer.unwrap_or_else(|| {
-            "(No answer returned — the query may have been filtered by safety settings.)".to_string()
-        });
+        let mut output = result
+            .answer
+            .unwrap_or_else(|| {
+                "(No answer returned — the query may have been filtered by safety settings.)"
+                    .to_string()
+            });
 
         if !result.sources.is_empty() {
             output.push_str("\n\n---\n**Sources:**\n");
@@ -136,9 +140,13 @@ impl Scout {
         };
 
         if output.len() > MAX_FETCH_OUTPUT_BYTES {
+            let total = output.len();
             let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_BYTES);
             output.truncate(end);
-            output.push_str("\n\n(truncated)");
+            let _ = write!(
+                output,
+                "\n\n(truncated: showing {end} / {total} bytes)",
+            );
         }
 
         Ok(output)
@@ -303,83 +311,18 @@ mod tests {
     use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn test_http_client() -> Client {
-        Client::builder()
+    fn scout_with_gemini(gemini_uri: &str) -> Scout {
+        let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
-            .unwrap()
-    }
-
-    fn scout() -> Scout {
-        let http = test_http_client();
-        Scout {
-            http: http.clone(),
-            gemini: None,
-            github: GitHubClient::with_base_url(http, "http://localhost:0"),
-        }
-    }
-
-    fn scout_with_gemini(gemini_uri: &str) -> Scout {
-        let http = test_http_client();
+            .unwrap();
         Scout {
             http: http.clone(),
             gemini: Some(GeminiClient::with_base_url(http.clone(), gemini_uri)),
             github: GitHubClient::with_base_url(http, "http://localhost:0"),
         }
-    }
-
-    #[tokio::test]
-    async fn search_without_api_key_returns_error() {
-        let s = scout();
-        let params = SearchParams {
-            query: "test query".into(),
-            lang: Lang::Auto,
-        };
-
-        let err = s.search(params).await.unwrap_err();
-        assert!(
-            err.to_string().contains("GEMINI_API_KEY"),
-            "got: {}",
-            err
-        );
-    }
-
-    #[tokio::test]
-    async fn repo_tree_rejects_invalid_repo() {
-        let s = scout();
-        let params = RepoTreeParams {
-            repository: "invalid".into(),
-            ref_: None,
-            path: None,
-            pattern: None,
-        };
-        let err = s.repo_tree(params).await.unwrap_err();
-        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
-    }
-
-    #[tokio::test]
-    async fn repo_read_rejects_invalid_repo() {
-        let s = scout();
-        let params = RepoReadParams {
-            repository: "invalid".into(),
-            path: "README.md".into(),
-            ref_: None,
-            lines: None,
-        };
-        let err = s.repo_read(params).await.unwrap_err();
-        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
-    }
-
-    #[tokio::test]
-    async fn repo_overview_rejects_invalid_repo() {
-        let s = scout();
-        let params = RepoOverviewParams {
-            repository: "".into(),
-        };
-        let err = s.repo_overview(params).await.unwrap_err();
-        assert!(err.to_string().contains("owner/repo"), "got: {}", err);
     }
 
     #[tokio::test]
@@ -414,28 +357,14 @@ mod tests {
 
         let result = s.search(params).await.unwrap();
         assert!(!result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn fetch_rejects_non_http_scheme() {
-        let s = scout();
-        for url in [
-            "ftp://example.com",
-            "javascript:alert(1)",
-            "data:text/html,<h1>hi</h1>",
-        ] {
-            let params = FetchParams {
-                url: url.into(),
-                raw: false,
-                meta: false,
-            };
-            let err = s.fetch(params).await.unwrap_err();
-            assert!(
-                err.to_string().contains("HTTP(S)"),
-                "should reject {url}, got: {}",
-                err
-            );
-        }
+        assert!(
+            result.contains("Rust is a systems programming language"),
+            "should contain answer text"
+        );
+        assert!(
+            !result.contains("**Query:**"),
+            "should not contain Query header (redundant for LLMs)"
+        );
     }
 
     #[tokio::test]

@@ -11,11 +11,11 @@ use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
 use crate::gemini::client::{GeminiError, SearchClient};
 use crate::gemini::types::{GroundedResult, Source};
-use crate::markdown::{escape_md_link, sanitize_heading};
+use crate::markdown::{escape_md_link, sanitize_heading, shift_headings};
 use crate::search::Lang;
 use crate::search::bilingual::expand_bilingual;
 
-const MAX_PAGE_CHARS: usize = 3000;
+const MAX_PAGE_BYTES: usize = 3000;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a multi-source research session.
@@ -194,12 +194,16 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         if page.used_raw_fallback {
             out.push_str("> Note: Readability extraction failed. Showing raw page conversion.\n\n");
         }
-        if page.markdown.len() > MAX_PAGE_CHARS {
-            let end = page.markdown.floor_char_boundary(MAX_PAGE_CHARS);
-            out.push_str(&page.markdown[..end]);
-            out.push_str("...\n\n(truncated)");
+        // Shift headings by 3 levels so page content (h1→h4, h2→h5, …)
+        // does not collide with the report's own heading hierarchy.
+        let content = shift_headings(&page.markdown, 3);
+        if content.len() > MAX_PAGE_BYTES {
+            let total = content.len();
+            let end = content.floor_char_boundary(MAX_PAGE_BYTES);
+            out.push_str(&content[..end]);
+            let _ = write!(out, "...\n\n(truncated: showing {end} / {total} bytes)");
         } else {
-            out.push_str(&page.markdown);
+            out.push_str(&content);
         }
         out.push_str("\n\n");
     }
@@ -346,7 +350,7 @@ mod tests {
             search_results: vec![make_grounded(vec![])],
             fetched_pages: vec![FetchResult {
                 url: "https://example.com".into(),
-                markdown: "# Example Page\n\nSome content here.".into(),
+                markdown: "# Example Page\n\n## Section\n\nSome content here.".into(),
                 used_raw_fallback: false,
             }],
             failed_urls: vec![],
@@ -357,6 +361,19 @@ mod tests {
         assert!(text.contains("Fetched Pages"));
         assert!(text.contains("### https://example.com"));
         assert!(text.contains("Some content here."));
+        // Heading shift: h1→h4, h2→h5 (shift by 3 levels)
+        assert!(
+            text.contains("#### Example Page"),
+            "h1 should be shifted to h4, got:\n{text}"
+        );
+        assert!(
+            text.contains("##### Section"),
+            "h2 should be shifted to h5, got:\n{text}"
+        );
+        assert!(
+            !text.contains("\n# Example Page"),
+            "original h1 should not remain"
+        );
     }
 
     #[test]
@@ -374,7 +391,11 @@ mod tests {
         };
 
         let text = format_report(&report, "test");
-        assert!(text.contains("(truncated)"));
+        // Verify truncation message includes both shown and total byte counts
+        assert!(
+            text.contains("(truncated: showing 3000 / 5000 bytes)"),
+            "should show exact byte counts, got:\n{text}"
+        );
     }
 
     #[test]
