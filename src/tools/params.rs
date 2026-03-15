@@ -31,6 +31,9 @@ pub struct SearchParams {
 pub struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub url: String,
+    /// Force JavaScript rendering via playwright-cli (auto-detected for SPA pages and thin extractions)
+    #[arg(long)]
+    pub js: bool,
     /// Skip Readability extraction and convert entire page
     #[arg(long)]
     pub raw: bool,

@@ -44,8 +44,6 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
     github::parse_repo(repository).map_err(ScoutError::from)
 }
 
-// A-001: Exhaustive match — no wildcard catch-all
-
 impl From<github::GitHubError> for ScoutError {
     fn from(e: github::GitHubError) -> Self {
         match &e {
@@ -73,6 +71,7 @@ impl From<FetchError> for ScoutError {
             | FetchError::InvalidUrl(_)
             | FetchError::InternalHost
             | FetchError::UnsupportedContentType(_) => Self::user_error(e.to_string()),
+            FetchError::Playwright(_) => Self::user_error(e.to_string()),
             FetchError::Timeout(_) | FetchError::DnsResolution(_) => Self::internal(e.to_string()),
             FetchError::Http(_) | FetchError::Status(_) | FetchError::TooLarge => {
                 Self::internal(e.to_string())
@@ -113,8 +112,6 @@ pub(super) fn unwrap_or_note<T>(
 mod tests {
     use super::*;
 
-    // A-010: Unit tests for error conversion
-
     #[test]
     fn github_not_found_is_user_error() {
         let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
@@ -154,6 +151,13 @@ mod tests {
     fn fetch_status_is_internal() {
         let err = ScoutError::from(FetchError::Status(500));
         assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn fetch_playwright_is_user_error() {
+        let err = ScoutError::from(FetchError::Playwright("not installed".into()));
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.to_string().contains("playwright"));
     }
 
     #[test]

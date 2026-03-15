@@ -4,7 +4,6 @@ mod params;
 pub use errors::ScoutError;
 pub use params::Command;
 
-use std::fmt::Write;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -15,25 +14,25 @@ use params::{
     FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
 };
 
-use crate::fetch::TokioDnsResolver;
+use crate::fetch::{FetchOptions, TokioDnsResolver};
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
 use crate::github::{self, GitHubClient};
-use crate::markdown::{escape_md_link, shift_headings};
+use crate::markdown::{escape_md_link, shift_headings, truncate_with_note};
 use crate::search::engine;
 
-/// TCP connection establishment timeout.
+impl From<&FetchParams> for FetchOptions {
+    fn from(p: &FetchParams) -> Self {
+        Self { js: p.js, raw: p.raw, meta: p.meta }
+    }
+}
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Global HTTP client timeout covering DNS + connect + response body.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// HTTP_TIMEOUT (30s) + PLAYWRIGHT_TIMEOUT (60s) + 5s margin.
 const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(95);
-/// Maximum redirect hops before aborting.
 const MAX_REDIRECTS: usize = 5;
-/// Maximum number of issues/PRs to show in overview.
 const OVERVIEW_ITEMS: u8 = 5;
-/// Maximum number of releases to show in overview.
 const OVERVIEW_RELEASES: u8 = 3;
-/// Maximum output bytes for fetch results.
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 
 /// CLI tool runner providing search, fetch, and GitHub tools.
@@ -109,17 +108,12 @@ impl Scout {
     }
 
     async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
-        info!(url = %params.url, "fetch");
+        info!(url = %params.url, js = params.js, raw = params.raw, meta = params.meta, "fetch");
 
+        let opts = FetchOptions::from(&params);
         let result = tokio::time::timeout(
             FETCH_TOOL_TIMEOUT,
-            crate::fetch::fetch_page(
-                &self.http,
-                &params.url,
-                params.raw,
-                params.meta,
-                &TokioDnsResolver,
-            ),
+            crate::fetch::fetch_page(&self.http, &params.url, opts, &TokioDnsResolver),
         )
         .await
         .unwrap_or_else(|_| {
@@ -290,23 +284,13 @@ impl Scout {
 
 fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String {
     let shifted = shift_headings(&result.markdown, 2);
-    let mut output = if result.used_raw_fallback {
+    let output = if result.used_raw_fallback {
         format!("> Note: Readability extraction failed. Showing raw page conversion.\n\n{shifted}")
     } else {
         shifted
     };
 
-    if output.len() > MAX_FETCH_OUTPUT_BYTES {
-        let total = output.len();
-        let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_BYTES);
-        output.truncate(end);
-        let _ = write!(
-            output,
-            "\n\n(truncated: showing {end} / {total} bytes)",
-        );
-    }
-
-    output
+    truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
 }
 
 #[cfg(test)]

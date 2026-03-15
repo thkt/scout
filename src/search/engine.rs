@@ -11,7 +11,7 @@ use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
 use crate::gemini::client::{GeminiError, SearchClient};
 use crate::gemini::types::{GroundedResult, Source};
-use crate::markdown::{escape_md_link, sanitize_heading, shift_headings};
+use crate::markdown::{escape_md_link, sanitize_heading, shift_headings, truncate_with_note};
 use crate::search::Lang;
 use crate::search::bilingual::expand_bilingual;
 
@@ -109,7 +109,12 @@ async fn fetch_sources(
         .map(|url| async {
             let result = tokio::time::timeout(
                 FETCH_TIMEOUT,
-                fetch::fetch_page(http, &url, false, true, resolver),
+                fetch::fetch_page(
+                    http,
+                    &url,
+                    fetch::FetchOptions { meta: true, ..Default::default() },
+                    resolver,
+                ),
             )
             .await;
             let result = match result {
@@ -197,14 +202,7 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         // Shift headings by 3 levels so page content (h1→h4, h2→h5, …)
         // does not collide with the report's own heading hierarchy.
         let content = shift_headings(&page.markdown, 3);
-        if content.len() > MAX_PAGE_BYTES {
-            let total = content.len();
-            let end = content.floor_char_boundary(MAX_PAGE_BYTES);
-            out.push_str(&content[..end]);
-            let _ = write!(out, "...\n\n(truncated: showing {end} / {total} bytes)");
-        } else {
-            out.push_str(&content);
-        }
+        out.push_str(&truncate_with_note(&content, MAX_PAGE_BYTES));
         out.push_str("\n\n");
     }
 }
@@ -361,7 +359,6 @@ mod tests {
         assert!(text.contains("Fetched Pages"));
         assert!(text.contains("### https://example.com"));
         assert!(text.contains("Some content here."));
-        // Heading shift: h1→h4, h2→h5 (shift by 3 levels)
         assert!(
             text.contains("#### Example Page"),
             "h1 should be shifted to h4, got:\n{text}"

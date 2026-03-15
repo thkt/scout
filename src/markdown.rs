@@ -21,6 +21,21 @@ pub(crate) fn sanitize_heading(s: &str) -> String {
         .collect()
 }
 
+/// Truncate a string at a char boundary and append a byte-count note.
+///
+/// Returns the input borrowed if it fits within `max_bytes`.
+pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> std::borrow::Cow<'_, str> {
+    if s.len() <= max_bytes {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let total = s.len();
+    let end = s.floor_char_boundary(max_bytes);
+    let mut out = s[..end].to_string();
+    use std::fmt::Write;
+    let _ = write!(out, "\n\n(truncated: showing {end} / {total} bytes)");
+    std::borrow::Cow::Owned(out)
+}
+
 /// Shift all Markdown heading levels deeper by `levels` (e.g., `# Foo` → `#### Foo`
 /// with `levels = 3`).  Skips lines inside fenced code blocks so that comment
 /// lines like `# TODO` are not affected.
@@ -97,5 +112,18 @@ mod tests {
     fn shift_headings_preserves_trailing_content() {
         let input = "No headings here\nJust text";
         assert_eq!(shift_headings(input, 3), input);
+    }
+
+    #[test]
+    fn truncate_with_note_short_input_unchanged() {
+        assert_eq!(truncate_with_note("hello", 100), "hello");
+    }
+
+    #[test]
+    fn truncate_with_note_truncates_with_message() {
+        let input = "x".repeat(200);
+        let result = truncate_with_note(&input, 100);
+        assert!(result.len() < 200);
+        assert!(result.contains("(truncated: showing 100 / 200 bytes)"));
     }
 }
