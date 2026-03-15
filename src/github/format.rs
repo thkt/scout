@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
-use crate::markdown::escape_md_link;
+use crate::markdown::{escape_md_link, shift_headings};
 
 const MAX_README_LINES: usize = 200;
 
@@ -88,10 +88,11 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
     out.push_str("## README\n\n");
     let lines: Vec<_> = content.lines().collect();
     if lines.len() > MAX_README_LINES {
-        out.push_str(&lines[..MAX_README_LINES].join("\n"));
+        let truncated = lines[..MAX_README_LINES].join("\n");
+        out.push_str(&shift_headings(&truncated, 2));
         let _ = write!(out, "\n\n... (truncated, {} lines total)", lines.len());
     } else {
-        out.push_str(content);
+        out.push_str(&shift_headings(content, 2));
     }
     out.push_str("\n\n");
 }
@@ -380,5 +381,28 @@ mod tests {
         let output = format_overview(&repo, None, &issues, &[], &[]);
         assert!(output.contains("(bug, urgent)"));
         assert!(output.contains("@reporter"));
+    }
+
+    #[test]
+    fn format_overview_shifts_readme_headings() {
+        let repo = sample_repo();
+        let readme = "# Getting Started\n## Install\nRun `cargo install`\n### Config";
+        let output = format_overview(&repo, Some(readme), &[], &[], &[]);
+        assert!(output.contains("### Getting Started"), "h1 should shift to h3");
+        assert!(output.contains("#### Install"), "h2 should shift to h4");
+        assert!(output.contains("##### Config"), "h3 should shift to h5");
+    }
+
+    #[test]
+    fn format_overview_shifts_headings_in_truncated_readme() {
+        let repo = sample_repo();
+        let mut lines: Vec<String> = vec!["# Title".into()];
+        for i in 0..250 {
+            lines.push(format!("line {i}"));
+        }
+        let readme = lines.join("\n");
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("### Title"), "h1 should shift to h3 even when truncated");
+        assert!(output.contains("truncated, 251 lines total"));
     }
 }

@@ -18,7 +18,7 @@ use params::{
 use crate::fetch::TokioDnsResolver;
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
 use crate::github::{self, GitHubClient};
-use crate::markdown::escape_md_link;
+use crate::markdown::{escape_md_link, shift_headings};
 use crate::search::engine;
 
 /// TCP connection establishment timeout.
@@ -129,27 +129,11 @@ impl Scout {
             )))
         })?;
 
-        let mut output = if result.used_raw_fallback {
+        if result.used_raw_fallback {
             warn!(url = %params.url, "readability extraction failed, using raw fallback");
-            format!(
-                "> Note: Readability extraction failed. Showing raw page conversion.\n\n{}",
-                result.markdown
-            )
-        } else {
-            result.markdown
-        };
-
-        if output.len() > MAX_FETCH_OUTPUT_BYTES {
-            let total = output.len();
-            let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_BYTES);
-            output.truncate(end);
-            let _ = write!(
-                output,
-                "\n\n(truncated: showing {end} / {total} bytes)",
-            );
         }
 
-        Ok(output)
+        Ok(format_fetch_output(&result))
     }
 
     async fn research(&self, params: ResearchParams) -> Result<String, ScoutError> {
@@ -304,6 +288,27 @@ impl Scout {
     }
 }
 
+fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String {
+    let shifted = shift_headings(&result.markdown, 2);
+    let mut output = if result.used_raw_fallback {
+        format!("> Note: Readability extraction failed. Showing raw page conversion.\n\n{shifted}")
+    } else {
+        shifted
+    };
+
+    if output.len() > MAX_FETCH_OUTPUT_BYTES {
+        let total = output.len();
+        let end = output.floor_char_boundary(MAX_FETCH_OUTPUT_BYTES);
+        output.truncate(end);
+        let _ = write!(
+            output,
+            "\n\n(truncated: showing {end} / {total} bytes)",
+        );
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +412,52 @@ mod tests {
             result.contains("rust-lang.org"),
             "report should reference source URL"
         );
+    }
+
+    #[test]
+    fn fetch_output_shifts_headings() {
+        let result = crate::fetch::converter::FetchResult {
+            url: "https://example.com".into(),
+            markdown: "# Title\n## Section\nContent".into(),
+            used_raw_fallback: false,
+        };
+        let output = format_fetch_output(&result);
+        assert!(output.contains("### Title"), "h1 should shift to h3");
+        assert!(output.contains("#### Section"), "h2 should shift to h4");
+    }
+
+    #[test]
+    fn fetch_output_shifts_headings_with_raw_fallback() {
+        let result = crate::fetch::converter::FetchResult {
+            url: "https://example.com".into(),
+            markdown: "# Raw Title\nBody".into(),
+            used_raw_fallback: true,
+        };
+        let output = format_fetch_output(&result);
+        assert!(
+            output.starts_with("> Note: Readability extraction failed"),
+            "should prepend fallback note"
+        );
+        assert!(output.contains("### Raw Title"), "h1 should shift to h3");
+    }
+
+    #[test]
+    fn fetch_output_truncates_long_content() {
+        let result = crate::fetch::converter::FetchResult {
+            url: "https://example.com".into(),
+            markdown: format!("# Title\n{}", "x".repeat(150_000)),
+            used_raw_fallback: false,
+        };
+        let output = format_fetch_output(&result);
+        assert!(
+            output.len() < 150_000,
+            "output should be truncated, got {} bytes",
+            output.len()
+        );
+        assert!(
+            output.contains("(truncated: showing"),
+            "should include truncation message"
+        );
+        assert!(output.contains("### Title"), "headings should still be shifted");
     }
 }

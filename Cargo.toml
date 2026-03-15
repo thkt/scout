@@ -9,7 +9,7 @@ repository = "https://github.com/thkt/scout"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json"] }
-dom_smoothie = "0.15"
+dom_smoothie = "0.16"
 fast_html2md = "0.0.58"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
