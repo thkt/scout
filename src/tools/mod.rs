@@ -22,7 +22,7 @@ use crate::search::engine;
 
 impl From<&FetchParams> for FetchOptions {
     fn from(p: &FetchParams) -> Self {
-        Self { js: p.js, raw: p.raw, meta: p.meta }
+        Self { js: p.js, raw: p.raw }
     }
 }
 
@@ -34,6 +34,8 @@ const MAX_REDIRECTS: usize = 5;
 const OVERVIEW_ITEMS: u8 = 5;
 const OVERVIEW_RELEASES: u8 = 3;
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
+/// Slack: up to 3 API calls + N user resolutions; 60s covers large threads.
+const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// CLI tool runner providing search, fetch, and GitHub tools.
 pub struct Scout {
@@ -108,7 +110,11 @@ impl Scout {
     }
 
     async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
-        info!(url = %params.url, js = params.js, raw = params.raw, meta = params.meta, "fetch");
+        if let Some(slack_url) = crate::slack::parse_slack_url(&params.url) {
+            return self.fetch_slack(slack_url).await;
+        }
+
+        info!(url = %params.url, js = params.js, raw = params.raw, "fetch");
 
         let opts = FetchOptions::from(&params);
         let result = tokio::time::timeout(
@@ -128,6 +134,23 @@ impl Scout {
         }
 
         Ok(format_fetch_output(&result))
+    }
+
+    async fn fetch_slack(&self, slack_url: crate::slack::SlackUrl) -> Result<String, ScoutError> {
+        info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack)");
+        let client = crate::slack::SlackClient::from_env(self.http.clone())?;
+        let output = tokio::time::timeout(
+            SLACK_TOOL_TIMEOUT,
+            client.fetch_message(&slack_url),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::slack::SlackError::Network(format!(
+                "slack fetch timed out after {}s",
+                SLACK_TOOL_TIMEOUT.as_secs()
+            )))
+        })?;
+        Ok(truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned())
     }
 
     async fn research(&self, params: ResearchParams) -> Result<String, ScoutError> {
@@ -285,7 +308,7 @@ impl Scout {
 fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String {
     let shifted = shift_headings(&result.markdown, 2);
     let output = if result.used_raw_fallback {
-        format!("> Note: Readability extraction failed. Showing raw page conversion.\n\n{shifted}")
+        format!("{}{shifted}", crate::fetch::converter::RAW_FALLBACK_NOTE)
     } else {
         shifted
     };
@@ -419,7 +442,7 @@ mod tests {
         };
         let output = format_fetch_output(&result);
         assert!(
-            output.starts_with("> Note: Readability extraction failed"),
+            output.starts_with(crate::fetch::converter::RAW_FALLBACK_NOTE.trim_end()),
             "should prepend fallback note"
         );
         assert!(output.contains("### Raw Title"), "h1 should shift to h3");

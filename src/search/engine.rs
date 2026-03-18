@@ -112,7 +112,7 @@ async fn fetch_sources(
                 fetch::fetch_page(
                     http,
                     &url,
-                    fetch::FetchOptions { meta: true, ..Default::default() },
+                    fetch::FetchOptions::default(),
                     resolver,
                 ),
             )
@@ -197,7 +197,7 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     for page in pages {
         let _ = writeln!(out, "### {}\n", escape_md_link(&page.url));
         if page.used_raw_fallback {
-            out.push_str("> Note: Readability extraction failed. Showing raw page conversion.\n\n");
+            out.push_str(fetch::converter::RAW_FALLBACK_NOTE);
         }
         // Shift headings by 3 levels so page content (h1→h4, h2→h5, …)
         // does not collide with the report's own heading hierarchy.

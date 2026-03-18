@@ -135,13 +135,15 @@ scout search "Next.js server actions security"
 Downloads a page, extracts main content via Readability, converts to Markdown. JS-dependent pages (SPAs) are automatically detected and rendered via `playwright-cli`. No LLM round-trip.
 
 ```sh
-scout fetch https://react.dev/blog/2024/12/05/react-19 --meta
+scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| Flag     | Description                                   |
-| -------- | --------------------------------------------- |
-| `--raw`  | Skip Readability, convert entire page         |
-| `--meta` | Include title/author/date as YAML frontmatter |
+| Flag    | Description                                                    |
+| ------- | -------------------------------------------------------------- |
+| `--js`  | Force JS rendering via playwright-cli (auto-detected for SPAs) |
+| `--raw` | Skip Readability, convert entire page                          |
+
+Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
 ### `scout repo-tree` — Remote file listing
 

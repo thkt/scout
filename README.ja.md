@@ -124,13 +124,15 @@ scout search "Next.js server actions security"
 ページをダウンロードし、Readabilityで本文を抽出してMarkdownに変換します。JS依存ページ（SPA）は自動検出し `playwright-cli` でレンダリングします。LLMは介在しません。
 
 ```sh
-scout fetch https://react.dev/blog/2024/12/05/react-19 --meta
+scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| フラグ   | 説明                                         |
-| -------- | -------------------------------------------- |
-| `--raw`  | Readabilityをスキップしてページ全体を変換    |
-| `--meta` | タイトル/著者/日付をYAMLフロントマターで付与 |
+| フラグ  | 説明                                                      |
+| ------- | --------------------------------------------------------- |
+| `--js`  | playwright-cliによるJSレンダリングを強制（SPAは自動検出） |
+| `--raw` | Readabilityをスキップしてページ全体を変換                 |
+
+ページのメタデータ（タイトル/著者/日付）はYAMLフロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
 ### `scout repo-tree` — リモートファイル一覧
 

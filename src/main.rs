@@ -3,6 +3,7 @@ mod gemini;
 mod github;
 mod markdown;
 mod search;
+mod slack;
 mod tools;
 
 pub const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));

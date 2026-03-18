@@ -4,6 +4,7 @@ use tracing::warn;
 use crate::fetch::FetchError;
 use crate::gemini::client::GeminiError;
 use crate::github;
+use crate::slack::SlackError;
 
 /// Unified error type for CLI tool execution.
 #[derive(Debug)]
@@ -76,6 +77,15 @@ impl From<FetchError> for ScoutError {
             FetchError::Http(_) | FetchError::Status(_) | FetchError::TooLarge => {
                 Self::internal(e.to_string())
             }
+        }
+    }
+}
+
+impl From<SlackError> for ScoutError {
+    fn from(e: SlackError) -> Self {
+        match &e {
+            SlackError::Network(_) => Self::internal(e.to_string()),
+            _ => Self::user_error(e.to_string()),
         }
     }
 }

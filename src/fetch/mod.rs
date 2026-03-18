@@ -22,8 +22,6 @@ pub struct FetchOptions {
     pub js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
     pub raw: bool,
-    /// Include YAML frontmatter (title, author, date).
-    pub meta: bool,
 }
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
@@ -141,7 +139,7 @@ pub async fn fetch_page(
     };
 
     debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(article, final_url, opts.meta))
+    Ok(to_fetch_result(article, final_url))
 }
 
 /// Check whether the extracted article has too little visible text.

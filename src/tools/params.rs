@@ -37,9 +37,6 @@ pub struct FetchParams {
     /// Skip Readability extraction and convert entire page
     #[arg(long)]
     pub raw: bool,
-    /// Include page metadata (title, author, date) as YAML frontmatter
-    #[arg(long)]
-    pub meta: bool,
 }
 
 #[derive(Args)]
