@@ -8,17 +8,22 @@ pub use helpers::{
     validate_path, validate_ref,
 };
 
-use reqwest::Client;
 use std::env;
+use std::time::Duration;
+
+use reqwest::Client;
 use tracing::{debug, info};
+
+use crate::redacted::Redacted;
 
 use types::{
     BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
 };
 
 const API_BASE: &str = "https://api.github.com";
-/// Timeout for `gh auth token` subprocess.
-const TOKEN_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+
+use crate::retry::{is_transient_network, retry_with};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
@@ -58,15 +63,6 @@ pub enum GitHubError {
     Decode(String),
 }
 
-#[derive(Clone)]
-struct Token(String);
-
-impl std::fmt::Debug for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[REDACTED]")
-    }
-}
-
 /// HTTP client for the GitHub REST API v3.
 ///
 /// Auth resolution order: `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` CLI → unauthenticated.
@@ -75,7 +71,7 @@ impl std::fmt::Debug for Token {
 #[derive(Clone)]
 pub struct GitHubClient {
     http: Client,
-    token: Option<Token>,
+    token: Option<Redacted>,
     base_url: String,
 }
 
@@ -114,16 +110,25 @@ impl GitHubClient {
             .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
-            debug_assert!(
+            assert!(
                 url.starts_with("https://") || cfg!(test),
                 "Bearer token must only be sent over HTTPS"
             );
-            req = req.header("Authorization", format!("Bearer {}", token.0));
+            req = req.header("Authorization", format!("Bearer {}", token.expose()));
         }
         req
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
+        retry_with(
+            || self.get_json_once(path),
+            is_retriable,
+            || GitHubError::RateLimited,
+        )
+        .await
+    }
+
+    async fn get_json_once<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         debug!(path, "github API request");
         let response = self.request(path).send().await?;
         let status = response.status();
@@ -258,11 +263,22 @@ fn extract_error_message(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
-async fn resolve_token() -> Option<Token> {
+fn is_retriable(e: &GitHubError) -> bool {
+    matches!(
+        e,
+        GitHubError::RateLimited
+            | GitHubError::Api {
+                code: 500..=599,
+                ..
+            }
+    ) || matches!(e, GitHubError::Network(e) if is_transient_network(e))
+}
+
+async fn resolve_token() -> Option<Redacted> {
     resolve_token_with(|var| env::var(var).ok()).await
 }
 
-async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Option<Token> {
+async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Option<Redacted> {
     let from_env = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
         .filter_map(|var| env_reader(var))
@@ -270,7 +286,7 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
         .find(|t| !t.is_empty());
 
     if let Some(token) = from_env {
-        return Some(Token(token));
+        return Some(Redacted::new(token));
     }
 
     let output = tokio::time::timeout(
@@ -298,7 +314,7 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
     if token.is_empty() {
         None
     } else {
-        Some(Token(token))
+        Some(Redacted::new(token))
     }
 }
 
@@ -372,12 +388,6 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
     }
 
-    #[test]
-    fn token_debug_is_redacted() {
-        let token = Token("ghp_secret123".to_string());
-        assert_eq!(format!("{token:?}"), "[REDACTED]");
-    }
-
     #[tokio::test]
     async fn resolve_token_reads_env_var() {
         let token = resolve_token_with(|key| {
@@ -389,7 +399,7 @@ mod http_tests {
         })
         .await;
         assert_eq!(
-            token.as_ref().map(|t| t.0.as_str()),
+            token.as_ref().map(|t| t.expose()),
             Some("test-token-from-env")
         );
     }

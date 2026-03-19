@@ -37,7 +37,6 @@ const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 /// Slack: up to 3 API calls + N user resolutions; 60s covers large threads.
 const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// CLI tool runner providing search, fetch, and GitHub tools.
 pub struct Scout {
     http: Client,
     gemini: Option<GeminiClient>,
@@ -145,10 +144,13 @@ impl Scout {
         )
         .await
         .unwrap_or_else(|_| {
-            Err(crate::slack::SlackError::Network(format!(
+            Err(crate::slack::SlackError::Timeout(format!(
                 "slack fetch timed out after {}s",
                 SLACK_TOOL_TIMEOUT.as_secs()
             )))
+        })
+        .inspect_err(|e| {
+            warn!(workspace = %slack_url.workspace, channel = %slack_url.channel, error = %e, "slack fetch failed");
         })?;
         Ok(truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned())
     }

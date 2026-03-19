@@ -6,7 +6,6 @@ use crate::gemini::client::GeminiError;
 use crate::github;
 use crate::slack::SlackError;
 
-/// Unified error type for CLI tool execution.
 #[derive(Debug)]
 pub struct ScoutError {
     message: String,
@@ -84,8 +83,10 @@ impl From<FetchError> for ScoutError {
 impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
         match &e {
-            SlackError::Network(_) => Self::internal(e.to_string()),
-            _ => Self::user_error(e.to_string()),
+            SlackError::TokenNotSet | SlackError::Api { .. } => Self::user_error(e.to_string()),
+            SlackError::Network(_) | SlackError::Timeout(_) | SlackError::Decode(_) => {
+                Self::internal(e.to_string())
+            }
         }
     }
 }

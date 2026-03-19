@@ -4,6 +4,9 @@ use std::time::Duration;
 use reqwest::Client;
 use tracing::{debug, warn};
 
+use crate::redacted::Redacted;
+use crate::retry::{is_transient_network, retry_with};
+
 use super::grounding::extract_grounded_result;
 use super::types::{
     ApiError, Content, GenerateContentRequest, GenerateContentResponse, GoogleSearch,
@@ -32,25 +35,14 @@ pub enum GeminiError {
     Network(#[from] reqwest::Error),
 }
 
-/// Abstraction for web search via LLM with grounding.
-/// Implemented by `GeminiClient` for production; mock implementations used in tests.
 pub trait SearchClient {
     async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError>;
 }
 
 #[derive(Clone)]
-struct ApiKey(String);
-
-impl std::fmt::Debug for ApiKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[REDACTED]")
-    }
-}
-
-#[derive(Clone)]
 pub struct GeminiClient {
     http: Client,
-    api_key: ApiKey,
+    api_key: Redacted,
     model: String,
     base_url: String,
 }
@@ -68,7 +60,7 @@ impl GeminiClient {
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         Ok(Self {
             http,
-            api_key: ApiKey(api_key.trim().to_string()),
+            api_key: Redacted::new(api_key),
             model,
             base_url: API_BASE.to_string(),
         })
@@ -78,7 +70,7 @@ impl GeminiClient {
     pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            api_key: ApiKey("test-key".to_string()),
+            api_key: Redacted::new("test-key".to_string()),
             model: DEFAULT_MODEL.to_string(),
             base_url: base_url.to_string(),
         }
@@ -102,7 +94,7 @@ impl GeminiClient {
             }],
         };
 
-        debug_assert!(
+        assert!(
             url.starts_with("https://") || cfg!(test),
             "API key must only be sent over HTTPS"
         );
@@ -110,7 +102,7 @@ impl GeminiClient {
         let response = self
             .http
             .post(&url)
-            .header("x-goog-api-key", &self.api_key.0)
+            .header("x-goog-api-key", self.api_key.expose())
             .header("User-Agent", crate::USER_AGENT)
             .json(&request)
             .timeout(REQUEST_TIMEOUT)
@@ -123,7 +115,10 @@ impl GeminiClient {
             return Err(GeminiError::RateLimited);
         }
         if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "(body unreadable)".into());
             if let Ok(body) = serde_json::from_str::<GenerateContentResponse>(&text)
                 && let Some(err) = &body.error
             {
@@ -131,7 +126,7 @@ impl GeminiClient {
                 warn!(error = %classified, "Gemini API error");
                 return Err(classified);
             }
-            let snippet = if text.len() > 200 { &text[..200] } else { &text };
+            let snippet: String = text.chars().take(200).collect();
             warn!(status = %status, "Gemini API error (no structured body)");
             return Err(GeminiError::Api {
                 code: status.as_u16(),
@@ -152,30 +147,15 @@ impl GeminiClient {
     }
 }
 
-const MAX_RETRIES: u32 = 3;
-const INITIAL_BACKOFF_MS: u64 = 1000;
-
 impl SearchClient for GeminiClient {
     async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError> {
-        let mut last_err = None;
-        for attempt in 0..MAX_RETRIES {
-            match self.generate_with_search(query).await {
-                Ok(response) => return Ok(extract_grounded_result(&response)),
-                Err(e) if is_retriable(&e) => {
-                    last_err = Some(e);
-                    if attempt + 1 < MAX_RETRIES {
-                        let delay_ms = jittered_backoff(attempt);
-                        debug!(
-                            attempt = attempt + 1,
-                            delay_ms, "retrying after transient error"
-                        );
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Err(last_err.unwrap_or(GeminiError::RateLimited))
+        let response = retry_with(
+            || self.generate_with_search(query),
+            is_retriable,
+            || GeminiError::RateLimited,
+        )
+        .await?;
+        Ok(extract_grounded_result(&response))
     }
 }
 
@@ -187,14 +167,7 @@ fn is_retriable(e: &GeminiError) -> bool {
                 code: 500..=599,
                 ..
             }
-    )
-}
-
-/// Equal jitter backoff: base/2 + rand(0, base/2).
-fn jittered_backoff(attempt: u32) -> u64 {
-    let base = INITIAL_BACKOFF_MS * 2u64.pow(attempt);
-    let half = base / 2;
-    half + fastrand::u64(..half.max(1))
+    ) || matches!(e, GeminiError::Network(e) if is_transient_network(e))
 }
 
 fn classify_api_error(err: &ApiError) -> GeminiError {

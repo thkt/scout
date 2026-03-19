@@ -2,6 +2,8 @@ mod fetch;
 mod gemini;
 mod github;
 mod markdown;
+mod redacted;
+mod retry;
 mod search;
 mod slack;
 mod tools;
