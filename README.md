@@ -192,10 +192,10 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 **Fetch** — SSRF defense-in-depth:
 
 ```
-URL validation → DNS pre-check → Download → Post-redirect recheck → Readability → Markdown
+URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → Post-redirect recheck → Readability → Markdown
 ```
 
-Private/loopback IPs blocked at DNS and redirect stages. Credentials redacted from errors. 10 MB download cap, 100K byte output.
+Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. 10 MB download cap, 100K byte output.
 
 **Search** — Gemini `generateContent` with `google_search` grounding tool. The response includes both the generated answer and `groundingMetadata` with source URLs extracted from Google Search.
 
