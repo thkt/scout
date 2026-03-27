@@ -46,6 +46,9 @@ pub struct ResearchParams {
     /// Number of URLs to fetch for deep analysis (1-10)
     #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=10))]
     pub depth: u8,
+    /// Number of topical search angles (1-7)
+    #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=7))]
+    pub breadth: u8,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
     pub lang: Lang,

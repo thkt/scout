@@ -163,6 +163,7 @@ impl Scout {
         let req = engine::ResearchRequest {
             query: &params.query,
             depth: params.depth,
+            breadth: params.breadth,
             lang: params.lang,
         };
         let report = engine::research(gemini, &self.http, &req, &TokioDnsResolver).await?;
@@ -409,6 +410,7 @@ mod tests {
         let params = ResearchParams {
             query: "What is Rust?".into(),
             depth: 1,
+            breadth: 1,
             lang: Lang::Auto,
         };
 
