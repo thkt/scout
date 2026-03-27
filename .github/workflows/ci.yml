@@ -32,11 +32,20 @@ jobs:
       - name: Check
         run: cargo check
 
+      - name: Check (js-rendering)
+        run: cargo check --features js-rendering
+
       - name: Test
         run: cargo test
 
+      - name: Test (js-rendering)
+        run: cargo test --features js-rendering
+
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Format check
         run: cargo fmt -- --check
