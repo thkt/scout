@@ -70,12 +70,14 @@ impl From<FetchError> for ScoutError {
             FetchError::InvalidScheme
             | FetchError::InvalidUrl(_)
             | FetchError::InternalHost
-            | FetchError::UnsupportedContentType(_) => Self::user_error(e.to_string()),
+            | FetchError::UnsupportedContentType(_)
+            | FetchError::RedirectMissingLocation => Self::user_error(e.to_string()),
             FetchError::Playwright(_) => Self::user_error(e.to_string()),
             FetchError::Timeout(_) | FetchError::DnsResolution(_) => Self::internal(e.to_string()),
-            FetchError::Http(_) | FetchError::Status(_) | FetchError::TooLarge => {
-                Self::internal(e.to_string())
-            }
+            FetchError::Http(_)
+            | FetchError::Status(_)
+            | FetchError::TooLarge
+            | FetchError::TooManyRedirects(_) => Self::internal(e.to_string()),
         }
     }
 }

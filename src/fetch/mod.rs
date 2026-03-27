@@ -12,6 +12,7 @@ use ssrf::{redact_url_credentials, ssrf_check};
 use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
+use reqwest::header::LOCATION;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -25,6 +26,7 @@ pub struct FetchOptions {
 }
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
+const MAX_REDIRECTS: usize = 5;
 
 const PLAYWRIGHT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -41,6 +43,12 @@ pub enum FetchError {
 
     #[error("fetch failed: {0}")]
     Http(#[from] reqwest::Error),
+
+    #[error("too many redirects (>{0})")]
+    TooManyRedirects(usize),
+
+    #[error("redirect without Location header")]
+    RedirectMissingLocation,
 
     #[error("DNS resolution failed: {0}")]
     DnsResolution(String),
@@ -82,8 +90,11 @@ pub async fn fetch_page(
     // (its own DNS resolution) — proxy or disable it in service mode.
     ssrf_check(url, resolver).await?;
 
-    let (final_url, mut html) = download(client, url).await?;
+    let (final_url, mut html) = download(client, url, MAX_REDIRECTS, resolver).await?;
 
+    // SECURITY: Defense-in-depth — redundant check on the final URL.
+    // download() already validates each redirect hop, but this catches
+    // implementation bugs in the manual redirect loop.
     ssrf_check(&final_url, resolver).await?;
 
     let need_js = if opts.js {
@@ -391,56 +402,94 @@ fn parse_playwright_output(stdout: &str) -> Result<String, PlaywrightError> {
     ))
 }
 
-async fn download(client: &Client, url: &str) -> Result<(String, String), FetchError> {
-    let response = client
-        .get(url)
-        .header("User-Agent", crate::USER_AGENT)
-        .send()
-        .await?;
+/// Download a URL with manual redirect handling.
+///
+/// Each redirect hop is validated with [`ssrf_check`] **before** the connection
+/// to the redirect target is established, closing the SSRF-via-redirect gap.
+/// The caller MUST pass a [`Client`] built with [`reqwest::redirect::Policy::none()`]
+/// so that reqwest does not follow redirects automatically.
+async fn download(
+    client: &Client,
+    url: &str,
+    max_redirects: usize,
+    resolver: &impl DnsResolver,
+) -> Result<(String, String), FetchError> {
+    let mut current_url = url.to_string();
 
-    let status = response.status();
-    if !status.is_success() {
-        return Err(FetchError::Status(status.as_u16()));
-    }
+    for _hop in 0..=max_redirects {
+        let response = client
+            .get(&current_url)
+            .header("User-Agent", crate::USER_AGENT)
+            .send()
+            .await?;
 
-    let mut charset = None;
-    match response.headers().get("content-type") {
-        None => {
-            debug!(url = %redact_url_credentials(url), "no Content-Type header, proceeding as text")
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or(FetchError::RedirectMissingLocation)?;
+
+            let base = url::Url::parse(&current_url)?;
+            let next_url = base.join(location)?.to_string();
+
+            // SECURITY: Full SSRF check (URL validation + async DNS) on each
+            // redirect target BEFORE following.
+            ssrf_check(&next_url, resolver).await?;
+
+            debug!(
+                from = %redact_url_credentials(&current_url),
+                to = %redact_url_credentials(&next_url),
+                "following redirect"
+            );
+            current_url = next_url;
+            continue;
         }
-        Some(ct) => match ct.to_str() {
-            Ok(ct_str) => {
-                check_content_type(ct_str)?;
-                charset = extract_charset(ct_str);
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(FetchError::Status(status.as_u16()));
+        }
+
+        let mut charset = None;
+        match response.headers().get("content-type") {
+            None => {
+                debug!(url = %redact_url_credentials(&current_url), "no Content-Type header, proceeding as text")
             }
-            Err(_) => {
-                debug!(url = %redact_url_credentials(url), "Content-Type header is not valid ASCII, proceeding as text")
-            }
-        },
-    }
+            Some(ct) => match ct.to_str() {
+                Ok(ct_str) => {
+                    check_content_type(ct_str)?;
+                    charset = extract_charset(ct_str);
+                }
+                Err(_) => {
+                    debug!(url = %redact_url_credentials(&current_url), "Content-Type header is not valid ASCII, proceeding as text")
+                }
+            },
+        }
 
-    let final_url = response.url().to_string();
-
-    let content_length = response.content_length();
-    if let Some(len) = content_length
-        && len as usize > MAX_RESPONSE_BYTES
-    {
-        return Err(FetchError::TooLarge);
-    }
-
-    let capacity = content_length
-        .map(|len| (len as usize).min(MAX_RESPONSE_BYTES))
-        .unwrap_or(8192);
-    let mut body = Vec::with_capacity(capacity);
-    let mut stream = response;
-    while let Some(chunk) = stream.chunk().await? {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_RESPONSE_BYTES {
+        let content_length = response.content_length();
+        if let Some(len) = content_length
+            && len as usize > MAX_RESPONSE_BYTES
+        {
             return Err(FetchError::TooLarge);
         }
+
+        let capacity = content_length
+            .map(|len| (len as usize).min(MAX_RESPONSE_BYTES))
+            .unwrap_or(8192);
+        let mut body = Vec::with_capacity(capacity);
+        let mut stream = response;
+        while let Some(chunk) = stream.chunk().await? {
+            body.extend_from_slice(&chunk);
+            if body.len() > MAX_RESPONSE_BYTES {
+                return Err(FetchError::TooLarge);
+            }
+        }
+        let html = decode_body(&body, charset.as_deref());
+        return Ok((current_url, html));
     }
-    let html = decode_body(&body, charset.as_deref());
-    Ok((final_url, html))
+
+    Err(FetchError::TooManyRedirects(max_redirects))
 }
 
 fn extract_charset(content_type: &str) -> Option<String> {
@@ -595,8 +644,24 @@ mod content_type_tests {
 #[cfg(test)]
 mod download_tests {
     use super::*;
+    use std::net::IpAddr;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn no_redirect_client() -> Client {
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+
+    /// Resolver that returns a public IP for any domain (SSRF checks pass).
+    struct PublicResolver;
+    impl DnsResolver for PublicResolver {
+        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
+            Ok(vec!["8.8.8.8".parse().unwrap()])
+        }
+    }
 
     #[tokio::test]
     async fn download_success_returns_html() {
@@ -610,10 +675,15 @@ mod download_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let (final_url, html) = download(&client, &format!("{}/page", server.uri()))
-            .await
-            .unwrap();
+        let client = no_redirect_client();
+        let (final_url, html) = download(
+            &client,
+            &format!("{}/page", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await
+        .unwrap();
 
         assert!(final_url.contains("/page"));
         assert!(html.contains("hello"));
@@ -633,13 +703,13 @@ mod download_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
+        let client = no_redirect_client();
         assert!(matches!(
-            download(&client, &format!("{}/404", server.uri())).await,
+            download(&client, &format!("{}/404", server.uri()), MAX_REDIRECTS, &PublicResolver).await,
             Err(FetchError::Status(404))
         ));
         assert!(matches!(
-            download(&client, &format!("{}/500", server.uri())).await,
+            download(&client, &format!("{}/500", server.uri()), MAX_REDIRECTS, &PublicResolver).await,
             Err(FetchError::Status(500))
         ));
     }
@@ -654,8 +724,8 @@ mod download_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let result = download(&client, &format!("{}/huge", server.uri())).await;
+        let client = no_redirect_client();
+        let result = download(&client, &format!("{}/huge", server.uri()), MAX_REDIRECTS, &PublicResolver).await;
         assert!(matches!(result, Err(FetchError::TooLarge)));
     }
 
@@ -672,8 +742,8 @@ mod download_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let result = download(&client, &format!("{}/binary", server.uri())).await;
+        let client = no_redirect_client();
+        let result = download(&client, &format!("{}/binary", server.uri()), MAX_REDIRECTS, &PublicResolver).await;
         assert!(
             matches!(result, Err(FetchError::UnsupportedContentType(ref ct)) if ct == "application/pdf"),
             "got: {result:?}"
@@ -693,13 +763,181 @@ mod download_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
-        let (_, html) = download(&client, &format!("{}/html", server.uri()))
-            .await
-            .unwrap();
+        let client = no_redirect_client();
+        let (_, html) = download(
+            &client,
+            &format!("{}/html", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await
+        .unwrap();
         assert!(html.contains("ok"));
     }
 
+    #[tokio::test]
+    async fn redirect_to_private_ip_blocked() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "http://127.0.0.1/secret"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/redir", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::InternalHost)),
+            "redirect to 127.0.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_to_metadata_endpoint_blocked() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "http://169.254.169.254/latest/meta-data"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/redir", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::InternalHost)),
+            "redirect to metadata endpoint should be blocked, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_to_localhost_domain_blocked() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "http://localhost/secret"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/redir", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::InternalHost)),
+            "redirect to localhost should be blocked, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_to_dns_private_ip_blocked() {
+        /// Resolver that returns a private IP for any domain.
+        struct PrivateResolver;
+        impl DnsResolver for PrivateResolver {
+            async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
+                Ok(vec!["10.0.0.1".parse().unwrap()])
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "http://evil.com/internal"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/redir", server.uri()),
+            MAX_REDIRECTS,
+            &PrivateResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::InternalHost)),
+            "redirect to domain resolving to private IP should be blocked, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn too_many_redirects_returns_error() {
+        // Use max_redirects=0 with a redirect to a public URL.
+        // The loop runs once, follows the redirect (passes SSRF check), then
+        // exceeds the limit without needing to connect to the target.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "https://example.com/next"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/redir", server.uri()),
+            0, // max_redirects = 0
+            &PublicResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::TooManyRedirects(0))),
+            "should error on too many redirects, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_missing_location_header_returns_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/bad-redir"))
+            .respond_with(ResponseTemplate::new(302))
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &format!("{}/bad-redir", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::RedirectMissingLocation)),
+            "missing Location header should error, got: {result:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -708,9 +946,16 @@ mod fetch_page_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn no_redirect_client() -> Client {
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn blocks_ssrf_to_localhost() {
-        let client = Client::new();
+        let client = no_redirect_client();
         let result = fetch_page(
             &client,
             "http://127.0.0.1/secret",
@@ -735,7 +980,7 @@ mod fetch_page_tests {
             .mount(&server)
             .await;
 
-        let client = Client::new();
+        let client = no_redirect_client();
         let opts = FetchOptions { js: true, ..Default::default() };
         let result = fetch_page(
             &client,
