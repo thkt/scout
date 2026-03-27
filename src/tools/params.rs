@@ -19,6 +19,13 @@ pub enum Command {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout search \"Rust async patterns\"
+  scout search \"状態管理\" --lang ja
+
+Environment:
+  GEMINI_API_KEY  Required. Gemini API key for web search.")]
 pub struct SearchParams {
     /// Search query
     pub query: String,
@@ -28,6 +35,11 @@ pub struct SearchParams {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout fetch https://example.com
+  scout fetch https://example.com --js
+  scout fetch https://example.com --raw")]
 pub struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub url: String,
@@ -40,6 +52,14 @@ pub struct FetchParams {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout research \"state management\"
+  scout research \"Rust error handling\" --depth 5
+  scout research \"型安全\" --lang ja --depth 3
+
+Environment:
+  GEMINI_API_KEY  Required. Gemini API key for web search.")]
 pub struct ResearchParams {
     /// Research query
     pub query: String,
@@ -52,6 +72,15 @@ pub struct ResearchParams {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout repo-tree facebook/react
+  scout repo-tree facebook/react --path src/
+  scout repo-tree facebook/react --pattern \"*.rs\"
+  scout repo-tree facebook/react --ref v18.0.0
+
+Environment:
+  GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoTreeParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
     pub repository: String,
@@ -67,6 +96,14 @@ pub struct RepoTreeParams {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout repo-read facebook/react README.md
+  scout repo-read facebook/react src/index.ts --lines 1-80
+  scout repo-read facebook/react Cargo.toml --ref main
+
+Environment:
+  GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoReadParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
     pub repository: String,
@@ -81,6 +118,13 @@ pub struct RepoReadParams {
 }
 
 #[derive(Args)]
+#[command(after_help = "\
+Examples:
+  scout repo-overview facebook/react
+  scout repo-overview rust-lang/rust
+
+Environment:
+  GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoOverviewParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
     pub repository: String,
