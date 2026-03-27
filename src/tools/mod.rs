@@ -22,7 +22,10 @@ use crate::search::engine;
 
 impl From<&FetchParams> for FetchOptions {
     fn from(p: &FetchParams) -> Self {
-        Self { js: p.js, raw: p.raw }
+        Self {
+            js: p.js,
+            raw: p.raw,
+        }
     }
 }
 
@@ -39,6 +42,9 @@ const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Scout {
     http: Client,
+    /// HTTP client with redirect following disabled for SSRF-safe fetching.
+    /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
+    fetch_http: Client,
     gemini: Option<GeminiClient>,
     github: GitHubClient,
 }
@@ -51,12 +57,19 @@ impl Scout {
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
+        let fetch_http = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
         let gemini = GeminiClient::from_env(http.clone())
             .inspect_err(|e| warn!("Gemini client not available: {e}"))
             .ok();
         let github = GitHubClient::from_env(http.clone()).await;
         Ok(Self {
             http,
+            fetch_http,
             gemini,
             github,
         })
@@ -86,12 +99,10 @@ impl Scout {
         let search_query = params.lang.apply_to_query(&params.query);
         let result = gemini.search(&search_query).await?;
 
-        let mut output = result
-            .answer
-            .unwrap_or_else(|| {
-                "(No answer returned — the query may have been filtered by safety settings.)"
-                    .to_string()
-            });
+        let mut output = result.answer.unwrap_or_else(|| {
+            "(No answer returned — the query may have been filtered by safety settings.)"
+                .to_string()
+        });
 
         if !result.sources.is_empty() {
             output.push_str("\n\n---\n**Sources:**\n");
@@ -118,7 +129,7 @@ impl Scout {
         let opts = FetchOptions::from(&params);
         let result = tokio::time::timeout(
             FETCH_TOOL_TIMEOUT,
-            crate::fetch::fetch_page(&self.http, &params.url, opts, &TokioDnsResolver),
+            crate::fetch::fetch_page(&self.fetch_http, &params.url, opts, &TokioDnsResolver),
         )
         .await
         .unwrap_or_else(|_| {
@@ -165,7 +176,7 @@ impl Scout {
             depth: params.depth,
             lang: params.lang,
         };
-        let report = engine::research(gemini, &self.http, &req, &TokioDnsResolver).await?;
+        let report = engine::research(gemini, &self.fetch_http, &req, &TokioDnsResolver).await?;
 
         info!(
             pages = report.fetched_pages.len(),
@@ -332,8 +343,15 @@ mod tests {
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .unwrap();
+        let fetch_http = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
         Scout {
             http: http.clone(),
+            fetch_http,
             gemini: Some(GeminiClient::with_base_url(http.clone(), gemini_uri)),
             github: GitHubClient::with_base_url(http, "http://localhost:0"),
         }
@@ -467,6 +485,9 @@ mod tests {
             output.contains("(truncated: showing"),
             "should include truncation message"
         );
-        assert!(output.contains("### Title"), "headings should still be shifted");
+        assert!(
+            output.contains("### Title"),
+            "headings should still be shifted"
+        );
     }
 }

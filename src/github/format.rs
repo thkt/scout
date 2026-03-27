@@ -388,7 +388,10 @@ mod tests {
         let repo = sample_repo();
         let readme = "# Getting Started\n## Install\nRun `cargo install`\n### Config";
         let output = format_overview(&repo, Some(readme), &[], &[], &[]);
-        assert!(output.contains("### Getting Started"), "h1 should shift to h3");
+        assert!(
+            output.contains("### Getting Started"),
+            "h1 should shift to h3"
+        );
         assert!(output.contains("#### Install"), "h2 should shift to h4");
         assert!(output.contains("##### Config"), "h3 should shift to h5");
     }
@@ -402,7 +405,10 @@ mod tests {
         }
         let readme = lines.join("\n");
         let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
-        assert!(output.contains("### Title"), "h1 should shift to h3 even when truncated");
+        assert!(
+            output.contains("### Title"),
+            "h1 should shift to h3 even when truncated"
+        );
         assert!(output.contains("truncated, 251 lines total"));
     }
 }

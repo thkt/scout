@@ -317,7 +317,10 @@ mod http_tests {
         let result = client.search("test").await;
         match &result {
             Err(GeminiError::Api { code: 500, message }) => {
-                assert!(message.contains("not json"), "expected body snippet in error, got: {message}");
+                assert!(
+                    message.contains("not json"),
+                    "expected body snippet in error, got: {message}"
+                );
             }
             other => panic!("expected Api(500) without body, got: {other:?}"),
         }
