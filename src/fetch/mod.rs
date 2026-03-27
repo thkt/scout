@@ -134,7 +134,9 @@ pub async fn fetch_page(
         #[cfg(not(feature = "js-rendering"))]
         {
             // opts.js=true is caught by early bail above; this is the auto-fallback path.
-            warn!("JS rendering unavailable (js-rendering feature not enabled), using original HTML");
+            warn!(
+                "JS rendering unavailable (js-rendering feature not enabled), using original HTML"
+            );
         }
     }
 
@@ -320,7 +322,12 @@ fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
         let path_commands: &[&str] = if cfg!(target_os = "macos") {
             &["chromium"]
         } else {
-            &["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]
+            &[
+                "google-chrome-stable",
+                "google-chrome",
+                "chromium-browser",
+                "chromium",
+            ]
         };
         let known_paths: &[&std::path::Path] = if cfg!(target_os = "macos") {
             &[
@@ -361,10 +368,7 @@ fn build_launch_args() -> Vec<&'static str> {
 ///   ws/wss URLs are checked by converting to http/https (same host:port).
 /// - Non-network URLs (`data:`, `chrome:`, `about:`, `blob:`): allowed.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
-pub(crate) async fn check_browser_request(
-    url: &str,
-    resolver: &impl ssrf::DnsResolver,
-) -> bool {
+pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
         std::borrow::Cow::Borrowed(url)
     } else if let Some(rest) = url.strip_prefix("ws://") {
@@ -396,12 +400,12 @@ pub(crate) async fn check_browser_request(
 /// for local CLI use; service mode would need Arc<dyn DnsResolver>.
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
+    use chromiumoxide::Browser;
     use chromiumoxide::browser::BrowserConfig;
     use chromiumoxide::cdp::browser_protocol::fetch::{
         ContinueRequestParams, EventRequestPaused, FailRequestParams,
     };
     use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
-    use chromiumoxide::Browser;
     use futures::StreamExt;
 
     let browser_path = resolve_browser_binary()?;
@@ -1070,13 +1074,7 @@ mod fetch_page_tests {
             ..Default::default()
         };
         // Any URL — error fires before ssrf_check or HTTP fetch
-        let result = fetch_page(
-            &client,
-            "https://example.com/page",
-            opts,
-            &TokioDnsResolver,
-        )
-        .await;
+        let result = fetch_page(&client, "https://example.com/page", opts, &TokioDnsResolver).await;
 
         assert!(
             matches!(&result, Err(FetchError::Browser(msg)) if msg.contains("js-rendering")),
@@ -1296,10 +1294,7 @@ mod cdp_launch_tests {
             "--disable-domain-reliability",
             "--no-pings",
         ] {
-            assert!(
-                args.contains(&flag),
-                "missing security flag: {flag}"
-            );
+            assert!(args.contains(&flag), "missing security flag: {flag}");
         }
     }
 }
@@ -1436,4 +1431,3 @@ mod cdp_integration_tests {
         );
     }
 }
-

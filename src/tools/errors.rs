@@ -138,7 +138,10 @@ mod tests {
             FetchError::RedirectMissingLocation.into(),
             FetchError::Browser("not installed".into()).into(),
             SlackError::TokenNotSet.into(),
-            SlackError::Api { error: "err".into() }.into(),
+            SlackError::Api {
+                error: "err".into(),
+            }
+            .into(),
             GeminiError::ApiKeyNotSet.into(),
             GeminiError::RateLimited.into(),
             GeminiError::QuotaExhausted("limit".into()).into(),
