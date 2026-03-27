@@ -403,11 +403,10 @@ async fn fetch_with_cdp(
         .build()
         .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
 
-    let (mut browser, mut handler) =
-        tokio::time::timeout(CDP_TIMEOUT, Browser::launch(config))
-            .await
-            .map_err(|_| BrowserError::TimedOut)?
-            .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
+    let (mut browser, mut handler) = tokio::time::timeout(CDP_TIMEOUT, Browser::launch(config))
+        .await
+        .map_err(|_| BrowserError::TimedOut)?
+        .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
 
     let handler_task = tokio::spawn(async move {
         while let Some(h) = handler.next().await {
@@ -418,10 +417,9 @@ async fn fetch_with_cdp(
     });
 
     // unwrap_or (not ?) so cleanup below runs even on timeout.
-    let result =
-        tokio::time::timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
-            .await
-            .unwrap_or(Err(BrowserError::TimedOut));
+    let result = tokio::time::timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
+        .await
+        .unwrap_or(Err(BrowserError::TimedOut));
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), browser.close()).await;
     handler_task.abort();

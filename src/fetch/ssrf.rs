@@ -150,20 +150,14 @@ mod tests {
             "https://8.8.8.8/dns",
             "http://[2001:db8::1]/page",
         ] {
-            assert!(
-                validate_url_sync(url).is_ok(),
-                "should accept: {url}"
-            );
+            assert!(validate_url_sync(url).is_ok(), "should accept: {url}");
         }
     }
 
     #[test]
     fn validate_url_rejects_bad_scheme() {
         for url in ["ftp://example.com", "file:///tmp/test", "not-a-url"] {
-            assert!(
-                validate_url_sync(url).is_err(),
-                "should reject: {url}"
-            );
+            assert!(validate_url_sync(url).is_err(), "should reject: {url}");
         }
     }
 
@@ -193,10 +187,7 @@ mod tests {
             "http://test.home.arpa/local",
         ] {
             assert!(
-                matches!(
-                    validate_url_sync(url),
-                    Err(FetchError::InternalHost)
-                ),
+                matches!(validate_url_sync(url), Err(FetchError::InternalHost)),
                 "should block as InternalHost: {url}"
             );
         }
