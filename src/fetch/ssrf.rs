@@ -1,6 +1,7 @@
 //! SSRF defense-in-depth: URL validation and DNS pre-check.
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::net::{IpAddr, Ipv6Addr};
 
 use tracing::warn;
@@ -9,13 +10,15 @@ use super::FetchError;
 
 const DNS_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// DNS resolver abstraction for SSRF defense. Enables mock-based testing
-/// of the DNS-resolves-to-private-IP path without real network lookups.
-pub(crate) trait DnsResolver {
-    async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, FetchError>;
+pub(crate) trait DnsResolver: Clone + Send + Sync + 'static {
+    fn lookup(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> impl Future<Output = Result<Vec<IpAddr>, FetchError>> + Send;
 }
 
-/// Production DNS resolver using tokio's async DNS lookup.
+#[derive(Clone, Copy)]
 pub(crate) struct TokioDnsResolver;
 
 impl DnsResolver for TokioDnsResolver {
@@ -31,7 +34,7 @@ impl DnsResolver for TokioDnsResolver {
     }
 }
 
-/// Strip userinfo (username:password) from URLs before logging (SEC-003).
+/// SEC-003: strip userinfo before logging.
 pub(super) fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     if !raw.contains('@') {
         return Cow::Borrowed(raw);
@@ -148,7 +151,7 @@ mod tests {
             "http://[2001:db8::1]/page",
         ] {
             assert!(
-                validate_url_sync(url).map(|_| ()).is_ok(),
+                validate_url_sync(url).is_ok(),
                 "should accept: {url}"
             );
         }
@@ -158,7 +161,7 @@ mod tests {
     fn validate_url_rejects_bad_scheme() {
         for url in ["ftp://example.com", "file:///tmp/test", "not-a-url"] {
             assert!(
-                validate_url_sync(url).map(|_| ()).is_err(),
+                validate_url_sync(url).is_err(),
                 "should reject: {url}"
             );
         }
@@ -191,7 +194,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    validate_url_sync(url).map(|_| ()),
+                    validate_url_sync(url),
                     Err(FetchError::InternalHost)
                 ),
                 "should block as InternalHost: {url}"
@@ -204,6 +207,7 @@ mod tests {
 mod dns_tests {
     use super::*;
 
+    #[derive(Clone)]
     struct AllowDns(Vec<IpAddr>);
 
     impl DnsResolver for AllowDns {
@@ -212,6 +216,7 @@ mod dns_tests {
         }
     }
 
+    #[derive(Clone)]
     struct FailDns(String);
 
     impl DnsResolver for FailDns {
