@@ -22,7 +22,10 @@ use crate::search::engine;
 
 impl From<&FetchParams> for FetchOptions {
     fn from(p: &FetchParams) -> Self {
-        Self { js: p.js, raw: p.raw }
+        Self {
+            js: p.js,
+            raw: p.raw,
+        }
     }
 }
 
@@ -96,12 +99,10 @@ impl Scout {
         let search_query = params.lang.apply_to_query(&params.query);
         let result = gemini.search(&search_query).await?;
 
-        let mut output = result
-            .answer
-            .unwrap_or_else(|| {
-                "(No answer returned — the query may have been filtered by safety settings.)"
-                    .to_string()
-            });
+        let mut output = result.answer.unwrap_or_else(|| {
+            "(No answer returned — the query may have been filtered by safety settings.)"
+                .to_string()
+        });
 
         if !result.sources.is_empty() {
             output.push_str("\n\n---\n**Sources:**\n");
@@ -484,6 +485,9 @@ mod tests {
             output.contains("(truncated: showing"),
             "should include truncation message"
         );
-        assert!(output.contains("### Title"), "headings should still be shifted");
+        assert!(
+            output.contains("### Title"),
+            "headings should still be shifted"
+        );
     }
 }

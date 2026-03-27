@@ -206,7 +206,10 @@ fn has_thin_body(html: &str) -> bool {
         .windows(5)
         .position(|w| w.eq_ignore_ascii_case(b"<body"));
     let body = if let Some(start) = body_start {
-        let after_tag = html[start..].find('>').map(|i| start + i + 1).unwrap_or(start);
+        let after_tag = html[start..]
+            .find('>')
+            .map(|i| start + i + 1)
+            .unwrap_or(start);
         let body_end = lower[after_tag..]
             .windows(7)
             .position(|w| w.eq_ignore_ascii_case(b"</body>"))
@@ -238,7 +241,9 @@ fn has_thin_body(html: &str) -> bool {
                 let name = &tag_buf[..tag_len];
                 if name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style") {
                     skip_text = true;
-                } else if name.eq_ignore_ascii_case(b"/script") || name.eq_ignore_ascii_case(b"/style") {
+                } else if name.eq_ignore_ascii_case(b"/script")
+                    || name.eq_ignore_ascii_case(b"/style")
+                {
                     skip_text = false;
                 }
             }
@@ -705,11 +710,23 @@ mod download_tests {
 
         let client = no_redirect_client();
         assert!(matches!(
-            download(&client, &format!("{}/404", server.uri()), MAX_REDIRECTS, &PublicResolver).await,
+            download(
+                &client,
+                &format!("{}/404", server.uri()),
+                MAX_REDIRECTS,
+                &PublicResolver
+            )
+            .await,
             Err(FetchError::Status(404))
         ));
         assert!(matches!(
-            download(&client, &format!("{}/500", server.uri()), MAX_REDIRECTS, &PublicResolver).await,
+            download(
+                &client,
+                &format!("{}/500", server.uri()),
+                MAX_REDIRECTS,
+                &PublicResolver
+            )
+            .await,
             Err(FetchError::Status(500))
         ));
     }
@@ -725,7 +742,13 @@ mod download_tests {
             .await;
 
         let client = no_redirect_client();
-        let result = download(&client, &format!("{}/huge", server.uri()), MAX_REDIRECTS, &PublicResolver).await;
+        let result = download(
+            &client,
+            &format!("{}/huge", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
         assert!(matches!(result, Err(FetchError::TooLarge)));
     }
 
@@ -743,7 +766,13 @@ mod download_tests {
             .await;
 
         let client = no_redirect_client();
-        let result = download(&client, &format!("{}/binary", server.uri()), MAX_REDIRECTS, &PublicResolver).await;
+        let result = download(
+            &client,
+            &format!("{}/binary", server.uri()),
+            MAX_REDIRECTS,
+            &PublicResolver,
+        )
+        .await;
         assert!(
             matches!(result, Err(FetchError::UnsupportedContentType(ref ct)) if ct == "application/pdf"),
             "got: {result:?}"
@@ -781,8 +810,7 @@ mod download_tests {
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", "http://127.0.0.1/secret"),
+                ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1/secret"),
             )
             .mount(&server)
             .await;
@@ -833,8 +861,7 @@ mod download_tests {
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", "http://localhost/secret"),
+                ResponseTemplate::new(302).insert_header("location", "http://localhost/secret"),
             )
             .mount(&server)
             .await;
@@ -867,8 +894,7 @@ mod download_tests {
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", "http://evil.com/internal"),
+                ResponseTemplate::new(302).insert_header("location", "http://evil.com/internal"),
             )
             .mount(&server)
             .await;
@@ -896,8 +922,7 @@ mod download_tests {
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", "https://example.com/next"),
+                ResponseTemplate::new(302).insert_header("location", "https://example.com/next"),
             )
             .mount(&server)
             .await;
@@ -981,7 +1006,10 @@ mod fetch_page_tests {
             .await;
 
         let client = no_redirect_client();
-        let opts = FetchOptions { js: true, ..Default::default() };
+        let opts = FetchOptions {
+            js: true,
+            ..Default::default()
+        };
         let result = fetch_page(
             &client,
             &format!("{}/rich", server.uri()),
@@ -992,7 +1020,10 @@ mod fetch_page_tests {
 
         // playwright-cli is likely not installed in CI — the --js path should
         // return an error rather than silently falling back.
-        assert!(result.is_err(), "js=true should error when playwright unavailable");
+        assert!(
+            result.is_err(),
+            "js=true should error when playwright unavailable"
+        );
     }
 }
 
