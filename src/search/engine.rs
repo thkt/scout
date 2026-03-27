@@ -47,14 +47,25 @@ pub async fn research(
     req: &ResearchRequest<'_>,
     resolver: &impl DnsResolver,
 ) -> Result<ResearchReport, GeminiError> {
-    let topical = expand_topical(req.query, req.breadth);
-    let queries: Vec<String> = topical
-        .iter()
-        .flat_map(|q| match req.lang {
-            Lang::Auto => expand_bilingual(q),
-            _ => vec![req.lang.apply_to_query(q)],
-        })
-        .collect();
+    let queries: Vec<String> = match req.lang {
+        Lang::Auto => {
+            // Bilingual first: preserves Japanese context in topical angles.
+            // "型安全とは" → bilingual → ["型安全とは"] → topical each → angles with context.
+            let bilingual = expand_bilingual(req.query);
+            bilingual
+                .iter()
+                .flat_map(|q| expand_topical(q, req.breadth))
+                .collect()
+        }
+        _ => {
+            // Topical first, then apply language suffix to each angle.
+            let topical = expand_topical(req.query, req.breadth);
+            topical
+                .iter()
+                .map(|q| req.lang.apply_to_query(q))
+                .collect()
+        }
+    };
 
     let search_results = run_searches(gemini, &queries).await?;
     let all_sources = collect_unique_sources(&search_results);
