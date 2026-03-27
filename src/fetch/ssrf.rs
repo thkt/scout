@@ -46,7 +46,7 @@ pub(super) fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     Cow::Borrowed(raw)
 }
 
-pub(super) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result<(), FetchError> {
+pub(crate) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result<(), FetchError> {
     let parsed = validate_url_sync(raw).map_err(|e| {
         if matches!(e, FetchError::InternalHost) {
             warn!(url = %redact_url_credentials(raw), "blocked fetch to internal/private host");
@@ -71,7 +71,7 @@ pub(super) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result
     Ok(())
 }
 
-fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
+pub(crate) fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
     let parsed = url::Url::parse(raw)?;
     match parsed.scheme() {
         "http" | "https" => {}
@@ -104,7 +104,7 @@ fn is_cgn(v4: std::net::Ipv4Addr) -> bool {
     octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
-fn is_private_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()

@@ -24,7 +24,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 encoding_rs = "0.8"
 fastrand = "2"
-shell-escape = "0.1"
+chromiumoxide = { version = "0.9", optional = true }
+
+[features]
+js-rendering = ["chromiumoxide"]
 
 [dev-dependencies]
 wiremock = "0.6"

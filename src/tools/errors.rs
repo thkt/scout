@@ -72,7 +72,7 @@ impl From<FetchError> for ScoutError {
             | FetchError::InternalHost
             | FetchError::UnsupportedContentType(_)
             | FetchError::RedirectMissingLocation => Self::user_error(e.to_string()),
-            FetchError::Playwright(_) => Self::user_error(e.to_string()),
+            FetchError::Browser(_) => Self::user_error(e.to_string()),
             FetchError::Timeout(_) | FetchError::DnsResolution(_) => Self::internal(e.to_string()),
             FetchError::Http(_)
             | FetchError::Status(_)
@@ -126,63 +126,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_not_found_is_user_error() {
-        let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
-        assert_eq!(err.exit_code(), 1);
+    fn user_errors_have_exit_code_1() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::NotFound("/test".into()).into(),
+            github::GitHubError::RateLimited.into(),
+            github::GitHubError::Forbidden("denied".into()).into(),
+            github::GitHubError::InvalidRepo("bad".into()).into(),
+            FetchError::InvalidScheme.into(),
+            FetchError::InternalHost.into(),
+            FetchError::UnsupportedContentType("image/png".into()).into(),
+            FetchError::RedirectMissingLocation.into(),
+            FetchError::Browser("not installed".into()).into(),
+            SlackError::TokenNotSet.into(),
+            SlackError::Api {
+                error: "err".into(),
+            }
+            .into(),
+            GeminiError::ApiKeyNotSet.into(),
+            GeminiError::RateLimited.into(),
+            GeminiError::QuotaExhausted("limit".into()).into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.exit_code(), 1, "expected user error (1): {err}");
+        }
     }
 
     #[test]
-    fn github_rate_limited_is_user_error() {
-        let err = ScoutError::from(github::GitHubError::RateLimited);
-        assert_eq!(err.exit_code(), 1);
-        assert!(err.to_string().contains("rate limit"));
+    fn internal_errors_have_exit_code_2() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::Api {
+                code: 500,
+                message: "server error".into(),
+            }
+            .into(),
+            github::GitHubError::Decode("decode error".into()).into(),
+            FetchError::Status(500).into(),
+            FetchError::TooLarge.into(),
+            FetchError::TooManyRedirects(10).into(),
+            SlackError::Network("err".into()).into(),
+            SlackError::Timeout("err".into()).into(),
+            SlackError::Decode("err".into()).into(),
+            GeminiError::Api {
+                code: 500,
+                message: "err".into(),
+            }
+            .into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.exit_code(), 2, "expected internal error (2): {err}");
+        }
     }
 
     #[test]
     fn github_forbidden_hints_token() {
         let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
-        assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("GITHUB_TOKEN"));
     }
 
     #[test]
-    fn github_api_error_is_internal() {
-        let err = ScoutError::from(github::GitHubError::Api {
-            code: 500,
-            message: "server error".into(),
-        });
-        assert_eq!(err.exit_code(), 2);
-    }
-
-    #[test]
-    fn fetch_invalid_scheme_is_user_error() {
-        let err = ScoutError::from(FetchError::InvalidScheme);
-        assert_eq!(err.exit_code(), 1);
-    }
-
-    #[test]
-    fn fetch_status_is_internal() {
-        let err = ScoutError::from(FetchError::Status(500));
-        assert_eq!(err.exit_code(), 2);
-    }
-
-    #[test]
-    fn fetch_playwright_is_user_error() {
-        let err = ScoutError::from(FetchError::Playwright("not installed".into()));
-        assert_eq!(err.exit_code(), 1);
-        assert!(err.to_string().contains("playwright"));
-    }
-
-    #[test]
-    fn gemini_api_key_not_set_is_user_error() {
-        let err = ScoutError::from(GeminiError::ApiKeyNotSet);
-        assert_eq!(err.exit_code(), 1);
-        assert!(err.to_string().contains("GEMINI_API_KEY"));
-    }
-
-    #[test]
-    fn gemini_rate_limited_is_user_error() {
-        let err = ScoutError::from(GeminiError::RateLimited);
-        assert_eq!(err.exit_code(), 1);
+    fn quota_exhausted_hints_billing_url() {
+        let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
+        assert!(err.to_string().contains("aistudio.google.com"));
     }
 }

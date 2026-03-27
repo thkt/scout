@@ -84,10 +84,10 @@ export GITHUB_TOKEN="..."     # Optional: 5,000 req/hour vs 60/hour unauthentica
 
 ### Optional: JS rendering (for SPAs)
 
-`fetch` auto-detects JS-dependent pages (React, Next.js, Vue, Nuxt) and falls back to `playwright-cli`. It works via `npx` out of the box, but installing globally is faster:
+`fetch` auto-detects JS-dependent pages (React, Next.js, Vue, Nuxt) and falls back to headless Chrome via CDP. Requires Chrome or Chromium installed locally and the `js-rendering` feature:
 
 ```sh
-npm install -g @playwright/cli
+cargo install --path . --features js-rendering
 ```
 
 ### Claude Code integration
@@ -132,16 +132,16 @@ scout search "Next.js server actions security"
 
 ### `scout fetch` — Web page to Markdown
 
-Downloads a page, extracts main content via Readability, converts to Markdown. JS-dependent pages (SPAs) are automatically detected and rendered via `playwright-cli`. No LLM round-trip.
+Downloads a page, extracts main content via Readability, converts to Markdown. With `js-rendering` feature, JS-dependent pages (SPAs) are automatically detected and rendered via headless Chrome (CDP). No LLM round-trip.
 
 ```sh
 scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| Flag    | Description                                                    |
-| ------- | -------------------------------------------------------------- |
-| `--js`  | Force JS rendering via playwright-cli (auto-detected for SPAs) |
-| `--raw` | Skip Readability, convert entire page                          |
+| Flag    | Description                                                           |
+| ------- | --------------------------------------------------------------------- |
+| `--js`  | Force JS rendering via CDP (requires `js-rendering` feature + Chrome) |
+| `--raw` | Skip Readability, convert entire page                                 |
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
@@ -223,12 +223,12 @@ Single binary, zero runtime dependencies.
 
 ## Limitations
 
-| Limitation                 | Details                                                                                                                           |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Gemini API key required    | `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day                                                      |
-| JS rendering needs Node.js | `fetch` auto-detects SPAs and falls back to `playwright-cli` for JS rendering. Requires `npx` (Node.js) if not installed globally |
-| GitHub rate limits         | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call                                        |
-| Fetch size cap             | 10 MB download limit, 100K byte output                                                                                            |
+| Limitation                | Details                                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Gemini API key required   | `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day                                                              |
+| JS rendering needs Chrome | `fetch` auto-detects SPAs. With `--features js-rendering`, falls back to headless Chrome (CDP) for JS rendering. Requires Chrome/Chromium |
+| GitHub rate limits        | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call                                                |
+| Fetch size cap            | 10 MB download limit, 100K byte output                                                                                                    |
 
 ## License
 
