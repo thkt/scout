@@ -73,10 +73,10 @@ export GITHUB_TOKEN="..."     # 任意: 5,000回/時 vs 未設定60回/時
 
 ### オプション: JSレンダリング（SPA対応）
 
-`fetch` はJS依存ページ（React、Next.js、Vue、Nuxt）を自動検出し `playwright-cli` にフォールバックします。`npx` 経由でそのまま動きますが、グローバルインストールすると高速です。
+`fetch` はJS依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレスChrome（CDP）でレンダリングします。Chrome/Chromiumのローカルインストールと `js-rendering` featureが必要です。
 
 ```sh
-npm install -g @playwright/cli
+cargo install --path . --features js-rendering
 ```
 
 ### Claude Code連携
@@ -121,16 +121,16 @@ scout search "Next.js server actions security"
 
 ### `scout fetch` — WebページをMarkdownに変換
 
-ページをダウンロードし、Readabilityで本文を抽出してMarkdownに変換します。JS依存ページ（SPA）は自動検出し `playwright-cli` でレンダリングします。LLMは介在しません。
+ページをダウンロードし、Readabilityで本文を抽出してMarkdownに変換します。`js-rendering` feature有効時、JS依存ページ（SPA）は自動検出しヘッドレスChrome（CDP）でレンダリングします。LLMは介在しません。
 
 ```sh
 scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| フラグ  | 説明                                                      |
-| ------- | --------------------------------------------------------- |
-| `--js`  | playwright-cliによるJSレンダリングを強制（SPAは自動検出） |
-| `--raw` | Readabilityをスキップしてページ全体を変換                 |
+| フラグ  | 説明                                                                 |
+| ------- | -------------------------------------------------------------------- |
+| `--js`  | CDP経由のJSレンダリングを強制（`js-rendering` feature + Chrome必要） |
+| `--raw` | Readabilityをスキップしてページ全体を変換                            |
 
 ページのメタデータ（タイトル/著者/日付）はYAMLフロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
@@ -213,12 +213,12 @@ src/
 
 ## 制限事項
 
-| 制限                          | 内容                                                                                                                 |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Gemini APIキーが必要          | `search` と `research` には `GEMINI_API_KEY` が必要。無料枠: 100 RPM、1,500回/日                                     |
-| JSレンダリングにNode.jsが必要 | `fetch` はSPAを自動検出し `playwright-cli` でJSレンダリングする。グローバル未インストール時は `npx`（Node.js）が必要 |
-| GitHubレート制限              | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5リクエスト消費                                |
-| 取得サイズ上限                | ダウンロード10MB、出力100Kバイト                                                                                     |
+| 制限                         | 内容                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Gemini APIキーが必要         | `search` と `research` には `GEMINI_API_KEY` が必要。無料枠: 100 RPM、1,500回/日                                                |
+| JSレンダリングにChromeが必要 | `fetch` はSPAを自動検出。`--features js-rendering` でビルドするとヘッドレスChrome（CDP）でJSレンダリング。Chrome/Chromiumが必要 |
+| GitHubレート制限             | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5リクエスト消費                                           |
+| 取得サイズ上限               | ダウンロード10MB、出力100Kバイト                                                                                                |
 
 ## ライセンス
 

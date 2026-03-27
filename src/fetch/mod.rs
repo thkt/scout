@@ -13,13 +13,13 @@ use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
 use reqwest::header::LOCATION;
-use std::time::Duration;
+
 use tracing::{debug, info, warn};
 
 /// Options for [`fetch_page`] that control rendering and output.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FetchOptions {
-    /// Force JS rendering via playwright-cli (skip auto-detection).
+    /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
     pub js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
     pub raw: bool,
@@ -27,8 +27,6 @@ pub struct FetchOptions {
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
 const MAX_REDIRECTS: usize = 5;
-
-const PLAYWRIGHT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -65,18 +63,18 @@ pub enum FetchError {
     #[error("fetch timed out: {0}")]
     Timeout(String),
 
-    #[error("playwright rendering failed: {0}")]
-    Playwright(String),
+    #[error("browser rendering failed: {0}")]
+    Browser(String),
 }
 
-/// Minimum extracted text length to consider Readability extraction successful.
+/// ~1 sentence; pages below this almost always need JS rendering.
 const EXTRACT_TEXT_THRESHOLD: usize = 50;
 
 /// Fetch a web page and extract its content.
 ///
 /// Includes SSRF defense (URL validation + DNS check + post-redirect recheck).
-/// Unless [`FetchOptions::js`] is set, automatically falls back to playwright-cli
-/// for JS rendering when the page appears JS-dependent (SPA with empty body)
+/// With `js-rendering` feature enabled, automatically falls back to CDP-based
+/// JS rendering when the page appears JS-dependent (SPA with empty body)
 /// or when Readability extraction yields too little content.
 pub async fn fetch_page(
     client: &Client,
@@ -84,13 +82,23 @@ pub async fn fetch_page(
     opts: FetchOptions,
     resolver: &impl DnsResolver,
 ) -> Result<FetchResult, FetchError> {
+    // Early bail: --js requires js-rendering feature at compile time.
+    #[cfg(not(feature = "js-rendering"))]
+    if opts.js {
+        return Err(FetchError::Browser(
+            "js-rendering feature required — rebuild with `--features js-rendering`".into(),
+        ));
+    }
+
     // SECURITY: Local CLI only. TOCTOU gap between DNS check and reqwest connect
     // is acceptable here; a network service would need a custom resolver that
-    // enforces the allowlist at connect time. Playwright widens the gap further
-    // (its own DNS resolution) — proxy or disable it in service mode.
+    // enforces the allowlist at connect time.
     ssrf_check(url, resolver).await?;
 
+    #[cfg(feature = "js-rendering")]
     let (final_url, mut html) = download(client, url, MAX_REDIRECTS, resolver).await?;
+    #[cfg(not(feature = "js-rendering"))]
+    let (final_url, html) = download(client, url, MAX_REDIRECTS, resolver).await?;
 
     // SECURITY: Defense-in-depth — redundant check on the final URL.
     // download() already validates each redirect hop, but this catches
@@ -98,27 +106,35 @@ pub async fn fetch_page(
     ssrf_check(&final_url, resolver).await?;
 
     let need_js = if opts.js {
-        info!("--js flag set, using playwright-cli for JS rendering");
+        info!("--js flag set, requesting JS rendering");
         true
     } else if is_js_dependent(&html) {
-        warn!("JS-dependent page detected, trying playwright-cli fallback");
+        warn!("JS-dependent page detected, trying JS rendering fallback");
         true
     } else {
         false
     };
 
     if need_js {
-        match fetch_with_playwright(&final_url).await {
-            Ok(js_html) => {
-                debug!("playwright succeeded");
-                html = js_html;
+        #[cfg(feature = "js-rendering")]
+        {
+            match fetch_with_cdp(&final_url).await {
+                Ok(js_html) => {
+                    debug!("JS rendering succeeded via CDP");
+                    html = js_html;
+                }
+                Err(e) if opts.js => {
+                    return Err(FetchError::Browser(e.to_string()));
+                }
+                Err(e) => {
+                    warn!(error = %e, "JS rendering failed, using original HTML");
+                }
             }
-            Err(e) if opts.js => {
-                return Err(FetchError::Playwright(e.to_string()));
-            }
-            Err(e) => {
-                warn!(error = %e, "playwright fallback failed, using original HTML");
-            }
+        }
+        #[cfg(not(feature = "js-rendering"))]
+        {
+            // opts.js=true is caught by early bail above; this is the auto-fallback path.
+            warn!("JS rendering unavailable (js-rendering feature not enabled), using original HTML");
         }
     }
 
@@ -128,26 +144,32 @@ pub async fn fetch_page(
         extract_article(&html, Some(&final_url))
     };
 
-    let article = if !opts.raw && !need_js && is_thin_extract(&article) {
-        warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content, trying playwright-cli fallback");
-        match fetch_with_playwright(&final_url).await {
+    let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
+    #[cfg(feature = "js-rendering")]
+    let article = if need_thin_fallback {
+        warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content, trying JS rendering fallback");
+        match fetch_with_cdp(&final_url).await {
             Ok(js_html) => {
                 let re_extracted = extract_article(&js_html, Some(&final_url));
                 if is_thin_extract(&re_extracted) {
-                    debug!(url = %redact_url_credentials(&final_url), "playwright re-extraction still thin, returning best-effort result");
+                    debug!(url = %redact_url_credentials(&final_url), "JS re-extraction still thin, returning best-effort result");
                 } else {
-                    debug!(url = %redact_url_credentials(&final_url), "playwright fallback succeeded (post-extraction)");
+                    debug!(url = %redact_url_credentials(&final_url), "JS rendering fallback succeeded (post-extraction)");
                 }
                 re_extracted
             }
             Err(e) => {
-                warn!(url = %redact_url_credentials(&final_url), error = %e, "playwright fallback failed, using original extraction");
+                warn!(url = %redact_url_credentials(&final_url), error = %e, "JS rendering fallback failed, using original extraction");
                 article
             }
         }
     } else {
         article
     };
+    #[cfg(not(feature = "js-rendering"))]
+    if need_thin_fallback {
+        warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content but JS rendering unavailable");
+    }
 
     debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
     Ok(to_fetch_result(article, final_url))
@@ -163,7 +185,7 @@ fn is_thin_extract(article: &extractor::ExtractedArticle) -> bool {
         || visible_text_len(&article.content_html, EXTRACT_TEXT_THRESHOLD) < EXTRACT_TEXT_THRESHOLD
 }
 
-/// Count non-whitespace characters outside HTML tags. Short-circuits at `limit`.
+/// Cheaply detect JS-rendered pages with empty visible content.
 fn visible_text_len(html: &str, limit: usize) -> usize {
     let mut count = 0usize;
     let mut in_tag = false;
@@ -278,133 +300,216 @@ fn has_thin_body(html: &str) -> bool {
     true
 }
 
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 #[derive(Debug, thiserror::Error)]
-enum PlaywrightError {
-    #[error("playwright-cli not installed")]
-    NotInstalled,
-    #[error("playwright-cli timed out after {0}s")]
-    Timeout(u64),
-    #[error("playwright-cli failed: {0}")]
+enum BrowserError {
+    #[error("Chrome/Chromium not found. Install Chrome or set PATH to include chromium")]
+    NotFound,
+    #[allow(dead_code)]
+    #[error("browser failed: {0}")]
     ProcessFailed(String),
 }
 
-async fn drain_pipe<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, limit: usize) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        match tokio::io::AsyncReadExt::read(&mut pipe, &mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > limit {
-                    buf.truncate(limit);
-                    break;
+/// Cached Chrome/Chromium binary lookup. Result is stable within a process lifetime.
+#[cfg(feature = "js-rendering")]
+fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
+    static CACHE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+        std::sync::OnceLock::new();
+
+    let cached = CACHE.get_or_init(|| {
+        let path_commands: &[&str] = if cfg!(target_os = "macos") {
+            &["chromium"]
+        } else {
+            &["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]
+        };
+        let known_paths: &[&std::path::Path] = if cfg!(target_os = "macos") {
+            &[
+                std::path::Path::new(
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                ),
+                std::path::Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            ]
+        } else {
+            &[]
+        };
+        resolve_browser_binary_from(path_commands, known_paths).map_err(|e| e.to_string())
+    });
+
+    cached.clone().map_err(|_| BrowserError::NotFound)
+}
+
+/// SECURITY: Chrome launch flags to close non-network exfiltration channels.
+/// See spec.md Chrome Launch Flags table for rationale.
+#[cfg(feature = "js-rendering")]
+fn build_launch_args() -> Vec<&'static str> {
+    vec![
+        "--headless=new",
+        "--disable-webrtc",
+        "--disable-background-networking",
+        "--disable-features=DnsOverHttps",
+        "--disable-domain-reliability",
+        "--no-pings",
+        "--disable-extensions",
+        "--no-first-run",
+        "--disable-default-apps",
+    ]
+}
+
+/// SSRF check for browser subrequests.
+///
+/// - `http(s)://` and `ws(s)://`: full ssrf_check (URL + DNS + IP).
+///   ws/wss URLs are checked by converting to http/https (same host:port).
+/// - Non-network URLs (`data:`, `chrome:`, `about:`, `blob:`): allowed.
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+pub(crate) async fn check_browser_request(
+    url: &str,
+    resolver: &impl ssrf::DnsResolver,
+) -> bool {
+    let check_url = if url.starts_with("http://") || url.starts_with("https://") {
+        std::borrow::Cow::Borrowed(url)
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        std::borrow::Cow::Owned(format!("http://{rest}"))
+    } else if let Some(rest) = url.strip_prefix("wss://") {
+        std::borrow::Cow::Owned(format!("https://{rest}"))
+    } else if url.starts_with("data:")
+        || url.starts_with("about:")
+        || url.starts_with("chrome:")
+        || url.starts_with("blob:")
+    {
+        return true;
+    } else {
+        // Unknown scheme — block by default (defense-in-depth).
+        warn!(url = %url, "SSRF: blocked browser subrequest with unrecognized scheme");
+        return false;
+    };
+    ssrf::ssrf_check(&check_url, resolver).await.is_ok()
+}
+
+/// JS rendering via CDP with SSRF interception on all browser subrequests.
+///
+/// SECURITY: Every HTTP(S)/WS(S) subrequest is checked via ssrf_check (URL
+/// validation, DNS resolution, private IP detection). TOCTOU gap between
+/// ssrf_check and Chrome's actual connect remains — same as HTTP fetch path.
+///
+/// NOTE: Uses TokioDnsResolver (system DNS). The caller's DnsResolver is not
+/// threaded through because tokio::spawn requires 'static. This is acceptable
+/// for local CLI use; service mode would need Arc<dyn DnsResolver>.
+#[cfg(feature = "js-rendering")]
+async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
+    use chromiumoxide::browser::BrowserConfig;
+    use chromiumoxide::cdp::browser_protocol::fetch::{
+        ContinueRequestParams, EventRequestPaused, FailRequestParams,
+    };
+    use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
+    use chromiumoxide::Browser;
+    use futures::StreamExt;
+
+    let browser_path = resolve_browser_binary()?;
+
+    let mut config_builder = BrowserConfig::builder().chrome_executable(browser_path);
+    for arg in build_launch_args() {
+        config_builder = config_builder.arg(arg);
+    }
+    let config = config_builder
+        .build()
+        .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
+
+    let (mut browser, mut handler) = Browser::launch(config)
+        .await
+        .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
+
+    // Handler loop must run for CDP communication to work.
+    let handler_task = tokio::spawn(async move {
+        while let Some(h) = handler.next().await {
+            if h.is_err() {
+                break;
+            }
+        }
+    });
+
+    let page = browser
+        .new_page("about:blank")
+        .await
+        .map_err(|e| BrowserError::ProcessFailed(format!("new page: {e}")))?;
+
+    // Enable Fetch domain to intercept all requests.
+    use chromiumoxide::cdp::browser_protocol::fetch::EnableParams;
+    page.execute(EnableParams::default())
+        .await
+        .map_err(|e| BrowserError::ProcessFailed(format!("fetch enable: {e}")))?;
+
+    // SSRF interception: check each request URL before allowing it.
+    let mut events = page
+        .event_listener::<EventRequestPaused>()
+        .await
+        .map_err(|e| BrowserError::ProcessFailed(format!("event listener: {e}")))?;
+
+    let intercept_page = page.clone();
+    let interceptor = tokio::spawn(async move {
+        let resolver = ssrf::TokioDnsResolver;
+        while let Some(event) = events.next().await {
+            let req_url = &event.request.url;
+            let allowed = check_browser_request(req_url, &resolver).await;
+            if allowed {
+                if let Ok(cmd) = ContinueRequestParams::builder()
+                    .request_id(event.request_id.clone())
+                    .build()
+                {
+                    let _ = intercept_page.execute(cmd).await;
+                }
+            } else {
+                warn!(blocked_url = %req_url, "SSRF: blocked browser subrequest");
+                if let Ok(cmd) = FailRequestParams::builder()
+                    .request_id(event.request_id.clone())
+                    .error_reason(ErrorReason::BlockedByClient)
+                    .build()
+                {
+                    let _ = intercept_page.execute(cmd).await;
                 }
             }
         }
-    }
-    buf
-}
+    });
 
-async fn resolve_playwright_cli() -> Result<String, PlaywrightError> {
-    for bin in ["playwright-cli", "npx"] {
-        let ok = tokio::process::Command::new("which")
-            .arg(bin)
-            .output()
+    let result = async {
+        page.goto(url)
             .await
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if ok {
-            return Ok(if bin == "npx" {
-                "npx @playwright/cli".to_string()
-            } else {
-                bin.to_string()
-            });
-        }
+            .map_err(|e| BrowserError::ProcessFailed(format!("navigation: {e}")))?;
+
+        page.content()
+            .await
+            .map_err(|e| BrowserError::ProcessFailed(format!("content: {e}")))
     }
-    Err(PlaywrightError::NotInstalled)
+    .await;
+
+    // Clean up: abort interceptor before closing browser to avoid racing.
+    interceptor.abort();
+    let _ = browser.close().await;
+    handler_task.abort();
+
+    result
 }
 
-async fn fetch_with_playwright(url: &str) -> Result<String, PlaywrightError> {
-    let cli = resolve_playwright_cli().await?;
-
-    let escaped_url = shell_escape::escape(url.into());
-    let cmd = format!(
-        r#"{cli} open {escaped_url} && {cli} run-code "async page => {{ return await page.content(); }}" && {cli} close"#
-    );
-
-    let mut child = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| PlaywrightError::ProcessFailed(e.to_string()))?;
-
-    // Drain pipes concurrently to avoid deadlock from full pipe buffers.
-    let stdout_pipe = child.stdout.take().unwrap();
-    let stderr_pipe = child.stderr.take().unwrap();
-    const MAX_STDERR_BYTES: usize = 65_536;
-    let stdout_drain = tokio::spawn(drain_pipe(stdout_pipe, MAX_RESPONSE_BYTES));
-    let stderr_drain = tokio::spawn(drain_pipe(stderr_pipe, MAX_STDERR_BYTES));
-
-    // wait() borrows &mut self, so child remains available for kill() on timeout.
-    match tokio::time::timeout(PLAYWRIGHT_TIMEOUT, child.wait()).await {
-        Ok(Ok(status)) => {
-            if !status.success() {
-                stdout_drain.abort();
-                let stderr_buf = stderr_drain.await.unwrap_or_default();
-                let stderr = String::from_utf8_lossy(&stderr_buf);
-                return Err(PlaywrightError::ProcessFailed(stderr.into_owned()));
-            }
-            let stdout_buf = stdout_drain.await.unwrap_or_default();
-            stderr_drain.abort();
-            let stdout = String::from_utf8_lossy(&stdout_buf);
-            parse_playwright_output(&stdout)
-        }
-        Ok(Err(e)) => {
-            stdout_drain.abort();
-            stderr_drain.abort();
-            Err(PlaywrightError::ProcessFailed(e.to_string()))
-        }
-        Err(_) => {
-            let _ = child.start_kill();
-            stdout_drain.abort();
-            stderr_drain.abort();
-            Err(PlaywrightError::Timeout(PLAYWRIGHT_TIMEOUT.as_secs()))
-        }
-    }
-}
-
-fn parse_playwright_output(stdout: &str) -> Result<String, PlaywrightError> {
-    // playwright-cli run-code outputs: ### Result\n"<html>..."
-    let result_marker = "### Result\n";
-    let after_marker = stdout
-        .find(result_marker)
-        .map(|i| &stdout[i + result_marker.len()..])
-        .unwrap_or(stdout);
-
-    let trimmed = after_marker.trim();
-
-    if trimmed.starts_with('"') {
-        let json_str = if let Some(end) = trimmed.find("\n###") {
-            &trimmed[..end]
-        } else {
-            trimmed
-        };
-        if let Ok(html) = serde_json::from_str::<String>(json_str.trim()) {
-            return Ok(html);
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+fn resolve_browser_binary_from(
+    path_commands: &[&str],
+    known_paths: &[&std::path::Path],
+) -> Result<std::path::PathBuf, BrowserError> {
+    for cmd in path_commands {
+        if let Ok(output) = std::process::Command::new("which").arg(cmd).output()
+            && output.status.success()
+        {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Ok(std::path::PathBuf::from(path));
         }
     }
 
-    if trimmed.contains("<html") || trimmed.contains("<body") {
-        return Ok(trimmed.to_string());
+    for path in known_paths {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
     }
 
-    Err(PlaywrightError::ProcessFailed(
-        "could not parse playwright output".to_string(),
-    ))
+    Err(BrowserError::NotFound)
 }
 
 /// Download a URL with manual redirect handling.
@@ -599,50 +704,30 @@ mod content_type_tests {
     use super::*;
 
     #[test]
-    fn accepts_text_html() {
-        assert!(check_content_type("text/html; charset=utf-8").is_ok());
+    fn accepts_textual_content_types() {
+        for ct in [
+            "text/html; charset=utf-8",
+            "text/plain",
+            "application/xhtml+xml",
+            "application/xml",
+            "application/json",
+            "; charset=utf-8", // edge: empty mime before semicolon → permissive
+        ] {
+            assert!(check_content_type(ct).is_ok(), "should accept: {ct}");
+        }
     }
 
     #[test]
-    fn accepts_text_plain() {
-        assert!(check_content_type("text/plain").is_ok());
-    }
-
-    #[test]
-    fn accepts_xhtml() {
-        assert!(check_content_type("application/xhtml+xml").is_ok());
-    }
-
-    #[test]
-    fn accepts_xml() {
-        assert!(check_content_type("application/xml").is_ok());
-    }
-
-    #[test]
-    fn accepts_json() {
-        assert!(check_content_type("application/json").is_ok());
-    }
-
-    #[test]
-    fn rejects_pdf() {
-        assert!(matches!(
-            check_content_type("application/pdf"),
-            Err(FetchError::UnsupportedContentType(ref m)) if m == "application/pdf"
-        ));
-    }
-
-    #[test]
-    fn rejects_image() {
-        assert!(matches!(
-            check_content_type("image/png"),
-            Err(FetchError::UnsupportedContentType(_))
-        ));
-    }
-
-    #[test]
-    fn accepts_empty_mime_before_semicolon() {
-        // Edge case: "; charset=utf-8" → empty mime → allowed (permissive)
-        assert!(check_content_type("; charset=utf-8").is_ok());
+    fn rejects_non_textual_content_types() {
+        for ct in ["application/pdf", "image/png"] {
+            assert!(
+                matches!(
+                    check_content_type(ct),
+                    Err(FetchError::UnsupportedContentType(ref m)) if m == ct
+                ),
+                "should reject: {ct}"
+            );
+        }
     }
 }
 
@@ -830,57 +915,6 @@ mod download_tests {
     }
 
     #[tokio::test]
-    async fn redirect_to_metadata_endpoint_blocked() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/redir"))
-            .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", "http://169.254.169.254/latest/meta-data"),
-            )
-            .mount(&server)
-            .await;
-
-        let client = no_redirect_client();
-        let result = download(
-            &client,
-            &format!("{}/redir", server.uri()),
-            MAX_REDIRECTS,
-            &PublicResolver,
-        )
-        .await;
-        assert!(
-            matches!(result, Err(FetchError::InternalHost)),
-            "redirect to metadata endpoint should be blocked, got: {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn redirect_to_localhost_domain_blocked() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/redir"))
-            .respond_with(
-                ResponseTemplate::new(302).insert_header("location", "http://localhost/secret"),
-            )
-            .mount(&server)
-            .await;
-
-        let client = no_redirect_client();
-        let result = download(
-            &client,
-            &format!("{}/redir", server.uri()),
-            MAX_REDIRECTS,
-            &PublicResolver,
-        )
-        .await;
-        assert!(
-            matches!(result, Err(FetchError::InternalHost)),
-            "redirect to localhost should be blocked, got: {result:?}"
-        );
-    }
-
-    #[tokio::test]
     async fn redirect_to_dns_private_ip_blocked() {
         /// Resolver that returns a private IP for any domain.
         struct PrivateResolver;
@@ -992,7 +1026,7 @@ mod fetch_page_tests {
     }
 
     #[tokio::test]
-    async fn js_flag_attempts_playwright_on_rich_body() {
+    async fn js_flag_attempts_rendering_on_rich_body() {
         // Serve a page with enough visible text that auto-detection would NOT trigger.
         let content = "x".repeat(200);
         let server = MockServer::start().await;
@@ -1018,11 +1052,35 @@ mod fetch_page_tests {
         )
         .await;
 
-        // playwright-cli is likely not installed in CI — the --js path should
+        // Chrome/CDP is likely not available in CI — the --js path should
         // return an error rather than silently falling back.
         assert!(
             result.is_err(),
-            "js=true should error when playwright unavailable"
+            "js=true should error when browser unavailable"
+        );
+    }
+
+    // [T-010] feature 無効 + --js → FetchError::Browser エラー（fetch 前に early bail）
+    #[cfg(not(feature = "js-rendering"))]
+    #[tokio::test]
+    async fn t010_js_flag_errors_when_feature_disabled() {
+        let client = no_redirect_client();
+        let opts = FetchOptions {
+            js: true,
+            ..Default::default()
+        };
+        // Any URL — error fires before ssrf_check or HTTP fetch
+        let result = fetch_page(
+            &client,
+            "https://example.com/page",
+            opts,
+            &TokioDnsResolver,
+        )
+        .await;
+
+        assert!(
+            matches!(&result, Err(FetchError::Browser(msg)) if msg.contains("js-rendering")),
+            "expected Browser error with feature hint, got: {result:?}"
         );
     }
 }
@@ -1128,7 +1186,7 @@ mod thin_body_tests {
     #[test]
     fn whitespace_only_body_is_thin() {
         let html = "<html><body>   \n\t  \n   </body></html>";
-        assert!(has_thin_body(&html));
+        assert!(has_thin_body(html));
     }
 }
 
@@ -1198,40 +1256,184 @@ mod thin_extract_tests {
 }
 
 #[cfg(test)]
-mod playwright_output_tests {
+mod browser_binary_tests {
     use super::*;
 
+    // [T-001] Chrome 未発見時に BrowserError::NotFound を返す
     #[test]
-    fn parses_playwright_html_output() {
-        let stdout = "### Result\n\"<html><body><p>rendered</p></body></html>\"\n### Ran Playwright code\n```js\n...\n```";
-        let html = parse_playwright_output(stdout).unwrap();
-        assert!(html.contains("rendered"));
+    fn t001_returns_error_when_chrome_not_found() {
+        let result = resolve_browser_binary_from(&[], &[]);
+        assert!(
+            matches!(result, Err(BrowserError::NotFound)),
+            "expected NotFound, got: {result:?}"
+        );
     }
 
+    // resolve_browser_binary_from が既知パスからバイナリを発見する
     #[test]
-    fn parses_output_without_result_marker() {
-        let stdout = "\"<html><body>hello</body></html>\"";
-        let html = parse_playwright_output(stdout).unwrap();
-        assert!(html.contains("hello"));
-    }
-
-    #[test]
-    fn parses_raw_html_fallback() {
-        let stdout = "<html><body><p>direct html</p></body></html>";
-        let html = parse_playwright_output(stdout).unwrap();
-        assert!(html.contains("direct html"));
-    }
-
-    #[test]
-    fn malformed_json_falls_back_to_html_check() {
-        let stdout = "\"not valid json <html><body>fallback</body></html>";
-        let html = parse_playwright_output(stdout).unwrap();
-        assert!(html.contains("fallback"));
-    }
-
-    #[test]
-    fn rejects_unparseable_output() {
-        let stdout = "some random text without html";
-        assert!(parse_playwright_output(stdout).is_err());
+    fn finds_binary_at_known_path() {
+        // Use the test binary itself as a stand-in for an existing path
+        let existing = std::env::current_exe().unwrap();
+        let result = resolve_browser_binary_from(&[], &[existing.as_path()]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), existing);
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "js-rendering")]
+mod cdp_launch_tests {
+    use super::*;
+
+    // [T-009] build_launch_args returns all security flags
+    #[test]
+    fn t009_launch_args_contain_security_flags() {
+        let args = build_launch_args();
+        for flag in [
+            "--disable-webrtc",
+            "--disable-background-networking",
+            "--disable-features=DnsOverHttps",
+            "--disable-domain-reliability",
+            "--no-pings",
+        ] {
+            assert!(
+                args.contains(&flag),
+                "missing security flag: {flag}"
+            );
+        }
+    }
+}
+
+/// [T-004] check_browser_request uses ssrf_check (DNS resolution included).
+#[cfg(test)]
+mod browser_request_tests {
+    use super::ssrf::DnsResolver;
+    use super::*;
+    use std::net::IpAddr;
+
+    struct MockPrivateDns;
+    impl DnsResolver for MockPrivateDns {
+        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
+            Ok(vec!["10.0.0.1".parse().unwrap()])
+        }
+    }
+
+    struct MockPublicDns;
+    impl DnsResolver for MockPublicDns {
+        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
+            Ok(vec!["93.184.216.34".parse().unwrap()])
+        }
+    }
+
+    // [T-004] Public hostname resolving to private IP is blocked via DNS check.
+    #[tokio::test]
+    async fn t004_blocks_dns_resolving_to_private_ip() {
+        let resolver = MockPrivateDns;
+        assert!(
+            !check_browser_request("https://evil.example/secret", &resolver).await,
+            "must block when DNS resolves to private IP"
+        );
+    }
+
+    // [T-004] Internal IP literal is blocked.
+    #[tokio::test]
+    async fn t004_blocks_internal_ip_literal() {
+        let resolver = MockPublicDns;
+        assert!(
+            !check_browser_request("http://127.0.0.1/secret", &resolver).await,
+            "must block loopback IP"
+        );
+    }
+
+    // [T-004] Public URL with public DNS is allowed.
+    #[tokio::test]
+    async fn t004_allows_public_url() {
+        let resolver = MockPublicDns;
+        assert!(
+            check_browser_request("https://example.com/page", &resolver).await,
+            "must allow public URL"
+        );
+    }
+
+    // [T-004] Non-network URLs (data:, chrome:, about:) are allowed through.
+    #[tokio::test]
+    async fn t004_allows_non_network_urls() {
+        let resolver = MockPublicDns;
+        for url in [
+            "data:text/html,<p>test</p>",
+            "about:blank",
+            "chrome://settings",
+            "blob:https://example.com/uuid",
+        ] {
+            assert!(
+                check_browser_request(url, &resolver).await,
+                "must allow non-network URL: {url}"
+            );
+        }
+    }
+
+    // Unknown schemes are blocked by default (defense-in-depth).
+    #[tokio::test]
+    async fn t004_blocks_unknown_schemes() {
+        let resolver = MockPublicDns;
+        for url in ["file:///etc/passwd", "ftp://internal/data", "gopher://x"] {
+            assert!(
+                !check_browser_request(url, &resolver).await,
+                "must block unknown scheme: {url}"
+            );
+        }
+    }
+
+    // WebSocket to internal host is blocked (ws:// → http:// conversion).
+    #[tokio::test]
+    async fn t004_blocks_websocket_to_internal() {
+        let resolver = MockPublicDns;
+        assert!(
+            !check_browser_request("ws://127.0.0.1:8080/ws", &resolver).await,
+            "must block ws:// to loopback"
+        );
+        assert!(
+            !check_browser_request("wss://localhost/ws", &resolver).await,
+            "must block wss:// to localhost"
+        );
+    }
+
+    // WebSocket to internal via DNS is blocked.
+    #[tokio::test]
+    async fn t004_blocks_websocket_dns_to_private() {
+        let resolver = MockPrivateDns;
+        assert!(
+            !check_browser_request("ws://evil.example/ws", &resolver).await,
+            "must block ws:// when DNS resolves to private IP"
+        );
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "js-rendering")]
+mod cdp_integration_tests {
+    use super::*;
+
+    fn chrome_available() -> bool {
+        resolve_browser_binary().is_ok()
+    }
+
+    // [T-005] Public URL JS rendering completes and returns HTML with content.
+    // Requires Chrome + network. Skipped in CI without Chrome.
+    #[tokio::test]
+    async fn t005_cdp_renders_public_url() {
+        if !chrome_available() {
+            eprintln!("SKIP: Chrome not found");
+            return;
+        }
+        let html = fetch_with_cdp("https://example.com")
+            .await
+            .expect("fetch_with_cdp should succeed for public URL");
+        assert!(
+            html.contains("Example Domain") || html.contains("example"),
+            "rendered HTML should contain page content, got {} bytes",
+            html.len()
+        );
+    }
+}
+

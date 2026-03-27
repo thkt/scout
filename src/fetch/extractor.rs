@@ -22,11 +22,7 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
 
     match readability.parse() {
         Ok(article) => {
-            let title = if article.title.is_empty() {
-                None
-            } else {
-                Some(article.title.to_string())
-            };
+            let title = (!article.title.is_empty()).then(|| article.title.to_string());
 
             ExtractedArticle {
                 title,
@@ -61,19 +57,14 @@ fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
     }
 }
 
-/// Simple `<title>` tag extraction via string search.
-/// Only used as fallback when dom_smoothie fails to parse the HTML.
+/// Fallback when dom_smoothie fails to parse the HTML.
 fn extract_title_from_html(html: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     let tag_start = lower.find("<title")?;
     let content_start = tag_start + lower[tag_start..].find('>')? + 1;
     let content_end = content_start + lower[content_start..].find("</title>")?;
     let title = html[content_start..content_end].trim();
-    if title.is_empty() {
-        None
-    } else {
-        Some(title.to_string())
-    }
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 #[cfg(test)]
@@ -111,7 +102,8 @@ mod tests {
         let result = extract_article(BLOG_HTML, None);
 
         assert!(!result.used_raw_fallback);
-        assert!(result.content_html.contains("ownership"));
+        assert_eq!(result.title.as_deref(), Some("Test Blog Post"));
+        assert!(result.byline.is_some());
     }
 
     #[test]

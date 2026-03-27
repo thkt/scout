@@ -91,4 +91,12 @@ mod tests {
     fn no_japanese_in_ascii() {
         assert!(!contains_japanese("hello world"));
     }
+
+    #[test]
+    fn katakana_mixed_query_expands_to_two() {
+        let queries = expand_bilingual("タイプスクリプト TypeScript");
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0], "タイプスクリプト TypeScript");
+        assert!(queries[1].contains("TypeScript"));
+    }
 }
