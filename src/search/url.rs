@@ -27,11 +27,9 @@ pub(crate) fn canonicalize_url(raw: &str) -> String {
     if clean_pairs.is_empty() {
         parsed.set_query(None);
     } else {
-        let qs: String = clean_pairs
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
+        let qs = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(&clean_pairs)
+            .finish();
         parsed.set_query(Some(&qs));
     }
 

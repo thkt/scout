@@ -84,7 +84,7 @@ async fn run_searches(
 ) -> Result<Vec<GroundedResult>, GeminiError> {
     let search_outcomes: Vec<_> = stream::iter(queries)
         .map(|q| gemini.search(q))
-        .buffer_unordered(SEARCH_CONCURRENCY)
+        .buffered(SEARCH_CONCURRENCY)
         .collect()
         .await;
 
