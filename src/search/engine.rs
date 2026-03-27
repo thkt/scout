@@ -202,11 +202,8 @@ fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
                 continue;
             }
             let canonical = canonicalize_url(&source.url);
-            if seen.insert(canonical.clone()) {
-                sources.push(Source {
-                    url: canonical,
-                    title: source.title.clone(),
-                });
+            if seen.insert(canonical) {
+                sources.push(source.clone());
             }
         }
     }
@@ -351,10 +348,9 @@ mod tests {
 
         let sources = collect_unique_sources(&results);
         assert_eq!(sources.len(), 3);
-        // URLs are canonicalized (url crate adds root "/")
-        assert_eq!(sources[0].url, "https://a.com/");
-        assert_eq!(sources[1].url, "https://b.com/");
-        assert_eq!(sources[2].url, "https://c.com/");
+        assert_eq!(sources[0].url, "https://a.com");
+        assert_eq!(sources[1].url, "https://b.com");
+        assert_eq!(sources[2].url, "https://c.com");
     }
 
     #[test]
@@ -363,7 +359,7 @@ mod tests {
 
         let sources = collect_unique_sources(&results);
         assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].url, "https://a.com/");
+        assert_eq!(sources[0].url, "https://a.com");
     }
 
     #[test]

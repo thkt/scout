@@ -41,9 +41,12 @@ pub(crate) fn canonicalize_url(raw: &str) -> String {
     parsed.to_string()
 }
 
+/// Reorders sources so diverse domains come first (up to `max_per_domain` each),
+/// followed by overflow. Caller uses `.take(depth)` to limit total count.
 pub(crate) fn select_diverse_sources(sources: Vec<Source>, max_per_domain: usize) -> Vec<Source> {
     let mut domain_counts: HashMap<String, usize> = HashMap::new();
     let mut selected = Vec::new();
+    let mut overflow = Vec::new();
 
     for source in sources {
         let domain = extract_domain(&source.url);
@@ -51,9 +54,12 @@ pub(crate) fn select_diverse_sources(sources: Vec<Source>, max_per_domain: usize
         if *count < max_per_domain {
             *count += 1;
             selected.push(source);
+        } else {
+            overflow.push(source);
         }
     }
 
+    selected.extend(overflow);
     selected
 }
 
@@ -121,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn t_014_caps_per_domain_overflow_fills_remaining() {
+    fn t_014_diverse_sources_first_overflow_after() {
         let sources = vec![
             source("a.com", 1),
             source("a.com", 2),
@@ -131,16 +137,20 @@ mod tests {
         ];
 
         let result = select_diverse_sources(sources, 2);
-        assert_eq!(result.len(), 4);
-
-        let a_count = result.iter().filter(|s| s.url.contains("a.com")).count();
-        let b_count = result.iter().filter(|s| s.url.contains("b.com")).count();
-        assert_eq!(a_count, 2);
-        assert_eq!(b_count, 2);
+        // All 5 sources returned: diverse first (2A + 2B), overflow after (1A)
+        assert_eq!(result.len(), 5);
+        // First 4 are the diverse selections
+        let first_4: Vec<_> = result.iter().take(4).collect();
+        let a_in_top = first_4.iter().filter(|s| s.url.contains("a.com")).count();
+        let b_in_top = first_4.iter().filter(|s| s.url.contains("b.com")).count();
+        assert_eq!(a_in_top, 2);
+        assert_eq!(b_in_top, 2);
+        // 5th is overflow
+        assert!(result[4].url.contains("a.com"));
     }
 
     #[test]
-    fn t_015_overflow_fills_up_to_take_limit() {
+    fn t_015_take_limits_total_from_diverse_plus_overflow() {
         let sources = vec![
             source("a.com", 1),
             source("a.com", 2),
@@ -149,20 +159,23 @@ mod tests {
         ];
 
         let result = select_diverse_sources(sources, 2);
-        assert_eq!(result.len(), 3);
-
-        let a_count = result.iter().filter(|s| s.url.contains("a.com")).count();
-        let b_count = result.iter().filter(|s| s.url.contains("b.com")).count();
+        // All 4 returned: diverse first (2A + 1B), overflow after (1A)
+        assert_eq!(result.len(), 4);
+        // Caller uses .take(depth) to limit; first 3 are diverse
+        let first_3: Vec<_> = result.iter().take(3).collect();
+        let a_count = first_3.iter().filter(|s| s.url.contains("a.com")).count();
+        let b_count = first_3.iter().filter(|s| s.url.contains("b.com")).count();
         assert_eq!(a_count, 2);
         assert_eq!(b_count, 1);
     }
 
     #[test]
-    fn t_016_single_domain_capped_to_max() {
+    fn t_016_single_domain_all_returned_diverse_first() {
         let sources = vec![source("a.com", 1), source("a.com", 2), source("a.com", 3)];
 
         let result = select_diverse_sources(sources, 2);
-        assert_eq!(result.len(), 2);
+        // All 3 returned: 2 diverse + 1 overflow
+        assert_eq!(result.len(), 3);
         assert!(result.iter().all(|s| s.url.contains("a.com")));
     }
 }
