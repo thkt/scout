@@ -195,7 +195,7 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → Post-redirect recheck → Readability → Markdown
 ```
 
-Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. 10 MB download cap, 100K byte output.
+Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. 10 MB download cap, 100K byte output. Note: SSRF defense is designed for local CLI use where the user controls URL input. If embedding scout in a service that accepts untrusted URLs, additional measures (e.g., DNS pinning) are required to close the TOCTOU gap between DNS check and connection.
 
 **Search** — Gemini `generateContent` with `google_search` grounding tool. The response includes both the generated answer and `groundingMetadata` with source URLs extracted from Google Search.
 
