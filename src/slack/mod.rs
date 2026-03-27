@@ -165,16 +165,13 @@ impl SlackClient {
             .await
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| {
-                if e.is_decode() {
-                    SlackError::Decode(e.to_string())
-                } else {
-                    SlackError::Network(e.to_string())
-                }
-            })?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            if e.is_decode() {
+                SlackError::Decode(e.to_string())
+            } else {
+                SlackError::Network(e.to_string())
+            }
+        })?;
 
         if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
             let error = body
@@ -185,8 +182,7 @@ impl SlackClient {
             return Err(SlackError::Api { error });
         }
 
-        serde_json::from_value(body)
-            .map_err(|e| SlackError::Decode(e.to_string()))
+        serde_json::from_value(body).map_err(|e| SlackError::Decode(e.to_string()))
     }
 
     async fn resolve_channel(&self, id: &str) -> String {
@@ -233,10 +229,7 @@ impl SlackClient {
         ids.into_iter().zip(results).collect()
     }
 
-    async fn fetch_thread(
-        &self,
-        slack_url: &SlackUrl,
-    ) -> Result<FetchedThread, SlackError> {
+    async fn fetch_thread(&self, slack_url: &SlackUrl) -> Result<FetchedThread, SlackError> {
         let ch = &slack_url.channel;
         if let Some(ref thread_ts) = slack_url.thread_ts {
             let body: MessagesBody = self
@@ -245,7 +238,10 @@ impl SlackClient {
                     &[("channel", ch), ("ts", thread_ts)],
                 )
                 .await?;
-            return Ok(FetchedThread { messages: body.messages, is_thread: true });
+            return Ok(FetchedThread {
+                messages: body.messages,
+                is_thread: true,
+            });
         }
 
         let body: MessagesBody = self
@@ -270,9 +266,15 @@ impl SlackClient {
                     &[("channel", ch), ("ts", &slack_url.ts)],
                 )
                 .await?;
-            Ok(FetchedThread { messages: thread.messages, is_thread: true })
+            Ok(FetchedThread {
+                messages: thread.messages,
+                is_thread: true,
+            })
         } else {
-            Ok(FetchedThread { messages: body.messages, is_thread: false })
+            Ok(FetchedThread {
+                messages: body.messages,
+                is_thread: false,
+            })
         }
     }
 
@@ -300,7 +302,10 @@ impl SlackClient {
         let mut resolved = Vec::with_capacity(fetched.messages.len());
         for msg in &fetched.messages {
             let author = match &msg.user {
-                Some(uid) => users.get(uid.as_str()).cloned().unwrap_or_else(|| uid.clone()),
+                Some(uid) => users
+                    .get(uid.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| uid.clone()),
                 None => "(no author)".into(),
             };
             let text = substitute_mentions(&msg.text, &users);
@@ -338,11 +343,17 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
     while let Some(rel) = text[search_from..].find("<@") {
         let abs_start = search_from + rel;
         let after = abs_start + 2;
-        let Some(rel_end) = text[after..].find('>') else { break };
+        let Some(rel_end) = text[after..].find('>') else {
+            break;
+        };
         let abs_end = after + rel_end + 1;
         let inner = &text[after..after + rel_end];
         let user_id = inner.split('|').next().unwrap_or(inner);
-        spans.push(MentionSpan { user_id, start: abs_start, end: abs_end });
+        spans.push(MentionSpan {
+            user_id,
+            start: abs_start,
+            end: abs_end,
+        });
         search_from = abs_end;
     }
     spans
@@ -364,7 +375,12 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
     for span in &spans {
         out.push_str(&text[pos..span.start]);
         out.push('@');
-        out.push_str(cache.get(span.user_id).map(|s| s.as_str()).unwrap_or(span.user_id));
+        out.push_str(
+            cache
+                .get(span.user_id)
+                .map(|s| s.as_str())
+                .unwrap_or(span.user_id),
+        );
         pos = span.end;
     }
     out.push_str(&text[pos..]);
@@ -380,7 +396,10 @@ fn format_slack_output(
     let escape = crate::fetch::converter::escape_yaml;
 
     let mut out = String::from("---\n");
-    out.push_str(&format!("workspace: \"{}\"\n", escape(&slack_url.workspace)));
+    out.push_str(&format!(
+        "workspace: \"{}\"\n",
+        escape(&slack_url.workspace)
+    ));
     out.push_str(&format!("channel: \"{}\"\n", escape(channel_name)));
     out.push_str(&format!("author: \"{}\"\n", escape(&first.author)));
     out.push_str(&format!("ts: \"{}\"\n", slack_url.ts));
@@ -398,7 +417,10 @@ fn format_slack_output(
         } else {
             format!(" ({})", msg.ts)
         };
-        out.push_str(&format!("\n\n---\n\n{}{}:\n{}", msg.author, ts_suffix, msg.text));
+        out.push_str(&format!(
+            "\n\n---\n\n{}{}:\n{}",
+            msg.author, ts_suffix, msg.text
+        ));
     }
 
     if !out.ends_with('\n') {
@@ -424,8 +446,7 @@ mod tests {
 
     #[test]
     fn parse_thread_reply_url() {
-        let url =
-            "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
+        let url = "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
         let parsed = parse_slack_url(url).unwrap();
         assert_eq!(parsed.channel, "C123");
         assert_eq!(parsed.ts, "1234567890.123456");

@@ -128,7 +128,10 @@ impl GitHubClient {
         .await
     }
 
-    async fn get_json_once<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
+    async fn get_json_once<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, GitHubError> {
         debug!(path, "github API request");
         let response = self.request(path).send().await?;
         let status = response.status();
@@ -297,7 +300,12 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
             .output(),
     )
     .await
-    .inspect_err(|_| info!("gh auth token timed out after {}s", TOKEN_RESOLVE_TIMEOUT.as_secs()))
+    .inspect_err(|_| {
+        info!(
+            "gh auth token timed out after {}s",
+            TOKEN_RESOLVE_TIMEOUT.as_secs()
+        )
+    })
     .ok()?
     .inspect_err(|e| info!("gh auth token command failed: {e}"))
     .ok()?;

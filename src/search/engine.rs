@@ -109,12 +109,7 @@ async fn fetch_sources(
         .map(|url| async {
             let result = tokio::time::timeout(
                 FETCH_TIMEOUT,
-                fetch::fetch_page(
-                    http,
-                    &url,
-                    fetch::FetchOptions::default(),
-                    resolver,
-                ),
+                fetch::fetch_page(http, &url, fetch::FetchOptions::default(), resolver),
             )
             .await;
             let result = match result {

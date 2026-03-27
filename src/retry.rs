@@ -32,7 +32,10 @@ where
                 last_err = Some(e);
                 if attempt + 1 < MAX_RETRIES {
                     let delay_ms = jittered_backoff(attempt);
-                    debug!(attempt = attempt + 1, delay_ms, "retrying after transient error");
+                    debug!(
+                        attempt = attempt + 1,
+                        delay_ms, "retrying after transient error"
+                    );
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 }
             }

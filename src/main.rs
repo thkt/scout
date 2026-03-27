@@ -14,7 +14,11 @@ use clap::Parser;
 use tools::{Command, Scout};
 
 #[derive(Parser)]
-#[command(name = "scout", version, about = "Web search, page fetching, and GitHub repository exploration")]
+#[command(
+    name = "scout",
+    version,
+    about = "Web search, page fetching, and GitHub repository exploration"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

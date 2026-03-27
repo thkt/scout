@@ -46,10 +46,7 @@ pub(super) fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     Cow::Borrowed(raw)
 }
 
-pub(super) async fn ssrf_check(
-    raw: &str,
-    resolver: &impl DnsResolver,
-) -> Result<(), FetchError> {
+pub(super) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result<(), FetchError> {
     let parsed = validate_url_sync(raw).map_err(|e| {
         if matches!(e, FetchError::InternalHost) {
             warn!(url = %redact_url_credentials(raw), "blocked fetch to internal/private host");
