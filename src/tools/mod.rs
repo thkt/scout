@@ -234,7 +234,7 @@ impl Scout {
             .get_contents(owner, repo, &params.path, params.ref_.as_deref())
             .await?;
 
-        let raw = if let Some(ref encoded) = contents.content {
+        let raw = if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
             github::decode_content(encoded)?
         } else {
             let blob = self.github.get_blob(owner, repo, &contents.sha).await?;
@@ -272,15 +272,8 @@ impl Scout {
 
         let mut notes = Vec::new();
 
-        let readme_content = match readme {
-            Ok(r) => r.content.and_then(|c| match github::decode_content(&c) {
-                Ok(content) => Some(content),
-                Err(e) => {
-                    warn!(%e, "failed to decode README");
-                    notes.push(format!("README could not be decoded ({e})"));
-                    None
-                }
-            }),
+        let readme_entry = match readme {
+            Ok(r) => Some(r),
             Err(e) => {
                 if !matches!(e, github::GitHubError::NotFound(_)) {
                     warn!(%e, "failed to fetch README");
@@ -289,6 +282,28 @@ impl Scout {
                 None
             }
         };
+
+        let readme_encoded = match readme_entry {
+            None => None,
+            Some(r) if r.content.as_ref().is_some_and(|c| !c.is_empty()) => r.content,
+            Some(r) => match self.github.get_blob(owner, repo, &r.sha).await {
+                Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
+                Err(e) => {
+                    warn!(%e, "failed to fetch README blob");
+                    notes.push(format!("README could not be fetched ({e})"));
+                    None
+                }
+            },
+        };
+
+        let readme_content = readme_encoded.and_then(|c| match github::decode_content(&c) {
+            Ok(content) => Some(content),
+            Err(e) => {
+                warn!(%e, "failed to decode README");
+                notes.push(format!("README could not be decoded ({e})"));
+                None
+            }
+        });
         let issues = unwrap_or_note(issues, "issues", &mut notes);
         let pulls = unwrap_or_note(pulls, "pull requests", &mut notes);
         let releases = unwrap_or_note(releases, "releases", &mut notes);
