@@ -20,8 +20,6 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
         }
     };
 
-    let readable = readability.is_probably_readable();
-
     match readability.parse() {
         Ok(article) => {
             let title = if article.title.is_empty() {
@@ -30,22 +28,12 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
                 Some(article.title.to_string())
             };
 
-            if readable {
-                ExtractedArticle {
-                    title,
-                    byline: article.byline.map(|b| b.to_string()),
-                    published_time: article.published_time.map(|t| t.to_string()),
-                    content_html: article.content.to_string(),
-                    used_raw_fallback: false,
-                }
-            } else {
-                ExtractedArticle {
-                    title,
-                    byline: None,
-                    published_time: None,
-                    content_html: html.to_string(),
-                    used_raw_fallback: true,
-                }
+            ExtractedArticle {
+                title,
+                byline: article.byline.map(|b| b.to_string()),
+                published_time: article.published_time.map(|t| t.to_string()),
+                content_html: article.content.to_string(),
+                used_raw_fallback: false,
             }
         }
         Err(e) => {
@@ -136,11 +124,11 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_raw_on_minimal_html() {
+    fn uses_parsed_result_for_minimal_html() {
         let minimal = "<html><body><p>hi</p></body></html>";
         let result = extract_article(minimal, None);
 
-        assert!(result.used_raw_fallback);
+        assert!(!result.used_raw_fallback);
         assert!(result.content_html.contains("hi"));
     }
 
@@ -172,11 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn fallback_still_extracts_title_from_minimal_html() {
+    fn extracts_title_from_minimal_html() {
         let html = "<html><head><title>Minimal Page</title></head><body><p>hi</p></body></html>";
         let result = extract_article(html, None);
 
-        assert!(result.used_raw_fallback);
+        assert!(!result.used_raw_fallback);
         assert_eq!(result.title, Some("Minimal Page".to_string()));
     }
 
