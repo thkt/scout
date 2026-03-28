@@ -313,17 +313,11 @@ impl SlackClient {
             resolved.push(ResolvedMessage { author, text, ts });
         }
 
-        let (first, resolved) =
-            extract_target(resolved, &slack_url.ts, fetched.is_thread).ok_or_else(|| {
-                SlackError::Api {
-                    error: format!("message {} not found in thread", slack_url.ts),
-                }
+        let (first, resolved) = extract_target(resolved, &slack_url.ts, fetched.is_thread)
+            .ok_or_else(|| SlackError::Api {
+                error: format!("message {} not found in thread", slack_url.ts),
             })?;
-        let replies: &[ResolvedMessage] = if fetched.is_thread {
-            &resolved
-        } else {
-            &[]
-        };
+        let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
         let output = format_slack_output(slack_url, &channel_name, &first, replies);
         info!(
             workspace = %slack_url.workspace,
@@ -490,7 +484,9 @@ mod tests {
             channel: "C123".into(),
             ts: "1111111111.222222".into(),
             thread_ts: Some("1234567890.123456".into()),
-            raw_url: "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456".into(),
+            raw_url:
+                "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456"
+                    .into(),
         };
         let reply = ResolvedMessage {
             author: "reply-author".into(),
@@ -547,10 +543,7 @@ parent body
 
     #[test]
     fn extract_target_returns_none_when_ts_missing() {
-        let messages = vec![
-            msg("1000.000000", "parent"),
-            msg("1001.000000", "reply-1"),
-        ];
+        let messages = vec![msg("1000.000000", "parent"), msg("1001.000000", "reply-1")];
         assert!(extract_target(messages, "9999.999999", true).is_none());
     }
 
