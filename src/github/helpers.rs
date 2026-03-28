@@ -154,10 +154,16 @@ pub fn filter_tree_entries<'a>(
         })
         .transpose()?;
 
+    let dir_prefix = path.filter(|p| !p.ends_with('/')).map(|p| format!("{p}/"));
+
     Ok(entries
         .iter()
         .filter(|e| e.entry_type == EntryType::Blob)
-        .filter(|e| path.is_none_or(|prefix| e.path.starts_with(prefix)))
+        .filter(|e| {
+            path.is_none_or(|prefix| {
+                e.path == prefix || e.path.starts_with(dir_prefix.as_deref().unwrap_or(prefix))
+            })
+        })
         .filter(|e| {
             matcher.as_ref().is_none_or(|m| {
                 let filename = e.path.rsplit('/').next().unwrap_or(&e.path);
@@ -344,6 +350,30 @@ mod tests {
         let filtered = filter_tree_entries(&entries, Some("src/"), None).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn filter_by_path_prefix_respects_directory_boundary() {
+        let entries = vec![
+            blob("src/main.rs"),
+            blob("src-old/legacy.rs"),
+            blob("src2/other.rs"),
+        ];
+        let filtered = filter_tree_entries(&entries, Some("src"), None).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn filter_by_path_exact_file() {
+        let entries = vec![
+            blob("README.md"),
+            blob("README.md.bak"),
+            blob("src/main.rs"),
+        ];
+        let filtered = filter_tree_entries(&entries, Some("README.md"), None).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].path, "README.md");
     }
 
     #[test]
