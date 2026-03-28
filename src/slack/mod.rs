@@ -846,8 +846,7 @@ parent body
             Mock::given(method("GET"))
                 .and(path("/auth.test"))
                 .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(serde_json::json!({"ok": true})),
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
                 )
                 .mount(&server)
                 .await;
