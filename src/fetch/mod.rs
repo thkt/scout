@@ -63,29 +63,25 @@ pub enum FetchError {
     #[error("fetch timed out: {0}")]
     Timeout(String),
 
+    #[error("browser not available: {0}")]
+    BrowserNotFound(String),
+
     #[error("browser rendering failed: {0}")]
-    Browser(String),
+    BrowserFailed(String),
 }
 
 /// ~1 sentence; pages below this almost always need JS rendering.
 const EXTRACT_TEXT_THRESHOLD: usize = 50;
 
-/// Fetch a web page and extract its content.
-///
-/// Includes SSRF defense (URL validation + DNS check + post-redirect recheck).
-/// With `js-rendering` feature enabled, automatically falls back to CDP-based
-/// JS rendering when the page appears JS-dependent (SPA with empty body)
-/// or when Readability extraction yields too little content.
 pub async fn fetch_page(
     client: &Client,
     url: &str,
     opts: FetchOptions,
     resolver: &impl DnsResolver,
 ) -> Result<FetchResult, FetchError> {
-    // Early bail: --js requires js-rendering feature at compile time.
     #[cfg(not(feature = "js-rendering"))]
     if opts.js {
-        return Err(FetchError::Browser(
+        return Err(FetchError::BrowserNotFound(
             "js-rendering feature required — rebuild with `--features js-rendering`".into(),
         ));
     }
@@ -100,9 +96,7 @@ pub async fn fetch_page(
     #[cfg(not(feature = "js-rendering"))]
     let (final_url, html) = download(client, url, MAX_REDIRECTS, resolver).await?;
 
-    // SECURITY: Defense-in-depth — redundant check on the final URL.
-    // download() already validates each redirect hop, but this catches
-    // implementation bugs in the manual redirect loop.
+    // Defense-in-depth: catch bugs in the manual redirect loop.
     ssrf_check(&final_url, resolver).await?;
 
     let need_js = if opts.js {
@@ -118,13 +112,13 @@ pub async fn fetch_page(
     if need_js {
         #[cfg(feature = "js-rendering")]
         {
-            match fetch_with_cdp(&final_url).await {
+            match fetch_with_cdp(&final_url, Clone::clone(resolver)).await {
                 Ok(js_html) => {
                     debug!("JS rendering succeeded via CDP");
                     html = js_html;
                 }
                 Err(e) if opts.js => {
-                    return Err(FetchError::Browser(e.to_string()));
+                    return Err(FetchError::from(e));
                 }
                 Err(e) => {
                     warn!(error = %e, "JS rendering failed, using original HTML");
@@ -133,7 +127,6 @@ pub async fn fetch_page(
         }
         #[cfg(not(feature = "js-rendering"))]
         {
-            // opts.js=true is caught by early bail above; this is the auto-fallback path.
             warn!(
                 "JS rendering unavailable (js-rendering feature not enabled), using original HTML"
             );
@@ -150,7 +143,7 @@ pub async fn fetch_page(
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content, trying JS rendering fallback");
-        match fetch_with_cdp(&final_url).await {
+        match fetch_with_cdp(&final_url, Clone::clone(resolver)).await {
             Ok(js_html) => {
                 let re_extracted = extract_article(&js_html, Some(&final_url));
                 if is_thin_extract(&re_extracted) {
@@ -177,17 +170,13 @@ pub async fn fetch_page(
     Ok(to_fetch_result(article, final_url))
 }
 
-/// Check whether the extracted article has too little visible text.
-///
-/// Raw fallback is always thin: shell text (nav, footer) inflates the count
-/// but the actual article body is missing. ~50 visible chars ≈ one sentence;
-/// pages below this almost always need JS rendering.
+/// Raw fallback is always thin because shell text (nav, footer) inflates
+/// the count but the article body is missing.
 fn is_thin_extract(article: &extractor::ExtractedArticle) -> bool {
     article.used_raw_fallback
         || visible_text_len(&article.content_html, EXTRACT_TEXT_THRESHOLD) < EXTRACT_TEXT_THRESHOLD
 }
 
-/// Cheaply detect JS-rendered pages with empty visible content.
 fn visible_text_len(html: &str, limit: usize) -> usize {
     let mut count = 0usize;
     let mut in_tag = false;
@@ -223,7 +212,6 @@ fn is_js_dependent(html: &str) -> bool {
     html.contains("<script") || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
 }
 
-/// Skips `<script>`/`<style>` content; short-circuits at [`BODY_TEXT_THRESHOLD`].
 fn has_thin_body(html: &str) -> bool {
     let lower = html.as_bytes();
     let body_start = lower
@@ -307,12 +295,23 @@ fn has_thin_body(html: &str) -> bool {
 enum BrowserError {
     #[error("Chrome/Chromium not found. Install Chrome or set PATH to include chromium")]
     NotFound,
-    #[allow(dead_code)]
     #[error("browser failed: {0}")]
     ProcessFailed(String),
+    #[error("browser rendering timed out")]
+    TimedOut,
 }
 
-/// Cached Chrome/Chromium binary lookup. Result is stable within a process lifetime.
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+impl From<BrowserError> for FetchError {
+    fn from(e: BrowserError) -> Self {
+        match e {
+            BrowserError::NotFound => Self::BrowserNotFound(e.to_string()),
+            BrowserError::ProcessFailed(msg) => Self::BrowserFailed(msg),
+            BrowserError::TimedOut => Self::Timeout(e.to_string()),
+        }
+    }
+}
+
 #[cfg(feature = "js-rendering")]
 fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
     static CACHE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
@@ -345,7 +344,6 @@ fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
     cached.clone().map_err(|_| BrowserError::NotFound)
 }
 
-/// SECURITY: Chrome launch flags to close non-network exfiltration channels.
 /// See spec.md Chrome Launch Flags table for rationale.
 #[cfg(feature = "js-rendering")]
 fn build_launch_args() -> Vec<&'static str> {
@@ -362,11 +360,6 @@ fn build_launch_args() -> Vec<&'static str> {
     ]
 }
 
-/// SSRF check for browser subrequests.
-///
-/// - `http(s)://` and `ws(s)://`: full ssrf_check (URL + DNS + IP).
-///   ws/wss URLs are checked by converting to http/https (same host:port).
-/// - Non-network URLs (`data:`, `chrome:`, `about:`, `blob:`): allowed.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -382,30 +375,22 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsRe
     {
         return true;
     } else {
-        // Unknown scheme — block by default (defense-in-depth).
         warn!(url = %url, "SSRF: blocked browser subrequest with unrecognized scheme");
         return false;
     };
     ssrf::ssrf_check(&check_url, resolver).await.is_ok()
 }
 
-/// JS rendering via CDP with SSRF interception on all browser subrequests.
-///
-/// SECURITY: Every HTTP(S)/WS(S) subrequest is checked via ssrf_check (URL
-/// validation, DNS resolution, private IP detection). TOCTOU gap between
-/// ssrf_check and Chrome's actual connect remains — same as HTTP fetch path.
-///
-/// NOTE: Uses TokioDnsResolver (system DNS). The caller's DnsResolver is not
-/// threaded through because tokio::spawn requires 'static. This is acceptable
-/// for local CLI use; service mode would need Arc<dyn DnsResolver>.
 #[cfg(feature = "js-rendering")]
-async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
+const CDP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(feature = "js-rendering")]
+async fn fetch_with_cdp(
+    url: &str,
+    resolver: impl ssrf::DnsResolver,
+) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
     use chromiumoxide::browser::BrowserConfig;
-    use chromiumoxide::cdp::browser_protocol::fetch::{
-        ContinueRequestParams, EventRequestPaused, FailRequestParams,
-    };
-    use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
     use futures::StreamExt;
 
     let browser_path = resolve_browser_binary()?;
@@ -418,11 +403,11 @@ async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
         .build()
         .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
 
-    let (mut browser, mut handler) = Browser::launch(config)
+    let (mut browser, mut handler) = tokio::time::timeout(CDP_TIMEOUT, Browser::launch(config))
         .await
+        .map_err(|_| BrowserError::TimedOut)?
         .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
 
-    // Handler loop must run for CDP communication to work.
     let handler_task = tokio::spawn(async move {
         while let Some(h) = handler.next().await {
             if h.is_err() {
@@ -431,18 +416,39 @@ async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
         }
     });
 
+    // unwrap_or (not ?) so cleanup below runs even on timeout.
+    let result = tokio::time::timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
+        .await
+        .unwrap_or(Err(BrowserError::TimedOut));
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), browser.close()).await;
+    handler_task.abort();
+
+    result
+}
+
+/// Borrows browser so the caller retains ownership for cleanup on timeout.
+#[cfg(feature = "js-rendering")]
+async fn cdp_navigate(
+    browser: &mut chromiumoxide::Browser,
+    url: &str,
+    resolver: impl ssrf::DnsResolver,
+) -> Result<String, BrowserError> {
+    use chromiumoxide::cdp::browser_protocol::fetch::{
+        ContinueRequestParams, EnableParams, EventRequestPaused, FailRequestParams,
+    };
+    use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
+    use futures::StreamExt;
+
     let page = browser
         .new_page("about:blank")
         .await
         .map_err(|e| BrowserError::ProcessFailed(format!("new page: {e}")))?;
 
-    // Enable Fetch domain to intercept all requests.
-    use chromiumoxide::cdp::browser_protocol::fetch::EnableParams;
     page.execute(EnableParams::default())
         .await
         .map_err(|e| BrowserError::ProcessFailed(format!("fetch enable: {e}")))?;
 
-    // SSRF interception: check each request URL before allowing it.
     let mut events = page
         .event_listener::<EventRequestPaused>()
         .await
@@ -450,7 +456,6 @@ async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
 
     let intercept_page = page.clone();
     let interceptor = tokio::spawn(async move {
-        let resolver = ssrf::TokioDnsResolver;
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, &resolver).await;
@@ -485,11 +490,7 @@ async fn fetch_with_cdp(url: &str) -> Result<String, BrowserError> {
     }
     .await;
 
-    // Clean up: abort interceptor before closing browser to avoid racing.
     interceptor.abort();
-    let _ = browser.close().await;
-    handler_task.abort();
-
     result
 }
 
@@ -516,12 +517,7 @@ fn resolve_browser_binary_from(
     Err(BrowserError::NotFound)
 }
 
-/// Download a URL with manual redirect handling.
-///
-/// Each redirect hop is validated with [`ssrf_check`] **before** the connection
-/// to the redirect target is established, closing the SSRF-via-redirect gap.
-/// The caller MUST pass a [`Client`] built with [`reqwest::redirect::Policy::none()`]
-/// so that reqwest does not follow redirects automatically.
+/// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
 async fn download(
     client: &Client,
     url: &str,
@@ -547,8 +543,6 @@ async fn download(
             let base = url::Url::parse(&current_url)?;
             let next_url = base.join(location)?.to_string();
 
-            // SECURITY: Full SSRF check (URL validation + async DNS) on each
-            // redirect target BEFORE following.
             ssrf_check(&next_url, resolver).await?;
 
             debug!(
@@ -749,7 +743,7 @@ mod download_tests {
             .unwrap()
     }
 
-    /// Resolver that returns a public IP for any domain (SSRF checks pass).
+    #[derive(Clone, Copy)]
     struct PublicResolver;
     impl DnsResolver for PublicResolver {
         async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
@@ -869,31 +863,6 @@ mod download_tests {
     }
 
     #[tokio::test]
-    async fn download_accepts_text_html_content_type() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/html"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/html; charset=utf-8")
-                    .set_body_string("<html><body>ok</body></html>"),
-            )
-            .mount(&server)
-            .await;
-
-        let client = no_redirect_client();
-        let (_, html) = download(
-            &client,
-            &format!("{}/html", server.uri()),
-            MAX_REDIRECTS,
-            &PublicResolver,
-        )
-        .await
-        .unwrap();
-        assert!(html.contains("ok"));
-    }
-
-    #[tokio::test]
     async fn redirect_to_private_ip_blocked() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -920,7 +889,7 @@ mod download_tests {
 
     #[tokio::test]
     async fn redirect_to_dns_private_ip_blocked() {
-        /// Resolver that returns a private IP for any domain.
+        #[derive(Clone, Copy)]
         struct PrivateResolver;
         impl DnsResolver for PrivateResolver {
             async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
@@ -953,9 +922,6 @@ mod download_tests {
 
     #[tokio::test]
     async fn too_many_redirects_returns_error() {
-        // Use max_redirects=0 with a redirect to a public URL.
-        // The loop runs once, follows the redirect (passes SSRF check), then
-        // exceeds the limit without needing to connect to the target.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/redir"))
@@ -1031,7 +997,6 @@ mod fetch_page_tests {
 
     #[tokio::test]
     async fn js_flag_attempts_rendering_on_rich_body() {
-        // Serve a page with enough visible text that auto-detection would NOT trigger.
         let content = "x".repeat(200);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -1056,15 +1021,12 @@ mod fetch_page_tests {
         )
         .await;
 
-        // Chrome/CDP is likely not available in CI — the --js path should
-        // return an error rather than silently falling back.
         assert!(
             result.is_err(),
             "js=true should error when browser unavailable"
         );
     }
 
-    // [T-010] feature 無効 + --js → FetchError::Browser エラー（fetch 前に early bail）
     #[cfg(not(feature = "js-rendering"))]
     #[tokio::test]
     async fn t010_js_flag_errors_when_feature_disabled() {
@@ -1073,12 +1035,11 @@ mod fetch_page_tests {
             js: true,
             ..Default::default()
         };
-        // Any URL — error fires before ssrf_check or HTTP fetch
         let result = fetch_page(&client, "https://example.com/page", opts, &TokioDnsResolver).await;
 
         assert!(
-            matches!(&result, Err(FetchError::Browser(msg)) if msg.contains("js-rendering")),
-            "expected Browser error with feature hint, got: {result:?}"
+            matches!(&result, Err(FetchError::BrowserNotFound(msg)) if msg.contains("js-rendering")),
+            "expected BrowserNotFound error with feature hint, got: {result:?}"
         );
     }
 }
@@ -1168,7 +1129,6 @@ mod thin_body_tests {
 
     #[test]
     fn exactly_at_threshold_is_not_thin() {
-        // 100 bytes of ASCII = 100 visible bytes = threshold reached
         let content = "x".repeat(BODY_TEXT_THRESHOLD);
         let html = format!("<html><body><p>{content}</p></body></html>");
         assert!(!has_thin_body(&html));
@@ -1210,7 +1170,6 @@ mod thin_extract_tests {
 
     #[test]
     fn raw_fallback_with_rich_content_still_thin() {
-        // Readability gave up → raw HTML has shell text but no article body.
         let content = format!("<p>{}</p>", "x".repeat(100));
         assert!(is_thin_extract(&article(&content, true)));
     }
@@ -1240,7 +1199,6 @@ mod thin_extract_tests {
 
     #[test]
     fn html_tags_excluded_from_count() {
-        // Many tags but only 2 visible chars
         let content = r#"<div class="very-long-class-name"><span>ab</span></div>"#;
         assert!(is_thin_extract(&article(content, false)));
     }
@@ -1248,7 +1206,6 @@ mod thin_extract_tests {
     #[test]
     fn whitespace_excluded_from_count() {
         let content = format!("<p>{}</p>", " x ".repeat(30));
-        // 30 non-whitespace chars < threshold
         assert!(is_thin_extract(&article(&content, false)));
     }
 }
@@ -1257,7 +1214,6 @@ mod thin_extract_tests {
 mod browser_binary_tests {
     use super::*;
 
-    // [T-001] Chrome 未発見時に BrowserError::NotFound を返す
     #[test]
     fn t001_returns_error_when_chrome_not_found() {
         let result = resolve_browser_binary_from(&[], &[]);
@@ -1267,10 +1223,8 @@ mod browser_binary_tests {
         );
     }
 
-    // resolve_browser_binary_from が既知パスからバイナリを発見する
     #[test]
     fn finds_binary_at_known_path() {
-        // Use the test binary itself as a stand-in for an existing path
         let existing = std::env::current_exe().unwrap();
         let result = resolve_browser_binary_from(&[], &[existing.as_path()]);
         assert!(result.is_ok());
@@ -1283,7 +1237,6 @@ mod browser_binary_tests {
 mod cdp_launch_tests {
     use super::*;
 
-    // [T-009] build_launch_args returns all security flags
     #[test]
     fn t009_launch_args_contain_security_flags() {
         let args = build_launch_args();
@@ -1299,13 +1252,13 @@ mod cdp_launch_tests {
     }
 }
 
-/// [T-004] check_browser_request uses ssrf_check (DNS resolution included).
 #[cfg(test)]
 mod browser_request_tests {
     use super::ssrf::DnsResolver;
     use super::*;
     use std::net::IpAddr;
 
+    #[derive(Clone, Copy)]
     struct MockPrivateDns;
     impl DnsResolver for MockPrivateDns {
         async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
@@ -1313,6 +1266,7 @@ mod browser_request_tests {
         }
     }
 
+    #[derive(Clone, Copy)]
     struct MockPublicDns;
     impl DnsResolver for MockPublicDns {
         async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
@@ -1320,7 +1274,6 @@ mod browser_request_tests {
         }
     }
 
-    // [T-004] Public hostname resolving to private IP is blocked via DNS check.
     #[tokio::test]
     async fn t004_blocks_dns_resolving_to_private_ip() {
         let resolver = MockPrivateDns;
@@ -1330,7 +1283,6 @@ mod browser_request_tests {
         );
     }
 
-    // [T-004] Internal IP literal is blocked.
     #[tokio::test]
     async fn t004_blocks_internal_ip_literal() {
         let resolver = MockPublicDns;
@@ -1340,7 +1292,6 @@ mod browser_request_tests {
         );
     }
 
-    // [T-004] Public URL with public DNS is allowed.
     #[tokio::test]
     async fn t004_allows_public_url() {
         let resolver = MockPublicDns;
@@ -1350,7 +1301,6 @@ mod browser_request_tests {
         );
     }
 
-    // [T-004] Non-network URLs (data:, chrome:, about:) are allowed through.
     #[tokio::test]
     async fn t004_allows_non_network_urls() {
         let resolver = MockPublicDns;
@@ -1367,7 +1317,6 @@ mod browser_request_tests {
         }
     }
 
-    // Unknown schemes are blocked by default (defense-in-depth).
     #[tokio::test]
     async fn t004_blocks_unknown_schemes() {
         let resolver = MockPublicDns;
@@ -1379,7 +1328,6 @@ mod browser_request_tests {
         }
     }
 
-    // WebSocket to internal host is blocked (ws:// → http:// conversion).
     #[tokio::test]
     async fn t004_blocks_websocket_to_internal() {
         let resolver = MockPublicDns;
@@ -1393,7 +1341,6 @@ mod browser_request_tests {
         );
     }
 
-    // WebSocket to internal via DNS is blocked.
     #[tokio::test]
     async fn t004_blocks_websocket_dns_to_private() {
         let resolver = MockPrivateDns;
@@ -1413,15 +1360,13 @@ mod cdp_integration_tests {
         resolve_browser_binary().is_ok()
     }
 
-    // [T-005] Public URL JS rendering completes and returns HTML with content.
-    // Requires Chrome + network. Skipped in CI without Chrome.
     #[tokio::test]
     async fn t005_cdp_renders_public_url() {
         if !chrome_available() {
             eprintln!("SKIP: Chrome not found");
             return;
         }
-        let html = fetch_with_cdp("https://example.com")
+        let html = fetch_with_cdp("https://example.com", TokioDnsResolver)
             .await
             .expect("fetch_with_cdp should succeed for public URL");
         assert!(

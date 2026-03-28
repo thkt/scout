@@ -72,7 +72,8 @@ impl From<FetchError> for ScoutError {
             | FetchError::InternalHost
             | FetchError::UnsupportedContentType(_)
             | FetchError::RedirectMissingLocation => Self::user_error(e.to_string()),
-            FetchError::Browser(_) => Self::user_error(e.to_string()),
+            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
+            FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
             FetchError::Timeout(_) | FetchError::DnsResolution(_) => Self::internal(e.to_string()),
             FetchError::Http(_)
             | FetchError::Status(_)
@@ -136,7 +137,7 @@ mod tests {
             FetchError::InternalHost.into(),
             FetchError::UnsupportedContentType("image/png".into()).into(),
             FetchError::RedirectMissingLocation.into(),
-            FetchError::Browser("not installed".into()).into(),
+            FetchError::BrowserNotFound("not installed".into()).into(),
             SlackError::TokenNotSet.into(),
             SlackError::Api {
                 error: "err".into(),
@@ -160,6 +161,7 @@ mod tests {
             }
             .into(),
             github::GitHubError::Decode("decode error".into()).into(),
+            FetchError::BrowserFailed("CDP protocol error".into()).into(),
             FetchError::Status(500).into(),
             FetchError::TooLarge.into(),
             FetchError::TooManyRedirects(10).into(),
