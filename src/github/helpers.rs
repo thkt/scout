@@ -154,17 +154,14 @@ pub fn filter_tree_entries<'a>(
         })
         .transpose()?;
 
-    let dir_prefix = path
-        .filter(|p| !p.ends_with('/'))
-        .map(|p| format!("{p}/"));
+    let dir_prefix = path.filter(|p| !p.ends_with('/')).map(|p| format!("{p}/"));
 
     Ok(entries
         .iter()
         .filter(|e| e.entry_type == EntryType::Blob)
         .filter(|e| {
             path.is_none_or(|prefix| {
-                e.path == prefix
-                    || e.path.starts_with(dir_prefix.as_deref().unwrap_or(prefix))
+                e.path == prefix || e.path.starts_with(dir_prefix.as_deref().unwrap_or(prefix))
             })
         })
         .filter(|e| {
