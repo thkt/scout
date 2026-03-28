@@ -5,7 +5,7 @@ use reqwest::Client;
 use tracing::{debug, warn};
 
 use crate::redacted::Redacted;
-use crate::retry::{is_transient_network, retry_with};
+use crate::retry::{default_delay, is_transient_network, retry_with};
 
 use super::grounding::extract_grounded_result;
 use super::types::{
@@ -152,6 +152,7 @@ impl SearchClient for GeminiClient {
         let response = retry_with(
             || self.generate_with_search(query),
             is_retriable,
+            default_delay,
             || GeminiError::RateLimited,
         )
         .await?;
