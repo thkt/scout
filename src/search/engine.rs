@@ -495,9 +495,30 @@ mod tests {
     fn fetch_sources_sort_restores_input_order() {
         // Simulate buffer_unordered completion order (2,0,1) differing from input order (0,1,2)
         let mut indexed_pages: Vec<(usize, FetchResult)> = vec![
-            (2, FetchResult { url: "https://c.com".into(), markdown: String::new(), used_raw_fallback: false }),
-            (0, FetchResult { url: "https://a.com".into(), markdown: String::new(), used_raw_fallback: false }),
-            (1, FetchResult { url: "https://b.com".into(), markdown: String::new(), used_raw_fallback: false }),
+            (
+                2,
+                FetchResult {
+                    url: "https://c.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
+            (
+                0,
+                FetchResult {
+                    url: "https://a.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
+            (
+                1,
+                FetchResult {
+                    url: "https://b.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
         ];
 
         indexed_pages.sort_by_key(|(idx, _)| *idx);
