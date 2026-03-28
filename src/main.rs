@@ -29,8 +29,11 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("scout=info".parse().expect("valid tracing directive")),
+            tracing_subscriber::EnvFilter::from_default_env().add_directive(
+                "scout=info".parse().unwrap_or_else(|_| {
+                    tracing_subscriber::filter::Directive::from(tracing::Level::INFO)
+                }),
+            ),
         )
         .init();
 

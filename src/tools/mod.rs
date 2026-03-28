@@ -31,7 +31,7 @@ impl From<&FetchParams> for FetchOptions {
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-/// HTTP_TIMEOUT (30s) + PLAYWRIGHT_TIMEOUT (60s) + 5s margin.
+/// HTTP_TIMEOUT (30s) + CDP_TIMEOUT (60s) + 5s margin.
 const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(95);
 const MAX_REDIRECTS: usize = 5;
 const OVERVIEW_ITEMS: u8 = 5;
