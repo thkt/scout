@@ -636,7 +636,6 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
         && !mime.starts_with("text/")
         && mime != "application/xhtml+xml"
         && mime != "application/xml"
-        && mime != "application/json"
     {
         return Err(FetchError::UnsupportedContentType(mime.to_string()));
     }
@@ -708,7 +707,6 @@ mod content_type_tests {
             "text/plain",
             "application/xhtml+xml",
             "application/xml",
-            "application/json",
             "; charset=utf-8", // edge: empty mime before semicolon → permissive
         ] {
             assert!(check_content_type(ct).is_ok(), "should accept: {ct}");
@@ -717,7 +715,7 @@ mod content_type_tests {
 
     #[test]
     fn rejects_non_textual_content_types() {
-        for ct in ["application/pdf", "image/png"] {
+        for ct in ["application/pdf", "image/png", "application/json"] {
             assert!(
                 matches!(
                     check_content_type(ct),
