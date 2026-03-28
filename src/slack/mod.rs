@@ -313,12 +313,12 @@ impl SlackClient {
             resolved.push(ResolvedMessage { author, text, ts });
         }
 
-        let (first, replies) = if fetched.is_thread {
-            resolved.split_first().expect("messages verified non-empty")
-        } else {
-            (&resolved[0], &[] as &[ResolvedMessage])
-        };
-        let output = format_slack_output(slack_url, &channel_name, first, replies);
+        let (first, resolved) = extract_target(resolved, &slack_url.ts, fetched.is_thread)
+            .ok_or_else(|| SlackError::Api {
+                error: format!("message {} not found in thread", slack_url.ts),
+            })?;
+        let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
+        let output = format_slack_output(slack_url, &channel_name, &first, replies);
         info!(
             workspace = %slack_url.workspace,
             channel = %channel_name,
@@ -387,6 +387,22 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
     out
 }
 
+/// Extract the message matching `target_ts` from `messages`, returning it and
+/// the remaining messages in their original order.
+fn extract_target(
+    mut messages: Vec<ResolvedMessage>,
+    target_ts: &str,
+    is_thread: bool,
+) -> Option<(ResolvedMessage, Vec<ResolvedMessage>)> {
+    let idx = if is_thread {
+        messages.iter().position(|m| m.ts == target_ts)?
+    } else {
+        0
+    };
+    let first = messages.remove(idx);
+    Some((first, messages))
+}
+
 fn format_slack_output(
     slack_url: &SlackUrl,
     channel_name: &str,
@@ -402,9 +418,9 @@ fn format_slack_output(
     ));
     out.push_str(&format!("channel: \"{}\"\n", escape(channel_name)));
     out.push_str(&format!("author: \"{}\"\n", escape(&first.author)));
-    out.push_str(&format!("ts: \"{}\"\n", slack_url.ts));
+    out.push_str(&format!("ts: \"{}\"\n", escape(&slack_url.ts)));
     if !replies.is_empty() {
-        out.push_str(&format!("replies: {}\n", replies.len()));
+        out.push_str(&format!("context_messages: {}\n", replies.len()));
     }
     out.push_str(&format!("url: \"{}\"\n", escape(&slack_url.raw_url)));
     out.push_str("---\n\n");
@@ -445,12 +461,98 @@ mod tests {
     }
 
     #[test]
-    fn parse_thread_reply_url() {
+    fn parse_parent_permalink_with_thread_ts() {
         let url = "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
         let parsed = parse_slack_url(url).unwrap();
         assert_eq!(parsed.channel, "C123");
         assert_eq!(parsed.ts, "1234567890.123456");
         assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
+    }
+
+    #[test]
+    fn parse_reply_permalink_has_different_ts_and_thread_ts() {
+        let url = "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456&cid=C123";
+        let parsed = parse_slack_url(url).unwrap();
+        assert_eq!(parsed.ts, "1111111111.222222");
+        assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
+    }
+
+    #[test]
+    fn format_output_uses_reply_as_primary_when_targeted() {
+        let slack_url = SlackUrl {
+            workspace: "team".into(),
+            channel: "C123".into(),
+            ts: "1111111111.222222".into(),
+            thread_ts: Some("1234567890.123456".into()),
+            raw_url:
+                "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456"
+                    .into(),
+        };
+        let reply = ResolvedMessage {
+            author: "reply-author".into(),
+            text: "reply body".into(),
+            ts: "1111111111.222222".into(),
+        };
+        let parent = ResolvedMessage {
+            author: "parent-author".into(),
+            text: "parent body".into(),
+            ts: "1234567890.123456".into(),
+        };
+        let output = format_slack_output(&slack_url, "#general", &reply, &[parent]);
+        let expected = "\
+---
+workspace: \"team\"
+channel: \"#general\"
+author: \"reply-author\"
+ts: \"1111111111.222222\"
+context_messages: 1
+url: \"https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456\"
+---
+
+reply body
+
+---
+
+parent-author (1234567890.123456):
+parent body
+";
+        assert_eq!(output, expected);
+    }
+
+    fn msg(ts: &str, author: &str) -> ResolvedMessage {
+        ResolvedMessage {
+            author: author.into(),
+            text: format!("text by {author}"),
+            ts: ts.into(),
+        }
+    }
+
+    #[test]
+    fn extract_target_picks_reply_from_thread() {
+        let messages = vec![
+            msg("1000.000000", "parent"),
+            msg("1001.000000", "reply-1"),
+            msg("1002.000000", "reply-2"),
+        ];
+        let (first, rest) = extract_target(messages, "1001.000000", true).unwrap();
+        assert_eq!(first.ts, "1001.000000");
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].ts, "1000.000000");
+        assert_eq!(rest[1].ts, "1002.000000");
+    }
+
+    #[test]
+    fn extract_target_returns_none_when_ts_missing() {
+        let messages = vec![msg("1000.000000", "parent"), msg("1001.000000", "reply-1")];
+        assert!(extract_target(messages, "9999.999999", true).is_none());
+    }
+
+    #[test]
+    fn extract_target_ignores_ts_for_non_thread() {
+        let messages = vec![msg("1000.000000", "author")];
+        let (first, rest) = extract_target(messages, "9999.999999", false).unwrap();
+        assert_eq!(first.ts, "1000.000000");
+        assert!(rest.is_empty());
     }
 
     #[test]
