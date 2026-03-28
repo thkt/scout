@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::redacted::Redacted;
 use crate::retry::{jittered_backoff, retry_with};
@@ -138,16 +138,20 @@ pub struct SlackClient {
 const API_BASE: &str = "https://slack.com/api";
 
 impl SlackClient {
+    pub fn new(http: Client, token: Redacted) -> Self {
+        Self {
+            http,
+            token,
+            base_url: API_BASE.to_string(),
+        }
+    }
+
     pub fn from_env(http: Client) -> Result<Self, SlackError> {
         let raw = std::env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
         if raw.trim().is_empty() {
             return Err(SlackError::TokenNotSet);
         }
-        Ok(Self {
-            http,
-            token: Redacted::new(raw),
-            base_url: API_BASE.to_string(),
-        })
+        Ok(Self::new(http, Redacted::new(raw)))
     }
 
     #[cfg(test)]
@@ -353,10 +357,19 @@ impl SlackClient {
                     .get(uid.as_str())
                     .cloned()
                     .unwrap_or_else(|| uid.clone()),
-                None => "(no author)".into(),
+                None => {
+                    debug!("msg.user is None, falling back to \"(no author)\"");
+                    "(no author)".into()
+                }
             };
             let text = substitute_mentions(&msg.text, &users);
-            let ts = msg.ts.clone().unwrap_or_default();
+            let ts = match &msg.ts {
+                Some(t) => t.clone(),
+                None => {
+                    warn!("msg.ts is None, falling back to empty string");
+                    String::new()
+                }
+            };
             resolved.push(ResolvedMessage { author, text, ts });
         }
 
@@ -513,18 +526,17 @@ fn slack_delay(e: &SlackError, attempt: u32) -> Duration {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
+    #[derive(serde::Deserialize)]
+    struct DummyBody {
+        ok: bool,
+    }
+
     mod http_tests {
         use super::*;
         use reqwest::Client;
-        use serde::Deserialize;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        #[allow(dead_code)]
-        #[derive(Deserialize)]
-        struct DummyBody {
-            ok: bool,
-        }
 
         #[tokio::test]
         async fn api_get_once_429_returns_rate_limited() {
@@ -719,5 +731,133 @@ parent body
     #[test]
     fn parse_rejects_short_timestamp() {
         assert!(parse_slack_url("https://team.slack.com/archives/C123/p12345").is_none());
+    }
+
+    mod mention_tests {
+        use super::*;
+
+        #[test]
+        fn t001_no_mentions_returns_empty() {
+            let spans = parse_mentions("hello world");
+            assert!(spans.is_empty());
+        }
+
+        #[test]
+        fn t002_single_mention_returns_one_span() {
+            let text = "hi <@U123> bye";
+            let spans = parse_mentions(text);
+            assert_eq!(spans.len(), 1);
+            assert_eq!(spans[0].user_id, "U123");
+            assert_eq!(spans[0].start, 3);
+            assert_eq!(spans[0].end, 10);
+            assert_eq!(&text[spans[0].start..spans[0].end], "<@U123>");
+        }
+
+        #[test]
+        fn t003_pipe_label_extracts_user_id_only() {
+            let text = "cc <@U123|alice>";
+            let spans = parse_mentions(text);
+            assert_eq!(spans.len(), 1);
+            assert_eq!(spans[0].user_id, "U123");
+        }
+
+        #[test]
+        fn t004_multiple_adjacent_mentions() {
+            let text = "<@U001><@U002><@U003>";
+            let spans = parse_mentions(text);
+            assert_eq!(spans.len(), 3);
+            assert_eq!(spans[0].user_id, "U001");
+            assert_eq!(spans[1].user_id, "U002");
+            assert_eq!(spans[2].user_id, "U003");
+            assert_eq!(spans[0].end, spans[1].start);
+            assert_eq!(spans[1].end, spans[2].start);
+        }
+
+        #[test]
+        fn t005_unclosed_mention_breaks_early() {
+            let text = "<@U001> then <@U002";
+            let spans = parse_mentions(text);
+            assert_eq!(spans.len(), 1);
+            assert_eq!(spans[0].user_id, "U001");
+        }
+
+        #[test]
+        fn t006_multibyte_characters_correct_offsets() {
+            // CJK characters are 3 bytes each in UTF-8
+            let text = "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}<@UCJK>end";
+            let spans = parse_mentions(text);
+            assert_eq!(spans.len(), 1);
+            assert_eq!(spans[0].user_id, "UCJK");
+            // 5 CJK chars x 3 bytes = 15, so <@UCJK> starts at byte 15
+            assert_eq!(spans[0].start, 15);
+            assert_eq!(&text[spans[0].start..spans[0].end], "<@UCJK>");
+
+            // Emoji (4-byte) surrounding a mention
+            let emoji_text = "\u{1F600}<@UEMJ>\u{1F600}";
+            let spans2 = parse_mentions(emoji_text);
+            assert_eq!(spans2.len(), 1);
+            assert_eq!(spans2[0].user_id, "UEMJ");
+            assert_eq!(spans2[0].start, 4);
+            assert_eq!(&emoji_text[spans2[0].start..spans2[0].end], "<@UEMJ>");
+        }
+
+        #[test]
+        fn t007_known_user_replaced_with_display_name() {
+            let cache: HashMap<String, String> =
+                [("U100".into(), "Alice".into())].into_iter().collect();
+            let result = substitute_mentions("hello <@U100> world", &cache);
+            assert_eq!(result, "hello @Alice world");
+        }
+
+        #[test]
+        fn t008_unknown_user_kept_as_at_uid() {
+            let cache: HashMap<String, String> = HashMap::new();
+            let result = substitute_mentions("hello <@UXXX> world", &cache);
+            assert_eq!(result, "hello @UXXX world");
+        }
+
+        #[test]
+        fn t009_no_mentions_returns_text_unchanged() {
+            let cache: HashMap<String, String> =
+                [("U100".into(), "Alice".into())].into_iter().collect();
+            let text = "no mentions here";
+            let result = substitute_mentions(text, &cache);
+            assert_eq!(result, text);
+        }
+
+        #[test]
+        fn t009b_pipe_label_substituted_with_display_name() {
+            let cache: HashMap<String, String> =
+                [("U123".into(), "Alice".into())].into_iter().collect();
+            let result = substitute_mentions("cc <@U123|alice_handle>", &cache);
+            assert_eq!(result, "cc @Alice");
+        }
+    }
+
+    mod constructor_tests {
+        use super::*;
+        use reqwest::Client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        #[tokio::test]
+        async fn t010_new_constructs_usable_client() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/auth.test"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"ok": true})),
+                )
+                .mount(&server)
+                .await;
+
+            let token = Redacted::new("xoxp-test-token".into());
+            let mut client = SlackClient::new(Client::new(), token);
+            client.base_url = server.uri();
+
+            let result: Result<DummyBody, _> = client.api_get_once("auth.test", &[]).await;
+            assert!(result.is_ok());
+        }
     }
 }
