@@ -13,6 +13,23 @@ pub(crate) fn escape_md_link(s: &str) -> String {
     out
 }
 
+/// Sanitize untrusted input for embedding in Markdown table cells and inline text.
+/// Prevents column breaks (`|`), row breaks (newlines), and link injection (`[]()`).
+pub(crate) fn escape_md_inline(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '|' | '[' | ']' | '(' | ')' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Sanitize user input for embedding in a Markdown heading.
 /// Replaces newlines (which would break heading structure) with spaces.
 pub(crate) fn sanitize_heading(s: &str) -> String {
@@ -77,6 +94,26 @@ mod tests {
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
+    }
+
+    #[test]
+    fn escape_md_inline_pipes_and_newlines() {
+        assert_eq!(escape_md_inline("col1 | col2"), r"col1 \| col2");
+        assert_eq!(escape_md_inline("line1\nline2"), "line1 line2");
+        assert_eq!(escape_md_inline("a\r\nb"), "a  b");
+    }
+
+    #[test]
+    fn escape_md_inline_link_syntax() {
+        assert_eq!(
+            escape_md_inline("[click](http://evil)"),
+            r"\[click\]\(http://evil\)"
+        );
+    }
+
+    #[test]
+    fn escape_md_inline_passthrough() {
+        assert_eq!(escape_md_inline("normal text"), "normal text");
     }
 
     #[test]

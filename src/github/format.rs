@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
-use crate::markdown::{escape_md_link, shift_headings};
+use crate::markdown::{escape_md_inline, escape_md_link, shift_headings};
 
 const MAX_README_LINES: usize = 200;
 
@@ -48,10 +48,10 @@ pub(crate) fn format_overview(
     pulls: &[PullInfo],
     releases: &[ReleaseInfo],
 ) -> String {
-    let mut out = format!("# {}\n\n", repo.full_name);
+    let mut out = format!("# {}\n\n", escape_md_inline(&repo.full_name));
 
     if let Some(ref desc) = repo.description {
-        let _ = writeln!(out, "{desc}\n");
+        let _ = writeln!(out, "{}\n", escape_md_inline(desc));
     }
 
     format_metadata_table(repo, &mut out);
@@ -66,21 +66,25 @@ pub(crate) fn format_overview(
 fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
     out.push_str("| Attribute | Value |\n|-----------|-------|\n");
     if let Some(ref lang) = repo.language {
-        let _ = writeln!(out, "| Language | {lang} |");
+        let _ = writeln!(out, "| Language | {} |", escape_md_inline(lang));
     }
     let _ = writeln!(out, "| Stars | {} |", repo.stargazers_count);
     let _ = writeln!(out, "| Forks | {} |", repo.forks_count);
     let _ = writeln!(out, "| Open Issues | {} |", repo.open_issues_count);
     if let Some(ref license) = repo.license {
         let name = license.spdx_id.as_deref().unwrap_or(&license.name);
-        let _ = writeln!(out, "| License | {name} |");
+        let _ = writeln!(out, "| License | {} |", escape_md_inline(name));
     }
-    let _ = writeln!(out, "| Default Branch | {} |", repo.default_branch);
+    let _ = writeln!(
+        out,
+        "| Default Branch | {} |",
+        escape_md_inline(&repo.default_branch)
+    );
     let topics = repo.topics.as_deref().unwrap_or(&[]);
     if !topics.is_empty() {
-        let _ = writeln!(out, "| Topics | {} |", topics.join(", "));
+        let _ = writeln!(out, "| Topics | {} |", escape_md_inline(&topics.join(", ")));
     }
-    let _ = writeln!(out, "| URL | {} |\n", repo.html_url);
+    let _ = writeln!(out, "| URL | {} |\n", escape_md_inline(&repo.html_url));
 }
 
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
@@ -120,15 +124,15 @@ fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
         let user = issue
             .user
             .as_ref()
-            .map(|u| format!(" — @{}", u.login))
+            .map(|u| format!(" — @{}", escape_md_inline(&u.login)))
             .unwrap_or_default();
         let _ = writeln!(
             out,
             "- [#{}]({}) {}{}{}",
             issue.number,
             escape_md_link(&issue.html_url),
-            issue.title,
-            labels,
+            escape_md_inline(&issue.title),
+            escape_md_inline(&labels),
             user
         );
     }
@@ -149,14 +153,14 @@ fn format_pulls_section(pulls: &[PullInfo], out: &mut String) {
         let user = pr
             .user
             .as_ref()
-            .map(|u| format!(" — @{}", u.login))
+            .map(|u| format!(" — @{}", escape_md_inline(&u.login)))
             .unwrap_or_default();
         let _ = writeln!(
             out,
             "- [#{}]({}) {}{}{}",
             pr.number,
             escape_md_link(&pr.html_url),
-            pr.title,
+            escape_md_inline(&pr.title),
             draft,
             user
         );
@@ -184,7 +188,7 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
         let _ = writeln!(
             out,
             "- [{}]({}) — {}{}",
-            escape_md_link(name),
+            escape_md_inline(name),
             escape_md_link(&release.html_url),
             date,
             pre
@@ -379,7 +383,7 @@ mod tests {
             pull_request: None,
         }];
         let output = format_overview(&repo, None, &issues, &[], &[]);
-        assert!(output.contains("(bug, urgent)"));
+        assert!(output.contains(r"\(bug, urgent\)"));
         assert!(output.contains("@reporter"));
     }
 
@@ -410,5 +414,62 @@ mod tests {
             "h1 should shift to h3 even when truncated"
         );
         assert!(output.contains("truncated, 251 lines total"));
+    }
+
+    #[test]
+    fn format_overview_escapes_description_with_pipe() {
+        let mut repo = sample_repo();
+        repo.description = Some("col1 | col2".into());
+        let output = format_overview(&repo, None, &[], &[], &[]);
+        assert!(
+            !output.contains("col1 | col2"),
+            "raw pipe should be escaped"
+        );
+        assert!(output.contains(r"col1 \| col2"));
+    }
+
+    #[test]
+    fn format_overview_escapes_table_cell_metadata() {
+        let mut repo = sample_repo();
+        repo.language = Some("Rust | Go".into());
+        let output = format_overview(&repo, None, &[], &[], &[]);
+        assert!(output.contains(r"Rust \| Go"));
+    }
+
+    #[test]
+    fn format_overview_escapes_default_branch() {
+        let mut repo = sample_repo();
+        repo.default_branch = "feat|injection".into();
+        let output = format_overview(&repo, None, &[], &[], &[]);
+        assert!(output.contains(r"feat\|injection"));
+    }
+
+    #[test]
+    fn format_overview_escapes_issue_title() {
+        let repo = sample_repo();
+        let issues = vec![IssueInfo {
+            number: 1,
+            title: "bug [click](http://evil)".into(),
+            html_url: "https://github.com/o/r/issues/1".into(),
+            labels: vec![],
+            user: None,
+            pull_request: None,
+        }];
+        let output = format_overview(&repo, None, &issues, &[], &[]);
+        assert!(!output.contains("[click](http://evil)"));
+    }
+
+    #[test]
+    fn format_overview_escapes_pr_title() {
+        let repo = sample_repo();
+        let pulls = vec![PullInfo {
+            number: 1,
+            title: "feat | [link](http://evil)".into(),
+            html_url: "https://github.com/o/r/pull/1".into(),
+            draft: None,
+            user: None,
+        }];
+        let output = format_overview(&repo, None, &[], &pulls, &[]);
+        assert!(!output.contains("[link](http://evil)"));
     }
 }

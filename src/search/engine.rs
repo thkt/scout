@@ -11,7 +11,9 @@ use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
 use crate::gemini::client::{GeminiError, SearchClient};
 use crate::gemini::types::{GroundedResult, Source};
-use crate::markdown::{escape_md_link, sanitize_heading, shift_headings, truncate_with_note};
+use crate::markdown::{
+    escape_md_inline, escape_md_link, sanitize_heading, shift_headings, truncate_with_note,
+};
 use crate::search::Lang;
 use crate::search::bilingual::expand_bilingual;
 
@@ -190,7 +192,7 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     }
     out.push_str("---\n\n## Fetched Pages\n\n");
     for page in pages {
-        let _ = writeln!(out, "### {}\n", escape_md_link(&page.url));
+        let _ = writeln!(out, "### {}\n", sanitize_heading(&page.url));
         if page.used_raw_fallback {
             out.push_str(fetch::converter::RAW_FALLBACK_NOTE);
         }
@@ -208,7 +210,12 @@ fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     }
     out.push_str("## Failed URLs\n\n");
     for f in failed {
-        let _ = writeln!(out, "- {} ({})", escape_md_link(&f.url), f.reason);
+        let _ = writeln!(
+            out,
+            "- {} ({})",
+            escape_md_link(&f.url),
+            escape_md_inline(&f.reason)
+        );
     }
     out.push('\n');
 }
@@ -222,7 +229,7 @@ fn format_sources(sources: &[Source], out: &mut String) {
         let _ = writeln!(
             out,
             "- [{}]({})",
-            escape_md_link(&source.title),
+            escape_md_inline(&source.title),
             escape_md_link(&source.url)
         );
     }

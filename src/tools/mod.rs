@@ -17,7 +17,7 @@ use params::{
 use crate::fetch::{FetchOptions, TokioDnsResolver};
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
 use crate::github::{self, GitHubClient};
-use crate::markdown::{escape_md_link, shift_headings, truncate_with_note};
+use crate::markdown::{escape_md_inline, escape_md_link, shift_headings, truncate_with_note};
 use crate::search::engine;
 
 impl From<&FetchParams> for FetchOptions {
@@ -109,7 +109,7 @@ impl Scout {
             for source in &result.sources {
                 output.push_str(&format!(
                     "- [{}]({})\n",
-                    escape_md_link(&source.title),
+                    escape_md_inline(&source.title),
                     escape_md_link(&source.url)
                 ));
             }
