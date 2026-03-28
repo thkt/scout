@@ -426,7 +426,7 @@ fn format_slack_output(
     out.push_str(&format!("author: \"{}\"\n", escape(&first.author)));
     out.push_str(&format!("ts: \"{}\"\n", escape(&slack_url.ts)));
     if !replies.is_empty() {
-        out.push_str(&format!("thread_context: {}\n", replies.len()));
+        out.push_str(&format!("context_messages: {}\n", replies.len()));
     }
     out.push_str(&format!("url: \"{}\"\n", escape(&slack_url.raw_url)));
     out.push_str("---\n\n");
@@ -509,7 +509,7 @@ workspace: \"team\"
 channel: \"#general\"
 author: \"reply-author\"
 ts: \"1111111111.222222\"
-thread_context: 1
+context_messages: 1
 url: \"https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456\"
 ---
 
