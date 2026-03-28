@@ -536,8 +536,7 @@ mod tests {
                 .await;
 
             let client = SlackClient::with_base_url(Client::new(), &server.uri());
-            let result: Result<DummyBody, _> =
-                client.api_get_once("test.method", &[]).await;
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
             assert!(matches!(
                 result,
                 Err(SlackError::RateLimited { retry_after: None })
@@ -549,15 +548,12 @@ mod tests {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
                 .and(path("/test.method"))
-                .respond_with(
-                    ResponseTemplate::new(429).append_header("Retry-After", "30"),
-                )
+                .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "30"))
                 .mount(&server)
                 .await;
 
             let client = SlackClient::with_base_url(Client::new(), &server.uri());
-            let result: Result<DummyBody, _> =
-                client.api_get_once("test.method", &[]).await;
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
             assert!(matches!(
                 result,
                 Err(SlackError::RateLimited {
@@ -579,12 +575,8 @@ mod tests {
                 .await;
 
             let client = SlackClient::with_base_url(Client::new(), &server.uri());
-            let result: Result<DummyBody, _> =
-                client.api_get_once("test.method", &[]).await;
-            assert!(matches!(
-                result,
-                Err(SlackError::RateLimited { .. })
-            ));
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+            assert!(matches!(result, Err(SlackError::RateLimited { .. })));
         }
 
         #[tokio::test]
@@ -593,15 +585,15 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/test.method"))
                 .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({"ok": false, "error": "channel_not_found"}),
+                    ),
                 )
                 .mount(&server)
                 .await;
 
             let client = SlackClient::with_base_url(Client::new(), &server.uri());
-            let result: Result<DummyBody, _> =
-                client.api_get_once("test.method", &[]).await;
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
             assert!(matches!(
                 result,
                 Err(SlackError::Api { error }) if error == "channel_not_found"
