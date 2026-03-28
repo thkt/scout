@@ -23,7 +23,7 @@ use types::{
 const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-use crate::retry::{is_transient_network, retry_with};
+use crate::retry::{default_delay, is_transient_network, retry_with};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
@@ -123,6 +123,7 @@ impl GitHubClient {
         retry_with(
             || self.get_json_once(path),
             is_retriable,
+            default_delay,
             || GitHubError::RateLimited,
         )
         .await

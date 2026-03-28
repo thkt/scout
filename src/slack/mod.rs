@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use reqwest::Client;
 use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::redacted::Redacted;
+use crate::retry::{jittered_backoff, retry_with};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SlackError {
@@ -13,6 +15,9 @@ pub enum SlackError {
 
     #[error("Slack API error: {error}")]
     Api { error: String },
+
+    #[error("Slack API rate limit exceeded")]
+    RateLimited { retry_after: Option<u64> },
 
     #[error("Slack request failed: {0}")]
     Network(String),
@@ -127,7 +132,10 @@ struct FetchedThread {
 pub struct SlackClient {
     http: Client,
     token: Redacted,
+    base_url: String,
 }
+
+const API_BASE: &str = "https://slack.com/api";
 
 impl SlackClient {
     pub fn from_env(http: Client) -> Result<Self, SlackError> {
@@ -138,7 +146,17 @@ impl SlackClient {
         Ok(Self {
             http,
             token: Redacted::new(raw),
+            base_url: API_BASE.to_string(),
         })
+    }
+
+    #[cfg(test)]
+    fn with_base_url(http: Client, base_url: &str) -> Self {
+        Self {
+            http,
+            token: Redacted::new("xoxp-test".to_string()),
+            base_url: base_url.to_string(),
+        }
     }
 
     async fn api_get<T: serde::de::DeserializeOwned>(
@@ -146,7 +164,21 @@ impl SlackClient {
         method: &str,
         params: &[(&str, &str)],
     ) -> Result<T, SlackError> {
-        let mut url = url::Url::parse(&format!("https://slack.com/api/{method}"))
+        retry_with(
+            || self.api_get_once(method, params),
+            is_retriable,
+            slack_delay,
+            || SlackError::RateLimited { retry_after: None },
+        )
+        .await
+    }
+
+    async fn api_get_once<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T, SlackError> {
+        let mut url = url::Url::parse(&format!("{}/{method}", self.base_url))
             .map_err(|e| SlackError::Network(e.to_string()))?;
         for (k, v) in params {
             url.query_pairs_mut().append_pair(k, v);
@@ -165,6 +197,17 @@ impl SlackClient {
             .await
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+
+        if resp.status() == 429 {
+            warn!(retry_after_secs = retry_after, "Slack API rate limited");
+            return Err(SlackError::RateLimited { retry_after });
+        }
+
         let body: serde_json::Value = resp.json().await.map_err(|e| {
             if e.is_decode() {
                 SlackError::Decode(e.to_string())
@@ -177,9 +220,13 @@ impl SlackClient {
             let error = body
                 .get("error")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            return Err(SlackError::Api { error });
+                .unwrap_or("unknown");
+            if error == "ratelimited" {
+                return Err(SlackError::RateLimited { retry_after });
+            }
+            return Err(SlackError::Api {
+                error: error.to_string(),
+            });
         }
 
         serde_json::from_value(body).map_err(|e| SlackError::Decode(e.to_string()))
@@ -446,9 +493,121 @@ fn format_slack_output(
     out
 }
 
+fn is_retriable(e: &SlackError) -> bool {
+    matches!(
+        e,
+        SlackError::RateLimited { .. } | SlackError::Network(_) | SlackError::Timeout(_)
+    )
+}
+
+fn slack_delay(e: &SlackError, attempt: u32) -> Duration {
+    match e {
+        SlackError::RateLimited {
+            retry_after: Some(secs),
+        } => Duration::from_secs(*secs),
+        _ => Duration::from_millis(jittered_backoff(attempt)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod http_tests {
+        use super::*;
+        use reqwest::Client;
+        use serde::Deserialize;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        #[allow(dead_code)]
+        #[derive(Deserialize)]
+        struct DummyBody {
+            ok: bool,
+        }
+
+        #[tokio::test]
+        async fn api_get_once_429_returns_rate_limited() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(ResponseTemplate::new(429))
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> =
+                client.api_get_once("test.method", &[]).await;
+            assert!(matches!(
+                result,
+                Err(SlackError::RateLimited { retry_after: None })
+            ));
+        }
+
+        #[tokio::test]
+        async fn api_get_once_429_with_retry_after_header() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(
+                    ResponseTemplate::new(429).append_header("Retry-After", "30"),
+                )
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> =
+                client.api_get_once("test.method", &[]).await;
+            assert!(matches!(
+                result,
+                Err(SlackError::RateLimited {
+                    retry_after: Some(30)
+                })
+            ));
+        }
+
+        #[tokio::test]
+        async fn api_get_once_body_ratelimited_returns_rate_limited() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
+                )
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> =
+                client.api_get_once("test.method", &[]).await;
+            assert!(matches!(
+                result,
+                Err(SlackError::RateLimited { .. })
+            ));
+        }
+
+        #[tokio::test]
+        async fn api_get_once_api_error_returns_api_variant() {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
+                )
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> =
+                client.api_get_once("test.method", &[]).await;
+            assert!(matches!(
+                result,
+                Err(SlackError::Api { error }) if error == "channel_not_found"
+            ));
+        }
+    }
 
     #[test]
     fn parse_standard_url() {

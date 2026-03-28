@@ -136,7 +136,9 @@ impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
         match &e {
             SlackError::TokenNotSet | SlackError::Api { .. } => Self::user_error(e.to_string()),
-            SlackError::Network(_) | SlackError::Timeout(_) => Self::transient(e.to_string()),
+            SlackError::RateLimited { .. } | SlackError::Network(_) | SlackError::Timeout(_) => {
+                Self::transient(e.to_string())
+            }
             SlackError::Decode(_) => Self::internal(e.to_string()),
         }
     }
@@ -252,6 +254,7 @@ mod tests {
                 message: "unavailable".into(),
             }
             .into(),
+            SlackError::RateLimited { retry_after: None }.into(),
             SlackError::Network("err".into()).into(),
             SlackError::Timeout("err".into()).into(),
         ];
