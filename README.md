@@ -41,7 +41,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 
 One command, grounded answer from Google Search, plus 5 source pages as clean Markdown. No LLM intermediary — you read the primary sources and decide what matters.
 
-Japanese queries are handled automatically: "Next.js 認証 ベストプラクティス" expands to both the original and an English query extracted from the technical terms, so English-only documentation isn't missed.
+Japanese queries are handled automatically: "Next.js 認証 ベストプラクティス" expands to both the original and a query built from extracted ASCII technical terms (e.g., "Next.js"), improving coverage of English documentation that uses those terms. Pure Japanese queries without ASCII terms are searched as-is.
 
 ## When to use scout (and when not to)
 

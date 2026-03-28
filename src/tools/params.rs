@@ -43,7 +43,7 @@ Examples:
 pub struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub url: String,
-    /// Force JavaScript rendering via playwright-cli (auto-detected for SPA pages and thin extractions)
+    /// Force JavaScript rendering via headless Chrome / CDP. Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
     pub js: bool,
     /// Skip Readability extraction and convert entire page
