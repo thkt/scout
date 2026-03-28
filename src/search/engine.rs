@@ -107,8 +107,8 @@ async fn fetch_sources(
     urls: Vec<String>,
     resolver: &impl DnsResolver,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
-    let fetch_outcomes: Vec<_> = stream::iter(urls)
-        .map(|url| async {
+    let fetch_outcomes: Vec<_> = stream::iter(urls.into_iter().enumerate())
+        .map(|(idx, url)| async move {
             let result = tokio::time::timeout(
                 FETCH_TIMEOUT,
                 fetch::fetch_page(http, &url, fetch::FetchOptions::default(), resolver),
@@ -121,24 +121,27 @@ async fn fetch_sources(
                     FETCH_TIMEOUT.as_secs()
                 ))),
             };
-            (url, result)
+            (idx, url, result)
         })
         .buffer_unordered(5)
         .collect()
         .await;
 
-    let mut fetched_pages = Vec::new();
+    let mut indexed_pages = Vec::new();
     let mut failed_urls = Vec::new();
 
-    for (url, outcome) in fetch_outcomes {
+    for (idx, url, outcome) in fetch_outcomes {
         match outcome {
-            Ok(page) => fetched_pages.push(page),
+            Ok(page) => indexed_pages.push((idx, page)),
             Err(e) => failed_urls.push(FailedUrl {
                 url,
                 reason: e.to_string(),
             }),
         }
     }
+
+    indexed_pages.sort_by_key(|(idx, _)| *idx);
+    let fetched_pages: Vec<_> = indexed_pages.into_iter().map(|(_, page)| page).collect();
 
     if !failed_urls.is_empty() && fetched_pages.is_empty() {
         warn!(failed = failed_urls.len(), "all page fetches failed");
@@ -486,5 +489,43 @@ mod tests {
         };
         let err = research(&mock, &http, &req, &resolver).await.unwrap_err();
         assert!(err.to_string().contains("rate limit"));
+    }
+
+    #[test]
+    fn fetch_sources_sort_restores_input_order() {
+        // Simulate buffer_unordered completion order (2,0,1) differing from input order (0,1,2)
+        let mut indexed_pages: Vec<(usize, FetchResult)> = vec![
+            (
+                2,
+                FetchResult {
+                    url: "https://c.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
+            (
+                0,
+                FetchResult {
+                    url: "https://a.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
+            (
+                1,
+                FetchResult {
+                    url: "https://b.com".into(),
+                    markdown: String::new(),
+                    used_raw_fallback: false,
+                },
+            ),
+        ];
+
+        indexed_pages.sort_by_key(|(idx, _)| *idx);
+        let pages: Vec<_> = indexed_pages.into_iter().map(|(_, page)| page).collect();
+
+        assert_eq!(pages[0].url, "https://a.com");
+        assert_eq!(pages[1].url, "https://b.com");
+        assert_eq!(pages[2].url, "https://c.com");
     }
 }
