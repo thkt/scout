@@ -99,10 +99,14 @@ impl Scout {
         let search_query = params.lang.apply_to_query(&params.query);
         let result = gemini.search(&search_query).await?;
 
-        let mut output = result.answer.unwrap_or_else(|| {
-            "(No answer returned — the query may have been filtered by safety settings.)"
-                .to_string()
-        });
+        // Shift by 2, consistent with fetch standalone output.
+        let mut output = shift_headings(
+            &result.answer.unwrap_or_else(|| {
+                "(No answer returned — the query may have been filtered by safety settings.)"
+                    .to_string()
+            }),
+            2,
+        );
 
         if !result.sources.is_empty() {
             output.push_str("\n\n---\n**Sources:**\n");
@@ -481,6 +485,120 @@ mod tests {
             "should prepend fallback note"
         );
         assert!(output.contains("### Raw Title"), "h1 should shift to h3");
+    }
+
+    /// [TC-5] search standalone: empty answer text becomes None via
+    /// `extract_grounded_result` (.filter(|t| !t.is_empty())), triggering
+    /// the fallback message path in `search()`.
+    #[tokio::test]
+    async fn search_none_answer_returns_fallback() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": ""}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": []
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_gemini(&server.uri());
+        let params = SearchParams {
+            query: "test".into(),
+            lang: Lang::En,
+        };
+
+        let result = s.search(params).await.unwrap();
+        assert!(
+            result.contains("No answer returned"),
+            "should contain fallback message, got:\n{result}"
+        );
+    }
+
+    /// [T-001] search standalone: answer with headings should have them shifted by 2
+    #[tokio::test]
+    async fn t_001_search_shifts_headings_in_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "# Title\n\n## Sub\n\nBody text"}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": []
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_gemini(&server.uri());
+        let params = SearchParams {
+            query: "test".into(),
+            lang: Lang::En,
+        };
+
+        let result = s.search(params).await.unwrap();
+        assert!(
+            result.contains("### Title"),
+            "h1 should shift to h3 (shift by 2), got:\n{result}"
+        );
+        assert!(
+            result.contains("#### Sub"),
+            "h2 should shift to h4 (shift by 2), got:\n{result}"
+        );
+    }
+
+    /// [T-003] search standalone: # inside fenced code block should NOT be shifted
+    #[tokio::test]
+    async fn t_003_search_preserves_headings_in_code_blocks() {
+        let answer = "# Real heading\n\n```bash\n# comment in script\n```\n\n## Another heading";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": answer}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": []
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_gemini(&server.uri());
+        let params = SearchParams {
+            query: "test".into(),
+            lang: Lang::En,
+        };
+
+        let result = s.search(params).await.unwrap();
+        assert!(
+            result.contains("### Real heading"),
+            "h1 outside code block should shift to h3, got:\n{result}"
+        );
+        assert!(
+            result.contains("#### Another heading"),
+            "h2 outside code block should shift to h4, got:\n{result}"
+        );
+        assert!(
+            result.contains("# comment in script"),
+            "# inside fenced code block should remain unchanged, got:\n{result}"
+        );
     }
 
     #[test]

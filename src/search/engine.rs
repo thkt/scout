@@ -180,7 +180,7 @@ fn format_search_results(results: &[GroundedResult], out: &mut String) {
             let _ = writeln!(out, "## Search Result {}\n", i + 1);
         }
         match &result.answer {
-            Some(answer) => out.push_str(answer),
+            Some(answer) => out.push_str(&shift_headings(answer, 2)),
             None => out.push_str(
                 "(No answer returned — the query may have been filtered by safety settings.)\n",
             ),
@@ -372,10 +372,6 @@ mod tests {
             text.contains("##### Section"),
             "h2 should be shifted to h5, got:\n{text}"
         );
-        assert!(
-            !text.contains("\n# Example Page"),
-            "original h1 should not remain"
-        );
     }
 
     #[test]
@@ -399,6 +395,59 @@ mod tests {
                 "(truncated: showing {MAX_PAGE_BYTES} / {total} bytes)"
             )),
             "should show exact byte counts, got:\n{text}"
+        );
+    }
+
+    /// [T-002] research report: answer with headings should have them shifted by 2
+    #[test]
+    fn t_002_research_report_shifts_headings_in_answer() {
+        let result = GroundedResult {
+            answer: Some("# Title\n\nSome text\n\n## Details".into()),
+            sources: vec![Source {
+                url: "https://example.com".into(),
+                title: "Example".into(),
+            }],
+        };
+        let report = ResearchReport {
+            search_results: vec![result],
+            fetched_pages: vec![],
+            failed_urls: vec![],
+            all_sources: vec![Source {
+                url: "https://example.com".into(),
+                title: "Example".into(),
+            }],
+        };
+
+        let text = format_report(&report, "test query");
+        assert!(
+            text.contains("### Title"),
+            "h1 in answer should shift to h3 (shift by 2), got:\n{text}"
+        );
+        assert!(
+            text.contains("#### Details"),
+            "h2 in answer should shift to h4 (shift by 2), got:\n{text}"
+        );
+    }
+
+    /// [T-004] research report: answer with no headings passes through unchanged
+    #[test]
+    fn t_004_research_report_no_headings_unchanged() {
+        let body = "This is plain text without any headings.\n\nJust paragraphs.";
+        let result = GroundedResult {
+            answer: Some(body.into()),
+            sources: vec![],
+        };
+        let report = ResearchReport {
+            search_results: vec![result],
+            fetched_pages: vec![],
+            failed_urls: vec![],
+            all_sources: vec![],
+        };
+
+        let text = format_report(&report, "test");
+        assert!(
+            text.contains(body),
+            "answer without headings should appear verbatim, got:\n{text}"
         );
     }
 

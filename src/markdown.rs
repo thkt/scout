@@ -53,14 +53,31 @@ pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> std::borrow::Cow<
     std::borrow::Cow::Owned(out)
 }
 
+/// Return the heading level (1–6) if `trimmed` is a valid ATX heading
+/// (CommonMark §4.2), or `None` otherwise.
+fn atx_heading_level(trimmed: &str) -> Option<usize> {
+    let hashes = trimmed.len() - trimmed.trim_start_matches('#').len();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = &trimmed[hashes..];
+    (rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')).then_some(hashes)
+}
+
 /// Shift all Markdown heading levels deeper by `levels` (e.g., `# Foo` → `#### Foo`
-/// with `levels = 3`).  Skips lines inside fenced code blocks so that comment
-/// lines like `# TODO` are not affected.
+/// with `levels = 3`).  Clamps output at h6 (CommonMark maximum).
+///
+/// Only valid ATX headings (CommonMark §4.2: 1–6 `#` + space/tab/EOL) are
+/// shifted; lines like `#include` or `#123` are left unchanged.
+///
+/// Skips lines inside fenced code blocks so that comment lines like `# TODO`
+/// are not affected.  Note: the fence toggle is simplified — it does not track
+/// opening fence character or length, so a 4-backtick fence closed by 3 backticks
+/// would mis-toggle.  This is acceptable for LLM/web-fetched markdown input.
 pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
     if levels == 0 {
         return markdown.to_string();
     }
-    let prefix = "#".repeat(levels);
     let mut in_code_block = false;
     let mut out = String::with_capacity(markdown.len() + levels * 40);
 
@@ -72,12 +89,13 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_code_block = !in_code_block;
         }
-        if !in_code_block && trimmed.starts_with('#') {
-            // Preserve leading whitespace (rare but possible).
+        if let Some(orig_hashes) = (!in_code_block).then(|| atx_heading_level(trimmed)).flatten() {
             let indent = &line[..line.len() - trimmed.len()];
+            let new_level = (orig_hashes + levels).min(6);
+            let heading_text = &trimmed[orig_hashes..];
             out.push_str(indent);
-            out.push_str(&prefix);
-            out.push_str(trimmed);
+            out.push_str(&"######"[..new_level]);
+            out.push_str(heading_text);
         } else {
             out.push_str(line);
         }
@@ -149,6 +167,29 @@ mod tests {
     fn shift_headings_preserves_trailing_content() {
         let input = "No headings here\nJust text";
         assert_eq!(shift_headings(input, 3), input);
+    }
+
+    /// [T-005] Non-ATX-heading `#` lines must not be shifted.
+    #[test]
+    fn shift_headings_skips_non_atx_lines() {
+        let input = "#include <stdio.h>\n# Real heading\n#123 issue ref\n## Also real";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result,
+            "#include <stdio.h>\n### Real heading\n#123 issue ref\n#### Also real",
+            "only ATX headings (# + space/EOL) should be shifted"
+        );
+    }
+
+    #[test]
+    fn shift_headings_clamps_at_h6() {
+        let input = "##### H5\n###### H6\n# H1";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result,
+            "###### H5\n###### H6\n### H1",
+            "shifted headings must clamp at h6 (6 hashes max)"
+        );
     }
 
     #[test]
