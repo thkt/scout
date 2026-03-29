@@ -797,11 +797,8 @@ mod tests {
 
         // Parallel: barrier(4) releases instantly → completes in ms.
         // Sequential: barrier never reaches 4 → deadlock → timeout.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            s.repo_overview(params),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), s.repo_overview(params)).await;
 
         assert!(
             result.is_ok(),
