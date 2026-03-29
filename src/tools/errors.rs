@@ -307,4 +307,43 @@ mod tests {
         let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
         assert!(err.to_string().contains("aistudio.google.com"));
     }
+
+    // TcpListener::drop is synchronous, so the port is immediately closed
+    // with no async shutdown race (unlike MockServer).
+    #[tokio::test]
+    async fn t003_fetch_error_http_connection_refused_is_transient() {
+        use reqwest::Client;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let dead_url = format!("http://{addr}/should-refuse");
+
+        let client = Client::new();
+        let reqwest_err = client
+            .get(&dead_url)
+            .send()
+            .await
+            .expect_err("request to dead port should fail");
+
+        assert!(
+            is_transient_network(&reqwest_err),
+            "expected transient network error, got: {reqwest_err}"
+        );
+
+        let fetch_err = FetchError::Http(reqwest_err);
+        let scout_err = ScoutError::from(fetch_err);
+
+        assert!(
+            scout_err.retryable(),
+            "connection-refused FetchError::Http should produce transient ScoutError"
+        );
+        assert!(
+            scout_err.to_string().contains("retry may succeed"),
+            "transient error should contain retry hint: {}",
+            scout_err
+        );
+    }
 }

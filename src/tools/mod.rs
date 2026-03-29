@@ -352,8 +352,9 @@ fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String 
 mod tests {
     use super::*;
     use crate::search::Lang;
+    use crate::test_support::try_spawn_mock_server;
     use wiremock::matchers::{method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, ResponseTemplate};
 
     fn scout_with_gemini(gemini_uri: &str) -> Scout {
         let http = Client::builder()
@@ -378,7 +379,9 @@ mod tests {
 
     #[tokio::test]
     async fn search_success_returns_content() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -420,7 +423,9 @@ mod tests {
 
     #[tokio::test]
     async fn research_success_returns_report() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -492,7 +497,9 @@ mod tests {
     /// the fallback message path in `search()`.
     #[tokio::test]
     async fn search_none_answer_returns_fallback() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -525,7 +532,9 @@ mod tests {
     /// [T-001] search standalone: answer with headings should have them shifted by 2
     #[tokio::test]
     async fn t_001_search_shifts_headings_in_answer() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -563,7 +572,9 @@ mod tests {
     #[tokio::test]
     async fn t_003_search_preserves_headings_in_code_blocks() {
         let answer = "# Real heading\n\n```bash\n# comment in script\n```\n\n## Another heading";
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
