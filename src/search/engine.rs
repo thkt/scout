@@ -17,7 +17,7 @@ use crate::markdown::{
 use crate::search::Lang;
 use crate::search::bilingual::expand_bilingual;
 
-const MAX_PAGE_BYTES: usize = 3000;
+const MAX_PAGE_BYTES: usize = 4_500;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a multi-source research session.
@@ -380,7 +380,8 @@ mod tests {
 
     #[test]
     fn format_report_truncates_long_pages() {
-        let long_content = "x".repeat(5000);
+        let total = MAX_PAGE_BYTES + 2_000;
+        let long_content = "x".repeat(total);
         let report = ResearchReport {
             search_results: vec![make_grounded(vec![])],
             fetched_pages: vec![FetchResult {
@@ -393,9 +394,10 @@ mod tests {
         };
 
         let text = format_report(&report, "test");
-        // Verify truncation message includes both shown and total byte counts
         assert!(
-            text.contains("(truncated: showing 3000 / 5000 bytes)"),
+            text.contains(&format!(
+                "(truncated: showing {MAX_PAGE_BYTES} / {total} bytes)"
+            )),
             "should show exact byte counts, got:\n{text}"
         );
     }
