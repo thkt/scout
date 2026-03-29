@@ -100,7 +100,7 @@ cargo install --path . --features js-rendering
 
 ### `scout research` — 複数ソース深掘り調査
 
-Gemini Groundingで検索し、上位Nページを取得してレポートにまとめます。回答・ページ全文・ソースリストを一括で返します。
+Gemini Groundingで検索し、上位Nページを取得してレポートにまとめます。回答・ページ全文・ソースリストを一括で返します。`search` がAI回答とURLリストを返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
@@ -170,7 +170,7 @@ scout repo-read facebook/react src/ReactElement.js --lines 1-50
 scout repo-overview denoland/deno
 ```
 
-リポジトリのメタデータ、README、オープンなIssue/PR、最近のリリースを5つのAPIコールで並行取得します。
+リポジトリのメタデータ、README、オープンなIssue/PR、最近のリリース。リポジトリの存在確認後、残りを並列取得します。
 
 全GitHubコマンドは `owner/repo`、フルURL（`https://github.com/denoland/deno`）、`.git`付きURLを受け付けます。
 
@@ -205,8 +205,11 @@ src/
 │   ├── converter.rs     HTML → Markdown変換
 │   └── ssrf.rs          SSRF防御（URL検証、DNS事前チェック）
 ├── gemini/              Gemini APIクライアント、グラウンディングレスポンス解析
-├── github/              GitHub APIクライアント、ツリーフィルタリング、出力整形
-└── markdown.rs          Markdownユーティリティ
+├── github/              GitHub APIクライアント（遅延初期化）、ツリーフィルタリング、出力整形
+├── slack/               Slackメッセージ取得（スレッド、リプライパーマリンク）
+├── markdown.rs          Markdownユーティリティ（見出しシフト、切り詰め、エスケープ）
+├── retry.rs             バックオフ付きリトライ（一時エラー、レート制限）
+└── redacted.rs          トークン用秘匿ラッパー
 ```
 
 シングルバイナリで、ランタイム依存はありません。
@@ -217,7 +220,7 @@ src/
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Gemini APIキーが必要         | `search` と `research` には `GEMINI_API_KEY` が必要。無料枠: 100 RPM、1,500回/日                                                |
 | JSレンダリングにChromeが必要 | `fetch` はSPAを自動検出。`--features js-rendering` でビルドするとヘッドレスChrome（CDP）でJSレンダリング。Chrome/Chromiumが必要 |
-| GitHubレート制限             | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5リクエスト消費                                           |
+| GitHubレート制限             | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5〜6リクエスト消費                                        |
 | 取得サイズ上限               | ダウンロード10MB、出力100Kバイト                                                                                                |
 
 ## ライセンス

@@ -111,7 +111,7 @@ Claude Code will pick up the commands naturally — no MCP configuration needed.
 
 ### `scout research` — Multi-source deep research
 
-Searches the web via Gemini Grounding, fetches the top N source pages, and compiles a report — grounded answer, full page content, and deduplicated source list.
+Searches the web via Gemini Grounding, fetches the top N source pages, and compiles a report — grounded answer, full page content, and deduplicated source list. Unlike `search` which returns an AI answer with URLs, `research` actually reads those pages and includes the full content — so you (or your AI agent) can verify claims against primary sources.
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
@@ -181,7 +181,7 @@ scout repo-read facebook/react src/ReactElement.js --lines 1-50
 scout repo-overview denoland/deno
 ```
 
-Repo metadata, README, open issues, PRs, and recent releases — 5 concurrent API calls, one response.
+Repo metadata, README, open issues, PRs, and recent releases. Verifies the repo exists first, then fetches the rest in parallel.
 
 All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland/deno`), and `.git`-suffixed URLs.
 
@@ -215,8 +215,11 @@ src/
 │   ├── converter.rs     HTML → Markdown conversion
 │   └── ssrf.rs          SSRF defense (URL validation, DNS pre-check)
 ├── gemini/              Gemini API client, grounding response parsing
-├── github/              GitHub API client, tree filtering, output formatting
-└── markdown.rs          Markdown utilities
+├── github/              GitHub API client (lazy-init), tree filtering, formatting
+├── slack/               Slack message fetching (thread, reply permalink)
+├── markdown.rs          Markdown utilities (heading shift, truncation, escaping)
+├── retry.rs             Retry with backoff (transient error, rate limit)
+└── redacted.rs          Secret-safe wrapper for tokens
 ```
 
 Single binary, zero runtime dependencies.
@@ -227,7 +230,7 @@ Single binary, zero runtime dependencies.
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | Gemini API key required   | `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day                                                              |
 | JS rendering needs Chrome | `fetch` auto-detects SPAs. With `--features js-rendering`, falls back to headless Chrome (CDP) for JS rendering. Requires Chrome/Chromium |
-| GitHub rate limits        | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5 requests per call                                                |
+| GitHub rate limits        | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5–6 requests per call                                              |
 | Fetch size cap            | 10 MB download limit, 100K byte output                                                                                                    |
 
 ## License
