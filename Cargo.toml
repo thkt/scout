@@ -30,6 +30,7 @@ chromiumoxide = { version = "0.9", optional = true }
 js-rendering = ["chromiumoxide"]
 
 [dev-dependencies]
+tracing-test = "0.2"
 wiremock = "0.6"
 
 [profile.release]
