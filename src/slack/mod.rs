@@ -908,10 +908,7 @@ parent body
         #[test]
         fn t014_mention_resolved_and_user_mapped() {
             let messages = vec![make_msg(Some("U1"), "cc <@U2>", Some("1000.000"))];
-            let users = HashMap::from([
-                ("U1".into(), "Alice".into()),
-                ("U2".into(), "Bob".into()),
-            ]);
+            let users = HashMap::from([("U1".into(), "Alice".into()), ("U2".into(), "Bob".into())]);
 
             let resolved = resolve_messages(&messages, &users);
 
@@ -930,6 +927,5 @@ parent body
 
             assert_eq!(resolved[0].author, "UXXX");
         }
-
     }
 }
