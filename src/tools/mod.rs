@@ -7,6 +7,7 @@ pub use params::Command;
 use std::time::Duration;
 
 use reqwest::Client;
+use tokio::sync::OnceCell;
 use tracing::{info, warn};
 
 use errors::{parse_repo_param, unwrap_or_note};
@@ -46,7 +47,9 @@ pub struct Scout {
     /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
     fetch_http: Client,
     gemini: Option<GeminiClient>,
-    github: GitHubClient,
+    /// Lazy-initialized on first GitHub API call. Non-GitHub commands
+    /// (search, fetch, research) never pay the `gh auth token` cost.
+    github: OnceCell<GitHubClient>,
 }
 
 impl Scout {
@@ -66,13 +69,18 @@ impl Scout {
         let gemini = GeminiClient::from_env(http.clone())
             .inspect_err(|e| warn!("Gemini client not available: {e}"))
             .ok();
-        let github = GitHubClient::from_env(http.clone()).await;
         Ok(Self {
             http,
             fetch_http,
             gemini,
-            github,
+            github: OnceCell::new(),
         })
+    }
+
+    async fn github(&self) -> &GitHubClient {
+        self.github
+            .get_or_init(|| GitHubClient::from_env(self.http.clone()))
+            .await
     }
 
     fn gemini(&self) -> Result<&GeminiClient, ScoutError> {
@@ -197,19 +205,21 @@ impl Scout {
 
         info!(repository = %params.repository, "repo_tree");
 
+        let github = self.github().await;
+
         let ref_ = match params.ref_ {
             Some(r) => {
                 github::validate_ref(&r)?;
                 r
             }
-            None => self.github.get_repo(owner, repo).await?.default_branch,
+            None => github.get_repo(owner, repo).await?.default_branch,
         };
 
         if let Some(ref p) = params.path {
             github::validate_path(p)?;
         }
 
-        let tree = self.github.get_tree(owner, repo, &ref_).await?;
+        let tree = github.get_tree(owner, repo, &ref_).await?;
 
         let filtered = github::filter_tree_entries(
             &tree.tree,
@@ -233,15 +243,16 @@ impl Scout {
             github::validate_ref(r)?;
         }
 
-        let contents = self
-            .github
+        let github = self.github().await;
+
+        let contents = github
             .get_contents(owner, repo, &params.path, params.ref_.as_deref())
             .await?;
 
         let raw = if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
             github::decode_content(encoded)?
         } else {
-            let blob = self.github.get_blob(owner, repo, &contents.sha).await?;
+            let blob = github.get_blob(owner, repo, &contents.sha).await?;
             github::decode_content(&blob.content)?
         };
 
@@ -264,15 +275,17 @@ impl Scout {
 
         info!(repository = %params.repository, "repo_overview");
 
-        let (repo_info, readme, issues, pulls, releases) = tokio::join!(
-            self.github.get_repo(owner, repo),
-            self.github.get_readme(owner, repo),
-            self.github.get_issues(owner, repo, OVERVIEW_ITEMS),
-            self.github.get_pulls(owner, repo, OVERVIEW_ITEMS),
-            self.github.get_releases(owner, repo, OVERVIEW_RELEASES),
-        );
+        let github = self.github().await;
 
-        let repo_info = repo_info?;
+        // Verify repo exists before issuing remaining API calls (#18).
+        let repo_info = github.get_repo(owner, repo).await?;
+
+        let (readme, issues, pulls, releases) = tokio::join!(
+            github.get_readme(owner, repo),
+            github.get_issues(owner, repo, OVERVIEW_ITEMS),
+            github.get_pulls(owner, repo, OVERVIEW_ITEMS),
+            github.get_releases(owner, repo, OVERVIEW_RELEASES),
+        );
 
         let mut notes = Vec::new();
 
@@ -290,7 +303,7 @@ impl Scout {
         let readme_encoded = match readme_entry {
             None => None,
             Some(r) if r.content.as_ref().is_some_and(|c| !c.is_empty()) => r.content,
-            Some(r) => match self.github.get_blob(owner, repo, &r.sha).await {
+            Some(r) => match github.get_blob(owner, repo, &r.sha).await {
                 Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
                 Err(e) => {
                     warn!(%e, "failed to fetch README blob");
@@ -353,10 +366,10 @@ mod tests {
     use super::*;
     use crate::search::Lang;
     use crate::test_support::try_spawn_mock_server;
-    use wiremock::matchers::{method, path_regex};
+    use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
-    fn scout_with_gemini(gemini_uri: &str) -> Scout {
+    fn build_test_clients() -> (Client, Client) {
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
@@ -369,12 +382,11 @@ mod tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        Scout {
-            http: http.clone(),
-            fetch_http,
-            gemini: Some(GeminiClient::with_base_url(http.clone(), gemini_uri)),
-            github: GitHubClient::with_base_url(http, "http://localhost:0"),
-        }
+        (http, fetch_http)
+    }
+
+    fn scout_with_gemini(gemini_uri: &str) -> Scout {
+        scout_with_github(gemini_uri, "http://localhost:0")
     }
 
     #[tokio::test]
@@ -632,6 +644,330 @@ mod tests {
         assert!(
             output.contains("### Title"),
             "headings should still be shifted"
+        );
+    }
+
+    // --- GitHub client efficiency tests (lazy init + repo_overview) ---
+
+    fn scout_with_github(gemini_uri: &str, github_uri: &str) -> Scout {
+        let (http, fetch_http) = build_test_clients();
+        let cell = OnceCell::new();
+        cell.set(GitHubClient::with_base_url(http.clone(), github_uri))
+            .ok();
+        Scout {
+            http: http.clone(),
+            fetch_http,
+            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            github: cell,
+        }
+    }
+
+    fn scout_lazy(gemini_uri: &str) -> Scout {
+        let (http, fetch_http) = build_test_clients();
+        Scout {
+            http: http.clone(),
+            fetch_http,
+            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            github: OnceCell::new(),
+        }
+    }
+
+    /// [T-001] repo_overview: get_repo 404 -> readme/issues/pulls/releases
+    /// APIs receive 0 requests.
+    #[tokio::test]
+    async fn t_001_repo_overview_404_skips_remaining_apis() {
+        let Some(server) = try_spawn_mock_server("tools::t_001").await else {
+            return;
+        };
+
+        // get_repo returns 404
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .named("get_repo 404")
+            .mount(&server)
+            .await;
+
+        // All other APIs expect 0 requests
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/nonexistent/readme"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("readme must not be called")
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/owner/nonexistent/issues"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("issues must not be called")
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/owner/nonexistent/pulls"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("pulls must not be called")
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/owner/nonexistent/releases"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .named("releases must not be called")
+            .mount(&server)
+            .await;
+
+        let s = scout_with_github(&server.uri(), &server.uri());
+        let params = RepoOverviewParams {
+            repository: "owner/nonexistent".into(),
+        };
+
+        let result = s.repo_overview(params).await;
+        assert!(result.is_err(), "repo_overview should fail on 404");
+
+        // wiremock verifies expect(0) on server drop
+    }
+
+    /// [T-002] repo_overview: after get_repo succeeds, readme/issues/pulls/
+    /// releases run in parallel.
+    ///
+    /// Proof: a barrier-synchronized TCP server requires all 4 API requests to
+    /// arrive before any response is sent. If requests are sequential, only one
+    /// arrives at a time and the barrier never releases → deadlock → timeout.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn t_002_repo_overview_parallel_after_get_repo() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+
+        // 4 parallel APIs must all arrive before any response is sent.
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(4));
+
+        let server = tokio::spawn(async move {
+            for _ in 0..10 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let b = barrier.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("");
+
+                    let (body, wait) = if path == "/repos/owner/repo" {
+                        (r#"{"full_name":"owner/repo","description":"test","html_url":"https://github.com/owner/repo","default_branch":"main","language":"Rust","stargazers_count":1,"forks_count":0,"open_issues_count":0,"topics":[],"license":null}"#.to_string(), false)
+                    } else if path.contains("/git/blobs/") {
+                        (r#"{"content":""}"#.to_string(), false)
+                    } else if path.contains("/readme") {
+                        (r#"{"sha":"abc123","content":""}"#.to_string(), true)
+                    } else {
+                        ("[]".to_string(), true)
+                    };
+
+                    if wait {
+                        b.wait().await;
+                    }
+
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        let s = scout_with_github(&base_url, &base_url);
+        let params = RepoOverviewParams {
+            repository: "owner/repo".into(),
+        };
+
+        // Parallel: barrier(4) releases instantly → completes in ms.
+        // Sequential: barrier never reaches 4 → deadlock → timeout.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            s.repo_overview(params),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "repo_overview should complete when 4 APIs run in parallel \
+             (barrier-synchronized); sequential execution deadlocks"
+        );
+
+        server.abort();
+    }
+
+    /// [T-003] scout_lazy: github OnceCell is None immediately after
+    /// construction.
+    #[test]
+    fn t_003_scout_lazy_github_initially_none() {
+        let s = scout_lazy("http://localhost:0");
+        assert!(
+            s.github.get().is_none(),
+            "github OnceCell should be uninitialized after scout_lazy()"
+        );
+    }
+
+    /// [T-004] search command does not initialize the GitHub client.
+    #[tokio::test]
+    async fn t_004_search_leaves_github_uninitialized() {
+        let Some(server) = try_spawn_mock_server("tools::t_004").await else {
+            return;
+        };
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "answer"}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": []
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_lazy(&server.uri());
+        let _result = s
+            .search(SearchParams {
+                query: "test".into(),
+                lang: Lang::En,
+            })
+            .await;
+
+        assert!(
+            s.github.get().is_none(),
+            "search should not initialize GitHubClient"
+        );
+    }
+
+    /// [T-005] fetch command does not initialize the GitHub client.
+    #[tokio::test]
+    async fn t_005_fetch_leaves_github_uninitialized() {
+        let Some(server) = try_spawn_mock_server("tools::t_005").await else {
+            return;
+        };
+        // Serve a minimal HTML page for the fetch command to consume.
+        Mock::given(method("GET"))
+            .and(path("/page"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><body>hello</body></html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let s = scout_lazy(&server.uri());
+        let _result = s
+            .fetch(FetchParams {
+                url: format!("{}/page", server.uri()),
+                js: false,
+                raw: false,
+            })
+            .await;
+
+        assert!(
+            s.github.get().is_none(),
+            "fetch should not initialize GitHubClient"
+        );
+    }
+
+    /// [T-006] research command does not initialize the GitHub client.
+    #[tokio::test]
+    async fn t_006_research_leaves_github_uninitialized() {
+        let Some(server) = try_spawn_mock_server("tools::t_006").await else {
+            return;
+        };
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "research result"}],
+                        "role": "model"
+                    },
+                    "groundingMetadata": {
+                        "groundingChunks": [{
+                            "web": {
+                                "uri": "https://example.com",
+                                "title": "Example"
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_lazy(&server.uri());
+        let _result = s
+            .research(ResearchParams {
+                query: "test".into(),
+                depth: 1,
+                lang: Lang::En,
+            })
+            .await;
+
+        assert!(
+            s.github.get().is_none(),
+            "research should not initialize GitHubClient"
+        );
+    }
+
+    /// [T-007] github() called twice returns the same reference
+    /// (OnceCell caching verified via std::ptr::eq).
+    #[tokio::test]
+    async fn t_007_github_returns_same_reference() {
+        // Use pre-set OnceCell to avoid triggering real `gh auth token` subprocess.
+        let s = scout_with_github("http://localhost:0", "http://localhost:0");
+        let first = s.github().await;
+        let second = s.github().await;
+        assert!(
+            std::ptr::eq(first, second),
+            "github() should return the same cached reference on second call"
+        );
+    }
+
+    /// [T-007b] github() initializes an empty OnceCell via from_env and caches
+    /// the result. Exercises the lazy-init code path at mod.rs:80-84.
+    ///
+    /// from_env is infallible: it resolves token from env vars or `gh auth token`
+    /// (with TOKEN_RESOLVE_TIMEOUT = 5s), then returns a client. No timeout
+    /// wrapper — a hang here is a real bug, not a flaky environment.
+    #[tokio::test]
+    async fn t_007b_github_lazy_init_from_empty_cell() {
+        let s = scout_lazy("http://localhost:0");
+        assert!(s.github.get().is_none(), "starts empty");
+
+        let client = s.github().await;
+
+        assert!(
+            s.github.get().is_some(),
+            "OnceCell should be initialized after github() call"
+        );
+        let client2 = s.github().await;
+        assert!(
+            std::ptr::eq(client, client2),
+            "second call returns the same cached reference"
         );
     }
 }
