@@ -350,28 +350,7 @@ impl SlackClient {
             self.prefetch_users(&user_ids),
         );
 
-        let mut resolved = Vec::with_capacity(fetched.messages.len());
-        for msg in &fetched.messages {
-            let author = match &msg.user {
-                Some(uid) => users
-                    .get(uid.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| uid.clone()),
-                None => {
-                    debug!("msg.user is None, falling back to \"(no author)\"");
-                    "(no author)".into()
-                }
-            };
-            let text = substitute_mentions(&msg.text, &users);
-            let ts = match &msg.ts {
-                Some(t) => t.clone(),
-                None => {
-                    warn!("msg.ts is None, falling back to empty string");
-                    String::new()
-                }
-            };
-            resolved.push(ResolvedMessage { author, text, ts });
-        }
+        let resolved = resolve_messages(&fetched.messages, &users);
 
         let (first, resolved) = extract_target(resolved, &slack_url.ts, fetched.is_thread)
             .ok_or_else(|| SlackError::Api {
@@ -423,6 +402,32 @@ fn collect_mention_ids(text: &str, ids: &mut HashSet<String>) {
     for span in parse_mentions(text) {
         ids.insert(span.user_id.to_string());
     }
+}
+
+fn resolve_messages(messages: &[Message], users: &HashMap<String, String>) -> Vec<ResolvedMessage> {
+    let mut resolved = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let author = match &msg.user {
+            Some(uid) => users
+                .get(uid.as_str())
+                .cloned()
+                .unwrap_or_else(|| uid.clone()),
+            None => {
+                debug!("msg.user is None, falling back to \"(no author)\"");
+                "(no author)".into()
+            }
+        };
+        let text = substitute_mentions(&msg.text, users);
+        let ts = match &msg.ts {
+            Some(t) => t.clone(),
+            None => {
+                warn!("msg.ts is None, falling back to empty string");
+                String::new()
+            }
+        };
+        resolved.push(ResolvedMessage { author, text, ts });
+    }
+    resolved
 }
 
 fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
@@ -857,6 +862,70 @@ parent body
 
             let result: Result<DummyBody, _> = client.api_get_once("auth.test", &[]).await;
             assert!(result.is_ok());
+        }
+    }
+
+    mod resolve_messages_tests {
+        use super::*;
+        use tracing_test::traced_test;
+
+        fn make_msg(user: Option<&str>, text: &str, ts: Option<&str>) -> Message {
+            Message {
+                user: user.map(String::from),
+                text: text.into(),
+                ts: ts.map(String::from),
+                reply_count: None,
+            }
+        }
+
+        #[traced_test]
+        #[test]
+        fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
+            let messages = vec![make_msg(None, "hello", Some("1000.000"))];
+            let users = HashMap::new();
+
+            let resolved = resolve_messages(&messages, &users);
+
+            assert_eq!(resolved[0].author, "(no author)");
+            assert!(logs_contain("msg.user is None"));
+            assert!(logs_contain("DEBUG"));
+        }
+
+        #[traced_test]
+        #[test]
+        fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
+            let messages = vec![make_msg(Some("U1"), "hi", None)];
+            let users = HashMap::from([("U1".into(), "Alice".into())]);
+
+            let resolved = resolve_messages(&messages, &users);
+
+            assert_eq!(resolved[0].ts, "");
+            assert!(logs_contain("msg.ts is None"));
+            assert!(logs_contain("WARN"));
+        }
+
+        #[traced_test]
+        #[test]
+        fn t014_mention_resolved_and_user_mapped() {
+            let messages = vec![make_msg(Some("U1"), "cc <@U2>", Some("1000.000"))];
+            let users = HashMap::from([("U1".into(), "Alice".into()), ("U2".into(), "Bob".into())]);
+
+            let resolved = resolve_messages(&messages, &users);
+
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(resolved[0].author, "Alice");
+            assert_eq!(resolved[0].text, "cc @Bob");
+            assert_eq!(resolved[0].ts, "1000.000");
+        }
+
+        #[test]
+        fn t015_unknown_user_id_kept_as_author() {
+            let messages = vec![make_msg(Some("UXXX"), "text", Some("1000.000"))];
+            let users = HashMap::new();
+
+            let resolved = resolve_messages(&messages, &users);
+
+            assert_eq!(resolved[0].author, "UXXX");
         }
     }
 }
