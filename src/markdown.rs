@@ -89,7 +89,10 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_code_block = !in_code_block;
         }
-        if let Some(orig_hashes) = (!in_code_block).then(|| atx_heading_level(trimmed)).flatten() {
+        if let Some(orig_hashes) = (!in_code_block)
+            .then(|| atx_heading_level(trimmed))
+            .flatten()
+        {
             let indent = &line[..line.len() - trimmed.len()];
             let new_level = (orig_hashes + levels).min(6);
             let heading_text = &trimmed[orig_hashes..];
@@ -175,8 +178,7 @@ mod tests {
         let input = "#include <stdio.h>\n# Real heading\n#123 issue ref\n## Also real";
         let result = shift_headings(input, 2);
         assert_eq!(
-            result,
-            "#include <stdio.h>\n### Real heading\n#123 issue ref\n#### Also real",
+            result, "#include <stdio.h>\n### Real heading\n#123 issue ref\n#### Also real",
             "only ATX headings (# + space/EOL) should be shifted"
         );
     }
@@ -186,8 +188,7 @@ mod tests {
         let input = "##### H5\n###### H6\n# H1";
         let result = shift_headings(input, 2);
         assert_eq!(
-            result,
-            "###### H5\n###### H6\n### H1",
+            result, "###### H5\n###### H6\n### H1",
             "shifted headings must clamp at h6 (6 hashes max)"
         );
     }
