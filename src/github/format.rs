@@ -560,7 +560,7 @@ mod tests {
         let repo = sample_repo();
         let cjk_char = '\u{4E16}'; // '世' = 3 bytes
         let char_count = (super::MAX_README_BYTES / 3) + 100;
-        let readme: String = std::iter::repeat(cjk_char).take(char_count).collect();
+        let readme: String = std::iter::repeat_n(cjk_char, char_count).collect();
         assert!(readme.len() > super::MAX_README_BYTES);
 
         let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
