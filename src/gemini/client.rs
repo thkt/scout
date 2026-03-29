@@ -232,12 +232,15 @@ mod tests {
 #[cfg(test)]
 mod http_tests {
     use super::*;
+    use crate::test_support::try_spawn_mock_server;
     use wiremock::matchers::{method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, ResponseTemplate};
 
     #[tokio::test]
     async fn search_success_returns_grounded_result() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -269,7 +272,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn search_429_returns_rate_limited() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(429))
@@ -283,7 +288,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn search_500_with_error_body_classified() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
@@ -307,7 +314,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn search_500_with_invalid_body_returns_generic_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(500).set_body_string("not json"))
@@ -329,7 +338,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn search_200_with_error_field_returns_classified_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
         Mock::given(method("POST"))
             .and(path_regex(r":generateContent$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

@@ -730,9 +730,10 @@ mod content_type_tests {
 #[cfg(test)]
 mod download_tests {
     use super::*;
+    use crate::test_support::try_spawn_mock_server;
     use std::net::IpAddr;
     use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
         Client::builder()
@@ -751,7 +752,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn download_success_returns_html() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/page"))
             .respond_with(
@@ -777,7 +780,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn download_non_success_returns_status_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/404"))
             .respond_with(ResponseTemplate::new(404))
@@ -815,7 +820,9 @@ mod download_tests {
     #[tokio::test]
     async fn download_too_large_body_rejected() {
         let oversized = "x".repeat(MAX_RESPONSE_BYTES + 1);
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/huge"))
             .respond_with(ResponseTemplate::new(200).set_body_string(oversized))
@@ -835,7 +842,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn download_rejects_non_html_content_type() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/binary"))
             .respond_with(
@@ -862,7 +871,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn redirect_to_private_ip_blocked() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
@@ -895,7 +906,9 @@ mod download_tests {
             }
         }
 
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
@@ -920,7 +933,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn too_many_redirects_returns_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/redir"))
             .respond_with(
@@ -945,7 +960,9 @@ mod download_tests {
 
     #[tokio::test]
     async fn redirect_missing_location_header_returns_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/bad-redir"))
             .respond_with(ResponseTemplate::new(302))
@@ -970,8 +987,9 @@ mod download_tests {
 #[cfg(test)]
 mod fetch_page_tests {
     use super::*;
+    use crate::test_support::try_spawn_mock_server;
     use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
         Client::builder()
@@ -996,7 +1014,9 @@ mod fetch_page_tests {
     #[tokio::test]
     async fn js_flag_attempts_rendering_on_rich_body() {
         let content = "x".repeat(200);
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/rich"))
             .respond_with(

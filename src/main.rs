@@ -6,6 +6,8 @@ mod redacted;
 mod retry;
 mod search;
 mod slack;
+#[cfg(test)]
+mod test_support;
 mod tools;
 
 pub const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));

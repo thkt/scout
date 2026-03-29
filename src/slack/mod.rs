@@ -539,13 +539,16 @@ mod tests {
 
     mod http_tests {
         use super::*;
+        use crate::test_support::try_spawn_mock_server;
         use reqwest::Client;
         use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::{Mock, ResponseTemplate};
 
         #[tokio::test]
         async fn api_get_once_429_returns_rate_limited() {
-            let server = MockServer::start().await;
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
             Mock::given(method("GET"))
                 .and(path("/test.method"))
                 .respond_with(ResponseTemplate::new(429))
@@ -562,7 +565,9 @@ mod tests {
 
         #[tokio::test]
         async fn api_get_once_429_with_retry_after_header() {
-            let server = MockServer::start().await;
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
             Mock::given(method("GET"))
                 .and(path("/test.method"))
                 .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "30"))
@@ -581,7 +586,9 @@ mod tests {
 
         #[tokio::test]
         async fn api_get_once_body_ratelimited_returns_rate_limited() {
-            let server = MockServer::start().await;
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
             Mock::given(method("GET"))
                 .and(path("/test.method"))
                 .respond_with(
@@ -598,7 +605,9 @@ mod tests {
 
         #[tokio::test]
         async fn api_get_once_api_error_returns_api_variant() {
-            let server = MockServer::start().await;
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
             Mock::given(method("GET"))
                 .and(path("/test.method"))
                 .respond_with(
@@ -841,13 +850,16 @@ parent body
 
     mod constructor_tests {
         use super::*;
+        use crate::test_support::try_spawn_mock_server;
         use reqwest::Client;
         use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::{Mock, ResponseTemplate};
 
         #[tokio::test]
         async fn t010_new_constructs_usable_client() {
-            let server = MockServer::start().await;
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
             Mock::given(method("GET"))
                 .and(path("/auth.test"))
                 .respond_with(

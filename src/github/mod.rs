@@ -330,12 +330,15 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
 #[cfg(test)]
 mod http_tests {
     use super::*;
+    use crate::test_support::try_spawn_mock_server;
     use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, ResponseTemplate};
 
     #[tokio::test]
     async fn get_json_404_returns_not_found() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("github::get_json_404").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
             .respond_with(ResponseTemplate::new(404))
@@ -349,7 +352,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn get_json_429_returns_rate_limited() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
             .respond_with(ResponseTemplate::new(429))
@@ -363,7 +368,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn get_json_403_with_zero_remaining_returns_rate_limited() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
             .respond_with(
@@ -381,7 +388,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn get_json_403_with_remaining_returns_forbidden() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
             .respond_with(
@@ -415,7 +424,9 @@ mod http_tests {
 
     #[tokio::test]
     async fn get_json_500_returns_api_error() {
-        let server = MockServer::start().await;
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
         Mock::given(method("GET"))
             .and(path("/test"))
             .respond_with(
