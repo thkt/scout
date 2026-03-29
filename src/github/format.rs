@@ -3,7 +3,7 @@ use std::fmt::Write;
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
 use crate::markdown::{escape_md_inline, escape_md_link, shift_headings};
 
-const MAX_README_LINES: usize = 200;
+const MAX_README_BYTES: usize = 24_000;
 
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
@@ -90,11 +90,20 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
-    let lines: Vec<_> = content.lines().collect();
-    if lines.len() > MAX_README_LINES {
-        let truncated = lines[..MAX_README_LINES].join("\n");
-        out.push_str(&shift_headings(&truncated, 2));
-        let _ = write!(out, "\n\n... (truncated, {} lines total)", lines.len());
+    if content.len() > MAX_README_BYTES {
+        // Not reusing truncate_with_note because shift_headings must run
+        // between truncation and note addition.
+        let boundary = content.floor_char_boundary(MAX_README_BYTES);
+        let end = content[..boundary]
+            .rfind('\n')
+            .map(|p| p + 1)
+            .unwrap_or(boundary);
+        out.push_str(&shift_headings(&content[..end], 2));
+        let _ = write!(
+            out,
+            "\n\n(truncated: showing {end} / {} bytes)",
+            content.len()
+        );
     } else {
         out.push_str(&shift_headings(content, 2));
     }
@@ -297,13 +306,13 @@ mod tests {
     #[test]
     fn format_overview_truncates_long_readme() {
         let repo = sample_repo();
-        let long_readme = (0..250)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let total = MAX_README_BYTES + 1_000;
+        let long_readme = make_readme_bytes(total);
         let output = format_overview(&repo, Some(&long_readme), &[], &[], &[]);
         assert!(output.contains("## README"));
-        assert!(output.contains("truncated, 250 lines total"));
+        let shown_bytes = parse_shown_bytes(&output);
+        assert!(shown_bytes > 0 && shown_bytes <= MAX_README_BYTES);
+        assert!(output.contains(&format!("/ {total} bytes)")));
     }
 
     #[test]
@@ -403,17 +412,15 @@ mod tests {
     #[test]
     fn format_overview_shifts_headings_in_truncated_readme() {
         let repo = sample_repo();
-        let mut lines: Vec<String> = vec!["# Title".into()];
-        for i in 0..250 {
-            lines.push(format!("line {i}"));
-        }
-        let readme = lines.join("\n");
+        let heading = "# Title\n";
+        let padding = make_readme_bytes(MAX_README_BYTES + 500 - heading.len());
+        let readme = format!("{heading}{padding}");
         let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
         assert!(
             output.contains("### Title"),
             "h1 should shift to h3 even when truncated"
         );
-        assert!(output.contains("truncated, 251 lines total"));
+        assert!(output.contains("(truncated: showing"));
     }
 
     #[test]
@@ -471,5 +478,125 @@ mod tests {
         }];
         let output = format_overview(&repo, None, &[], &pulls, &[]);
         assert!(!output.contains("[link](http://evil)"));
+    }
+
+    fn make_readme_bytes(n: usize) -> String {
+        let mut buf = "x\n".repeat(n);
+        buf.truncate(n);
+        buf
+    }
+
+    fn parse_shown_bytes(output: &str) -> usize {
+        let prefix = "(truncated: showing ";
+        let pos = output.find(prefix).expect("should have truncation note");
+        output[pos + prefix.len()..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .expect("shown bytes should be a number")
+    }
+
+    #[test]
+    fn readme_no_truncation_under_limit() {
+        let repo = sample_repo();
+        let readme = make_readme_bytes(super::MAX_README_BYTES - 100);
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("## README"));
+        assert!(!output.contains("truncated"));
+    }
+
+    #[test]
+    fn readme_no_truncation_at_exact_limit() {
+        let repo = sample_repo();
+        let readme = make_readme_bytes(super::MAX_README_BYTES);
+        assert_eq!(readme.len(), super::MAX_README_BYTES);
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(!output.contains("truncated"));
+    }
+
+    #[test]
+    fn readme_truncation_snaps_to_last_newline() {
+        let repo = sample_repo();
+        let short_line = "short\n";
+        let repeat_count = (super::MAX_README_BYTES - 200) / short_line.len();
+        let prefix: String = short_line.repeat(repeat_count);
+        let filler_len = super::MAX_README_BYTES + 500 - prefix.len();
+        let filler: String = "X".repeat(filler_len);
+        let readme = format!("{prefix}{filler}");
+        assert!(readme.len() > super::MAX_README_BYTES);
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("truncated"));
+
+        let shown_bytes = parse_shown_bytes(&output);
+        assert!(
+            shown_bytes <= super::MAX_README_BYTES,
+            "shown bytes ({shown_bytes}) should be <= MAX_README_BYTES"
+        );
+        assert_eq!(
+            shown_bytes,
+            prefix.len(),
+            "should snap to last newline position"
+        );
+    }
+
+    #[test]
+    fn readme_truncation_no_newline_no_panic() {
+        let repo = sample_repo();
+        let total = super::MAX_README_BYTES + 500;
+        let readme = "A".repeat(total);
+        assert!(!readme.contains('\n'));
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("truncated"));
+        assert!(output.contains(&format!("/ {total} bytes)")));
+    }
+
+    #[test]
+    fn readme_truncation_multibyte_no_mid_char_cut() {
+        let repo = sample_repo();
+        let cjk_char = '\u{4E16}'; // '世' = 3 bytes
+        let char_count = (super::MAX_README_BYTES / 3) + 100;
+        let readme: String = std::iter::repeat(cjk_char).take(char_count).collect();
+        assert!(readme.len() > super::MAX_README_BYTES);
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("truncated"));
+        let shown_bytes = parse_shown_bytes(&output);
+        assert_eq!(shown_bytes % 3, 0, "must land on a char boundary");
+    }
+
+    #[test]
+    fn readme_truncation_multibyte_with_newlines() {
+        // TC-003 fix: exercises both floor_char_boundary AND rfind('\n') on CJK
+        let repo = sample_repo();
+        let line = "\u{4E16}\u{754C}\u{3053}\n"; // "世界こ\n" = 10 bytes
+        let repeat_count = (super::MAX_README_BYTES / line.len()) + 50;
+        let readme: String = line.repeat(repeat_count);
+        assert!(readme.len() > super::MAX_README_BYTES);
+
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("truncated"));
+        let shown_bytes = parse_shown_bytes(&output);
+        assert!(shown_bytes <= super::MAX_README_BYTES);
+        assert_eq!(
+            shown_bytes % line.len(),
+            0,
+            "should snap to last newline on char boundary"
+        );
+    }
+
+    #[test]
+    fn readme_truncation_note_not_heading_shifted() {
+        // TC-004 fix: ordering invariant — note appended after shift_headings
+        let repo = sample_repo();
+        let readme = format!("# Title\n{}", "x\n".repeat(super::MAX_README_BYTES));
+        let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+        assert!(output.contains("(truncated: showing"));
+        assert!(!output.contains("### (truncated"));
+        assert!(!output.contains("## (truncated"));
     }
 }
