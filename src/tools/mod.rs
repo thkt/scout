@@ -250,15 +250,18 @@ impl Scout {
             .await?;
 
         let hint = params.encoding.as_deref();
-        let decode_result = if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
-            github::decode_content(encoded, hint)?
-        } else {
-            let blob = github.get_blob(owner, repo, &contents.sha).await?;
-            github::decode_content(&blob.content, hint)?
-        };
+        let decode_result =
+            if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
+                github::decode_content(encoded, hint)?
+            } else {
+                let blob = github.get_blob(owner, repo, &contents.sha).await?;
+                github::decode_content(&blob.content, hint)?
+            };
         let encoding_label = match decode_result.source {
             github::encoding::DetectionSource::AssumedUtf8 => None,
-            github::encoding::DetectionSource::Detected if decode_result.encoding == "utf-8" => None,
+            github::encoding::DetectionSource::Detected if decode_result.encoding == "utf-8" => {
+                None
+            }
             _ => Some(decode_result.encoding.clone()),
         };
         let raw = decode_result.text;
@@ -271,7 +274,12 @@ impl Scout {
             github::apply_line_range(&raw, 1, None)
         };
 
-        let output = github::format::format_file_content(&params.path, total, &content, encoding_label.as_deref());
+        let output = github::format::format_file_content(
+            &params.path,
+            total,
+            &content,
+            encoding_label.as_deref(),
+        );
 
         info!(path = %params.path, lines = total, "repo_read complete");
         Ok(output)

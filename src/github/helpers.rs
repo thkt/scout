@@ -320,11 +320,15 @@ mod tests {
     #[test]
     fn decode_content_handles_base64() {
         assert_eq!(
-            decode_content(&STANDARD.encode("hello world"), None).unwrap().text,
+            decode_content(&STANDARD.encode("hello world"), None)
+                .unwrap()
+                .text,
             "hello world"
         );
         assert_eq!(
-            decode_content("aGVs\nbG8g\nd29y\nbGQ=\n", None).unwrap().text,
+            decode_content("aGVs\nbG8g\nd29y\nbGQ=\n", None)
+                .unwrap()
+                .text,
             "hello world"
         );
     }

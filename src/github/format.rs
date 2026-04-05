@@ -804,7 +804,10 @@ mod tests {
             output.starts_with("file.txt (1 lines)\n\n"),
             "header should omit encoding when None, got:\n{output}"
         );
-        assert!(!output.contains("[encoding"), "should not contain encoding label");
+        assert!(
+            !output.contains("[encoding"),
+            "should not contain encoding label"
+        );
     }
 
     #[test]
