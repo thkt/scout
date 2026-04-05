@@ -19,13 +19,13 @@ fn format_size(bytes: u64) -> String {
 /// run found in `content`.
 fn fence_delimiter(content: &str) -> String {
     let max_run = content
-        .chars()
-        .fold((0usize, 0usize), |(max, cur), c| {
-            if c == '`' {
-                let next = cur + 1;
-                (max.max(next), next)
+        .bytes()
+        .fold((0usize, 0usize), |(longest, run), b| {
+            if b == b'`' {
+                let next = run + 1;
+                (longest.max(next), next)
             } else {
-                (max, 0)
+                (longest, 0)
             }
         })
         .0;
@@ -34,7 +34,7 @@ fn fence_delimiter(content: &str) -> String {
 
 /// Infer a Markdown language identifier from a file path's extension.
 fn lang_for_path(path: &str) -> &'static str {
-    let ext = path.rsplit('.').next().unwrap_or("");
+    let ext = path.rsplit_once('.').map_or("", |(_, e)| e);
     match ext {
         "rs" => "rust",
         "ts" => "typescript",
