@@ -60,7 +60,7 @@ pub(crate) fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<
 /// When retry_after exceeds the cap the delay would be truncated, meaning
 /// we would sleep, retry, and still hit the limit — fail fast instead.
 pub(crate) fn retry_after_within_cap(retry_after: Option<u64>) -> bool {
-    retry_after.map_or(true, |s| s <= MAX_RETRY_AFTER_SECS)
+    retry_after.is_none_or(|s| s <= MAX_RETRY_AFTER_SECS)
 }
 
 pub(crate) fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32) -> Duration {
