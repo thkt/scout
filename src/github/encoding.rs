@@ -108,8 +108,7 @@ fn is_reliable_detection(encoding: &'static encoding_rs::Encoding) -> bool {
         encoding_rs::GB18030,
         encoding_rs::EUC_KR,
     ]
-    .iter()
-    .any(|&e| e == encoding)
+    .contains(&encoding)
 }
 
 fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
