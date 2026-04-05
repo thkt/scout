@@ -1024,4 +1024,66 @@ mod tests {
             "header should include encoding label, got: {result}"
         );
     }
+
+    /// [T-009] repo_tree: --path filter is wired through RepoTreeParams to
+    /// filter_tree_entries; files outside the prefix are excluded from output.
+    #[tokio::test]
+    async fn t_009_repo_tree_path_filter_excludes_non_matching_files() {
+        let Some(server) = try_spawn_mock_server("tools::t_009").await else {
+            return;
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "full_name": "owner/repo",
+                "description": null,
+                "html_url": "https://github.com/owner/repo",
+                "default_branch": "main",
+                "language": null,
+                "stargazers_count": 0,
+                "forks_count": 0,
+                "open_issues_count": 0,
+                "topics": null,
+                "license": null
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/git/trees/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "tree": [
+                    {"path": "src/main.rs", "type": "blob", "size": 100},
+                    {"path": "src/lib.rs", "type": "blob", "size": 200},
+                    {"path": "README.md", "type": "blob", "size": 50},
+                    {"path": "Cargo.toml", "type": "blob", "size": 80},
+                ],
+                "truncated": false
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_github("http://localhost:0", &server.uri());
+        let params = RepoTreeParams {
+            repository: "owner/repo".into(),
+            ref_: None,
+            path: Some("src/".into()),
+            pattern: None,
+        };
+
+        let result = s.repo_tree(params).await.unwrap();
+        assert!(
+            result.contains("src/main.rs"),
+            "path filter should include src/main.rs, got:\n{result}"
+        );
+        assert!(
+            !result.contains("README.md"),
+            "path filter should exclude README.md, got:\n{result}"
+        );
+        assert!(
+            !result.contains("Cargo.toml"),
+            "path filter should exclude Cargo.toml, got:\n{result}"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-pub use crate::search::Lang;
+use crate::search::Lang;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -135,4 +135,80 @@ Environment:
 pub struct RepoOverviewParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
     pub repository: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Args;
+
+    fn help_text<A: Args + Send + Sync + 'static>() -> String {
+        A::augment_args(clap::Command::new("test"))
+            .render_help()
+            .to_string()
+    }
+
+    fn assert_help_sections<A: Args + Send + Sync + 'static>(expected_env: Option<&str>) {
+        let help = help_text::<A>();
+        assert!(help.contains("Examples:"), "help missing Examples:");
+        if let Some(env_key) = expected_env {
+            assert!(help.contains(env_key), "help missing {env_key}");
+        }
+    }
+
+    /// [T-H001] search --help contains Examples: and Environment: sections
+    #[test]
+    fn t_h001_search_help_contains_examples_and_environment() {
+        assert_help_sections::<super::SearchParams>(Some("GEMINI_API_KEY"));
+    }
+
+    /// [T-H002] fetch --help contains Examples: section
+    #[test]
+    fn t_h002_fetch_help_contains_examples() {
+        assert_help_sections::<super::FetchParams>(None);
+    }
+
+    /// [T-H003] research --help contains Examples: and Environment: sections
+    #[test]
+    fn t_h003_research_help_contains_examples_and_environment() {
+        assert_help_sections::<super::ResearchParams>(Some("GEMINI_API_KEY"));
+    }
+
+    /// [T-H004] repo-tree --help contains Examples: and Environment: sections
+    #[test]
+    fn t_h004_repo_tree_help_contains_examples_and_environment() {
+        assert_help_sections::<super::RepoTreeParams>(Some("GITHUB_TOKEN"));
+    }
+
+    /// [T-H005] repo-read --help contains Examples: and Environment: sections
+    #[test]
+    fn t_h005_repo_read_help_contains_examples_and_environment() {
+        assert_help_sections::<super::RepoReadParams>(Some("GITHUB_TOKEN"));
+    }
+
+    /// [T-H006] repo-overview --help contains Examples: and Environment: sections
+    #[test]
+    fn t_h006_repo_overview_help_contains_examples_and_environment() {
+        assert_help_sections::<super::RepoOverviewParams>(Some("GITHUB_TOKEN"));
+    }
+
+    /// [T-P001] research --depth accepts valid range 1..=10 and rejects out-of-range
+    #[test]
+    fn t_p001_research_depth_valid_range() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: super::Command,
+        }
+
+        for val in ["1", "3", "10"] {
+            let result = Cli::try_parse_from(["scout", "research", "test query", "--depth", val]);
+            assert!(result.is_ok(), "depth={val} should be accepted");
+        }
+        for val in ["0", "11", "255"] {
+            let result = Cli::try_parse_from(["scout", "research", "test query", "--depth", val]);
+            assert!(result.is_err(), "depth={val} should be rejected");
+        }
+    }
 }
