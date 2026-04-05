@@ -4,15 +4,18 @@ mod params;
 pub use errors::ScoutError;
 pub use params::Command;
 
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use reqwest::Client;
+use tokio::io::AsyncReadExt;
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
 
 use errors::{parse_repo_param, unwrap_or_note};
 use params::{
     FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
+    resolve_input,
 };
 
 use crate::fetch::{FetchOptions, TokioDnsResolver};
@@ -21,13 +24,87 @@ use crate::github::{self, GitHubClient};
 use crate::markdown::{escape_md_inline, escape_md_link, shift_headings, truncate_with_note};
 use crate::search::engine;
 
-impl From<&FetchParams> for FetchOptions {
-    fn from(p: &FetchParams) -> Self {
+const MAX_STDIN_BYTES: u64 = 1_048_576;
+
+async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
+    if !needs_stdin {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    tokio::io::stdin()
+        .take(MAX_STDIN_BYTES)
+        .read_to_string(&mut buf)
+        .await
+        .map_err(|e| ScoutError::user_error(format!("Failed to read stdin: {e}")))?;
+    let trimmed = buf.trim();
+    Ok(if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    })
+}
+
+/// Resolves CLI positional args with stdin fallback.
+/// Stdin is read once; the first arg that needs it consumes it.
+struct StdinResolver {
+    is_terminal: bool,
+    /// `None` = not piped, empty, or already consumed — check `stdin_consumed` to distinguish.
+    content: Option<String>,
+    /// `true` after any `resolve()` consumed stdin content; `content: None` alone cannot express this.
+    stdin_consumed: bool,
+}
+
+impl StdinResolver {
+    fn resolve(
+        &mut self,
+        value: Option<String>,
+        label: &str,
+        placeholder: &str,
+    ) -> Result<String, ScoutError> {
+        let needs_stdin = value.is_none() || value.as_deref() == Some("-");
+        if needs_stdin && self.stdin_consumed {
+            let msg = if value.as_deref() == Some("-") {
+                format!("stdin already read — cannot use `-` for {label}")
+            } else {
+                format!(
+                    "No {label} provided. Pass {placeholder} as an argument (stdin was already read by the previous argument)"
+                )
+            };
+            return Err(ScoutError::user_error(msg));
+        }
+        let result = resolve_input(
+            value,
+            self.content.as_deref(),
+            self.is_terminal,
+            label,
+            placeholder,
+        )?;
+        if needs_stdin {
+            self.content = None;
+            self.stdin_consumed = true;
+        }
+        Ok(result)
+    }
+
+    #[cfg(test)]
+    fn with_content(is_terminal: bool, content: Option<String>) -> Self {
         Self {
-            js: p.js,
-            raw: p.raw,
+            is_terminal,
+            content,
+            stdin_consumed: false,
         }
     }
+}
+
+async fn resolve_stdin_arg(
+    value: Option<String>,
+    label: &str,
+    placeholder: &str,
+) -> Result<String, ScoutError> {
+    let is_terminal = std::io::stdin().is_terminal();
+    let content =
+        read_stdin((value.is_none() && !is_terminal) || value.as_deref() == Some("-")).await?;
+    resolve_input(value, content.as_deref(), is_terminal, label, placeholder)
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -101,10 +178,12 @@ impl Scout {
     }
 
     async fn search(&self, params: SearchParams) -> Result<String, ScoutError> {
-        info!(query = %params.query, "search");
+        let query = resolve_stdin_arg(params.query, "query", "<QUERY>").await?;
+
+        info!(query = %query, "search");
 
         let gemini = self.gemini()?;
-        let search_query = params.lang.apply_to_query(&params.query);
+        let search_query = params.lang.apply_to_query(&query);
         let result = gemini.search(&search_query).await?;
 
         // Shift by 2, consistent with fetch standalone output.
@@ -132,16 +211,21 @@ impl Scout {
     }
 
     async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
-        if let Some(slack_url) = crate::slack::parse_slack_url(&params.url) {
+        let url = resolve_stdin_arg(params.url, "url", "<URL>").await?;
+
+        if let Some(slack_url) = crate::slack::parse_slack_url(&url) {
             return self.fetch_slack(slack_url).await;
         }
 
-        info!(url = %params.url, js = params.js, raw = params.raw, "fetch");
+        info!(url = %url, js = params.js, raw = params.raw, "fetch");
 
-        let opts = FetchOptions::from(&params);
+        let opts = FetchOptions {
+            js: params.js,
+            raw: params.raw,
+        };
         let result = tokio::time::timeout(
             FETCH_TOOL_TIMEOUT,
-            crate::fetch::fetch_page(&self.fetch_http, &params.url, opts, &TokioDnsResolver),
+            crate::fetch::fetch_page(&self.fetch_http, &url, opts, &TokioDnsResolver),
         )
         .await
         .unwrap_or_else(|_| {
@@ -152,9 +236,10 @@ impl Scout {
         })?;
 
         if result.used_raw_fallback {
-            warn!(url = %params.url, "readability extraction failed, using raw fallback");
+            warn!(url = %url, "readability extraction failed, using raw fallback");
         }
 
+        info!(url = %url, "fetch complete");
         Ok(format_fetch_output(&result))
     }
 
@@ -175,16 +260,19 @@ impl Scout {
         .inspect_err(|e| {
             warn!(workspace = %slack_url.workspace, channel = %slack_url.channel, error = %e, "slack fetch failed");
         })?;
+        info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack) complete");
         Ok(truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned())
     }
 
     async fn research(&self, params: ResearchParams) -> Result<String, ScoutError> {
-        info!(query = %params.query, depth = params.depth, "research");
+        let query = resolve_stdin_arg(params.query, "query", "<QUERY>").await?;
+
+        info!(query = %query, depth = params.depth, "research");
 
         let gemini = self.gemini()?;
 
         let req = engine::ResearchRequest {
-            query: &params.query,
+            query: &query,
             depth: params.depth,
             lang: params.lang,
         };
@@ -197,13 +285,15 @@ impl Scout {
             "research complete"
         );
 
-        Ok(engine::format_report(&report, &params.query))
+        Ok(engine::format_report(&report, &query))
     }
 
     async fn repo_tree(&self, params: RepoTreeParams) -> Result<String, ScoutError> {
-        let (owner, repo) = parse_repo_param(&params.repository)?;
+        let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        info!(repository = %params.repository, "repo_tree");
+        let (owner, repo) = parse_repo_param(&repository)?;
+
+        info!(repository = %repository, "repo_tree");
 
         let github = self.github().await;
 
@@ -234,11 +324,26 @@ impl Scout {
     }
 
     async fn repo_read(&self, params: RepoReadParams) -> Result<String, ScoutError> {
-        let (owner, repo) = parse_repo_param(&params.repository)?;
+        let is_terminal = std::io::stdin().is_terminal();
+        let content = read_stdin(
+            params.repository.as_deref() == Some("-")
+                || params.path.as_deref() == Some("-")
+                || (!is_terminal && (params.repository.is_none() || params.path.is_none())),
+        )
+        .await?;
+        let mut resolver = StdinResolver {
+            is_terminal,
+            content,
+            stdin_consumed: false,
+        };
+        let repository = resolver.resolve(params.repository, "repository", "<OWNER/REPO>")?;
+        let path = resolver.resolve(params.path, "path", "<FILE_PATH>")?;
 
-        info!(repository = %params.repository, path = %params.path, "repo_read");
+        let (owner, repo) = parse_repo_param(&repository)?;
 
-        github::validate_path(&params.path)?;
+        info!(repository = %repository, path = %path, "repo_read");
+
+        github::validate_path(&path)?;
         if let Some(ref r) = params.ref_ {
             github::validate_ref(r)?;
         }
@@ -246,7 +351,7 @@ impl Scout {
         let github = self.github().await;
 
         let contents = github
-            .get_contents(owner, repo, &params.path, params.ref_.as_deref())
+            .get_contents(owner, repo, &path, params.ref_.as_deref())
             .await?;
 
         let hint = params.encoding.as_deref();
@@ -274,21 +379,19 @@ impl Scout {
             github::apply_line_range(&raw, 1, None)
         };
 
-        let output = github::format::format_file_content(
-            &params.path,
-            total,
-            &content,
-            encoding_label.as_deref(),
-        );
+        let output =
+            github::format::format_file_content(&path, total, &content, encoding_label.as_deref());
 
-        info!(path = %params.path, lines = total, "repo_read complete");
+        info!(path = %path, lines = total, "repo_read complete");
         Ok(output)
     }
 
     async fn repo_overview(&self, params: RepoOverviewParams) -> Result<String, ScoutError> {
-        let (owner, repo) = parse_repo_param(&params.repository)?;
+        let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        info!(repository = %params.repository, "repo_overview");
+        let (owner, repo) = parse_repo_param(&repository)?;
+
+        info!(repository = %repository, "repo_overview");
 
         let github = self.github().await;
 
@@ -303,39 +406,7 @@ impl Scout {
         );
 
         let mut notes = Vec::new();
-
-        let readme_entry = match readme {
-            Ok(r) => Some(r),
-            Err(e) => {
-                if !matches!(e, github::GitHubError::NotFound(_)) {
-                    warn!(%e, "failed to fetch README");
-                    notes.push(format!("Could not fetch README ({e})"));
-                }
-                None
-            }
-        };
-
-        let readme_encoded = match readme_entry {
-            None => None,
-            Some(r) if r.content.as_ref().is_some_and(|c| !c.is_empty()) => r.content,
-            Some(r) => match github.get_blob(owner, repo, &r.sha).await {
-                Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
-                Err(e) => {
-                    warn!(%e, "failed to fetch README blob");
-                    notes.push(format!("README could not be fetched ({e})"));
-                    None
-                }
-            },
-        };
-
-        let readme_content = readme_encoded.and_then(|c| match github::decode_content(&c, None) {
-            Ok(result) => Some(result.text),
-            Err(e) => {
-                warn!(%e, "failed to decode README");
-                notes.push(format!("README could not be decoded ({e})"));
-                None
-            }
-        });
+        let readme_content = resolve_readme(github, owner, repo, readme, &mut notes).await;
         let issues = unwrap_or_note(issues, "issues", &mut notes);
         let pulls = unwrap_or_note(pulls, "pull requests", &mut notes);
         let releases = unwrap_or_note(releases, "releases", &mut notes);
@@ -363,6 +434,47 @@ impl Scout {
         );
         Ok(output)
     }
+}
+
+async fn resolve_readme(
+    github: &GitHubClient,
+    owner: &str,
+    repo: &str,
+    readme: Result<crate::github::types::ContentsResponse, github::GitHubError>,
+    notes: &mut Vec<String>,
+) -> Option<String> {
+    let entry = match readme {
+        Ok(r) => Some(r),
+        Err(e) => {
+            if !matches!(e, github::GitHubError::NotFound(_)) {
+                warn!(%e, "failed to fetch README");
+                notes.push(format!("Could not fetch README ({e})"));
+            }
+            None
+        }
+    };
+
+    let encoded = match entry {
+        None => None,
+        Some(r) if r.content.as_ref().is_some_and(|c| !c.is_empty()) => r.content,
+        Some(r) => match github.get_blob(owner, repo, &r.sha).await {
+            Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
+            Err(e) => {
+                warn!(%e, "failed to fetch README blob");
+                notes.push(format!("README could not be fetched ({e})"));
+                None
+            }
+        },
+    };
+
+    encoded.and_then(|c| match github::decode_content(&c, None) {
+        Ok(result) => Some(result.text),
+        Err(e) => {
+            warn!(%e, "failed to decode README");
+            notes.push(format!("README could not be decoded ({e})"));
+            None
+        }
+    })
 }
 
 fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String {
@@ -432,7 +544,7 @@ mod tests {
 
         let s = scout_with_gemini(&server.uri());
         let params = SearchParams {
-            query: "What is Rust?".into(),
+            query: Some("What is Rust?".into()),
             lang: Lang::Auto,
         };
 
@@ -476,7 +588,7 @@ mod tests {
 
         let s = scout_with_gemini(&server.uri());
         let params = ResearchParams {
-            query: "What is Rust?".into(),
+            query: Some("What is Rust?".into()),
             depth: 1,
             lang: Lang::Auto,
         };
@@ -545,7 +657,7 @@ mod tests {
 
         let s = scout_with_gemini(&server.uri());
         let params = SearchParams {
-            query: "test".into(),
+            query: Some("test".into()),
             lang: Lang::En,
         };
 
@@ -580,7 +692,7 @@ mod tests {
 
         let s = scout_with_gemini(&server.uri());
         let params = SearchParams {
-            query: "test".into(),
+            query: Some("test".into()),
             lang: Lang::En,
         };
 
@@ -620,7 +732,7 @@ mod tests {
 
         let s = scout_with_gemini(&server.uri());
         let params = SearchParams {
-            query: "test".into(),
+            query: Some("test".into()),
             lang: Lang::En,
         };
 
@@ -735,7 +847,7 @@ mod tests {
 
         let s = scout_with_github(&server.uri(), &server.uri());
         let params = RepoOverviewParams {
-            repository: "owner/nonexistent".into(),
+            repository: Some("owner/nonexistent".into()),
         };
 
         let result = s.repo_overview(params).await;
@@ -807,7 +919,7 @@ mod tests {
 
         let s = scout_with_github(&base_url, &base_url);
         let params = RepoOverviewParams {
-            repository: "owner/repo".into(),
+            repository: Some("owner/repo".into()),
         };
 
         // Parallel: barrier(4) releases instantly → completes in ms.
@@ -860,7 +972,7 @@ mod tests {
         let s = scout_lazy(&server.uri());
         let _result = s
             .search(SearchParams {
-                query: "test".into(),
+                query: Some("test".into()),
                 lang: Lang::En,
             })
             .await;
@@ -891,7 +1003,7 @@ mod tests {
         let s = scout_lazy(&server.uri());
         let _result = s
             .fetch(FetchParams {
-                url: format!("{}/page", server.uri()),
+                url: Some(format!("{}/page", server.uri())),
                 js: false,
                 raw: false,
             })
@@ -933,7 +1045,7 @@ mod tests {
         let s = scout_lazy(&server.uri());
         let _result = s
             .research(ResearchParams {
-                query: "test".into(),
+                query: Some("test".into()),
                 depth: 1,
                 lang: Lang::En,
             })
@@ -1007,8 +1119,8 @@ mod tests {
 
         let s = scout_with_github("http://localhost:0", &server.uri());
         let params = RepoReadParams {
-            repository: "owner/repo".into(),
-            path: "test.txt".into(),
+            repository: Some("owner/repo".into()),
+            path: Some("test.txt".into()),
             ref_: None,
             lines: None,
             encoding: Some("shift_jis".into()),
@@ -1066,7 +1178,7 @@ mod tests {
 
         let s = scout_with_github("http://localhost:0", &server.uri());
         let params = RepoTreeParams {
-            repository: "owner/repo".into(),
+            repository: Some("owner/repo".into()),
             ref_: None,
             path: Some("src/".into()),
             pattern: None,
@@ -1085,5 +1197,74 @@ mod tests {
             !result.contains("Cargo.toml"),
             "path filter should exclude Cargo.toml, got:\n{result}"
         );
+    }
+
+    /// [T-R001] StdinResolver: first arg consumes stdin, second uses its own value
+    #[test]
+    fn t_r001_stdin_resolver_first_consumes_second_uses_arg() {
+        let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
+        let first = r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
+        assert_eq!(first, "from_stdin");
+        let second = r
+            .resolve(Some("test.txt".into()), "path", "<FILE_PATH>")
+            .unwrap();
+        assert_eq!(second, "test.txt");
+    }
+
+    /// [T-R002] StdinResolver: arg wins over stdin, stdin preserved for next resolve
+    #[test]
+    fn t_r002_stdin_resolver_arg_wins_stdin_preserved() {
+        let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
+        let first = r
+            .resolve(Some("owner/repo".into()), "repository", "<OWNER/REPO>")
+            .unwrap();
+        assert_eq!(first, "owner/repo");
+        let second = r.resolve(None, "path", "<FILE_PATH>").unwrap();
+        assert_eq!(second, "from_stdin");
+    }
+
+    /// [T-R003] StdinResolver: second arg fails when stdin already consumed
+    #[test]
+    fn t_r003_stdin_resolver_consumed_stdin_fails_second() {
+        let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
+        r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
+        let result = r.resolve(None, "path", "<FILE_PATH>");
+        assert!(
+            result.is_err(),
+            "second positional should fail when stdin consumed"
+        );
+    }
+
+    /// [T-R005] StdinResolver: error message hints stdin was consumed, not missing
+    #[test]
+    fn t_r005_stdin_resolver_consumed_error_hints_stdin_exhausted() {
+        let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
+        r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
+        let err = r
+            .resolve(None, "path", "<FILE_PATH>")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("stdin was already read"),
+            "error should hint stdin was consumed, got: {err}"
+        );
+        assert!(
+            !err.contains("pipe it via stdin"),
+            "error should not suggest piping when stdin is exhausted, got: {err}"
+        );
+    }
+
+    /// [T-R004] StdinResolver: both args provided, stdin unused
+    #[test]
+    fn t_r004_stdin_resolver_both_args_stdin_unused() {
+        let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
+        let first = r
+            .resolve(Some("owner/repo".into()), "repository", "<OWNER/REPO>")
+            .unwrap();
+        let second = r
+            .resolve(Some("test.txt".into()), "path", "<FILE_PATH>")
+            .unwrap();
+        assert_eq!(first, "owner/repo");
+        assert_eq!(second, "test.txt");
     }
 }

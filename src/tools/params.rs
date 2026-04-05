@@ -2,6 +2,32 @@ use clap::{Args, Subcommand};
 
 use crate::search::Lang;
 
+use super::errors::ScoutError;
+
+/// Resolve a CLI positional with stdin fallback.
+pub(super) fn resolve_input(
+    value: Option<String>,
+    stdin: Option<&str>,
+    stdin_is_terminal: bool,
+    label: &str,
+    placeholder: &str,
+) -> Result<String, ScoutError> {
+    match value {
+        Some(v) if v != "-" => Ok(v),
+        None if stdin_is_terminal => Err(ScoutError::user_error(format!(
+            "Missing {label}. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
+        ))),
+        _ => stdin
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .ok_or_else(|| {
+                ScoutError::user_error(format!(
+                    "No {label} provided. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
+                ))
+            }),
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Search the web using Gemini Grounding with Google Search
@@ -23,12 +49,14 @@ pub enum Command {
 Examples:
   scout search \"Rust async patterns\"
   scout search \"状態管理\" --lang ja
+  echo \"Rust async patterns\" | scout search
+  scout search -
 
 Environment:
   GEMINI_API_KEY  Required. Gemini API key for web search.")]
 pub struct SearchParams {
     /// Search query
-    pub query: String,
+    pub query: Option<String>,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
     pub lang: Lang,
@@ -39,10 +67,12 @@ pub struct SearchParams {
 Examples:
   scout fetch https://example.com
   scout fetch https://example.com --js
-  scout fetch https://example.com --raw")]
+  scout fetch https://example.com --raw
+  echo \"https://example.com\" | scout fetch
+  scout fetch -")]
 pub struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
-    pub url: String,
+    pub url: Option<String>,
     /// Force JavaScript rendering via headless Chrome / CDP. Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
     pub js: bool,
@@ -57,12 +87,14 @@ Examples:
   scout research \"state management\"
   scout research \"Rust error handling\" --depth 5
   scout research \"型安全\" --lang ja --depth 3
+  echo \"state management\" | scout research
+  scout research -
 
 Environment:
   GEMINI_API_KEY  Required. Gemini API key for web search.")]
 pub struct ResearchParams {
     /// Research query
-    pub query: String,
+    pub query: Option<String>,
     /// Number of URLs to fetch for deep analysis (1-10)
     #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=10))]
     pub depth: u8,
@@ -78,12 +110,14 @@ Examples:
   scout repo-tree facebook/react --path src/
   scout repo-tree facebook/react --pattern \"*.rs\"
   scout repo-tree facebook/react --ref v18.0.0
+  echo \"facebook/react\" | scout repo-tree
+  scout repo-tree -
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoTreeParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
+    pub repository: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
     pub ref_: Option<String>,
@@ -102,14 +136,16 @@ Examples:
   scout repo-read facebook/react src/index.ts --lines 1-80
   scout repo-read facebook/react Cargo.toml --ref main
   scout repo-read owner/repo legacy.txt --encoding shift_jis
+  echo \"README.md\" | scout repo-read facebook/react
+  echo \"facebook/react\" | scout repo-read - README.md
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoReadParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
+    pub repository: Option<String>,
     /// File path within the repository (e.g., "src/index.ts")
-    pub path: String,
+    pub path: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
     pub ref_: Option<String>,
@@ -129,17 +165,21 @@ pub struct RepoReadParams {
 Examples:
   scout repo-overview facebook/react
   scout repo-overview rust-lang/rust
+  echo \"facebook/react\" | scout repo-overview
+  scout repo-overview -
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
 pub struct RepoOverviewParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: String,
+    pub repository: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use clap::Args;
+
+    use super::resolve_input;
 
     fn help_text<A: Args + Send + Sync + 'static>() -> String {
         A::augment_args(clap::Command::new("test"))
@@ -191,6 +231,33 @@ mod tests {
         assert_help_sections::<super::RepoOverviewParams>(Some("GITHUB_TOKEN"));
     }
 
+    /// [T-H009] stdin-supporting subcommand help contains stdin usage examples
+    #[test]
+    fn t_h009_subcommand_help_contains_stdin_examples() {
+        let cases: &[(&str, &str)] = &[
+            ("search", "| scout search"),
+            ("fetch", "| scout fetch"),
+            ("research", "| scout research"),
+            ("repo-tree", "| scout repo-tree"),
+            ("repo-read", "| scout repo-read"),
+            ("repo-overview", "| scout repo-overview"),
+        ];
+        let helps = [
+            help_text::<super::SearchParams>(),
+            help_text::<super::FetchParams>(),
+            help_text::<super::ResearchParams>(),
+            help_text::<super::RepoTreeParams>(),
+            help_text::<super::RepoReadParams>(),
+            help_text::<super::RepoOverviewParams>(),
+        ];
+        for ((name, pattern), help) in cases.iter().zip(helps.iter()) {
+            assert!(
+                help.contains(pattern),
+                "{name} help missing stdin example '{pattern}'"
+            );
+        }
+    }
+
     /// [T-P001] research --depth accepts valid range 1..=10 and rejects out-of-range
     #[test]
     fn t_p001_research_depth_valid_range() {
@@ -210,5 +277,116 @@ mod tests {
             let result = Cli::try_parse_from(["scout", "research", "test query", "--depth", val]);
             assert!(result.is_err(), "depth={val} should be rejected");
         }
+    }
+
+    /// [T-S001] optional positional arg is None when omitted from command line
+    #[test]
+    fn t_s001_optional_positional_is_none_when_omitted() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: super::Command,
+        }
+
+        let result = Cli::try_parse_from(["scout", "search"]);
+        assert!(result.is_ok(), "parse should succeed with query omitted");
+        if let Ok(cli) = result
+            && let super::Command::Search(p) = cli.cmd
+        {
+            assert!(p.query.is_none(), "query should be None when omitted");
+        }
+    }
+
+    /// [T-S002] ARG wins over piped stdin when both are present
+    #[test]
+    fn t_s002_arg_wins_over_stdin() {
+        let result = resolve_input(
+            Some("from_arg".into()),
+            Some("from_stdin"),
+            false,
+            "query",
+            "<QUERY>",
+        );
+        assert_eq!(result.unwrap(), "from_arg");
+    }
+
+    /// [T-S003] ARG omitted + piped stdin → reads from stdin
+    #[test]
+    fn t_s003_stdin_used_when_arg_omitted_and_piped() {
+        let result = resolve_input(None, Some("from_stdin"), false, "query", "<QUERY>");
+        assert_eq!(result.unwrap(), "from_stdin");
+    }
+
+    /// [T-S004] `-` reads from stdin even when terminal
+    #[test]
+    fn t_s004_dash_reads_from_stdin() {
+        let result = resolve_input(
+            Some("-".into()),
+            Some("from_stdin"),
+            true, // terminal
+            "query",
+            "<QUERY>",
+        );
+        assert_eq!(result.unwrap(), "from_stdin");
+    }
+
+    /// [T-S005] terminal + no arg → fail-fast error with canonical message
+    #[test]
+    fn t_s005_terminal_no_arg_returns_fail_fast_error() {
+        let result = resolve_input(None, None, true, "query", "<QUERY>");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Missing query"),
+            "error should contain 'Missing query', got: {err}"
+        );
+        assert!(
+            err.contains("Pass <QUERY>"),
+            "error should contain placeholder, got: {err}"
+        );
+        assert!(
+            err.contains("pipe it via stdin"),
+            "error should suggest stdin, got: {err}"
+        );
+        assert!(
+            err.contains("`-`"),
+            "error should mention `-` for interactive stdin, got: {err}"
+        );
+    }
+
+    /// [T-S006] empty stdin → error with "No X provided" canonical message
+    #[test]
+    fn t_s006_empty_stdin_returns_no_provided_error() {
+        let result = resolve_input(None, Some("   "), false, "query", "<QUERY>");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No query provided"),
+            "error should contain 'No query provided', got: {err}"
+        );
+    }
+
+    /// [T-S007] `-` with empty stdin → same "No X provided" error
+    #[test]
+    fn t_s007_dash_with_empty_stdin_returns_error() {
+        let result = resolve_input(Some("-".into()), Some(""), true, "url", "<URL>");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No url provided"),
+            "error should contain 'No url provided', got: {err}"
+        );
+    }
+
+    /// [T-S008] stdin content is trimmed before use
+    #[test]
+    fn t_s008_stdin_content_is_trimmed() {
+        let result = resolve_input(
+            None,
+            Some("  facebook/react\n"),
+            false,
+            "repository",
+            "<OWNER/REPO>",
+        );
+        assert_eq!(result.unwrap(), "facebook/react");
     }
 }
