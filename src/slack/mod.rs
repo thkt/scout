@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::redacted::Redacted;
-use crate::retry::{jittered_backoff, retry_with};
+use crate::retry::{parse_retry_after, retry_after_or_backoff, retry_after_within_cap, retry_with};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SlackError {
@@ -188,10 +188,7 @@ impl SlackClient {
             url.query_pairs_mut().append_pair(k, v);
         }
 
-        assert!(
-            url.scheme() == "https" || cfg!(test),
-            "Bearer token must only be sent over HTTPS"
-        );
+        crate::redacted::assert_https(url.as_str());
 
         let resp = self
             .http
@@ -201,11 +198,7 @@ impl SlackClient {
             .await
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
-        let retry_after = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
+        let retry_after = parse_retry_after(resp.headers());
 
         if resp.status() == 429 {
             warn!(retry_after_secs = retry_after, "Slack API rate limited");
@@ -226,6 +219,7 @@ impl SlackClient {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             if error == "ratelimited" {
+                warn!(retry_after_secs = retry_after, "Slack API rate limited");
                 return Err(SlackError::RateLimited { retry_after });
             }
             return Err(SlackError::Api {
@@ -512,19 +506,19 @@ fn format_slack_output(
 }
 
 fn is_retriable(e: &SlackError) -> bool {
-    matches!(
-        e,
-        SlackError::RateLimited { .. } | SlackError::Network(_) | SlackError::Timeout(_)
-    )
+    match e {
+        SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
+        SlackError::Network(_) | SlackError::Timeout(_) => true,
+        _ => false,
+    }
 }
 
 fn slack_delay(e: &SlackError, attempt: u32) -> Duration {
-    match e {
-        SlackError::RateLimited {
-            retry_after: Some(secs),
-        } => Duration::from_secs(*secs),
-        _ => Duration::from_millis(jittered_backoff(attempt)),
-    }
+    let retry_after = match e {
+        SlackError::RateLimited { retry_after } => *retry_after,
+        _ => None,
+    };
+    retry_after_or_backoff(retry_after, attempt)
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use std::env;
 use std::time::Duration;
 
 use reqwest::Client;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::redacted::Redacted;
 
@@ -23,7 +23,10 @@ use types::{
 const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-use crate::retry::{default_delay, is_transient_network, retry_with};
+use crate::retry::{
+    is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
+    retry_with,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
@@ -33,7 +36,7 @@ pub enum GitHubError {
     #[error(
         "GitHub API rate limit exceeded. Set GITHUB_TOKEN or run `gh auth login` for higher limits."
     )]
-    RateLimited,
+    RateLimited { retry_after: Option<u64> },
 
     #[error("Access denied: {0}")]
     Forbidden(String),
@@ -110,10 +113,7 @@ impl GitHubClient {
             .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
-            assert!(
-                url.starts_with("https://") || cfg!(test),
-                "Bearer token must only be sent over HTTPS"
-            );
+            crate::redacted::assert_https(&url);
             req = req.header("Authorization", format!("Bearer {}", token.expose()));
         }
         req
@@ -123,8 +123,8 @@ impl GitHubClient {
         retry_with(
             || self.get_json_once(path),
             is_retriable,
-            default_delay,
-            || GitHubError::RateLimited,
+            github_delay,
+            || GitHubError::RateLimited { retry_after: None },
         )
         .await
     }
@@ -140,15 +140,20 @@ impl GitHubClient {
         match status.as_u16() {
             200..=299 => Ok(response.json().await?),
             404 => Err(GitHubError::NotFound(path.to_string())),
-            429 => Err(GitHubError::RateLimited),
+            429 => {
+                let retry_after = parse_retry_after(response.headers());
+                warn!(retry_after_secs = retry_after, "GitHub API rate limited");
+                Err(GitHubError::RateLimited { retry_after })
+            }
             403 => {
                 let remaining = response
                     .headers()
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
+                let retry_after = secs_until_ratelimit_reset(response.headers());
                 if remaining == Some(0) {
-                    Err(GitHubError::RateLimited)
+                    Err(GitHubError::RateLimited { retry_after })
                 } else {
                     let message = extract_error_message(&response.text().await.unwrap_or_default());
                     Err(GitHubError::Forbidden(message))
@@ -268,14 +273,34 @@ fn extract_error_message(body: &str) -> String {
 }
 
 fn is_retriable(e: &GitHubError) -> bool {
-    matches!(
-        e,
-        GitHubError::RateLimited
-            | GitHubError::Api {
-                code: 500..=599,
-                ..
-            }
-    ) || matches!(e, GitHubError::Network(e) if is_transient_network(e))
+    match e {
+        GitHubError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
+        GitHubError::Api {
+            code: 500..=599, ..
+        } => true,
+        GitHubError::Network(e) => is_transient_network(e),
+        _ => false,
+    }
+}
+
+fn github_delay(e: &GitHubError, attempt: u32) -> Duration {
+    let retry_after = match e {
+        GitHubError::RateLimited { retry_after } => *retry_after,
+        _ => None,
+    };
+    retry_after_or_backoff(retry_after, attempt)
+}
+
+fn secs_until_ratelimit_reset(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let reset_ts = headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(reset_ts.saturating_sub(now))
 }
 
 async fn resolve_token() -> Option<Redacted> {
@@ -363,7 +388,7 @@ mod http_tests {
 
         let client = GitHubClient::with_base_url(Client::new(), &server.uri());
         let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
-        assert!(matches!(result, Err(GitHubError::RateLimited)));
+        assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
     #[tokio::test]
@@ -383,7 +408,7 @@ mod http_tests {
 
         let client = GitHubClient::with_base_url(Client::new(), &server.uri());
         let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
-        assert!(matches!(result, Err(GitHubError::RateLimited)));
+        assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
     #[tokio::test]
@@ -439,5 +464,57 @@ mod http_tests {
         let client = GitHubClient::with_base_url(Client::new(), &server.uri());
         let result: Result<serde_json::Value, _> = client.get_json("/test").await;
         assert!(matches!(result, Err(GitHubError::Api { code: 500, .. })));
+    }
+
+    #[tokio::test]
+    async fn get_json_429_with_retry_after_carries_delay() {
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "30"))
+            .mount(&server)
+            .await;
+
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+        let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+        assert!(matches!(
+            result,
+            Err(GitHubError::RateLimited {
+                retry_after: Some(30)
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_json_403_with_ratelimit_reset_carries_delay() {
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
+        let future_reset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60;
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .append_header("x-ratelimit-remaining", "0")
+                    .append_header("x-ratelimit-reset", future_reset.to_string().as_str())
+                    .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+        let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+        assert!(matches!(
+            result,
+            Err(GitHubError::RateLimited {
+                retry_after: Some(_)
+            })
+        ));
     }
 }

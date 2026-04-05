@@ -17,6 +17,13 @@ impl std::fmt::Debug for Redacted {
     }
 }
 
+pub(crate) fn assert_https(url: &str) {
+    assert!(
+        url.starts_with("https://") || cfg!(test),
+        "credentials must only be sent over HTTPS"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

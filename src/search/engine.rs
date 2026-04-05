@@ -86,7 +86,7 @@ async fn run_searches(
         let first_err = failures
             .into_iter()
             .find_map(Result::err)
-            .unwrap_or(GeminiError::RateLimited);
+            .unwrap_or(GeminiError::RateLimited { retry_after: None });
         warn!(
             queries = ?queries,
             error = %first_err,
@@ -283,7 +283,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(Err(GeminiError::RateLimited))
+                .unwrap_or(Err(GeminiError::RateLimited { retry_after: None }))
         }
     }
 
@@ -507,7 +507,7 @@ mod tests {
     async fn research_partial_search_failure_still_returns() {
         let mock = MockSearch::success_then_failure(
             make_grounded(vec![("https://a.com", "A")]),
-            GeminiError::RateLimited,
+            GeminiError::RateLimited { retry_after: None },
         );
         let http = Client::new();
         let resolver = fetch::TokioDnsResolver;
@@ -529,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn research_all_searches_fail_returns_error() {
-        let mock = MockSearch::all_fail(GeminiError::RateLimited);
+        let mock = MockSearch::all_fail(GeminiError::RateLimited { retry_after: None });
         let http = Client::new();
         let resolver = fetch::TokioDnsResolver;
 

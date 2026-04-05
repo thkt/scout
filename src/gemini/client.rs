@@ -5,7 +5,10 @@ use reqwest::Client;
 use tracing::{debug, warn};
 
 use crate::redacted::Redacted;
-use crate::retry::{default_delay, is_transient_network, retry_with};
+use crate::retry::{
+    is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
+    retry_with,
+};
 
 use super::grounding::extract_grounded_result;
 use super::types::{
@@ -23,7 +26,7 @@ pub enum GeminiError {
     ApiKeyNotSet,
 
     #[error("API rate limit exceeded. Please retry later.")]
-    RateLimited,
+    RateLimited { retry_after: Option<u64> },
 
     #[error("API quota exhausted: {0}")]
     QuotaExhausted(String),
@@ -94,10 +97,7 @@ impl GeminiClient {
             }],
         };
 
-        assert!(
-            url.starts_with("https://") || cfg!(test),
-            "API key must only be sent over HTTPS"
-        );
+        crate::redacted::assert_https(&url);
 
         let response = self
             .http
@@ -111,10 +111,12 @@ impl GeminiClient {
 
         let status = response.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            warn!("Gemini API rate limited");
-            return Err(GeminiError::RateLimited);
+            let retry_after = parse_retry_after(response.headers());
+            warn!(retry_after_secs = retry_after, "Gemini API rate limited");
+            return Err(GeminiError::RateLimited { retry_after });
         }
         if !status.is_success() {
+            let retry_after = parse_retry_after(response.headers());
             let text = response
                 .text()
                 .await
@@ -122,7 +124,7 @@ impl GeminiClient {
             if let Ok(body) = serde_json::from_str::<GenerateContentResponse>(&text)
                 && let Some(err) = &body.error
             {
-                let classified = classify_api_error(err);
+                let classified = classify_api_error(err, retry_after);
                 warn!(error = %classified, "Gemini API error");
                 return Err(classified);
             }
@@ -138,7 +140,7 @@ impl GeminiClient {
         debug!(model = %self.model, "gemini search complete");
 
         if let Some(err) = &body.error {
-            let classified = classify_api_error(err);
+            let classified = classify_api_error(err, None);
             warn!(error = %classified, "Gemini API error in 200 response");
             return Err(classified);
         }
@@ -152,8 +154,8 @@ impl SearchClient for GeminiClient {
         let response = retry_with(
             || self.generate_with_search(query),
             is_retriable,
-            default_delay,
-            || GeminiError::RateLimited,
+            gemini_delay,
+            || GeminiError::RateLimited { retry_after: None },
         )
         .await?;
         Ok(extract_grounded_result(&response))
@@ -161,24 +163,32 @@ impl SearchClient for GeminiClient {
 }
 
 fn is_retriable(e: &GeminiError) -> bool {
-    matches!(
-        e,
-        GeminiError::RateLimited
-            | GeminiError::Api {
-                code: 500..=599,
-                ..
-            }
-    ) || matches!(e, GeminiError::Network(e) if is_transient_network(e))
+    match e {
+        GeminiError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
+        GeminiError::Api {
+            code: 500..=599, ..
+        } => true,
+        GeminiError::Network(e) => is_transient_network(e),
+        _ => false,
+    }
 }
 
-fn classify_api_error(err: &ApiError) -> GeminiError {
+fn gemini_delay(e: &GeminiError, attempt: u32) -> Duration {
+    let retry_after = match e {
+        GeminiError::RateLimited { retry_after } => *retry_after,
+        _ => None,
+    };
+    retry_after_or_backoff(retry_after, attempt)
+}
+
+fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
     let message = err
         .message
         .clone()
         .unwrap_or_else(|| "Unknown error".to_string());
 
     match err.code {
-        Some(429) => GeminiError::RateLimited,
+        Some(429) => GeminiError::RateLimited { retry_after },
         Some(403) => GeminiError::QuotaExhausted(message),
         Some(code) => GeminiError::Api { code, message },
         None => GeminiError::Api {
@@ -198,7 +208,10 @@ mod tests {
             code: Some(429),
             message: Some("Resource exhausted".into()),
         };
-        assert!(matches!(classify_api_error(&err), GeminiError::RateLimited));
+        assert!(matches!(
+            classify_api_error(&err, None),
+            GeminiError::RateLimited { .. }
+        ));
     }
 
     #[test]
@@ -208,7 +221,7 @@ mod tests {
             message: Some("Quota exceeded".into()),
         };
         assert!(matches!(
-            classify_api_error(&err),
+            classify_api_error(&err, None),
             GeminiError::QuotaExhausted(_)
         ));
     }
@@ -219,7 +232,7 @@ mod tests {
             code: Some(500),
             message: Some("Internal server error".into()),
         };
-        match classify_api_error(&err) {
+        match classify_api_error(&err, None) {
             GeminiError::Api { code, message } => {
                 assert_eq!(code, 500);
                 assert_eq!(message, "Internal server error");
@@ -283,7 +296,7 @@ mod http_tests {
 
         let client = GeminiClient::with_base_url(Client::new(), &server.uri());
         let result = client.search("test").await;
-        assert!(matches!(result, Err(GeminiError::RateLimited)));
+        assert!(matches!(result, Err(GeminiError::RateLimited { .. })));
     }
 
     #[tokio::test]
@@ -355,5 +368,26 @@ mod http_tests {
         let client = GeminiClient::with_base_url(Client::new(), &server.uri());
         let result = client.search("test").await;
         assert!(matches!(result, Err(GeminiError::QuotaExhausted(_))));
+    }
+
+    #[tokio::test]
+    async fn search_429_with_retry_after_carries_delay() {
+        let Some(server) = try_spawn_mock_server("gemini::http").await else {
+            return;
+        };
+        Mock::given(method("POST"))
+            .and(path_regex(r":generateContent$"))
+            .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "60"))
+            .mount(&server)
+            .await;
+
+        let client = GeminiClient::with_base_url(Client::new(), &server.uri());
+        let result = client.generate_with_search("test").await;
+        assert!(matches!(
+            result,
+            Err(GeminiError::RateLimited {
+                retry_after: Some(60)
+            })
+        ));
     }
 }
