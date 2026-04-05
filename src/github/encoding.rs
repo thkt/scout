@@ -88,22 +88,63 @@ fn decode_bom(bytes: &[u8]) -> Option<DecodeResult> {
     })
 }
 
+fn is_likely_binary(bytes: &[u8]) -> bool {
+    bytes.contains(&0)
+}
+
+/// Returns true for encodings that chardetng can reliably detect.
+///
+/// Multi-byte encodings have strict byte-pattern constraints, so a successful decode
+/// is meaningful evidence. Single-byte encodings (windows-1252, windows-1251, iso-8859-*,
+/// etc.) accept nearly every byte, making `had_errors == false` an unreliable signal.
+fn is_reliable_detection(encoding: &'static encoding_rs::Encoding) -> bool {
+    [
+        encoding_rs::UTF_8,
+        encoding_rs::SHIFT_JIS,
+        encoding_rs::EUC_JP,
+        encoding_rs::ISO_2022_JP,
+        encoding_rs::BIG5,
+        encoding_rs::GBK,
+        encoding_rs::GB18030,
+        encoding_rs::EUC_KR,
+    ]
+    .iter()
+    .any(|&e| e == encoding)
+}
+
 fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
+    // Binary heuristic: null bytes appear in binary files but not in any text encoding
+    // (UTF-16 with BOM is already handled by decode_bom before reaching here)
+    if is_likely_binary(bytes) {
+        return Err(GitHubError::NonUtf8(
+            "File appears to be binary (contains null bytes). \
+            Use --encoding utf-16le or --encoding utf-16be if this is a UTF-16 file without a BOM."
+                .to_string(),
+        ));
+    }
+
     // BR-001: chardetng runs BEFORE UTF-8 check to prevent silent mojibake
     let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
     let encoding = detector.guess(None, Utf8Detection::Allow);
 
-    let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
-    if !had_errors {
-        return Ok(DecodeResult {
-            text: decoded.into_owned(),
-            encoding: encoding.name().to_ascii_lowercase(),
-            source: DetectionSource::Detected,
-        });
+    // Only trust chardetng for multi-byte encodings that have strict byte-pattern constraints
+    // (Shift_JIS, EUC-JP, GBK, etc.) or UTF-8. Single-byte encodings (windows-1252,
+    // windows-1251, iso-8859-*, etc.) accept nearly every byte without errors, so
+    // `had_errors == false` carries no reliability signal for them. Fall through to the
+    // UTF-8 check for those; if UTF-8 also fails, return a NonUtf8 error.
+    if is_reliable_detection(encoding) {
+        let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
+        if !had_errors {
+            return Ok(DecodeResult {
+                text: decoded.into_owned(),
+                encoding: encoding.name().to_ascii_lowercase(),
+                source: DetectionSource::Detected,
+            });
+        }
     }
 
-    // FR-007: chardetng had errors; try strict UTF-8 as fallback
+    // FR-007: chardetng inconclusive or had errors; try strict UTF-8
     if let Ok(s) = std::str::from_utf8(bytes) {
         return Ok(DecodeResult {
             text: s.to_owned(),
@@ -279,6 +320,64 @@ mod tests {
         assert!(
             msg.contains("--encoding"),
             "error should suggest --encoding flag, got: {msg}"
+        );
+    }
+
+    // ── T-008: Binary file (null bytes) returns NonUtf8 error ──
+
+    #[test]
+    fn t_008_decode_bytes_with_null_bytes_returns_non_utf8_error() {
+        // [T-008] Binary heuristic: null bytes indicate non-text content
+        // chardetng would otherwise guess windows-1252 and return Detected with garbage text
+        let bytes: &[u8] = &[0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00];
+
+        let result = decode_bytes(bytes, None);
+
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            matches!(err, GitHubError::NonUtf8(_)),
+            "expected NonUtf8 variant for binary input, got: {err:?}"
+        );
+        assert!(
+            msg.contains("binary"),
+            "error should mention binary, got: {msg}"
+        );
+    }
+
+    // ── T-009: Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
+
+    #[test]
+    fn t_009_decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
+        // [T-009] Single-byte encoding guard: chardetng can return windows-1251, windows-1252,
+        // or other single-byte encodings for arbitrary non-NUL bytes. Those encodings accept
+        // every byte without error, so `had_errors == false` is meaningless as a quality signal.
+        // The `is_reliable_detection` guard must reject single-byte encodings and fall through
+        // to the UTF-8 check (which fails here), ultimately returning NonUtf8.
+        //
+        // Byte choice rationale (0xFD/0xFF alternating):
+        //   UTF-8:     always invalid (0xFD and 0xFF are permanently unused code points)
+        //   Shift_JIS: 0xFD is undefined (lead bytes only go to 0xFC)
+        //   GBK:       0xFF is an invalid trail byte (trail range is 0x40-0xFE)
+        //   EUC-JP:    0xFF is an invalid second byte (valid range is 0xA1-0xFE)
+        //   windows-1251/1252: valid (0xFD='э'/'ý', 0xFF='я'/'ÿ') → chardetng returns one of these
+        //
+        // Without the guard this would return Ok(Detected) with garbled Cyrillic/Latin text.
+        let bytes: &[u8] = &[
+            0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF,
+            0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF,
+            0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF, 0xFD, 0xFF,
+        ];
+
+        let result = decode_bytes(bytes, None);
+
+        assert!(
+            result.is_err(),
+            "non-NUL random bytes should return an error, not Detected"
+        );
+        assert!(
+            matches!(result.unwrap_err(), GitHubError::NonUtf8(_)),
+            "error should be NonUtf8 variant"
         );
     }
 

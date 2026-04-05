@@ -116,8 +116,10 @@ pub struct RepoReadParams {
     /// Line range: "1-80", "50-", or "100" (first N lines)
     #[arg(short, long)]
     pub lines: Option<String>,
-    /// Character encoding label for non-UTF-8 files (e.g., shift_jis, euc-jp, gbk).
-    /// When omitted, encoding is auto-detected via BOM and chardetng.
+    /// Character encoding label (e.g., shift_jis, euc-jp, gbk).
+    /// When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other
+    /// multi-byte encodings via BOM and chardetng. Single-byte encodings (windows-1252,
+    /// ISO-8859-*, etc.) require explicit --encoding.
     #[arg(long)]
     pub encoding: Option<String>,
 }

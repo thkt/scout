@@ -170,10 +170,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 scout repo-read facebook/react src/ReactElement.js --lines 1-50
 ```
 
-| Flag          | Description                                         |
-| ------------- | --------------------------------------------------- |
-| `--ref`       | Branch, tag, or commit SHA                          |
-| `-l, --lines` | Line range: `1-80`, `50-`, or `100` (first N lines) |
+| Flag          | Description                                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--ref`       | Branch, tag, or commit SHA                                                                                                                                                                                                                       |
+| `-l, --lines` | Line range: `1-80`, `50-`, or `100` (first N lines)                                                                                                                                                                                              |
+| `--encoding`  | Character encoding (e.g., `shift_jis`, `euc-jp`, `gbk`). When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other multi-byte encodings. Single-byte encodings (windows-1252, ISO-8859-\*, etc.) require explicit `--encoding` |
 
 ### `scout repo-overview` — Repository at a glance
 
