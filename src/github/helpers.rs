@@ -1,8 +1,8 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use globset::Glob;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
 use super::GitHubError;
+use super::encoding::DecodeResult;
 use super::types::{EntryType, TreeEntry};
 
 /// Characters to percent-encode in URL path segments.
@@ -80,13 +80,14 @@ pub fn validate_path(path: &str) -> Result<(), GitHubError> {
 }
 
 /// Decode base64-encoded content from the GitHub Contents/Blob API.
-pub fn decode_content(encoded: &str) -> Result<String, GitHubError> {
-    let clean: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
-    let bytes = STANDARD
-        .decode(&clean)
-        .map_err(|e| GitHubError::Decode(e.to_string()))?;
-    String::from_utf8(bytes)
-        .map_err(|_| GitHubError::Decode("file appears to be binary (not valid UTF-8)".into()))
+///
+/// `hint` is an optional encoding label (e.g. `"shift_jis"`) passed by the caller.
+/// When `None`, chardetng auto-detects the encoding (BOM → chardetng → UTF-8 fallback).
+///
+/// Returns a [`DecodeResult`] containing the decoded text, encoding label, and detection source.
+pub fn decode_content(encoded: &str, hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
+    let bytes = super::encoding::decode_base64(encoded)?;
+    super::encoding::decode_bytes(&bytes, hint)
 }
 
 /// Parse a line range string: `"1-80"` (range), `"50-"` (open end), `"100"` (first N lines).
@@ -176,7 +177,7 @@ pub fn filter_tree_entries<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     #[test]
     fn parse_repo_valid_formats() {
@@ -319,13 +320,31 @@ mod tests {
     #[test]
     fn decode_content_handles_base64() {
         assert_eq!(
-            decode_content(&STANDARD.encode("hello world")).unwrap(),
+            decode_content(&STANDARD.encode("hello world"), None).unwrap().text,
             "hello world"
         );
         assert_eq!(
-            decode_content("aGVs\nbG8g\nd29y\nbGQ=\n").unwrap(),
+            decode_content("aGVs\nbG8g\nd29y\nbGQ=\n", None).unwrap().text,
             "hello world"
         );
+    }
+
+    #[test]
+    fn decode_content_decodes_shift_jis_without_hint() {
+        // [Phase 1-B] delegate to decode_bytes: chardetng auto-detects Shift_JIS
+        // "テスト" in Shift_JIS — would fail with old UTF-8-only decode_content
+        let shift_jis_bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
+        let result = decode_content(&STANDARD.encode(shift_jis_bytes), None).unwrap();
+        assert_eq!(result.text, "テスト");
+    }
+
+    #[test]
+    fn decode_content_decodes_euc_jp_with_hint() {
+        // [Phase 1-B] delegate to decode_bytes: explicit encoding hint passed through
+        // "日本語" in EUC-JP
+        let euc_jp_bytes: &[u8] = &[0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC];
+        let result = decode_content(&STANDARD.encode(euc_jp_bytes), Some("euc-jp")).unwrap();
+        assert_eq!(result.text, "日本語");
     }
 
     fn blob(path: &str) -> TreeEntry {
