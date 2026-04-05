@@ -165,7 +165,9 @@ impl SearchClient for GeminiClient {
 fn is_retriable(e: &GeminiError) -> bool {
     match e {
         GeminiError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        GeminiError::Api { code: 500..=599, .. } => true,
+        GeminiError::Api {
+            code: 500..=599, ..
+        } => true,
         GeminiError::Network(e) => is_transient_network(e),
         _ => false,
     }
@@ -206,7 +208,10 @@ mod tests {
             code: Some(429),
             message: Some("Resource exhausted".into()),
         };
-        assert!(matches!(classify_api_error(&err, None), GeminiError::RateLimited { .. }));
+        assert!(matches!(
+            classify_api_error(&err, None),
+            GeminiError::RateLimited { .. }
+        ));
     }
 
     #[test]

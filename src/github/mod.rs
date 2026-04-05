@@ -275,7 +275,9 @@ fn extract_error_message(body: &str) -> String {
 fn is_retriable(e: &GitHubError) -> bool {
     match e {
         GitHubError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        GitHubError::Api { code: 500..=599, .. } => true,
+        GitHubError::Api {
+            code: 500..=599, ..
+        } => true,
         GitHubError::Network(e) => is_transient_network(e),
         _ => false,
     }
