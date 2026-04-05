@@ -264,7 +264,7 @@ impl Scout {
             github::apply_line_range(&raw, 1, None)
         };
 
-        let output = format!("{} ({total} lines)\n\n{content}", params.path);
+        let output = github::format::format_file_content(&params.path, total, &content);
 
         info!(path = %params.path, lines = total, "repo_read complete");
         Ok(output)
