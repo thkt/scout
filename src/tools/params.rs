@@ -292,10 +292,10 @@ mod tests {
 
         let result = Cli::try_parse_from(["scout", "search"]);
         assert!(result.is_ok(), "parse should succeed with query omitted");
-        if let Ok(cli) = result {
-            if let super::Command::Search(p) = cli.cmd {
-                assert!(p.query.is_none(), "query should be None when omitted");
-            }
+        if let Ok(cli) = result
+            && let super::Command::Search(p) = cli.cmd
+        {
+            assert!(p.query.is_none(), "query should be None when omitted");
         }
     }
 
