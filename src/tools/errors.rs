@@ -75,7 +75,7 @@ impl From<github::GitHubError> for ScoutError {
             | github::GitHubError::InvalidPath(_)
             | github::GitHubError::InvalidLineRange(_)
             | github::GitHubError::InvalidPattern(_) => Self::user_error(e.to_string()),
-            github::GitHubError::RateLimited => Self::transient(e.to_string()),
+            github::GitHubError::RateLimited { .. } => Self::transient(e.to_string()),
             github::GitHubError::Forbidden(_) => Self::user_error(format!(
                 "{e} — check that your GITHUB_TOKEN has the required scopes"
             )),
@@ -148,7 +148,7 @@ impl From<GeminiError> for ScoutError {
     fn from(e: GeminiError) -> Self {
         match &e {
             GeminiError::ApiKeyNotSet => Self::user_error(e.to_string()),
-            GeminiError::RateLimited => Self::transient(e.to_string()),
+            GeminiError::RateLimited { .. } => Self::transient(e.to_string()),
             GeminiError::QuotaExhausted(_) => Self::user_error(format!(
                 "{e} — check your API billing at https://aistudio.google.com"
             )),
@@ -242,13 +242,13 @@ mod tests {
             FetchError::Status(503).into(),
             FetchError::DnsResolution("dns failed".into()).into(),
             FetchError::Timeout("timed out".into()).into(),
-            github::GitHubError::RateLimited.into(),
+            github::GitHubError::RateLimited { retry_after: None }.into(),
             github::GitHubError::Api {
                 code: 502,
                 message: "bad gateway".into(),
             }
             .into(),
-            GeminiError::RateLimited.into(),
+            GeminiError::RateLimited { retry_after: None }.into(),
             GeminiError::Api {
                 code: 503,
                 message: "unavailable".into(),
