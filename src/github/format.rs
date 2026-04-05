@@ -60,10 +60,22 @@ fn lang_for_path(path: &str) -> &'static str {
 }
 
 /// Format file content as a fenced Markdown code block with a path header.
-pub(crate) fn format_file_content(path: &str, total: usize, content: &str) -> String {
+///
+/// `encoding` is shown in the header when the file uses a non-default encoding
+/// (e.g. `Some("shift_jis")`). Pass `None` for plain UTF-8 files.
+pub(crate) fn format_file_content(
+    path: &str,
+    total: usize,
+    content: &str,
+    encoding: Option<&str>,
+) -> String {
     let lang = lang_for_path(path);
     let fence = fence_delimiter(content);
-    format!("{path} ({total} lines)\n\n{fence}{lang}\n{content}\n{fence}")
+    let header = match encoding {
+        Some(enc) => format!("{path} ({total} lines) [encoding: {enc}]"),
+        None => format!("{path} ({total} lines)"),
+    };
+    format!("{header}\n\n{fence}{lang}\n{content}\n{fence}")
 }
 
 pub(crate) fn format_tree(
@@ -645,7 +657,7 @@ mod tests {
     #[test]
     fn t_001_format_file_content_wraps_rust_file_in_fenced_code_block() {
         // [T-001] FR-001, FR-002
-        let output = format_file_content("src/main.rs", 3, "    1\tfn main() {}\n");
+        let output = format_file_content("src/main.rs", 3, "    1\tfn main() {}\n", None);
         assert!(
             output.starts_with("src/main.rs (3 lines)\n\n```rust\n"),
             "should start with path header and ```rust fence, got:\n{output}"
@@ -742,7 +754,7 @@ mod tests {
     fn t_007_format_file_content_fence_does_not_collide_with_inner_backticks() {
         // [T-007] FR-001, FR-003
         let inner = "    1\t```\n    2\tsome code\n    3\t```\n";
-        let output = format_file_content("doc.md", 3, inner);
+        let output = format_file_content("doc.md", 3, inner, None);
 
         let lines: Vec<&str> = output.lines().collect();
         // Structure: line 0 = header, line 1 = blank, line 2 = opening fence, ..., last = closing fence
@@ -765,12 +777,36 @@ mod tests {
     #[test]
     fn t_008_format_file_content_uses_empty_lang_for_extensionless_path() {
         // [T-008] FR-001, FR-002
-        let output = format_file_content("config", 1, "    1\tkey=val");
+        let output = format_file_content("config", 1, "    1\tkey=val", None);
         let lines: Vec<&str> = output.lines().collect();
         // line 2 is the opening fence
         assert_eq!(
             lines[2], "```",
             "fence line should be exactly ``` with no language suffix"
+        );
+    }
+
+    #[test]
+    fn t_009_format_file_content_includes_encoding_label_in_header() {
+        // [T-009] FR-009: encoding label appended to header when provided
+        let output = format_file_content("file.txt", 2, "    1\thello\n", Some("shift_jis"));
+        assert!(
+            output.starts_with("file.txt (2 lines) [encoding: shift_jis]\n\n"),
+            "header should include encoding label, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn t_010_format_file_content_omits_encoding_when_none() {
+        // [T-010] FR-009: no encoding label when None
+        let output = format_file_content("file.txt", 1, "    1\thello\n", None);
+        assert!(
+            output.starts_with("file.txt (1 lines)\n\n"),
+            "header should omit encoding when None, got:\n{output}"
+        );
+        assert!(
+            !output.contains("[encoding"),
+            "should not contain encoding label"
         );
     }
 

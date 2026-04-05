@@ -74,7 +74,8 @@ impl From<github::GitHubError> for ScoutError {
             | github::GitHubError::InvalidRef(_)
             | github::GitHubError::InvalidPath(_)
             | github::GitHubError::InvalidLineRange(_)
-            | github::GitHubError::InvalidPattern(_) => Self::user_error(e.to_string()),
+            | github::GitHubError::InvalidPattern(_)
+            | github::GitHubError::NonUtf8(_) => Self::user_error(e.to_string()),
             github::GitHubError::RateLimited { .. } => Self::transient(e.to_string()),
             github::GitHubError::Forbidden(_) => Self::user_error(format!(
                 "{e} — check that your GITHUB_TOKEN has the required scopes"

@@ -249,12 +249,22 @@ impl Scout {
             .get_contents(owner, repo, &params.path, params.ref_.as_deref())
             .await?;
 
-        let raw = if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
-            github::decode_content(encoded)?
-        } else {
-            let blob = github.get_blob(owner, repo, &contents.sha).await?;
-            github::decode_content(&blob.content)?
+        let hint = params.encoding.as_deref();
+        let decode_result =
+            if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
+                github::decode_content(encoded, hint)?
+            } else {
+                let blob = github.get_blob(owner, repo, &contents.sha).await?;
+                github::decode_content(&blob.content, hint)?
+            };
+        let encoding_label = match decode_result.source {
+            github::encoding::DetectionSource::AssumedUtf8 => None,
+            github::encoding::DetectionSource::Detected if decode_result.encoding == "utf-8" => {
+                None
+            }
+            _ => Some(decode_result.encoding.clone()),
         };
+        let raw = decode_result.text;
 
         let total = raw.lines().count();
         let content = if let Some(ref range) = params.lines {
@@ -264,7 +274,12 @@ impl Scout {
             github::apply_line_range(&raw, 1, None)
         };
 
-        let output = github::format::format_file_content(&params.path, total, &content);
+        let output = github::format::format_file_content(
+            &params.path,
+            total,
+            &content,
+            encoding_label.as_deref(),
+        );
 
         info!(path = %params.path, lines = total, "repo_read complete");
         Ok(output)
@@ -313,8 +328,8 @@ impl Scout {
             },
         };
 
-        let readme_content = readme_encoded.and_then(|c| match github::decode_content(&c) {
-            Ok(content) => Some(content),
+        let readme_content = readme_encoded.and_then(|c| match github::decode_content(&c, None) {
+            Ok(result) => Some(result.text),
             Err(e) => {
                 warn!(%e, "failed to decode README");
                 notes.push(format!("README could not be decoded ({e})"));
@@ -965,6 +980,48 @@ mod tests {
         assert!(
             std::ptr::eq(client, client2),
             "second call returns the same cached reference"
+        );
+    }
+
+    /// [T-008] repo_read: --encoding hint is passed to decode_content and
+    /// used to decode non-UTF-8 content correctly.
+    #[tokio::test]
+    async fn t_008_repo_read_decodes_with_encoding_hint() {
+        let Some(server) = try_spawn_mock_server("tools::t_008").await else {
+            return;
+        };
+
+        // "テスト" in Shift_JIS ([0x83, 0x65, 0x83, 0x58, 0x83, 0x67]), base64-encoded.
+        // Without --encoding, chardetng auto-detects Shift_JIS for 6 bytes too.
+        // With --encoding shift_jis, decode_explicit is used (deterministic).
+        let shift_jis_b64 = "g2WDWINn";
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/contents/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "abc123",
+                "content": shift_jis_b64
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_github("http://localhost:0", &server.uri());
+        let params = RepoReadParams {
+            repository: "owner/repo".into(),
+            path: "test.txt".into(),
+            ref_: None,
+            lines: None,
+            encoding: Some("shift_jis".into()),
+        };
+
+        let result = s.repo_read(params).await.unwrap();
+        assert!(
+            result.contains("テスト"),
+            "output should contain decoded Shift_JIS text, got: {result}"
+        );
+        assert!(
+            result.contains("[encoding: shift_jis]"),
+            "header should include encoding label, got: {result}"
         );
     }
 }

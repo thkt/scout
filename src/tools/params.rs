@@ -101,6 +101,7 @@ Examples:
   scout repo-read facebook/react README.md
   scout repo-read facebook/react src/index.ts --lines 1-80
   scout repo-read facebook/react Cargo.toml --ref main
+  scout repo-read owner/repo legacy.txt --encoding shift_jis
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
@@ -115,6 +116,12 @@ pub struct RepoReadParams {
     /// Line range: "1-80", "50-", or "100" (first N lines)
     #[arg(short, long)]
     pub lines: Option<String>,
+    /// Character encoding label (e.g., shift_jis, euc-jp, gbk).
+    /// When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other
+    /// multi-byte encodings via BOM and chardetng. Single-byte encodings (windows-1252,
+    /// ISO-8859-*, etc.) require explicit --encoding.
+    #[arg(long)]
+    pub encoding: Option<String>,
 }
 
 #[derive(Args)]

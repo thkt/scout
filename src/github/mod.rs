@@ -1,3 +1,4 @@
+pub(crate) mod encoding;
 pub(crate) mod format;
 mod helpers;
 pub(crate) mod types;
@@ -64,6 +65,9 @@ pub enum GitHubError {
 
     #[error("Content decode error: {0}")]
     Decode(String),
+
+    #[error("{0}")]
+    NonUtf8(String),
 }
 
 /// HTTP client for the GitHub REST API v3.
