@@ -9,6 +9,17 @@ mod ssrf;
 pub(crate) use ssrf::{DnsResolver, TokioDnsResolver};
 use ssrf::{redact_url_credentials, ssrf_check};
 
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::sync::OnceLock;
+#[cfg(feature = "js-rendering")]
+use std::time::Duration;
+
+#[cfg(feature = "js-rendering")]
+use tokio::time::timeout;
+
 use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
@@ -18,7 +29,7 @@ use tracing::{debug, info, warn};
 
 /// Options for [`fetch_page`] that control rendering and output.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FetchOptions {
+pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
     pub js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
@@ -29,7 +40,7 @@ const MAX_RESPONSE_BYTES: usize = 10_000_000;
 const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
-pub enum FetchError {
+pub(crate) enum FetchError {
     #[error("invalid URL: must be HTTP(S)")]
     InvalidScheme,
 
@@ -73,7 +84,7 @@ pub enum FetchError {
 /// ~1 sentence; pages below this almost always need JS rendering.
 const EXTRACT_TEXT_THRESHOLD: usize = 50;
 
-pub async fn fetch_page(
+pub(crate) async fn fetch_page(
     client: &Client,
     url: &str,
     opts: FetchOptions,
@@ -167,7 +178,7 @@ pub async fn fetch_page(
     }
 
     debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(article, final_url))
+    Ok(to_fetch_result(&article, final_url))
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates
@@ -313,9 +324,8 @@ impl From<BrowserError> for FetchError {
 }
 
 #[cfg(feature = "js-rendering")]
-fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
-    static CACHE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
-        std::sync::OnceLock::new();
+fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
+    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
     let cached = CACHE.get_or_init(|| {
         let path_commands: &[&str] = if cfg!(target_os = "macos") {
@@ -328,12 +338,10 @@ fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
                 "chromium",
             ]
         };
-        let known_paths: &[&std::path::Path] = if cfg!(target_os = "macos") {
+        let known_paths: &[&Path] = if cfg!(target_os = "macos") {
             &[
-                std::path::Path::new(
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                ),
-                std::path::Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+                Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
             ]
         } else {
             &[]
@@ -363,11 +371,11 @@ fn build_launch_args() -> Vec<&'static str> {
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
-        std::borrow::Cow::Borrowed(url)
+        Cow::Borrowed(url)
     } else if let Some(rest) = url.strip_prefix("ws://") {
-        std::borrow::Cow::Owned(format!("http://{rest}"))
+        Cow::Owned(format!("http://{rest}"))
     } else if let Some(rest) = url.strip_prefix("wss://") {
-        std::borrow::Cow::Owned(format!("https://{rest}"))
+        Cow::Owned(format!("https://{rest}"))
     } else if url.starts_with("data:")
         || url.starts_with("about:")
         || url.starts_with("chrome:")
@@ -382,7 +390,7 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsRe
 }
 
 #[cfg(feature = "js-rendering")]
-const CDP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(
@@ -403,7 +411,7 @@ async fn fetch_with_cdp(
         .build()
         .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
 
-    let (mut browser, mut handler) = tokio::time::timeout(CDP_TIMEOUT, Browser::launch(config))
+    let (mut browser, mut handler) = timeout(CDP_TIMEOUT, Browser::launch(config))
         .await
         .map_err(|_| BrowserError::TimedOut)?
         .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
@@ -417,11 +425,11 @@ async fn fetch_with_cdp(
     });
 
     // unwrap_or (not ?) so cleanup below runs even on timeout.
-    let result = tokio::time::timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
+    let result = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
         .await
         .unwrap_or(Err(BrowserError::TimedOut));
 
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), browser.close()).await;
+    let _ = timeout(Duration::from_secs(5), browser.close()).await;
     handler_task.abort();
 
     result
@@ -497,14 +505,14 @@ async fn cdp_navigate(
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 fn resolve_browser_binary_from(
     path_commands: &[&str],
-    known_paths: &[&std::path::Path],
-) -> Result<std::path::PathBuf, BrowserError> {
+    known_paths: &[&Path],
+) -> Result<PathBuf, BrowserError> {
     for cmd in path_commands {
-        if let Ok(output) = std::process::Command::new("which").arg(cmd).output()
+        if let Ok(output) = Command::new("which").arg(cmd).output()
             && output.status.success()
         {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return Ok(std::path::PathBuf::from(path));
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -524,7 +532,7 @@ async fn download(
     max_redirects: usize,
     resolver: &impl DnsResolver,
 ) -> Result<(String, String), FetchError> {
-    let mut current_url = url.to_string();
+    let mut current_url = url.to_owned();
 
     for _hop in 0..=max_redirects {
         let response = client
@@ -577,13 +585,17 @@ async fn download(
 
         let content_length = response.content_length();
         if let Some(len) = content_length
-            && len as usize > MAX_RESPONSE_BYTES
+            && usize::try_from(len).unwrap_or(usize::MAX) > MAX_RESPONSE_BYTES
         {
             return Err(FetchError::TooLarge);
         }
 
         let capacity = content_length
-            .map(|len| (len as usize).min(MAX_RESPONSE_BYTES))
+            .map(|len| {
+                usize::try_from(len)
+                    .unwrap_or(usize::MAX)
+                    .min(MAX_RESPONSE_BYTES)
+            })
             .unwrap_or(8192);
         let mut body = Vec::with_capacity(capacity);
         let mut stream = response;
@@ -607,7 +619,7 @@ fn extract_charset(content_type: &str) -> Option<String> {
         if let Some(value) = lower.strip_prefix("charset=") {
             let value = value.trim().trim_matches('"');
             if !value.is_empty() {
-                return Some(value.to_string());
+                return Some(value.to_owned());
             }
         }
         None
@@ -637,7 +649,7 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
         && mime != "application/xhtml+xml"
         && mime != "application/xml"
     {
-        return Err(FetchError::UnsupportedContentType(mime.to_string()));
+        return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
     Ok(())
 }
@@ -646,6 +658,7 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
 mod charset_tests {
     use super::*;
 
+    /// [T-F001] extracts_charset_from_content_type
     #[test]
     fn extracts_charset_from_content_type() {
         assert_eq!(
@@ -662,12 +675,14 @@ mod charset_tests {
         );
     }
 
+    /// [T-F002] returns_none_when_no_charset
     #[test]
     fn returns_none_when_no_charset() {
         assert!(extract_charset("text/html").is_none());
         assert!(extract_charset("text/plain; boundary=something").is_none());
     }
 
+    /// [T-F003] decode_body_handles_utf8
     #[test]
     fn decode_body_handles_utf8() {
         let bytes = "こんにちは".as_bytes();
@@ -675,6 +690,7 @@ mod charset_tests {
         assert_eq!(decode_body(bytes, None), "こんにちは");
     }
 
+    /// [T-F004] decode_body_handles_shift_jis
     #[test]
     fn decode_body_handles_shift_jis() {
         let encoding = encoding_rs::SHIFT_JIS;
@@ -682,6 +698,7 @@ mod charset_tests {
         assert_eq!(decode_body(&bytes, Some("shift_jis")), "テスト");
     }
 
+    /// [T-F005] decode_body_handles_euc_jp
     #[test]
     fn decode_body_handles_euc_jp() {
         let encoding = encoding_rs::EUC_JP;
@@ -689,6 +706,7 @@ mod charset_tests {
         assert_eq!(decode_body(&bytes, Some("euc-jp")), "日本語");
     }
 
+    /// [T-F006] decode_body_falls_back_to_utf8_for_unknown
     #[test]
     fn decode_body_falls_back_to_utf8_for_unknown() {
         let bytes = "hello".as_bytes();
@@ -700,6 +718,7 @@ mod charset_tests {
 mod content_type_tests {
     use super::*;
 
+    /// [T-F007] accepts_textual_content_types
     #[test]
     fn accepts_textual_content_types() {
         for ct in [
@@ -713,6 +732,7 @@ mod content_type_tests {
         }
     }
 
+    /// [T-F008] rejects_non_textual_content_types
     #[test]
     fn rejects_non_textual_content_types() {
         for ct in ["application/pdf", "image/png", "application/json"] {
@@ -731,15 +751,13 @@ mod content_type_tests {
 mod download_tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
+    use reqwest::redirect::Policy;
     use std::net::IpAddr;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+        Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
     #[derive(Clone, Copy)]
@@ -750,6 +768,7 @@ mod download_tests {
         }
     }
 
+    /// [T-F009] download_success_returns_html
     #[tokio::test]
     async fn download_success_returns_html() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -778,6 +797,7 @@ mod download_tests {
         assert!(html.contains("hello"));
     }
 
+    /// [T-F010] download_non_success_returns_status_error
     #[tokio::test]
     async fn download_non_success_returns_status_error() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -817,6 +837,7 @@ mod download_tests {
         ));
     }
 
+    /// [T-F011] download_too_large_body_rejected
     #[tokio::test]
     async fn download_too_large_body_rejected() {
         let oversized = "x".repeat(MAX_RESPONSE_BYTES + 1);
@@ -840,6 +861,7 @@ mod download_tests {
         assert!(matches!(result, Err(FetchError::TooLarge)));
     }
 
+    /// [T-F012] download_rejects_non_html_content_type
     #[tokio::test]
     async fn download_rejects_non_html_content_type() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -869,6 +891,7 @@ mod download_tests {
         );
     }
 
+    /// [T-F013] redirect_to_private_ip_blocked
     #[tokio::test]
     async fn redirect_to_private_ip_blocked() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -896,6 +919,7 @@ mod download_tests {
         );
     }
 
+    /// [T-F014] redirect_to_dns_private_ip_blocked
     #[tokio::test]
     async fn redirect_to_dns_private_ip_blocked() {
         #[derive(Clone, Copy)]
@@ -931,6 +955,7 @@ mod download_tests {
         );
     }
 
+    /// [T-F015] too_many_redirects_returns_error
     #[tokio::test]
     async fn too_many_redirects_returns_error() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -958,6 +983,7 @@ mod download_tests {
         );
     }
 
+    /// [T-F016] redirect_missing_location_header_returns_error
     #[tokio::test]
     async fn redirect_missing_location_header_returns_error() {
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -988,16 +1014,15 @@ mod download_tests {
 mod fetch_page_tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
+    use reqwest::redirect::Policy;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+        Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
+    /// [T-F017] blocks_ssrf_to_localhost
     #[tokio::test]
     async fn blocks_ssrf_to_localhost() {
         let client = no_redirect_client();
@@ -1011,6 +1036,7 @@ mod fetch_page_tests {
         assert!(matches!(result, Err(FetchError::InternalHost)));
     }
 
+    /// [T-F018] js_flag_attempts_rendering_on_rich_body
     #[tokio::test]
     async fn js_flag_attempts_rendering_on_rich_body() {
         let content = "x".repeat(200);
@@ -1045,6 +1071,7 @@ mod fetch_page_tests {
         );
     }
 
+    /// [T-F019] t010_js_flag_errors_when_feature_disabled
     #[cfg(not(feature = "js-rendering"))]
     #[tokio::test]
     async fn t010_js_flag_errors_when_feature_disabled() {
@@ -1066,6 +1093,7 @@ mod fetch_page_tests {
 mod js_dependent_tests {
     use super::*;
 
+    /// [T-F020] all_spa_frameworks_detected
     #[test]
     fn all_spa_frameworks_detected() {
         for id in SPA_ROOT_IDS {
@@ -1077,6 +1105,7 @@ mod js_dependent_tests {
         }
     }
 
+    /// [T-F021] normal_html_not_detected
     #[test]
     fn normal_html_not_detected() {
         let html = r#"<html><body><article>
@@ -1086,6 +1115,7 @@ mod js_dependent_tests {
         assert!(!is_js_dependent(html));
     }
 
+    /// [T-F022] script_without_spa_pattern_but_empty_body
     #[test]
     fn script_without_spa_pattern_but_empty_body() {
         let html = r#"<html><head><script src="bundle.js"></script></head>
@@ -1093,12 +1123,14 @@ mod js_dependent_tests {
         assert!(is_js_dependent(html));
     }
 
+    /// [T-F023] spa_pattern_without_script_but_empty_body
     #[test]
     fn spa_pattern_without_script_but_empty_body() {
         let html = r#"<html><body><div id="root"></div></body></html>"#;
         assert!(is_js_dependent(html));
     }
 
+    /// [T-F024] rich_body_with_scripts_not_detected
     #[test]
     fn rich_body_with_scripts_not_detected() {
         let content = "x".repeat(200);
@@ -1109,12 +1141,14 @@ mod js_dependent_tests {
         assert!(!is_js_dependent(&html));
     }
 
+    /// [T-F025] thin_body_without_script_or_spa_pattern_not_detected
     #[test]
     fn thin_body_without_script_or_spa_pattern_not_detected() {
         let html = "<html><body><p>short</p></body></html>";
         assert!(!is_js_dependent(html));
     }
 
+    /// [T-F026] no_body_tag_falls_back_to_full_html
     #[test]
     fn no_body_tag_falls_back_to_full_html() {
         let html = r#"<div id="root"></div><script src="app.js"></script>"#;
@@ -1126,18 +1160,21 @@ mod js_dependent_tests {
 mod thin_body_tests {
     use super::*;
 
+    /// [T-F027] style_content_excluded_from_visible_text
     #[test]
     fn style_content_excluded_from_visible_text() {
         let html = "<html><body><style>.big{font-size:9999px;color:red;margin:0 auto;padding:10px 20px 30px 40px}</style><p>hi</p></body></html>";
         assert!(has_thin_body(html));
     }
 
+    /// [T-F028] uppercase_script_tag_excluded
     #[test]
     fn uppercase_script_tag_excluded() {
         let html = "<html><body><SCRIPT>var x = 'lots of javascript code that should be ignored by the parser';</SCRIPT><p>hi</p></body></html>";
         assert!(has_thin_body(html));
     }
 
+    /// [T-F029] uppercase_body_tag_found
     #[test]
     fn uppercase_body_tag_found() {
         let content = "x".repeat(200);
@@ -1145,6 +1182,7 @@ mod thin_body_tests {
         assert!(!has_thin_body(&html));
     }
 
+    /// [T-F030] exactly_at_threshold_is_not_thin (body)
     #[test]
     fn exactly_at_threshold_is_not_thin() {
         let content = "x".repeat(BODY_TEXT_THRESHOLD);
@@ -1152,6 +1190,7 @@ mod thin_body_tests {
         assert!(!has_thin_body(&html));
     }
 
+    /// [T-F031] just_below_threshold_is_thin (body)
     #[test]
     fn just_below_threshold_is_thin() {
         let content = "x".repeat(BODY_TEXT_THRESHOLD - 1);
@@ -1159,6 +1198,7 @@ mod thin_body_tests {
         assert!(has_thin_body(&html));
     }
 
+    /// [T-F032] whitespace_only_body_is_thin
     #[test]
     fn whitespace_only_body_is_thin() {
         let html = "<html><body>   \n\t  \n   </body></html>";
@@ -1176,51 +1216,59 @@ mod thin_extract_tests {
             title: None,
             byline: None,
             published_time: None,
-            content_html: content_html.to_string(),
+            content_html: content_html.to_owned(),
             used_raw_fallback,
         }
     }
 
+    /// [T-F033] raw_fallback_with_short_content_is_thin
     #[test]
     fn raw_fallback_with_short_content_is_thin() {
         assert!(is_thin_extract(&article("<p>short</p>", true)));
     }
 
+    /// [T-F034] raw_fallback_with_rich_content_still_thin
     #[test]
     fn raw_fallback_with_rich_content_still_thin() {
         let content = format!("<p>{}</p>", "x".repeat(100));
         assert!(is_thin_extract(&article(&content, true)));
     }
 
+    /// [T-F035] short_content_is_thin
     #[test]
     fn short_content_is_thin() {
         assert!(is_thin_extract(&article("<p>hi</p>", false)));
     }
 
+    /// [T-F036] sufficient_content_is_not_thin
     #[test]
     fn sufficient_content_is_not_thin() {
         let content = format!("<p>{}</p>", "x".repeat(100));
         assert!(!is_thin_extract(&article(&content, false)));
     }
 
+    /// [T-F037] exactly_at_threshold_is_not_thin (extract)
     #[test]
     fn exactly_at_threshold_is_not_thin() {
         let content = format!("<p>{}</p>", "x".repeat(EXTRACT_TEXT_THRESHOLD));
         assert!(!is_thin_extract(&article(&content, false)));
     }
 
+    /// [T-F038] just_below_threshold_is_thin (extract)
     #[test]
     fn just_below_threshold_is_thin() {
         let content = format!("<p>{}</p>", "x".repeat(EXTRACT_TEXT_THRESHOLD - 1));
         assert!(is_thin_extract(&article(&content, false)));
     }
 
+    /// [T-F039] html_tags_excluded_from_count
     #[test]
     fn html_tags_excluded_from_count() {
         let content = r#"<div class="very-long-class-name"><span>ab</span></div>"#;
         assert!(is_thin_extract(&article(content, false)));
     }
 
+    /// [T-F040] whitespace_excluded_from_count
     #[test]
     fn whitespace_excluded_from_count() {
         let content = format!("<p>{}</p>", " x ".repeat(30));
@@ -1231,7 +1279,9 @@ mod thin_extract_tests {
 #[cfg(test)]
 mod browser_binary_tests {
     use super::*;
+    use std::env;
 
+    /// [T-F041] t001_returns_error_when_chrome_not_found
     #[test]
     fn t001_returns_error_when_chrome_not_found() {
         let result = resolve_browser_binary_from(&[], &[]);
@@ -1241,9 +1291,10 @@ mod browser_binary_tests {
         );
     }
 
+    /// [T-F042] finds_binary_at_known_path
     #[test]
     fn finds_binary_at_known_path() {
-        let existing = std::env::current_exe().unwrap();
+        let existing = env::current_exe().unwrap();
         let result = resolve_browser_binary_from(&[], &[existing.as_path()]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), existing);
@@ -1255,6 +1306,7 @@ mod browser_binary_tests {
 mod cdp_launch_tests {
     use super::*;
 
+    /// [T-F043] t009_launch_args_contain_security_flags
     #[test]
     fn t009_launch_args_contain_security_flags() {
         let args = build_launch_args();
@@ -1292,6 +1344,7 @@ mod browser_request_tests {
         }
     }
 
+    /// [T-F044] t004_blocks_dns_resolving_to_private_ip
     #[tokio::test]
     async fn t004_blocks_dns_resolving_to_private_ip() {
         let resolver = MockPrivateDns;
@@ -1301,6 +1354,7 @@ mod browser_request_tests {
         );
     }
 
+    /// [T-F045] t004_blocks_internal_ip_literal
     #[tokio::test]
     async fn t004_blocks_internal_ip_literal() {
         let resolver = MockPublicDns;
@@ -1310,6 +1364,7 @@ mod browser_request_tests {
         );
     }
 
+    /// [T-F046] t004_allows_public_url
     #[tokio::test]
     async fn t004_allows_public_url() {
         let resolver = MockPublicDns;
@@ -1319,6 +1374,7 @@ mod browser_request_tests {
         );
     }
 
+    /// [T-F047] t004_allows_non_network_urls
     #[tokio::test]
     async fn t004_allows_non_network_urls() {
         let resolver = MockPublicDns;
@@ -1335,6 +1391,7 @@ mod browser_request_tests {
         }
     }
 
+    /// [T-F048] t004_blocks_unknown_schemes
     #[tokio::test]
     async fn t004_blocks_unknown_schemes() {
         let resolver = MockPublicDns;
@@ -1346,6 +1403,7 @@ mod browser_request_tests {
         }
     }
 
+    /// [T-F049] t004_blocks_websocket_to_internal
     #[tokio::test]
     async fn t004_blocks_websocket_to_internal() {
         let resolver = MockPublicDns;
@@ -1359,6 +1417,7 @@ mod browser_request_tests {
         );
     }
 
+    /// [T-F050] t004_blocks_websocket_dns_to_private
     #[tokio::test]
     async fn t004_blocks_websocket_dns_to_private() {
         let resolver = MockPrivateDns;
@@ -1378,6 +1437,7 @@ mod cdp_integration_tests {
         resolve_browser_binary().is_ok()
     }
 
+    /// [T-F051] t005_cdp_renders_public_url
     #[tokio::test]
     async fn t005_cdp_renders_public_url() {
         if !chrome_available() {

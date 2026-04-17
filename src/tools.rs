@@ -4,12 +4,14 @@ mod params;
 pub use errors::ScoutError;
 pub use params::Command;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, stdin};
 use std::time::Duration;
 
 use reqwest::Client;
-use tokio::io::AsyncReadExt;
+use reqwest::redirect::Policy;
+use tokio::io::{AsyncReadExt, stdin as tokio_stdin};
 use tokio::sync::OnceCell;
+use tokio::time::timeout;
 use tracing::{info, warn};
 
 use errors::{parse_repo_param, unwrap_or_note};
@@ -18,11 +20,14 @@ use params::{
     resolve_input,
 };
 
-use crate::fetch::{FetchOptions, TokioDnsResolver};
+use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
+use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
+use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient};
 use crate::markdown::{escape_md_inline, escape_md_link, shift_headings, truncate_with_note};
 use crate::search::engine;
+use crate::slack::{SlackClient, SlackError, SlackUrl, parse_slack_url};
 
 const MAX_STDIN_BYTES: u64 = 1_048_576;
 
@@ -31,7 +36,7 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
         return Ok(None);
     }
     let mut buf = String::new();
-    tokio::io::stdin()
+    tokio_stdin()
         .take(MAX_STDIN_BYTES)
         .read_to_string(&mut buf)
         .await
@@ -40,7 +45,7 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
     Ok(if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(trimmed.to_owned())
     })
 }
 
@@ -101,7 +106,7 @@ async fn resolve_stdin_arg(
     label: &str,
     placeholder: &str,
 ) -> Result<String, ScoutError> {
-    let is_terminal = std::io::stdin().is_terminal();
+    let is_terminal = stdin().is_terminal();
     let content =
         read_stdin((value.is_none() && !is_terminal) || value.as_deref() == Some("-")).await?;
     resolve_input(value, content.as_deref(), is_terminal, label, placeholder)
@@ -134,13 +139,13 @@ impl Scout {
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .redirect(Policy::limited(MAX_REDIRECTS))
             .build()
             .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
         let fetch_http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(Policy::none())
             .build()
             .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
         let gemini = GeminiClient::from_env(http.clone())
@@ -190,7 +195,7 @@ impl Scout {
         let mut output = shift_headings(
             &result.answer.unwrap_or_else(|| {
                 "(No answer returned — the query may have been filtered by safety settings.)"
-                    .to_string()
+                    .to_owned()
             }),
             2,
         );
@@ -213,7 +218,7 @@ impl Scout {
     async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
         let url = resolve_stdin_arg(params.url, "url", "<URL>").await?;
 
-        if let Some(slack_url) = crate::slack::parse_slack_url(&url) {
+        if let Some(slack_url) = parse_slack_url(&url) {
             return self.fetch_slack(slack_url).await;
         }
 
@@ -223,13 +228,13 @@ impl Scout {
             js: params.js,
             raw: params.raw,
         };
-        let result = tokio::time::timeout(
+        let result = timeout(
             FETCH_TOOL_TIMEOUT,
-            crate::fetch::fetch_page(&self.fetch_http, &url, opts, &TokioDnsResolver),
+            fetch_page(&self.fetch_http, &url, opts, &TokioDnsResolver),
         )
         .await
         .unwrap_or_else(|_| {
-            Err(crate::fetch::FetchError::Timeout(format!(
+            Err(FetchError::Timeout(format!(
                 "fetch timed out after {}s",
                 FETCH_TOOL_TIMEOUT.as_secs()
             )))
@@ -243,16 +248,16 @@ impl Scout {
         Ok(format_fetch_output(&result))
     }
 
-    async fn fetch_slack(&self, slack_url: crate::slack::SlackUrl) -> Result<String, ScoutError> {
+    async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<String, ScoutError> {
         info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack)");
-        let client = crate::slack::SlackClient::from_env(self.http.clone())?;
-        let output = tokio::time::timeout(
+        let client = SlackClient::from_env(self.http.clone())?;
+        let output = timeout(
             SLACK_TOOL_TIMEOUT,
             client.fetch_message(&slack_url),
         )
         .await
         .unwrap_or_else(|_| {
-            Err(crate::slack::SlackError::Timeout(format!(
+            Err(SlackError::Timeout(format!(
                 "slack fetch timed out after {}s",
                 SLACK_TOOL_TIMEOUT.as_secs()
             )))
@@ -324,7 +329,7 @@ impl Scout {
     }
 
     async fn repo_read(&self, params: RepoReadParams) -> Result<String, ScoutError> {
-        let is_terminal = std::io::stdin().is_terminal();
+        let is_terminal = stdin().is_terminal();
         let content = read_stdin(
             params.repository.as_deref() == Some("-")
                 || params.path.as_deref() == Some("-")
@@ -440,7 +445,7 @@ async fn resolve_readme(
     github: &GitHubClient,
     owner: &str,
     repo: &str,
-    readme: Result<crate::github::types::ContentsResponse, github::GitHubError>,
+    readme: Result<ContentsResponse, github::GitHubError>,
     notes: &mut Vec<String>,
 ) -> Option<String> {
     let entry = match readme {
@@ -477,10 +482,10 @@ async fn resolve_readme(
     })
 }
 
-fn format_fetch_output(result: &crate::fetch::converter::FetchResult) -> String {
+fn format_fetch_output(result: &FetchResult) -> String {
     let shifted = shift_headings(&result.markdown, 2);
     let output = if result.used_raw_fallback {
-        format!("{}{shifted}", crate::fetch::converter::RAW_FALLBACK_NOTE)
+        format!("{RAW_FALLBACK_NOTE}{shifted}")
     } else {
         shifted
     };
@@ -500,13 +505,13 @@ mod tests {
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .redirect(Policy::limited(MAX_REDIRECTS))
             .build()
             .unwrap();
         let fetch_http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(Policy::none())
             .build()
             .unwrap();
         (http, fetch_http)
@@ -516,6 +521,7 @@ mod tests {
         scout_with_github(gemini_uri, "http://localhost:0")
     }
 
+    /// [T-TS001] search_success_returns_content
     #[tokio::test]
     async fn search_success_returns_content() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -560,6 +566,7 @@ mod tests {
         );
     }
 
+    /// [T-TS002] research_success_returns_report
     #[tokio::test]
     async fn research_success_returns_report() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -604,9 +611,10 @@ mod tests {
         );
     }
 
+    /// [T-TS003] fetch_output_shifts_headings
     #[test]
     fn fetch_output_shifts_headings() {
-        let result = crate::fetch::converter::FetchResult {
+        let result = FetchResult {
             url: "https://example.com".into(),
             markdown: "# Title\n## Section\nContent".into(),
             used_raw_fallback: false,
@@ -616,16 +624,17 @@ mod tests {
         assert!(output.contains("#### Section"), "h2 should shift to h4");
     }
 
+    /// [T-TS004] fetch_output_shifts_headings_with_raw_fallback
     #[test]
     fn fetch_output_shifts_headings_with_raw_fallback() {
-        let result = crate::fetch::converter::FetchResult {
+        let result = FetchResult {
             url: "https://example.com".into(),
             markdown: "# Raw Title\nBody".into(),
             used_raw_fallback: true,
         };
         let output = format_fetch_output(&result);
         assert!(
-            output.starts_with(crate::fetch::converter::RAW_FALLBACK_NOTE.trim_end()),
+            output.starts_with(RAW_FALLBACK_NOTE.trim_end()),
             "should prepend fallback note"
         );
         assert!(output.contains("### Raw Title"), "h1 should shift to h3");
@@ -751,9 +760,10 @@ mod tests {
         );
     }
 
+    /// [T-TS005] fetch_output_truncates_long_content
     #[test]
     fn fetch_output_truncates_long_content() {
-        let result = crate::fetch::converter::FetchResult {
+        let result = FetchResult {
             url: "https://example.com".into(),
             markdown: format!("# Title\n{}", "x".repeat(150_000)),
             used_raw_fallback: false,
@@ -864,14 +874,16 @@ mod tests {
     /// arrives at a time and the barrier never releases → deadlock → timeout.
     #[tokio::test(flavor = "multi_thread")]
     async fn t_002_repo_overview_parallel_after_get_repo() {
+        use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
+        use tokio::sync::Barrier;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
 
         // 4 parallel APIs must all arrive before any response is sent.
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(4));
+        let barrier = Arc::new(Barrier::new(4));
 
         let server = tokio::spawn(async move {
             for _ in 0..10 {
@@ -893,13 +905,13 @@ mod tests {
                         .unwrap_or("");
 
                     let (body, wait) = if path == "/repos/owner/repo" {
-                        (r#"{"full_name":"owner/repo","description":"test","html_url":"https://github.com/owner/repo","default_branch":"main","language":"Rust","stargazers_count":1,"forks_count":0,"open_issues_count":0,"topics":[],"license":null}"#.to_string(), false)
+                        (r#"{"full_name":"owner/repo","description":"test","html_url":"https://github.com/owner/repo","default_branch":"main","language":"Rust","stargazers_count":1,"forks_count":0,"open_issues_count":0,"topics":[],"license":null}"#.to_owned(), false)
                     } else if path.contains("/git/blobs/") {
-                        (r#"{"content":""}"#.to_string(), false)
+                        (r#"{"content":""}"#.to_owned(), false)
                     } else if path.contains("/readme") {
-                        (r#"{"sha":"abc123","content":""}"#.to_string(), true)
+                        (r#"{"sha":"abc123","content":""}"#.to_owned(), true)
                     } else {
-                        ("[]".to_string(), true)
+                        ("[]".to_owned(), true)
                     };
 
                     if wait {
@@ -924,8 +936,7 @@ mod tests {
 
         // Parallel: barrier(4) releases instantly → completes in ms.
         // Sequential: barrier never reaches 4 → deadlock → timeout.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), s.repo_overview(params)).await;
+        let result = timeout(Duration::from_secs(5), s.repo_overview(params)).await;
 
         assert!(
             result.is_ok(),
@@ -1061,12 +1072,13 @@ mod tests {
     /// (OnceCell caching verified via std::ptr::eq).
     #[tokio::test]
     async fn t_007_github_returns_same_reference() {
+        use std::ptr;
         // Use pre-set OnceCell to avoid triggering real `gh auth token` subprocess.
         let s = scout_with_github("http://localhost:0", "http://localhost:0");
         let first = s.github().await;
         let second = s.github().await;
         assert!(
-            std::ptr::eq(first, second),
+            ptr::eq(first, second),
             "github() should return the same cached reference on second call"
         );
     }
@@ -1079,6 +1091,7 @@ mod tests {
     /// wrapper — a hang here is a real bug, not a flaky environment.
     #[tokio::test]
     async fn t_007b_github_lazy_init_from_empty_cell() {
+        use std::ptr;
         let s = scout_lazy("http://localhost:0");
         assert!(s.github.get().is_none(), "starts empty");
 
@@ -1090,7 +1103,7 @@ mod tests {
         );
         let client2 = s.github().await;
         assert!(
-            std::ptr::eq(client, client2),
+            ptr::eq(client, client2),
             "second call returns the same cached reference"
         );
     }

@@ -1,3 +1,5 @@
+use std::env;
+use std::io;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -7,14 +9,14 @@ static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Spawn a wiremock server, returning `None` if loopback bind is unavailable.
 pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
-    let force = std::env::var("SCOUT_NETWORK_TESTS").is_ok();
+    let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
 }
 
 /// Testable core: inject bind result and force flag to control skip-vs-panic.
 pub async fn try_spawn_with_bind(
     test_name: &str,
-    bind_result: std::io::Result<TcpListener>,
+    bind_result: io::Result<TcpListener>,
     force: bool,
 ) -> Option<MockServer> {
     match bind_result {

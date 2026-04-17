@@ -4,18 +4,22 @@ mod helpers;
 pub(crate) mod types;
 
 use helpers::encode_path;
-pub use helpers::{
+pub(crate) use helpers::{
     apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
     validate_path, validate_ref,
 };
 
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::Client;
+use reqwest::header::HeaderMap;
+use serde::de::DeserializeOwned;
+use tokio::process::Command;
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use crate::redacted::Redacted;
+use crate::redacted::{Redacted, assert_https};
 
 use types::{
     BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
@@ -30,7 +34,7 @@ use crate::retry::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum GitHubError {
+pub(crate) enum GitHubError {
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -76,7 +80,7 @@ pub enum GitHubError {
 /// Owner/repo parameters are safe for direct URL interpolation because `parse_repo`
 /// restricts them to `[a-zA-Z0-9._-]`.
 #[derive(Clone)]
-pub struct GitHubClient {
+pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
     base_url: String,
@@ -95,7 +99,7 @@ impl GitHubClient {
         Self {
             http,
             token,
-            base_url: API_BASE.to_string(),
+            base_url: API_BASE.to_owned(),
         }
     }
 
@@ -104,7 +108,7 @@ impl GitHubClient {
         Self {
             http,
             token: None,
-            base_url: base_url.to_string(),
+            base_url: base_url.to_owned(),
         }
     }
 
@@ -117,13 +121,13 @@ impl GitHubClient {
             .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
-            crate::redacted::assert_https(&url);
+            assert_https(&url);
             req = req.header("Authorization", format!("Bearer {}", token.expose()));
         }
         req
     }
 
-    async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
+    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         retry_with(
             || self.get_json_once(path),
             is_retriable,
@@ -133,17 +137,14 @@ impl GitHubClient {
         .await
     }
 
-    async fn get_json_once<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, GitHubError> {
+    async fn get_json_once<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         debug!(path, "github API request");
         let response = self.request(path).send().await?;
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
             200..=299 => Ok(response.json().await?),
-            404 => Err(GitHubError::NotFound(path.to_string())),
+            404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
                 let retry_after = parse_retry_after(response.headers());
                 warn!(retry_after_secs = retry_after, "GitHub API rate limited");
@@ -295,15 +296,12 @@ fn github_delay(e: &GitHubError, attempt: u32) -> Duration {
     retry_after_or_backoff(retry_after, attempt)
 }
 
-fn secs_until_ratelimit_reset(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+fn secs_until_ratelimit_reset(headers: &HeaderMap) -> Option<u64> {
     let reset_ts = headers
         .get("x-ratelimit-reset")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     Some(reset_ts.saturating_sub(now))
 }
 
@@ -315,16 +313,16 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
     let from_env = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
         .filter_map(|var| env_reader(var))
-        .map(|t| t.trim().to_string())
+        .map(|t| t.trim().to_owned())
         .find(|t| !t.is_empty());
 
     if let Some(token) = from_env {
-        return Some(Redacted::new(token));
+        return Some(Redacted::new(&token));
     }
 
-    let output = tokio::time::timeout(
+    let output = timeout(
         TOKEN_RESOLVE_TIMEOUT,
-        tokio::process::Command::new("gh")
+        Command::new("gh")
             .args(["auth", "token"])
             .kill_on_drop(true)
             .output(),
@@ -348,11 +346,11 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
         return None;
     }
 
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if token.is_empty() {
         None
     } else {
-        Some(Redacted::new(token))
+        Some(Redacted::new(&token))
     }
 }
 
@@ -363,6 +361,7 @@ mod http_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
+    /// [T-GH001] get_json maps 404 responses to NotFound error
     #[tokio::test]
     async fn get_json_404_returns_not_found() {
         let Some(server) = try_spawn_mock_server("github::get_json_404").await else {
@@ -379,6 +378,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::NotFound(_))));
     }
 
+    /// [T-GH002] get_json maps 429 responses to RateLimited error
     #[tokio::test]
     async fn get_json_429_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -395,6 +395,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
+    /// [T-GH003] get_json maps 403 with zero remaining to RateLimited error
     #[tokio::test]
     async fn get_json_403_with_zero_remaining_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -415,6 +416,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
+    /// [T-GH004] get_json maps 403 with non-zero remaining to Forbidden error
     #[tokio::test]
     async fn get_json_403_with_remaining_returns_forbidden() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -435,6 +437,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
     }
 
+    /// [T-GH005] resolve_token_with reads token from GITHUB_TOKEN env var
     #[tokio::test]
     async fn resolve_token_reads_env_var() {
         let token = resolve_token_with(|key| {
@@ -446,11 +449,12 @@ mod http_tests {
         })
         .await;
         assert_eq!(
-            token.as_ref().map(|t| t.expose()),
+            token.as_ref().map(super::super::redacted::Redacted::expose),
             Some("test-token-from-env")
         );
     }
 
+    /// [T-GH006] get_json maps 500 responses to generic Api error
     #[tokio::test]
     async fn get_json_500_returns_api_error() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -470,6 +474,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::Api { code: 500, .. })));
     }
 
+    /// [T-GH007] get_json_once propagates Retry-After header value on 429
     #[tokio::test]
     async fn get_json_429_with_retry_after_carries_delay() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -491,13 +496,14 @@ mod http_tests {
         ));
     }
 
+    /// [T-GH008] get_json_once uses x-ratelimit-reset to compute delay on 403 rate limit
     #[tokio::test]
     async fn get_json_403_with_ratelimit_reset_carries_delay() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
             return;
         };
-        let future_reset = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let future_reset = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs()
             + 60;

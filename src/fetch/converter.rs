@@ -4,7 +4,7 @@ use super::extractor::ExtractedArticle;
 
 /// Fetched page content converted to Markdown.
 #[derive(Debug)]
-pub struct FetchResult {
+pub(crate) struct FetchResult {
     pub url: String,
     pub markdown: String,
     pub used_raw_fallback: bool,
@@ -13,9 +13,9 @@ pub struct FetchResult {
 pub(crate) const RAW_FALLBACK_NOTE: &str =
     "> Note: Readability extraction failed. Showing raw page conversion.\n\n";
 
-pub(super) fn to_fetch_result(article: ExtractedArticle, url: String) -> FetchResult {
+pub(super) fn to_fetch_result(article: &ExtractedArticle, url: String) -> FetchResult {
     let markdown = html2md::rewrite_html(&article.content_html, false);
-    let output = format_with_frontmatter(&article, &markdown);
+    let output = format_with_frontmatter(article, &markdown);
 
     FetchResult {
         url,
@@ -56,6 +56,7 @@ pub(crate) fn escape_yaml(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// [T-FC001] always_includes_frontmatter
     #[test]
     fn always_includes_frontmatter() {
         let article = ExtractedArticle {
@@ -66,7 +67,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into());
 
         assert!(result.markdown.starts_with("---\n"));
         assert!(result.markdown.contains("\n---\n\n"));
@@ -76,6 +77,7 @@ mod tests {
         assert!(result.markdown.contains("Body text"));
     }
 
+    /// [T-FC002] frontmatter_omits_missing_fields
     #[test]
     fn frontmatter_omits_missing_fields() {
         let article = ExtractedArticle {
@@ -86,13 +88,14 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into());
 
         assert!(result.markdown.contains("title: \"Only Title\""));
         assert!(!result.markdown.contains("author:"));
         assert!(!result.markdown.contains("date:"));
     }
 
+    /// [T-FC003] escapes_yaml_special_chars
     #[test]
     fn escapes_yaml_special_chars() {
         assert_eq!(escape_yaml(r#"He said "hello""#), r#"He said \"hello\""#);
@@ -103,6 +106,7 @@ mod tests {
         assert_eq!(escape_yaml("null\0byte"), "nullbyte");
     }
 
+    /// [T-FC004] escapes_combined_special_chars
     #[test]
     fn escapes_combined_special_chars() {
         // Backslash-first ordering prevents double-escape: \" must not become \\\"

@@ -2,12 +2,12 @@ pub fn expand_bilingual(query: &str) -> Vec<String> {
     if contains_japanese(query) {
         let eng = to_english_query(query);
         if eng == query {
-            vec![query.to_string()]
+            vec![query.to_owned()]
         } else {
-            vec![query.to_string(), eng]
+            vec![query.to_owned(), eng]
         }
     } else {
-        vec![query.to_string()]
+        vec![query.to_owned()]
     }
 }
 
@@ -30,7 +30,7 @@ fn to_english_query(query: &str) -> String {
         .collect();
 
     if ascii_words.is_empty() {
-        query.to_string()
+        query.to_owned()
     } else {
         ascii_words.join(" ")
     }
@@ -40,6 +40,7 @@ fn to_english_query(query: &str) -> String {
 mod tests {
     use super::*;
 
+    /// [T-SB001] Japanese+ASCII query expands to original plus English-only variant
     #[test]
     fn japanese_query_expands_to_two() {
         let queries = expand_bilingual("型安全 TypeScript");
@@ -48,6 +49,7 @@ mod tests {
         assert!(queries[1].contains("TypeScript"));
     }
 
+    /// [T-SB002] English-only query is not expanded
     #[test]
     fn english_query_stays_single() {
         let queries = expand_bilingual("React hooks best practices");
@@ -55,6 +57,7 @@ mod tests {
         assert_eq!(queries[0], "React hooks best practices");
     }
 
+    /// [T-SB003] Pure Japanese query returns a single element
     #[test]
     fn pure_japanese_query_returns_single() {
         let queries = expand_bilingual("型安全とは");
@@ -62,6 +65,7 @@ mod tests {
         assert_eq!(queries[0], "型安全とは");
     }
 
+    /// [T-SB004] Mixed query extracts ASCII tech terms into English variant
     #[test]
     fn mixed_query_extracts_tech_terms() {
         let queries = expand_bilingual("Rust MCP SDK の使い方");
@@ -72,26 +76,31 @@ mod tests {
         assert!(queries[1].contains("SDK"));
     }
 
+    /// [T-SB005] Hiragana characters detected as Japanese
     #[test]
     fn detects_hiragana() {
         assert!(contains_japanese("あいうえお"));
     }
 
+    /// [T-SB006] Katakana characters detected as Japanese
     #[test]
     fn detects_katakana() {
         assert!(contains_japanese("カタカナ"));
     }
 
+    /// [T-SB007] Kanji characters detected as Japanese
     #[test]
     fn detects_kanji() {
         assert!(contains_japanese("漢字"));
     }
 
+    /// [T-SB008] ASCII-only text not detected as Japanese
     #[test]
     fn no_japanese_in_ascii() {
         assert!(!contains_japanese("hello world"));
     }
 
+    /// [T-SB009] Katakana+ASCII query expands to two variants
     #[test]
     fn katakana_mixed_query_expands_to_two() {
         let queries = expand_bilingual("タイプスクリプト TypeScript");

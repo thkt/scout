@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use tracing::{debug, warn};
 
-use crate::redacted::Redacted;
+use crate::redacted::{Redacted, assert_https};
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
     retry_with,
@@ -21,7 +21,7 @@ const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
-pub enum GeminiError {
+pub(crate) enum GeminiError {
     #[error("GEMINI_API_KEY not set. Get one at https://aistudio.google.com/apikey")]
     ApiKeyNotSet,
 
@@ -38,12 +38,12 @@ pub enum GeminiError {
     Network(#[from] reqwest::Error),
 }
 
-pub trait SearchClient {
+pub(crate) trait SearchClient {
     async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError>;
 }
 
 #[derive(Clone)]
-pub struct GeminiClient {
+pub(crate) struct GeminiClient {
     http: Client,
     api_key: Redacted,
     model: String,
@@ -51,21 +51,21 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
-    pub fn from_env(http: Client) -> Result<Self, GeminiError> {
+    pub(crate) fn from_env(http: Client) -> Result<Self, GeminiError> {
         let api_key = env::var("GEMINI_API_KEY").map_err(|_| GeminiError::ApiKeyNotSet)?;
         if api_key.trim().is_empty() {
             return Err(GeminiError::ApiKeyNotSet);
         }
         let model = env::var("GEMINI_MODEL")
             .ok()
-            .map(|m| m.trim().to_string())
+            .map(|m| m.trim().to_owned())
             .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         Ok(Self {
             http,
-            api_key: Redacted::new(api_key),
+            api_key: Redacted::new(&api_key),
             model,
-            base_url: API_BASE.to_string(),
+            base_url: API_BASE.to_owned(),
         })
     }
 
@@ -73,9 +73,9 @@ impl GeminiClient {
     pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            api_key: Redacted::new("test-key".to_string()),
-            model: DEFAULT_MODEL.to_string(),
-            base_url: base_url.to_string(),
+            api_key: Redacted::new("test-key"),
+            model: DEFAULT_MODEL.to_owned(),
+            base_url: base_url.to_owned(),
         }
     }
 
@@ -88,7 +88,7 @@ impl GeminiClient {
         let request = GenerateContentRequest {
             contents: vec![Content {
                 parts: vec![Part {
-                    text: query.to_string(),
+                    text: query.to_owned(),
                 }],
                 role: None,
             }],
@@ -97,7 +97,7 @@ impl GeminiClient {
             }],
         };
 
-        crate::redacted::assert_https(&url);
+        assert_https(&url);
 
         let response = self
             .http
@@ -185,7 +185,7 @@ fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
     let message = err
         .message
         .clone()
-        .unwrap_or_else(|| "Unknown error".to_string());
+        .unwrap_or_else(|| "Unknown error".to_owned());
 
     match err.code {
         Some(429) => GeminiError::RateLimited { retry_after },
@@ -202,6 +202,7 @@ fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
 mod tests {
     use super::*;
 
+    /// [T-GC001] classify_api_error maps HTTP 429 to RateLimited variant
     #[test]
     fn classify_429_as_rate_limited() {
         let err = ApiError {
@@ -214,6 +215,7 @@ mod tests {
         ));
     }
 
+    /// [T-GC002] classify_api_error maps HTTP 403 to QuotaExhausted variant
     #[test]
     fn classify_403_as_quota_exhausted() {
         let err = ApiError {
@@ -226,6 +228,7 @@ mod tests {
         ));
     }
 
+    /// [T-GC003] classify_api_error maps HTTP 500 to generic Api error
     #[test]
     fn classify_500_as_generic_api_error() {
         let err = ApiError {
@@ -249,6 +252,7 @@ mod http_tests {
     use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
+    /// [T-GC004] search returns GroundedResult with answer and sources on 200 OK
     #[tokio::test]
     async fn search_success_returns_grounded_result() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -283,6 +287,7 @@ mod http_tests {
         assert_eq!(result.sources[0].url, "https://example.com");
     }
 
+    /// [T-GC005] search returns RateLimited error when server responds 429
     #[tokio::test]
     async fn search_429_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -299,6 +304,7 @@ mod http_tests {
         assert!(matches!(result, Err(GeminiError::RateLimited { .. })));
     }
 
+    /// [T-GC006] search classifies 500 response with structured error body
     #[tokio::test]
     async fn search_500_with_error_body_classified() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -325,6 +331,7 @@ mod http_tests {
         }
     }
 
+    /// [T-GC007] search returns generic Api error when 500 response body is not JSON
     #[tokio::test]
     async fn search_500_with_invalid_body_returns_generic_error() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -349,6 +356,7 @@ mod http_tests {
         }
     }
 
+    /// [T-GC008] search classifies error field embedded in 200 OK response body
     #[tokio::test]
     async fn search_200_with_error_field_returns_classified_error() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -370,6 +378,7 @@ mod http_tests {
         assert!(matches!(result, Err(GeminiError::QuotaExhausted(_))));
     }
 
+    /// [T-GC009] generate_with_search propagates Retry-After header value in RateLimited error
     #[tokio::test]
     async fn search_429_with_retry_after_carries_delay() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {

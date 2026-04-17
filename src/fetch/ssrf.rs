@@ -2,13 +2,16 @@
 
 use std::borrow::Cow;
 use std::future::Future;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::time::Duration;
 
+use tokio::net::lookup_host;
+use tokio::time::timeout;
 use tracing::warn;
 
 use super::FetchError;
 
-const DNS_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) trait DnsResolver: Clone + Send + Sync + 'static {
     fn lookup(
@@ -23,13 +26,10 @@ pub(crate) struct TokioDnsResolver;
 
 impl DnsResolver for TokioDnsResolver {
     async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, FetchError> {
-        let addrs = tokio::time::timeout(
-            DNS_LOOKUP_TIMEOUT,
-            tokio::net::lookup_host(format!("{host}:{port}")),
-        )
-        .await
-        .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_string()))?
-        .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
+        let addrs = timeout(DNS_LOOKUP_TIMEOUT, lookup_host(format!("{host}:{port}")))
+            .await
+            .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_owned()))?
+            .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
         Ok(addrs.map(|a| a.ip()).collect())
     }
 }
@@ -102,7 +102,7 @@ fn is_blocked_host(parsed: &url::Url) -> bool {
     }
 }
 
-fn is_cgn(v4: std::net::Ipv4Addr) -> bool {
+fn is_cgn(v4: Ipv4Addr) -> bool {
     let octets = v4.octets();
     octets[0] == 100 && (64..=127).contains(&octets[1])
 }
@@ -142,6 +142,7 @@ fn is_ipv6_unique_local(v6: &Ipv6Addr) -> bool {
 mod tests {
     use super::*;
 
+    /// [T-FS001] validate_url_accepts_valid
     #[test]
     fn validate_url_accepts_valid() {
         for url in [
@@ -154,6 +155,7 @@ mod tests {
         }
     }
 
+    /// [T-FS002] validate_url_rejects_bad_scheme
     #[test]
     fn validate_url_rejects_bad_scheme() {
         for url in ["ftp://example.com", "file:///tmp/test", "not-a-url"] {
@@ -161,6 +163,7 @@ mod tests {
         }
     }
 
+    /// [T-FS003] validate_url_rejects_internal_hosts
     #[test]
     fn validate_url_rejects_internal_hosts() {
         for url in [
@@ -216,6 +219,7 @@ mod dns_tests {
         }
     }
 
+    /// [T-FS004] ssrf_blocks_dns_resolving_to_private_ip
     #[tokio::test]
     async fn ssrf_blocks_dns_resolving_to_private_ip() {
         let resolver = AllowDns(vec!["127.0.0.1".parse().unwrap()]);
@@ -223,6 +227,7 @@ mod dns_tests {
         assert!(matches!(result, Err(FetchError::InternalHost)));
     }
 
+    /// [T-FS005] ssrf_allows_dns_resolving_to_public_ip
     #[tokio::test]
     async fn ssrf_allows_dns_resolving_to_public_ip() {
         let resolver = AllowDns(vec!["8.8.8.8".parse().unwrap()]);
@@ -230,6 +235,7 @@ mod dns_tests {
         assert!(result.is_ok());
     }
 
+    /// [T-FS006] ssrf_returns_error_on_dns_failure
     #[tokio::test]
     async fn ssrf_returns_error_on_dns_failure() {
         let resolver = FailDns("lookup failed".into());
@@ -237,6 +243,7 @@ mod dns_tests {
         assert!(matches!(result, Err(FetchError::DnsResolution(_))));
     }
 
+    /// [T-FS007] ssrf_skips_dns_for_ip_literals
     #[tokio::test]
     async fn ssrf_skips_dns_for_ip_literals() {
         let resolver = AllowDns(vec![]);
@@ -244,6 +251,7 @@ mod dns_tests {
         assert!(result.is_ok());
     }
 
+    /// [T-FS008] redact_strips_userinfo
     #[test]
     fn redact_strips_userinfo() {
         let url = "https://user:password@example.com/path";
@@ -253,12 +261,14 @@ mod dns_tests {
         assert!(safe.contains("example.com/path"));
     }
 
+    /// [T-FS009] redact_preserves_clean_url
     #[test]
     fn redact_preserves_clean_url() {
         let url = "https://example.com/path";
         assert!(matches!(redact_url_credentials(url), Cow::Borrowed(_)));
     }
 
+    /// [T-FS010] redact_handles_username_only
     #[test]
     fn redact_handles_username_only() {
         let url = "https://admin@example.com/";

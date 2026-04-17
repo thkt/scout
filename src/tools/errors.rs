@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
@@ -24,7 +25,7 @@ impl fmt::Display for ScoutError {
     }
 }
 
-impl std::error::Error for ScoutError {}
+impl Error for ScoutError {}
 
 impl ScoutError {
     pub(super) fn user_error(msg: impl Into<String>) -> Self {
@@ -181,6 +182,7 @@ pub(super) fn unwrap_or_note<T>(
 mod tests {
     use super::*;
 
+    /// [T-ER001] User-facing errors surface with exit code 1
     #[test]
     fn user_errors_have_exit_code_1() {
         let cases: Vec<ScoutError> = vec![
@@ -211,6 +213,7 @@ mod tests {
         }
     }
 
+    /// [T-ER002] Internal errors surface with exit code 2 and are non-retryable
     #[test]
     fn internal_errors_have_exit_code_2() {
         let cases: Vec<ScoutError> = vec![
@@ -234,6 +237,7 @@ mod tests {
         }
     }
 
+    /// [T-ER003] Transient errors are retryable and display retry hint
     #[test]
     fn transient_errors_are_retryable() {
         let cases: Vec<ScoutError> = vec![
@@ -269,6 +273,7 @@ mod tests {
         }
     }
 
+    /// [T-ER004] Non-transient errors are not retryable and omit retry hint
     #[test]
     fn non_transient_errors_are_not_retryable() {
         let cases: Vec<ScoutError> = vec![
@@ -287,22 +292,26 @@ mod tests {
         }
     }
 
+    /// [T-ER005] classify_fetch_http maps true to Transient variant
     #[test]
     fn classify_fetch_http_transient_input() {
         assert_eq!(classify_fetch_http(true), FetchHttpKind::Transient);
     }
 
+    /// [T-ER006] classify_fetch_http maps false to Permanent variant
     #[test]
     fn classify_fetch_http_permanent_input() {
         assert_eq!(classify_fetch_http(false), FetchHttpKind::Permanent);
     }
 
+    /// [T-ER007] GitHub Forbidden error hints at GITHUB_TOKEN scope
     #[test]
     fn github_forbidden_hints_token() {
         let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
         assert!(err.to_string().contains("GITHUB_TOKEN"));
     }
 
+    /// [T-ER008] Gemini QuotaExhausted error hints at AI Studio billing URL
     #[test]
     fn quota_exhausted_hints_billing_url() {
         let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
@@ -311,6 +320,7 @@ mod tests {
 
     // TcpListener::drop is synchronous, so the port is immediately closed
     // with no async shutdown race (unlike MockServer).
+    /// [T-ER009] Connection-refused FetchError::Http maps to transient ScoutError
     #[tokio::test]
     async fn t003_fetch_error_http_connection_refused_is_transient() {
         use reqwest::Client;

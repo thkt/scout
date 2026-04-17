@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 /// Repository metadata from `GET /repos/{owner}/{repo}`.
 #[derive(Deserialize, Debug)]
-pub struct RepoInfo {
+pub(crate) struct RepoInfo {
     pub full_name: String,
     pub description: Option<String>,
     pub html_url: String,
@@ -16,14 +16,14 @@ pub struct RepoInfo {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct LicenseInfo {
+pub(crate) struct LicenseInfo {
     pub spdx_id: Option<String>,
     pub name: String,
 }
 
 /// Response from `GET /repos/{owner}/{repo}/git/trees/{ref}?recursive=1`.
 #[derive(Deserialize, Debug)]
-pub struct TreeResponse {
+pub(crate) struct TreeResponse {
     pub tree: Vec<TreeEntry>,
     pub truncated: bool,
 }
@@ -31,7 +31,7 @@ pub struct TreeResponse {
 /// Git object type. `Other` captures unknown types via `#[serde(other)]` for forward compat.
 #[derive(Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum EntryType {
+pub(crate) enum EntryType {
     Blob,
     Tree,
     Commit,
@@ -41,7 +41,7 @@ pub enum EntryType {
 
 /// A single entry in a git tree (file, directory, or submodule).
 #[derive(Deserialize, Debug)]
-pub struct TreeEntry {
+pub(crate) struct TreeEntry {
     pub path: String,
     #[serde(rename = "type")]
     pub entry_type: EntryType,
@@ -50,19 +50,19 @@ pub struct TreeEntry {
 
 /// Response from `GET /repos/{owner}/{repo}/contents/{path}`.
 #[derive(Deserialize, Debug)]
-pub struct ContentsResponse {
+pub(crate) struct ContentsResponse {
     pub sha: String,
     pub content: Option<String>,
 }
 
 /// Response from `GET /repos/{owner}/{repo}/git/blobs/{sha}`.
 #[derive(Deserialize, Debug)]
-pub struct BlobResponse {
+pub(crate) struct BlobResponse {
     pub content: String,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct IssueInfo {
+pub(crate) struct IssueInfo {
     pub number: u64,
     pub title: String,
     pub html_url: String,
@@ -72,12 +72,12 @@ pub struct IssueInfo {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct LabelInfo {
+pub(crate) struct LabelInfo {
     pub name: String,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct PullInfo {
+pub(crate) struct PullInfo {
     pub number: u64,
     pub title: String,
     pub html_url: String,
@@ -86,12 +86,12 @@ pub struct PullInfo {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct UserInfo {
+pub(crate) struct UserInfo {
     pub login: String,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct ReleaseInfo {
+pub(crate) struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
     pub html_url: String,

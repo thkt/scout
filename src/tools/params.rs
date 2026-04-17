@@ -19,7 +19,7 @@ pub(super) fn resolve_input(
         ))),
         _ => stdin
             .filter(|s| !s.trim().is_empty())
-            .map(|s| s.trim().to_string())
+            .map(|s| s.trim().to_owned())
             .ok_or_else(|| {
                 ScoutError::user_error(format!(
                     "No {label} provided. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
