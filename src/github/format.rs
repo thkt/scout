@@ -275,21 +275,25 @@ mod tests {
     use crate::github::types::{EntryType, LabelInfo, LicenseInfo, UserInfo};
     use std::iter;
 
+    /// [T-GF001] format_size returns byte suffix for values under 1 KiB
     #[test]
     fn format_size_bytes() {
         assert_eq!(format_size(500), "500 B");
     }
 
+    /// [T-GF002] format_size returns KB suffix with one decimal place
     #[test]
     fn format_size_kilobytes() {
         assert_eq!(format_size(1536), "1.5 KB");
     }
 
+    /// [T-GF003] format_size returns MB suffix with one decimal place
     #[test]
     fn format_size_megabytes() {
         assert_eq!(format_size(2_621_440), "2.5 MB");
     }
 
+    /// [T-GF004] format_tree renders owner/repo header and entry sizes
     #[test]
     fn format_tree_basic() {
         let entries = [
@@ -312,6 +316,7 @@ mod tests {
         assert!(output.contains("README.md (256 B)"));
     }
 
+    /// [T-GF005] format_tree emits truncation notice when GitHub marks tree truncated
     #[test]
     fn format_tree_truncated() {
         let output = format_tree("o", "r", "main", &[], true);
@@ -336,6 +341,7 @@ mod tests {
         }
     }
 
+    /// [T-GF006] format_overview omits README and Issues sections when inputs are empty
     #[test]
     fn format_overview_minimal() {
         let repo = RepoInfo {
@@ -357,6 +363,7 @@ mod tests {
         assert!(!output.contains("## Recent Issues"));
     }
 
+    /// [T-GF007] format_overview renders language, license, topics, and description rows
     #[test]
     fn format_overview_with_metadata() {
         let repo = sample_repo();
@@ -367,6 +374,7 @@ mod tests {
         assert!(output.contains("A test repo"));
     }
 
+    /// [T-GF008] format_overview truncates README larger than MAX_README_BYTES
     #[test]
     fn format_overview_truncates_long_readme() {
         let repo = sample_repo();
@@ -379,6 +387,7 @@ mod tests {
         assert!(output.contains(&format!("/ {total} bytes)")));
     }
 
+    /// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
     #[test]
     fn format_overview_filters_issues_from_prs() {
         let repo = sample_repo();
@@ -405,6 +414,7 @@ mod tests {
         assert!(!output.contains("PR as issue"));
     }
 
+    /// [T-GF010] format_overview marks draft PRs and shows author handle
     #[test]
     fn format_overview_shows_draft_prs() {
         let repo = sample_repo();
@@ -422,6 +432,7 @@ mod tests {
         assert!(output.contains("@dev"));
     }
 
+    /// [T-GF011] format_overview annotates prerelease flag and publish date
     #[test]
     fn format_overview_shows_prerelease() {
         let repo = sample_repo();
@@ -437,6 +448,7 @@ mod tests {
         assert!(output.contains("2026-01-15"));
     }
 
+    /// [T-GF012] format_overview renders issue labels list and reporter handle
     #[test]
     fn format_overview_shows_issue_labels() {
         let repo = sample_repo();
@@ -460,6 +472,7 @@ mod tests {
         assert!(output.contains("@reporter"));
     }
 
+    /// [T-GF013] format_overview shifts README headings by two levels (h1 to h3)
     #[test]
     fn format_overview_shifts_readme_headings() {
         let repo = sample_repo();
@@ -473,6 +486,7 @@ mod tests {
         assert!(output.contains("##### Config"), "h3 should shift to h5");
     }
 
+    /// [T-GF014] format_overview shifts headings even when README is truncated
     #[test]
     fn format_overview_shifts_headings_in_truncated_readme() {
         let repo = sample_repo();
@@ -487,6 +501,7 @@ mod tests {
         assert!(output.contains("(truncated: showing"));
     }
 
+    /// [T-GF015] format_overview escapes pipe characters in the description
     #[test]
     fn format_overview_escapes_description_with_pipe() {
         let mut repo = sample_repo();
@@ -499,6 +514,7 @@ mod tests {
         assert!(output.contains(r"col1 \| col2"));
     }
 
+    /// [T-GF016] format_overview escapes pipes inside metadata table cells
     #[test]
     fn format_overview_escapes_table_cell_metadata() {
         let mut repo = sample_repo();
@@ -507,6 +523,7 @@ mod tests {
         assert!(output.contains(r"Rust \| Go"));
     }
 
+    /// [T-GF017] format_overview escapes pipes in the default branch name
     #[test]
     fn format_overview_escapes_default_branch() {
         let mut repo = sample_repo();
@@ -515,6 +532,7 @@ mod tests {
         assert!(output.contains(r"feat\|injection"));
     }
 
+    /// [T-GF018] format_overview escapes markdown link syntax in issue titles
     #[test]
     fn format_overview_escapes_issue_title() {
         let repo = sample_repo();
@@ -530,6 +548,7 @@ mod tests {
         assert!(!output.contains("[click](http://evil)"));
     }
 
+    /// [T-GF019] format_overview escapes markdown link syntax in PR titles
     #[test]
     fn format_overview_escapes_pr_title() {
         let repo = sample_repo();
@@ -561,6 +580,7 @@ mod tests {
             .expect("shown bytes should be a number")
     }
 
+    /// [T-GF020] README passes through intact when below MAX_README_BYTES
     #[test]
     fn readme_no_truncation_under_limit() {
         let repo = sample_repo();
@@ -571,6 +591,7 @@ mod tests {
         assert!(!output.contains("truncated"));
     }
 
+    /// [T-GF021] README passes through intact at exactly MAX_README_BYTES
     #[test]
     fn readme_no_truncation_at_exact_limit() {
         let repo = sample_repo();
@@ -581,6 +602,7 @@ mod tests {
         assert!(!output.contains("truncated"));
     }
 
+    /// [T-GF022] README truncation snaps back to the last newline before the limit
     #[test]
     fn readme_truncation_snaps_to_last_newline() {
         let repo = sample_repo();
@@ -607,6 +629,7 @@ mod tests {
         );
     }
 
+    /// [T-GF023] README truncation does not panic when no newline exists
     #[test]
     fn readme_truncation_no_newline_no_panic() {
         let repo = sample_repo();
@@ -619,6 +642,7 @@ mod tests {
         assert!(output.contains(&format!("/ {total} bytes)")));
     }
 
+    /// [T-GF024] README truncation lands on a character boundary for multibyte content
     #[test]
     fn readme_truncation_multibyte_no_mid_char_cut() {
         let repo = sample_repo();
@@ -633,6 +657,7 @@ mod tests {
         assert_eq!(shown_bytes % 3, 0, "must land on a char boundary");
     }
 
+    /// [T-GF025] README truncation snaps to newline on multibyte character boundary
     #[test]
     fn readme_truncation_multibyte_with_newlines() {
         // TC-003 fix: exercises both floor_char_boundary AND rfind('\n') on CJK
@@ -655,6 +680,7 @@ mod tests {
 
     // ── T-001 through T-008: format_file_content / lang_for_path / fence_delimiter ──
 
+    /// [T-GF026] format_file_content wraps a Rust file in a ```rust fenced block
     #[test]
     fn t_001_format_file_content_wraps_rust_file_in_fenced_code_block() {
         // [T-001] FR-001, FR-002
@@ -669,6 +695,7 @@ mod tests {
         );
     }
 
+    /// [T-GF027] lang_for_path returns the canonical identifier for known extensions
     #[test]
     fn t_002_lang_for_path_returns_canonical_identifier_for_known_extensions() {
         // [T-002] FR-002
@@ -706,6 +733,7 @@ mod tests {
         }
     }
 
+    /// [T-GF028] lang_for_path returns empty string for missing or unknown extensions
     #[test]
     fn t_003_lang_for_path_returns_empty_for_no_extension_and_unknown() {
         // [T-003] FR-002
@@ -713,6 +741,7 @@ mod tests {
         assert_eq!(lang_for_path("file.xyz"), "", "unknown extension");
     }
 
+    /// [T-GF029] fence_delimiter grows past three backticks when content contains a triple-backtick run
     #[test]
     fn t_004_fence_delimiter_returns_longer_fence_when_content_has_triple_backticks() {
         // [T-004] FR-003
@@ -729,12 +758,14 @@ mod tests {
         );
     }
 
+    /// [T-GF030] fence_delimiter defaults to triple backticks for content without backticks
     #[test]
     fn t_005_fence_delimiter_returns_triple_backtick_for_plain_content() {
         // [T-005] FR-003, FR-004
         assert_eq!(fence_delimiter("hello world"), "```");
     }
 
+    /// [T-GF031] fence_delimiter grows past five backticks when content has a five-backtick run
     #[test]
     fn t_006_fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
         // [T-006] FR-003
@@ -751,6 +782,7 @@ mod tests {
         );
     }
 
+    /// [T-GF032] format_file_content picks a fence longer than any inner backtick run
     #[test]
     fn t_007_format_file_content_fence_does_not_collide_with_inner_backticks() {
         // [T-007] FR-001, FR-003
@@ -775,6 +807,7 @@ mod tests {
         }
     }
 
+    /// [T-GF033] format_file_content emits a bare triple-backtick fence for paths without extensions
     #[test]
     fn t_008_format_file_content_uses_empty_lang_for_extensionless_path() {
         // [T-008] FR-001, FR-002
@@ -787,6 +820,7 @@ mod tests {
         );
     }
 
+    /// [T-GF034] format_file_content appends the encoding label to the header when provided
     #[test]
     fn t_009_format_file_content_includes_encoding_label_in_header() {
         // [T-009] FR-009: encoding label appended to header when provided
@@ -797,6 +831,7 @@ mod tests {
         );
     }
 
+    /// [T-GF035] format_file_content omits the encoding label when none is given
     #[test]
     fn t_010_format_file_content_omits_encoding_when_none() {
         // [T-010] FR-009: no encoding label when None
@@ -811,6 +846,7 @@ mod tests {
         );
     }
 
+    /// [T-GF036] README truncation note is appended after heading shift so it is not rewritten
     #[test]
     fn readme_truncation_note_not_heading_shifted() {
         // TC-004 fix: ordering invariant — note appended after shift_headings

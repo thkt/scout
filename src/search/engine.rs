@@ -302,6 +302,7 @@ mod tests {
         }
     }
 
+    /// [T-SE001] collect_sources_deduplicates
     #[test]
     fn collect_sources_deduplicates() {
         let results = vec![
@@ -316,6 +317,7 @@ mod tests {
         assert_eq!(sources[2].url, "https://c.com");
     }
 
+    /// [T-SE002] collect_sources_skips_empty_urls
     #[test]
     fn collect_sources_skips_empty_urls() {
         let results = vec![make_grounded(vec![("", "Empty"), ("https://a.com", "A")])];
@@ -325,6 +327,7 @@ mod tests {
         assert_eq!(sources[0].url, "https://a.com");
     }
 
+    /// [T-SE003] format_report_includes_sections
     #[test]
     fn format_report_includes_sections() {
         let report = ResearchReport {
@@ -349,6 +352,7 @@ mod tests {
         assert!(text.contains("[A](https://a.com)"));
     }
 
+    /// [T-SE004] format_report_includes_fetched_pages
     #[test]
     fn format_report_includes_fetched_pages() {
         let report = ResearchReport {
@@ -376,6 +380,7 @@ mod tests {
         );
     }
 
+    /// [T-SE005] format_report_truncates_long_pages
     #[test]
     fn format_report_truncates_long_pages() {
         let total = MAX_PAGE_BYTES + 2_000;
@@ -453,6 +458,7 @@ mod tests {
         );
     }
 
+    /// [T-SE006] format_report_multiple_search_results_numbered
     #[test]
     fn format_report_multiple_search_results_numbered() {
         let report = ResearchReport {
@@ -470,6 +476,7 @@ mod tests {
         assert!(text.contains("## Search Result 2"));
     }
 
+    /// [T-SE007] format_report_sanitizes_query_newlines
     #[test]
     fn format_report_sanitizes_query_newlines() {
         let report = ResearchReport {
@@ -484,6 +491,7 @@ mod tests {
         assert!(!text.contains("# Research: line1\n"));
     }
 
+    /// [T-SE008] research_with_mock_returns_report
     #[tokio::test]
     async fn research_with_mock_returns_report() {
         let mock = MockSearch::with_results(vec![make_grounded(vec![("https://a.com", "A")])]);
@@ -505,6 +513,7 @@ mod tests {
         assert_eq!(queries[0], "test (answer in English)");
     }
 
+    /// [T-SE009] research_partial_search_failure_still_returns
     #[tokio::test]
     async fn research_partial_search_failure_still_returns() {
         let mock = MockSearch::success_then_failure(
@@ -529,6 +538,7 @@ mod tests {
         assert!(queries[1].contains("query"));
     }
 
+    /// [T-SE010] research_all_searches_fail_returns_error
     #[tokio::test]
     async fn research_all_searches_fail_returns_error() {
         let mock = MockSearch::all_fail(GeminiError::RateLimited { retry_after: None });
@@ -544,6 +554,7 @@ mod tests {
         assert!(err.to_string().contains("rate limit"));
     }
 
+    /// [T-SE011] fetch_sources_sort_restores_input_order
     #[test]
     fn fetch_sources_sort_restores_input_order() {
         // Simulate buffer_unordered completion order (2,0,1) differing from input order (0,1,2)

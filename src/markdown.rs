@@ -113,12 +113,14 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
 mod tests {
     use super::*;
 
+    /// [T-MD001] escape_md_link brackets and parens
     #[test]
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
     }
 
+    /// [T-MD002] escape_md_inline escapes pipes and replaces newlines
     #[test]
     fn escape_md_inline_pipes_and_newlines() {
         assert_eq!(escape_md_inline("col1 | col2"), r"col1 \| col2");
@@ -126,6 +128,7 @@ mod tests {
         assert_eq!(escape_md_inline("a\r\nb"), "a  b");
     }
 
+    /// [T-MD003] escape_md_inline escapes link syntax
     #[test]
     fn escape_md_inline_link_syntax() {
         assert_eq!(
@@ -134,17 +137,20 @@ mod tests {
         );
     }
 
+    /// [T-MD004] escape_md_inline passes normal text through
     #[test]
     fn escape_md_inline_passthrough() {
         assert_eq!(escape_md_inline("normal text"), "normal text");
     }
 
+    /// [T-MD005] sanitize_heading replaces newlines with spaces
     #[test]
     fn sanitize_heading_replaces_newlines() {
         assert_eq!(sanitize_heading("line1\nline2\rline3"), "line1 line2 line3");
         assert_eq!(sanitize_heading("no newlines"), "no newlines");
     }
 
+    /// [T-MD006] shift_headings deepens levels by N
     #[test]
     fn shift_headings_basic() {
         let input = "# H1\n## H2\nParagraph\n### H3";
@@ -152,12 +158,14 @@ mod tests {
         assert_eq!(result, "#### H1\n##### H2\nParagraph\n###### H3");
     }
 
+    /// [T-MD007] shift_headings with zero levels is a no-op
     #[test]
     fn shift_headings_zero_is_noop() {
         let input = "# Title\nBody";
         assert_eq!(shift_headings(input, 0), input);
     }
 
+    /// [T-MD008] shift_headings skips lines inside fenced code blocks
     #[test]
     fn shift_headings_skips_code_blocks() {
         let input = "# Real heading\n```\n# comment in code\n```\n## Another heading";
@@ -168,6 +176,7 @@ mod tests {
         );
     }
 
+    /// [T-MD009] shift_headings preserves lines without headings
     #[test]
     fn shift_headings_preserves_trailing_content() {
         let input = "No headings here\nJust text";
@@ -185,6 +194,7 @@ mod tests {
         );
     }
 
+    /// [T-MD010] shift_headings clamps resulting level at h6
     #[test]
     fn shift_headings_clamps_at_h6() {
         let input = "##### H5\n###### H6\n# H1";
@@ -195,11 +205,13 @@ mod tests {
         );
     }
 
+    /// [T-MD011] truncate_with_note returns input unchanged when under limit
     #[test]
     fn truncate_with_note_short_input_unchanged() {
         assert_eq!(truncate_with_note("hello", 100), "hello");
     }
 
+    /// [T-MD012] truncate_with_note appends byte-count note when truncated
     #[test]
     fn truncate_with_note_truncates_with_message() {
         let input = "x".repeat(200);

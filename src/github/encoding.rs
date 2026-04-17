@@ -168,6 +168,7 @@ mod tests {
 
     // ── T-001: Explicit Shift_JIS decoding ──
 
+    /// [T-GE001] decode_bytes with shift_jis hint returns Explicit DecodeResult
     #[test]
     fn t_001_decode_bytes_with_shift_jis_hint_returns_explicit_result() {
         // [T-001] FR-001, BR-003
@@ -183,6 +184,7 @@ mod tests {
 
     // ── T-002: Explicit EUC-JP decoding ──
 
+    /// [T-GE002] decode_bytes with euc-jp hint returns Explicit DecodeResult
     #[test]
     fn t_002_decode_bytes_with_euc_jp_hint_returns_explicit_result() {
         // [T-002] FR-001, BR-003
@@ -198,6 +200,7 @@ mod tests {
 
     // ── T-003: Invalid encoding hint ──
 
+    /// [T-GE003] decode_bytes with unknown encoding hint returns NonUtf8 error with retry guidance
     #[test]
     fn t_003_decode_bytes_with_invalid_hint_returns_non_utf8_error() {
         // [T-003] FR-002
@@ -221,6 +224,7 @@ mod tests {
 
     // ── T-004: Auto-detect Shift_JIS (chardetng) ──
 
+    /// [T-GE004] decode_bytes without hint auto-detects Shift_JIS via chardetng
     #[test]
     fn t_004_decode_bytes_without_hint_detects_shift_jis() {
         // [T-004] FR-004, FR-005
@@ -236,6 +240,7 @@ mod tests {
 
     // ── T-005: ASCII-heavy Shift_JIS detected before UTF-8 (BR-001) ──
 
+    /// [T-GE005] decode_bytes runs chardetng before UTF-8 fallback on ASCII-heavy Shift_JIS
     #[test]
     fn t_005_decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
         // [T-005] BR-001: chardetng runs BEFORE UTF-8 check
@@ -272,6 +277,7 @@ mod tests {
 
     // ── T-006: UTF-16 BE BOM detection ──
 
+    /// [T-GE006] decode_bytes recognizes UTF-16 BE BOM and reports Bom detection source
     #[test]
     fn t_006_decode_bytes_with_utf16be_bom_returns_bom_source() {
         // [T-006] FR-003, BR-002
@@ -299,6 +305,7 @@ mod tests {
     // bytes to C1 control characters, not U+FFFD). The NonUtf8 path is reliably reached
     // via decode_explicit: user specifies --encoding but the file has invalid bytes for it.
 
+    /// [T-GE007] decode_bytes returns NonUtf8 with --encoding hint when explicit encoding fails
     #[test]
     fn t_007_decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
         // [T-007] FR-002 (bytes invalid for specified encoding → NonUtf8 with retry hint)
@@ -326,6 +333,7 @@ mod tests {
 
     // ── T-008: Binary file (null bytes) returns NonUtf8 error ──
 
+    /// [T-GE008] decode_bytes treats null-byte content as binary and returns NonUtf8 error
     #[test]
     fn t_008_decode_bytes_with_null_bytes_returns_non_utf8_error() {
         // [T-008] Binary heuristic: null bytes indicate non-text content
@@ -348,6 +356,7 @@ mod tests {
 
     // ── T-009: Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
 
+    /// [T-GE009] decode_bytes rejects non-NUL random bytes that chardetng would guess as single-byte encoding
     #[test]
     fn t_009_decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
         // [T-009] Single-byte encoding guard: chardetng can return windows-1251, windows-1252,
@@ -385,6 +394,7 @@ mod tests {
     // Note: This test validates the error variant exists and its Display output.
     // The ScoutError mapping test belongs in tools/errors.rs (Phase 2).
 
+    /// [T-GE010] GitHubError::NonUtf8 Display output contains the inner descriptive message
     #[test]
     fn t_011_non_utf8_error_contains_descriptive_message() {
         // [T-011] FR-011
@@ -398,6 +408,7 @@ mod tests {
 
     // ── T-012: Decode (base64) error remains distinct ──
 
+    /// [T-GE011] GitHubError::Decode and NonUtf8 variants produce distinct Display output
     #[test]
     fn t_012_decode_error_is_distinct_from_non_utf8() {
         // [T-012] FR-012
@@ -420,6 +431,7 @@ mod tests {
 
     // ── decode_base64 tests ──
 
+    /// [T-GE012] decode_base64 returns raw bytes for valid base64 input
     #[test]
     fn decode_base64_valid_input_returns_bytes() {
         // Validates the base64 → bytes path that was split from decode_content
@@ -428,6 +440,7 @@ mod tests {
         assert_eq!(bytes, b"hello world");
     }
 
+    /// [T-GE013] decode_base64 strips whitespace and decodes GitHub-style line-wrapped base64
     #[test]
     fn decode_base64_with_whitespace_succeeds() {
         // GitHub API returns base64 with line breaks
@@ -436,6 +449,7 @@ mod tests {
         assert_eq!(bytes, b"hello world");
     }
 
+    /// [T-GE014] decode_base64 returns GitHubError::Decode for malformed base64 input
     #[test]
     fn decode_base64_invalid_input_returns_decode_error() {
         let result = decode_base64("!!!not-base64!!!");

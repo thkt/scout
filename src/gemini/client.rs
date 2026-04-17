@@ -202,6 +202,7 @@ fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
 mod tests {
     use super::*;
 
+    /// [T-GC001] classify_api_error maps HTTP 429 to RateLimited variant
     #[test]
     fn classify_429_as_rate_limited() {
         let err = ApiError {
@@ -214,6 +215,7 @@ mod tests {
         ));
     }
 
+    /// [T-GC002] classify_api_error maps HTTP 403 to QuotaExhausted variant
     #[test]
     fn classify_403_as_quota_exhausted() {
         let err = ApiError {
@@ -226,6 +228,7 @@ mod tests {
         ));
     }
 
+    /// [T-GC003] classify_api_error maps HTTP 500 to generic Api error
     #[test]
     fn classify_500_as_generic_api_error() {
         let err = ApiError {
@@ -249,6 +252,7 @@ mod http_tests {
     use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
+    /// [T-GC004] search returns GroundedResult with answer and sources on 200 OK
     #[tokio::test]
     async fn search_success_returns_grounded_result() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -283,6 +287,7 @@ mod http_tests {
         assert_eq!(result.sources[0].url, "https://example.com");
     }
 
+    /// [T-GC005] search returns RateLimited error when server responds 429
     #[tokio::test]
     async fn search_429_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -299,6 +304,7 @@ mod http_tests {
         assert!(matches!(result, Err(GeminiError::RateLimited { .. })));
     }
 
+    /// [T-GC006] search classifies 500 response with structured error body
     #[tokio::test]
     async fn search_500_with_error_body_classified() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -325,6 +331,7 @@ mod http_tests {
         }
     }
 
+    /// [T-GC007] search returns generic Api error when 500 response body is not JSON
     #[tokio::test]
     async fn search_500_with_invalid_body_returns_generic_error() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -349,6 +356,7 @@ mod http_tests {
         }
     }
 
+    /// [T-GC008] search classifies error field embedded in 200 OK response body
     #[tokio::test]
     async fn search_200_with_error_field_returns_classified_error() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {
@@ -370,6 +378,7 @@ mod http_tests {
         assert!(matches!(result, Err(GeminiError::QuotaExhausted(_))));
     }
 
+    /// [T-GC009] generate_with_search propagates Retry-After header value in RateLimited error
     #[tokio::test]
     async fn search_429_with_retry_after_carries_delay() {
         let Some(server) = try_spawn_mock_server("gemini::http").await else {

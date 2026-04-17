@@ -59,6 +59,7 @@ mod tests {
         }
     }
 
+    /// [T-GG001] extract_grounded_result returns answer and sources from populated response
     #[test]
     fn extracts_answer_and_sources() {
         let response = make_response(
@@ -82,6 +83,7 @@ mod tests {
         assert_eq!(result.sources[0].title, "React Blog");
     }
 
+    /// [T-GG002] extract_grounded_result collects all grounding chunks as sources
     #[test]
     fn handles_multiple_sources() {
         let response = make_response(
@@ -107,6 +109,7 @@ mod tests {
         assert_eq!(result.sources.len(), 2);
     }
 
+    /// [T-GG003] extract_grounded_result returns empty result when candidates is None
     #[test]
     fn handles_empty_response() {
         let response = GenerateContentResponse {
@@ -120,6 +123,7 @@ mod tests {
         assert!(result.sources.is_empty());
     }
 
+    /// [T-GG004] extract_grounded_result returns answer with empty sources when metadata is absent
     #[test]
     fn handles_missing_metadata() {
         let response = GenerateContentResponse {
@@ -141,6 +145,7 @@ mod tests {
         assert!(result.sources.is_empty());
     }
 
+    /// [T-GG005] extract_grounded_result filters out chunks missing web or with empty URI
     #[test]
     fn skips_chunks_without_web_or_empty_uri() {
         let response = make_response(

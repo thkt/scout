@@ -30,6 +30,7 @@ pub(crate) fn assert_https(url: &str) {
 mod tests {
     use super::*;
 
+    /// [T-RD001] Redacted value hides contents in Debug output
     #[test]
     fn debug_is_redacted() {
         let secret = Redacted::new("super-secret");

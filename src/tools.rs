@@ -521,6 +521,7 @@ mod tests {
         scout_with_github(gemini_uri, "http://localhost:0")
     }
 
+    /// [T-TS001] search_success_returns_content
     #[tokio::test]
     async fn search_success_returns_content() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -565,6 +566,7 @@ mod tests {
         );
     }
 
+    /// [T-TS002] research_success_returns_report
     #[tokio::test]
     async fn research_success_returns_report() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -609,6 +611,7 @@ mod tests {
         );
     }
 
+    /// [T-TS003] fetch_output_shifts_headings
     #[test]
     fn fetch_output_shifts_headings() {
         let result = FetchResult {
@@ -621,6 +624,7 @@ mod tests {
         assert!(output.contains("#### Section"), "h2 should shift to h4");
     }
 
+    /// [T-TS004] fetch_output_shifts_headings_with_raw_fallback
     #[test]
     fn fetch_output_shifts_headings_with_raw_fallback() {
         let result = FetchResult {
@@ -756,6 +760,7 @@ mod tests {
         );
     }
 
+    /// [T-TS005] fetch_output_truncates_long_content
     #[test]
     fn fetch_output_truncates_long_content() {
         let result = FetchResult {

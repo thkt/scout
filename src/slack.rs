@@ -542,6 +542,7 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
 
+        /// [T-SK001] HTTP 429 response maps to SlackError::RateLimited
         #[tokio::test]
         async fn api_get_once_429_returns_rate_limited() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -561,6 +562,7 @@ mod tests {
             ));
         }
 
+        /// [T-SK002] HTTP 429 with Retry-After header preserves header value
         #[tokio::test]
         async fn api_get_once_429_with_retry_after_header() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -582,6 +584,7 @@ mod tests {
             ));
         }
 
+        /// [T-SK003] Body-level ratelimited error maps to SlackError::RateLimited
         #[tokio::test]
         async fn api_get_once_body_ratelimited_returns_rate_limited() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -601,6 +604,7 @@ mod tests {
             assert!(matches!(result, Err(SlackError::RateLimited { .. })));
         }
 
+        /// [T-SK004] Non-ratelimited Slack API error maps to SlackError::Api
         #[tokio::test]
         async fn api_get_once_api_error_returns_api_variant() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -625,6 +629,7 @@ mod tests {
         }
     }
 
+    /// [T-SK005] parse_slack_url accepts a standard archive permalink
     #[test]
     fn parse_standard_url() {
         let url = "https://myteam.slack.com/archives/C0656BJSFL7/p1773819598273499";
@@ -635,6 +640,7 @@ mod tests {
         assert!(parsed.thread_ts.is_none());
     }
 
+    /// [T-SK006] parse_slack_url extracts thread_ts from parent permalink
     #[test]
     fn parse_parent_permalink_with_thread_ts() {
         let url = "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
@@ -644,6 +650,7 @@ mod tests {
         assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
     }
 
+    /// [T-SK007] Reply permalink carries distinct ts and thread_ts
     #[test]
     fn parse_reply_permalink_has_different_ts_and_thread_ts() {
         let url = "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456&cid=C123";
@@ -652,6 +659,7 @@ mod tests {
         assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
     }
 
+    /// [T-SK008] format_slack_output uses targeted reply as primary message
     #[test]
     fn format_output_uses_reply_as_primary_when_targeted() {
         let slack_url = SlackUrl {
@@ -702,6 +710,7 @@ parent body
         }
     }
 
+    /// [T-SK009] extract_target picks the reply matching target ts from a thread
     #[test]
     fn extract_target_picks_reply_from_thread() {
         let messages = vec![
@@ -716,12 +725,14 @@ parent body
         assert_eq!(rest[1].ts, "1002.000000");
     }
 
+    /// [T-SK010] extract_target returns None when target ts not present
     #[test]
     fn extract_target_returns_none_when_ts_missing() {
         let messages = vec![msg("1000.000000", "parent"), msg("1001.000000", "reply-1")];
         assert!(extract_target(messages, "9999.999999", true).is_none());
     }
 
+    /// [T-SK011] extract_target ignores ts for non-thread messages and picks first
     #[test]
     fn extract_target_ignores_ts_for_non_thread() {
         let messages = vec![msg("1000.000000", "author")];
@@ -730,16 +741,19 @@ parent body
         assert!(rest.is_empty());
     }
 
+    /// [T-SK012] parse_slack_url rejects URLs outside *.slack.com
     #[test]
     fn parse_rejects_non_slack_url() {
         assert!(parse_slack_url("https://example.com/page").is_none());
     }
 
+    /// [T-SK013] parse_slack_url rejects paths outside /archives
     #[test]
     fn parse_rejects_non_archives_path() {
         assert!(parse_slack_url("https://team.slack.com/messages/C123/p111111222222333").is_none());
     }
 
+    /// [T-SK014] parse_slack_url rejects timestamps shorter than micro-precision
     #[test]
     fn parse_rejects_short_timestamp() {
         assert!(parse_slack_url("https://team.slack.com/archives/C123/p12345").is_none());
@@ -748,12 +762,14 @@ parent body
     mod mention_tests {
         use super::*;
 
+        /// [T-SK015] parse_mentions on plain text returns no spans
         #[test]
         fn t001_no_mentions_returns_empty() {
             let spans = parse_mentions("hello world");
             assert!(spans.is_empty());
         }
 
+        /// [T-SK016] parse_mentions captures one span with byte offsets for a single mention
         #[test]
         fn t002_single_mention_returns_one_span() {
             let text = "hi <@U123> bye";
@@ -765,6 +781,7 @@ parent body
             assert_eq!(&text[spans[0].start..spans[0].end], "<@U123>");
         }
 
+        /// [T-SK017] parse_mentions extracts user id only from pipe-labeled mention
         #[test]
         fn t003_pipe_label_extracts_user_id_only() {
             let text = "cc <@U123|alice>";
@@ -773,6 +790,7 @@ parent body
             assert_eq!(spans[0].user_id, "U123");
         }
 
+        /// [T-SK018] parse_mentions captures consecutive adjacent mentions
         #[test]
         fn t004_multiple_adjacent_mentions() {
             let text = "<@U001><@U002><@U003>";
@@ -785,6 +803,7 @@ parent body
             assert_eq!(spans[1].end, spans[2].start);
         }
 
+        /// [T-SK019] parse_mentions stops at unclosed mention token
         #[test]
         fn t005_unclosed_mention_breaks_early() {
             let text = "<@U001> then <@U002";
@@ -793,6 +812,7 @@ parent body
             assert_eq!(spans[0].user_id, "U001");
         }
 
+        /// [T-SK020] parse_mentions yields correct byte offsets across multibyte characters
         #[test]
         fn t006_multibyte_characters_correct_offsets() {
             // CJK characters are 3 bytes each in UTF-8
@@ -813,6 +833,7 @@ parent body
             assert_eq!(&emoji_text[spans2[0].start..spans2[0].end], "<@UEMJ>");
         }
 
+        /// [T-SK021] substitute_mentions replaces known user id with display name
         #[test]
         fn t007_known_user_replaced_with_display_name() {
             let cache: HashMap<String, String> =
@@ -821,6 +842,7 @@ parent body
             assert_eq!(result, "hello @Alice world");
         }
 
+        /// [T-SK022] substitute_mentions falls back to @UID when user unknown
         #[test]
         fn t008_unknown_user_kept_as_at_uid() {
             let cache: HashMap<String, String> = HashMap::new();
@@ -828,6 +850,7 @@ parent body
             assert_eq!(result, "hello @UXXX world");
         }
 
+        /// [T-SK023] substitute_mentions returns text unchanged when no mentions present
         #[test]
         fn t009_no_mentions_returns_text_unchanged() {
             let cache: HashMap<String, String> =
@@ -837,6 +860,7 @@ parent body
             assert_eq!(result, text);
         }
 
+        /// [T-SK024] substitute_mentions replaces pipe-labeled mention with display name
         #[test]
         fn t009b_pipe_label_substituted_with_display_name() {
             let cache: HashMap<String, String> =
@@ -853,6 +877,7 @@ parent body
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
 
+        /// [T-SK025] SlackClient::new constructs a client that reaches the API
         #[tokio::test]
         async fn t010_new_constructs_usable_client() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -889,6 +914,7 @@ parent body
         }
 
         #[traced_test]
+        /// [T-SK026] resolve_messages logs debug and falls back to "(no author)" when user is None
         #[test]
         fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
             let messages = vec![make_msg(None, "hello", Some("1000.000"))];
@@ -902,6 +928,7 @@ parent body
         }
 
         #[traced_test]
+        /// [T-SK027] resolve_messages logs warn and falls back to empty ts when missing
         #[test]
         fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
             let messages = vec![make_msg(Some("U1"), "hi", None)];
@@ -915,6 +942,7 @@ parent body
         }
 
         #[traced_test]
+        /// [T-SK028] resolve_messages resolves both author and mention via user map
         #[test]
         fn t014_mention_resolved_and_user_mapped() {
             let messages = vec![make_msg(Some("U1"), "cc <@U2>", Some("1000.000"))];
@@ -928,6 +956,7 @@ parent body
             assert_eq!(resolved[0].ts, "1000.000");
         }
 
+        /// [T-SK029] resolve_messages keeps unknown user id as the author label
         #[test]
         fn t015_unknown_user_id_kept_as_author() {
             let messages = vec![make_msg(Some("UXXX"), "text", Some("1000.000"))];

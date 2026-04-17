@@ -361,6 +361,7 @@ mod http_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
+    /// [T-GH001] get_json maps 404 responses to NotFound error
     #[tokio::test]
     async fn get_json_404_returns_not_found() {
         let Some(server) = try_spawn_mock_server("github::get_json_404").await else {
@@ -377,6 +378,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::NotFound(_))));
     }
 
+    /// [T-GH002] get_json maps 429 responses to RateLimited error
     #[tokio::test]
     async fn get_json_429_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -393,6 +395,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
+    /// [T-GH003] get_json maps 403 with zero remaining to RateLimited error
     #[tokio::test]
     async fn get_json_403_with_zero_remaining_returns_rate_limited() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -413,6 +416,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
+    /// [T-GH004] get_json maps 403 with non-zero remaining to Forbidden error
     #[tokio::test]
     async fn get_json_403_with_remaining_returns_forbidden() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -433,6 +437,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
     }
 
+    /// [T-GH005] resolve_token_with reads token from GITHUB_TOKEN env var
     #[tokio::test]
     async fn resolve_token_reads_env_var() {
         let token = resolve_token_with(|key| {
@@ -449,6 +454,7 @@ mod http_tests {
         );
     }
 
+    /// [T-GH006] get_json maps 500 responses to generic Api error
     #[tokio::test]
     async fn get_json_500_returns_api_error() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -468,6 +474,7 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::Api { code: 500, .. })));
     }
 
+    /// [T-GH007] get_json_once propagates Retry-After header value on 429
     #[tokio::test]
     async fn get_json_429_with_retry_after_carries_delay() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -489,6 +496,7 @@ mod http_tests {
         ));
     }
 
+    /// [T-GH008] get_json_once uses x-ratelimit-reset to compute delay on 403 rate limit
     #[tokio::test]
     async fn get_json_403_with_ratelimit_reset_carries_delay() {
         let Some(server) = try_spawn_mock_server("github::http").await else {

@@ -142,6 +142,7 @@ fn is_ipv6_unique_local(v6: &Ipv6Addr) -> bool {
 mod tests {
     use super::*;
 
+    /// [T-FS001] validate_url_accepts_valid
     #[test]
     fn validate_url_accepts_valid() {
         for url in [
@@ -154,6 +155,7 @@ mod tests {
         }
     }
 
+    /// [T-FS002] validate_url_rejects_bad_scheme
     #[test]
     fn validate_url_rejects_bad_scheme() {
         for url in ["ftp://example.com", "file:///tmp/test", "not-a-url"] {
@@ -161,6 +163,7 @@ mod tests {
         }
     }
 
+    /// [T-FS003] validate_url_rejects_internal_hosts
     #[test]
     fn validate_url_rejects_internal_hosts() {
         for url in [
@@ -216,6 +219,7 @@ mod dns_tests {
         }
     }
 
+    /// [T-FS004] ssrf_blocks_dns_resolving_to_private_ip
     #[tokio::test]
     async fn ssrf_blocks_dns_resolving_to_private_ip() {
         let resolver = AllowDns(vec!["127.0.0.1".parse().unwrap()]);
@@ -223,6 +227,7 @@ mod dns_tests {
         assert!(matches!(result, Err(FetchError::InternalHost)));
     }
 
+    /// [T-FS005] ssrf_allows_dns_resolving_to_public_ip
     #[tokio::test]
     async fn ssrf_allows_dns_resolving_to_public_ip() {
         let resolver = AllowDns(vec!["8.8.8.8".parse().unwrap()]);
@@ -230,6 +235,7 @@ mod dns_tests {
         assert!(result.is_ok());
     }
 
+    /// [T-FS006] ssrf_returns_error_on_dns_failure
     #[tokio::test]
     async fn ssrf_returns_error_on_dns_failure() {
         let resolver = FailDns("lookup failed".into());
@@ -237,6 +243,7 @@ mod dns_tests {
         assert!(matches!(result, Err(FetchError::DnsResolution(_))));
     }
 
+    /// [T-FS007] ssrf_skips_dns_for_ip_literals
     #[tokio::test]
     async fn ssrf_skips_dns_for_ip_literals() {
         let resolver = AllowDns(vec![]);
@@ -244,6 +251,7 @@ mod dns_tests {
         assert!(result.is_ok());
     }
 
+    /// [T-FS008] redact_strips_userinfo
     #[test]
     fn redact_strips_userinfo() {
         let url = "https://user:password@example.com/path";
@@ -253,12 +261,14 @@ mod dns_tests {
         assert!(safe.contains("example.com/path"));
     }
 
+    /// [T-FS009] redact_preserves_clean_url
     #[test]
     fn redact_preserves_clean_url() {
         let url = "https://example.com/path";
         assert!(matches!(redact_url_credentials(url), Cow::Borrowed(_)));
     }
 
+    /// [T-FS010] redact_handles_username_only
     #[test]
     fn redact_handles_username_only() {
         let url = "https://admin@example.com/";

@@ -56,6 +56,7 @@ pub(crate) fn escape_yaml(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// [T-FC001] always_includes_frontmatter
     #[test]
     fn always_includes_frontmatter() {
         let article = ExtractedArticle {
@@ -76,6 +77,7 @@ mod tests {
         assert!(result.markdown.contains("Body text"));
     }
 
+    /// [T-FC002] frontmatter_omits_missing_fields
     #[test]
     fn frontmatter_omits_missing_fields() {
         let article = ExtractedArticle {
@@ -93,6 +95,7 @@ mod tests {
         assert!(!result.markdown.contains("date:"));
     }
 
+    /// [T-FC003] escapes_yaml_special_chars
     #[test]
     fn escapes_yaml_special_chars() {
         assert_eq!(escape_yaml(r#"He said "hello""#), r#"He said \"hello\""#);
@@ -103,6 +106,7 @@ mod tests {
         assert_eq!(escape_yaml("null\0byte"), "nullbyte");
     }
 
+    /// [T-FC004] escapes_combined_special_chars
     #[test]
     fn escapes_combined_special_chars() {
         // Backslash-first ordering prevents double-escape: \" must not become \\\"
