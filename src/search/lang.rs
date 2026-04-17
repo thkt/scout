@@ -13,7 +13,7 @@ impl Lang {
         match self {
             Lang::Ja => format!("{query} (日本語で回答)"),
             Lang::En => format!("{query} (answer in English)"),
-            Lang::Auto => query.to_string(),
+            Lang::Auto => query.to_owned(),
         }
     }
 }

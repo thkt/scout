@@ -273,6 +273,7 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
 mod tests {
     use super::*;
     use crate::github::types::{EntryType, LabelInfo, LicenseInfo, UserInfo};
+    use std::iter;
 
     #[test]
     fn format_size_bytes() {
@@ -623,7 +624,7 @@ mod tests {
         let repo = sample_repo();
         let cjk_char = '\u{4E16}'; // '世' = 3 bytes
         let char_count = (super::MAX_README_BYTES / 3) + 100;
-        let readme: String = std::iter::repeat_n(cjk_char, char_count).collect();
+        let readme: String = iter::repeat_n(cjk_char, char_count).collect();
         assert!(readme.len() > super::MAX_README_BYTES);
 
         let output = format_overview(&repo, Some(&readme), &[], &[], &[]);

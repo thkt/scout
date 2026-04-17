@@ -9,8 +9,8 @@ repository = "https://github.com/thkt/scout"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json"] }
-dom_smoothie = "0.16"
-fast_html2md = "0.0.58"
+dom_smoothie = "0.17"
+fast_html2md = "0.0.61"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,6 +33,27 @@ js-rendering = ["chromiumoxide"]
 [dev-dependencies]
 tracing-test = "0.2"
 wiremock = "0.6"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# フルパス使用検出
+absolute_paths = "deny"
+# Rustイディオム (RUST.md idioms table)
+cast_possible_truncation = "deny"
+redundant_closure_for_method_calls = "deny"
+filter_map_next = "deny"
+flat_map_option = "deny"
+manual_filter_map = "deny"
+manual_find_map = "deny"
+# インポート
+wildcard_imports = "deny"
+enum_glob_use = "deny"
+# 文字列
+str_to_string = "deny"
+# 引数
+needless_pass_by_value = "deny"
 
 [profile.release]
 opt-level = 3

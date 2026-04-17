@@ -47,9 +47,9 @@ mod tests {
             candidates: Some(vec![Candidate {
                 content: Some(Content {
                     parts: vec![Part {
-                        text: answer.to_string(),
+                        text: answer.to_owned(),
                     }],
-                    role: Some("model".to_string()),
+                    role: Some("model".to_owned()),
                 }),
                 grounding_metadata: Some(GroundingMetadata {
                     grounding_chunks: Some(chunks),

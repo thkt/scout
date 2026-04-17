@@ -1,9 +1,11 @@
+use std::fmt;
+
 #[derive(Clone)]
 pub(crate) struct Redacted(String);
 
 impl Redacted {
-    pub fn new(s: String) -> Self {
-        Self(s.trim().to_string())
+    pub fn new(s: &str) -> Self {
+        Self(s.trim().to_owned())
     }
 
     pub fn expose(&self) -> &str {
@@ -11,8 +13,8 @@ impl Redacted {
     }
 }
 
-impl std::fmt::Debug for Redacted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[REDACTED]")
     }
 }
@@ -30,7 +32,7 @@ mod tests {
 
     #[test]
     fn debug_is_redacted() {
-        let secret = Redacted::new("super-secret".into());
+        let secret = Redacted::new("super-secret");
         assert_eq!(format!("{secret:?}"), "[REDACTED]");
     }
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use tracing::{debug, warn};
 
-use crate::redacted::Redacted;
+use crate::redacted::{Redacted, assert_https};
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
     retry_with,
@@ -58,14 +58,14 @@ impl GeminiClient {
         }
         let model = env::var("GEMINI_MODEL")
             .ok()
-            .map(|m| m.trim().to_string())
+            .map(|m| m.trim().to_owned())
             .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         Ok(Self {
             http,
-            api_key: Redacted::new(api_key),
+            api_key: Redacted::new(&api_key),
             model,
-            base_url: API_BASE.to_string(),
+            base_url: API_BASE.to_owned(),
         })
     }
 
@@ -73,9 +73,9 @@ impl GeminiClient {
     pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            api_key: Redacted::new("test-key".to_string()),
-            model: DEFAULT_MODEL.to_string(),
-            base_url: base_url.to_string(),
+            api_key: Redacted::new("test-key"),
+            model: DEFAULT_MODEL.to_owned(),
+            base_url: base_url.to_owned(),
         }
     }
 
@@ -88,7 +88,7 @@ impl GeminiClient {
         let request = GenerateContentRequest {
             contents: vec![Content {
                 parts: vec![Part {
-                    text: query.to_string(),
+                    text: query.to_owned(),
                 }],
                 role: None,
             }],
@@ -97,7 +97,7 @@ impl GeminiClient {
             }],
         };
 
-        crate::redacted::assert_https(&url);
+        assert_https(&url);
 
         let response = self
             .http
@@ -185,7 +185,7 @@ fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
     let message = err
         .message
         .clone()
-        .unwrap_or_else(|| "Unknown error".to_string());
+        .unwrap_or_else(|| "Unknown error".to_owned());
 
     match err.code {
         Some(429) => GeminiError::RateLimited { retry_after },

@@ -9,6 +9,17 @@ mod ssrf;
 pub(crate) use ssrf::{DnsResolver, TokioDnsResolver};
 use ssrf::{redact_url_credentials, ssrf_check};
 
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::sync::OnceLock;
+#[cfg(feature = "js-rendering")]
+use std::time::Duration;
+
+#[cfg(feature = "js-rendering")]
+use tokio::time::timeout;
+
 use converter::{FetchResult, to_fetch_result};
 use extractor::{extract_article, extract_raw};
 use reqwest::Client;
@@ -313,9 +324,8 @@ impl From<BrowserError> for FetchError {
 }
 
 #[cfg(feature = "js-rendering")]
-fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
-    static CACHE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
-        std::sync::OnceLock::new();
+fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
+    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
     let cached = CACHE.get_or_init(|| {
         let path_commands: &[&str] = if cfg!(target_os = "macos") {
@@ -328,12 +338,10 @@ fn resolve_browser_binary() -> Result<std::path::PathBuf, BrowserError> {
                 "chromium",
             ]
         };
-        let known_paths: &[&std::path::Path] = if cfg!(target_os = "macos") {
+        let known_paths: &[&Path] = if cfg!(target_os = "macos") {
             &[
-                std::path::Path::new(
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                ),
-                std::path::Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+                Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
             ]
         } else {
             &[]
@@ -363,11 +371,11 @@ fn build_launch_args() -> Vec<&'static str> {
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
-        std::borrow::Cow::Borrowed(url)
+        Cow::Borrowed(url)
     } else if let Some(rest) = url.strip_prefix("ws://") {
-        std::borrow::Cow::Owned(format!("http://{rest}"))
+        Cow::Owned(format!("http://{rest}"))
     } else if let Some(rest) = url.strip_prefix("wss://") {
-        std::borrow::Cow::Owned(format!("https://{rest}"))
+        Cow::Owned(format!("https://{rest}"))
     } else if url.starts_with("data:")
         || url.starts_with("about:")
         || url.starts_with("chrome:")
@@ -382,7 +390,7 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsRe
 }
 
 #[cfg(feature = "js-rendering")]
-const CDP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(
@@ -403,7 +411,7 @@ async fn fetch_with_cdp(
         .build()
         .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
 
-    let (mut browser, mut handler) = tokio::time::timeout(CDP_TIMEOUT, Browser::launch(config))
+    let (mut browser, mut handler) = timeout(CDP_TIMEOUT, Browser::launch(config))
         .await
         .map_err(|_| BrowserError::TimedOut)?
         .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
@@ -417,11 +425,11 @@ async fn fetch_with_cdp(
     });
 
     // unwrap_or (not ?) so cleanup below runs even on timeout.
-    let result = tokio::time::timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
+    let result = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
         .await
         .unwrap_or(Err(BrowserError::TimedOut));
 
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), browser.close()).await;
+    let _ = timeout(Duration::from_secs(5), browser.close()).await;
     handler_task.abort();
 
     result
@@ -497,14 +505,14 @@ async fn cdp_navigate(
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 fn resolve_browser_binary_from(
     path_commands: &[&str],
-    known_paths: &[&std::path::Path],
-) -> Result<std::path::PathBuf, BrowserError> {
+    known_paths: &[&Path],
+) -> Result<PathBuf, BrowserError> {
     for cmd in path_commands {
-        if let Ok(output) = std::process::Command::new("which").arg(cmd).output()
+        if let Ok(output) = Command::new("which").arg(cmd).output()
             && output.status.success()
         {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return Ok(std::path::PathBuf::from(path));
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -524,7 +532,7 @@ async fn download(
     max_redirects: usize,
     resolver: &impl DnsResolver,
 ) -> Result<(String, String), FetchError> {
-    let mut current_url = url.to_string();
+    let mut current_url = url.to_owned();
 
     for _hop in 0..=max_redirects {
         let response = client
@@ -577,13 +585,17 @@ async fn download(
 
         let content_length = response.content_length();
         if let Some(len) = content_length
-            && len as usize > MAX_RESPONSE_BYTES
+            && usize::try_from(len).unwrap_or(usize::MAX) > MAX_RESPONSE_BYTES
         {
             return Err(FetchError::TooLarge);
         }
 
         let capacity = content_length
-            .map(|len| (len as usize).min(MAX_RESPONSE_BYTES))
+            .map(|len| {
+                usize::try_from(len)
+                    .unwrap_or(usize::MAX)
+                    .min(MAX_RESPONSE_BYTES)
+            })
             .unwrap_or(8192);
         let mut body = Vec::with_capacity(capacity);
         let mut stream = response;
@@ -607,7 +619,7 @@ fn extract_charset(content_type: &str) -> Option<String> {
         if let Some(value) = lower.strip_prefix("charset=") {
             let value = value.trim().trim_matches('"');
             if !value.is_empty() {
-                return Some(value.to_string());
+                return Some(value.to_owned());
             }
         }
         None
@@ -637,7 +649,7 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
         && mime != "application/xhtml+xml"
         && mime != "application/xml"
     {
-        return Err(FetchError::UnsupportedContentType(mime.to_string()));
+        return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
     Ok(())
 }
@@ -731,15 +743,13 @@ mod content_type_tests {
 mod download_tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
+    use reqwest::redirect::Policy;
     use std::net::IpAddr;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+        Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
     #[derive(Clone, Copy)]
@@ -988,14 +998,12 @@ mod download_tests {
 mod fetch_page_tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
+    use reqwest::redirect::Policy;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     fn no_redirect_client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+        Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
     #[tokio::test]
@@ -1176,7 +1184,7 @@ mod thin_extract_tests {
             title: None,
             byline: None,
             published_time: None,
-            content_html: content_html.to_string(),
+            content_html: content_html.to_owned(),
             used_raw_fallback,
         }
     }
@@ -1231,6 +1239,7 @@ mod thin_extract_tests {
 #[cfg(test)]
 mod browser_binary_tests {
     use super::*;
+    use std::env;
 
     #[test]
     fn t001_returns_error_when_chrome_not_found() {
@@ -1243,7 +1252,7 @@ mod browser_binary_tests {
 
     #[test]
     fn finds_binary_at_known_path() {
-        let existing = std::env::current_exe().unwrap();
+        let existing = env::current_exe().unwrap();
         let result = resolve_browser_binary_from(&[], &[existing.as_path()]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), existing);

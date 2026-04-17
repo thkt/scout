@@ -1,5 +1,9 @@
+use std::future::Future;
 use std::time::Duration;
 
+use reqwest::Error;
+use reqwest::header::{HeaderMap, RETRY_AFTER};
+use tokio::time::sleep;
 use tracing::debug;
 
 pub(crate) const MAX_RETRIES: u32 = 3;
@@ -12,7 +16,7 @@ pub(crate) fn jittered_backoff(attempt: u32) -> u64 {
     half + fastrand::u64(..half.max(1))
 }
 
-pub(crate) fn is_transient_network(e: &reqwest::Error) -> bool {
+pub(crate) fn is_transient_network(e: &Error) -> bool {
     e.is_connect() || e.is_timeout()
 }
 
@@ -24,7 +28,7 @@ pub(crate) async fn retry_with<T, E, F, Fut>(
 ) -> Result<T, E>
 where
     F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<T, E>>,
+    Fut: Future<Output = Result<T, E>>,
 {
     let mut last_err = None;
     for attempt in 0..MAX_RETRIES {
@@ -35,10 +39,10 @@ where
                     let delay = delay_for(&e, attempt);
                     debug!(
                         attempt = attempt + 1,
-                        delay_ms = delay.as_millis() as u64,
+                        delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
                         "retrying after transient error"
                     );
-                    tokio::time::sleep(delay).await;
+                    sleep(delay).await;
                 }
                 last_err = Some(e);
             }
@@ -48,9 +52,9 @@ where
     Err(last_err.unwrap_or_else(fallback_err))
 }
 
-pub(crate) fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
     headers
-        .get(reqwest::header::RETRY_AFTER)
+        .get(RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
 }

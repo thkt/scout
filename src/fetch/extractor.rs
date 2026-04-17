@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn extracts_title_from_html_tag() {
         let html = "<html><head><title>My Page</title></head><body></body></html>";
-        assert_eq!(extract_title_from_html(html), Some("My Page".to_string()));
+        assert_eq!(extract_title_from_html(html), Some("My Page".to_owned()));
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         let html = r#"<html><head><title lang="en">Attributed Title</title></head></html>"#;
         assert_eq!(
             extract_title_from_html(html),
-            Some("Attributed Title".to_string())
+            Some("Attributed Title".to_owned())
         );
     }
 
@@ -157,7 +157,7 @@ mod tests {
         let result = extract_article(html, None);
 
         assert!(!result.used_raw_fallback);
-        assert_eq!(result.title, Some("Minimal Page".to_string()));
+        assert_eq!(result.title, Some("Minimal Page".to_owned()));
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
         let html = "<html><head><title>日本語タイトル</title></head><body></body></html>";
         assert_eq!(
             extract_title_from_html(html),
-            Some("日本語タイトル".to_string())
+            Some("日本語タイトル".to_owned())
         );
     }
 
@@ -174,6 +174,6 @@ mod tests {
         // Turkish İ (U+0130) expands from 2→3 bytes under full to_lowercase().
         // to_ascii_lowercase preserves byte offsets, preventing panic on slice.
         let html = "<html><head><TITLE>My Title</TITLE></head><body>İİİ</body></html>";
-        assert_eq!(extract_title_from_html(html), Some("My Title".to_string()));
+        assert_eq!(extract_title_from_html(html), Some("My Title".to_owned()));
     }
 }

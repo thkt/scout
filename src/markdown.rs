@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// Escape characters that break Markdown link syntax: `[`, `]`, `(`, `)`.
 pub(crate) fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -41,16 +43,16 @@ pub(crate) fn sanitize_heading(s: &str) -> String {
 /// Truncate a string at a char boundary and append a byte-count note.
 ///
 /// Returns the input borrowed if it fits within `max_bytes`.
-pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> std::borrow::Cow<'_, str> {
+pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
     if s.len() <= max_bytes {
-        return std::borrow::Cow::Borrowed(s);
+        return Cow::Borrowed(s);
     }
     let total = s.len();
     let end = s.floor_char_boundary(max_bytes);
     let mut out = s[..end].to_string();
     use std::fmt::Write;
     let _ = write!(out, "\n\n(truncated: showing {end} / {total} bytes)");
-    std::borrow::Cow::Owned(out)
+    Cow::Owned(out)
 }
 
 /// Return the heading level (1–6) if `trimmed` is a valid ATX heading
@@ -76,7 +78,7 @@ fn atx_heading_level(trimmed: &str) -> Option<usize> {
 /// would mis-toggle.  This is acceptable for LLM/web-fetched markdown input.
 pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
     if levels == 0 {
-        return markdown.to_string();
+        return markdown.to_owned();
     }
     let mut in_code_block = false;
     let mut out = String::with_capacity(markdown.len() + levels * 40);

@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::future::Future;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use tokio::net::lookup_host;
@@ -102,7 +102,7 @@ fn is_blocked_host(parsed: &url::Url) -> bool {
     }
 }
 
-fn is_cgn(v4: std::net::Ipv4Addr) -> bool {
+fn is_cgn(v4: Ipv4Addr) -> bool {
     let octets = v4.octets();
     octets[0] == 100 && (64..=127).contains(&octets[1])
 }

@@ -45,7 +45,7 @@ pub(crate) fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> 
 
     let parts: Vec<&str> = repo_str.splitn(3, '/').collect();
     if parts.len() < 2 || !is_valid_github_name(parts[0]) || !is_valid_github_name(parts[1]) {
-        return Err(GitHubError::InvalidRepo(repository.to_string()));
+        return Err(GitHubError::InvalidRepo(repository.to_owned()));
     }
     Ok((parts[0], parts[1]))
 }
@@ -60,7 +60,7 @@ pub(crate) fn validate_ref(ref_: &str) -> Result<(), GitHubError> {
         || ref_.ends_with('.')
         || ref_.ends_with(".lock")
     {
-        return Err(GitHubError::InvalidRef(ref_.to_string()));
+        return Err(GitHubError::InvalidRef(ref_.to_owned()));
     }
     Ok(())
 }
@@ -74,7 +74,7 @@ pub(crate) fn validate_path(path: &str) -> Result<(), GitHubError> {
         || path.contains(['\0', '\n', '\r'])
         || path.split('/').any(|s| s == "..")
     {
-        return Err(GitHubError::InvalidPath(path.to_string()));
+        return Err(GitHubError::InvalidPath(path.to_owned()));
     }
     Ok(())
 }
@@ -96,7 +96,7 @@ pub(crate) fn decode_content(
 /// Parse a line range string: `"1-80"` (range), `"50-"` (open end), `"100"` (first N lines).
 pub(crate) fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), GitHubError> {
     let range = range.trim();
-    let err = || GitHubError::InvalidLineRange(range.to_string());
+    let err = || GitHubError::InvalidLineRange(range.to_owned());
 
     if range.is_empty() {
         return Err(err());

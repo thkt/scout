@@ -1,3 +1,5 @@
+use std::str;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::Encoding;
@@ -118,7 +120,7 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         return Err(GitHubError::NonUtf8(
             "File appears to be binary (contains null bytes). \
             Use --encoding utf-16le or --encoding utf-16be if this is a UTF-16 file without a BOM."
-                .to_string(),
+                .to_owned(),
         ));
     }
 
@@ -144,7 +146,7 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
     }
 
     // FR-007: chardetng inconclusive or had errors; try strict UTF-8
-    if let Ok(s) = std::str::from_utf8(bytes) {
+    if let Ok(s) = str::from_utf8(bytes) {
         return Ok(DecodeResult {
             text: s.to_owned(),
             encoding: encoding_rs::UTF_8.name().to_ascii_lowercase(),

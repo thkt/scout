@@ -12,6 +12,9 @@ mod tools;
 
 pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
+use std::io::stderr;
+use std::process::exit;
+
 use clap::Parser;
 use tools::{Command, Scout};
 
@@ -37,13 +40,14 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    use tracing_subscriber::filter::Directive;
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                "scout=info".parse().unwrap_or_else(|_| {
-                    tracing_subscriber::filter::Directive::from(tracing::Level::INFO)
-                }),
+                "scout=info"
+                    .parse()
+                    .unwrap_or_else(|_| Directive::from(tracing::Level::INFO)),
             ),
         )
         .init();
@@ -54,7 +58,7 @@ async fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(e.exit_code());
+            exit(e.exit_code());
         }
     };
 
@@ -67,7 +71,7 @@ async fn main() {
         }
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(e.exit_code());
+            exit(e.exit_code());
         }
     }
 }

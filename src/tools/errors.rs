@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
@@ -24,7 +25,7 @@ impl fmt::Display for ScoutError {
     }
 }
 
-impl std::error::Error for ScoutError {}
+impl Error for ScoutError {}
 
 impl ScoutError {
     pub(super) fn user_error(msg: impl Into<String>) -> Self {

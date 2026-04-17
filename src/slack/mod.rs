@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::time::Duration;
 
+use futures::future::join_all;
 use reqwest::Client;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
-use crate::redacted::Redacted;
+use crate::fetch::converter::escape_yaml;
+use crate::redacted::{Redacted, assert_https};
 use crate::retry::{parse_retry_after, retry_after_or_backoff, retry_after_within_cap, retry_with};
 
 #[derive(Debug, thiserror::Error)]
@@ -53,7 +57,7 @@ pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
         return None;
     }
 
-    let channel = segments[1].to_string();
+    let channel = segments[1].to_owned();
     // Slack timestamps: p{epoch_secs}{6-digit micros} → "{epoch_secs}.{micros}"
     const TS_MICROS_DIGITS: usize = 6;
     let ts_raw = segments[2].strip_prefix('p')?;
@@ -69,11 +73,11 @@ pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
         .map(|(_, v)| v.into_owned());
 
     Some(SlackUrl {
-        workspace: workspace.to_string(),
+        workspace: workspace.to_owned(),
         channel,
         ts,
         thread_ts,
-        raw_url: url.to_string(),
+        raw_url: url.to_owned(),
     })
 }
 
@@ -142,28 +146,28 @@ impl SlackClient {
         Self {
             http,
             token,
-            base_url: API_BASE.to_string(),
+            base_url: API_BASE.to_owned(),
         }
     }
 
     pub fn from_env(http: Client) -> Result<Self, SlackError> {
-        let raw = std::env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
+        let raw = env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
         if raw.trim().is_empty() {
             return Err(SlackError::TokenNotSet);
         }
-        Ok(Self::new(http, Redacted::new(raw)))
+        Ok(Self::new(http, Redacted::new(&raw)))
     }
 
     #[cfg(test)]
     fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            token: Redacted::new("xoxp-test".to_string()),
-            base_url: base_url.to_string(),
+            token: Redacted::new("xoxp-test"),
+            base_url: base_url.to_owned(),
         }
     }
 
-    async fn api_get<T: serde::de::DeserializeOwned>(
+    async fn api_get<T: DeserializeOwned>(
         &self,
         method: &str,
         params: &[(&str, &str)],
@@ -177,7 +181,7 @@ impl SlackClient {
         .await
     }
 
-    async fn api_get_once<T: serde::de::DeserializeOwned>(
+    async fn api_get_once<T: DeserializeOwned>(
         &self,
         method: &str,
         params: &[(&str, &str)],
@@ -188,7 +192,7 @@ impl SlackClient {
             url.query_pairs_mut().append_pair(k, v);
         }
 
-        crate::redacted::assert_https(url.as_str());
+        assert_https(url.as_str());
 
         let resp = self
             .http
@@ -213,7 +217,7 @@ impl SlackClient {
             }
         })?;
 
-        if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        if body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             let error = body
                 .get("error")
                 .and_then(|v| v.as_str())
@@ -223,7 +227,7 @@ impl SlackClient {
                 return Err(SlackError::RateLimited { retry_after });
             }
             return Err(SlackError::Api {
-                error: error.to_string(),
+                error: error.to_owned(),
             });
         }
 
@@ -239,10 +243,10 @@ impl SlackClient {
                 .channel
                 .and_then(|c| c.name)
                 .map(|n| format!("#{n}"))
-                .unwrap_or_else(|| id.to_string()),
+                .unwrap_or_else(|| id.to_owned()),
             Err(e) => {
                 warn!(channel_id = %id, error = %e, "channel resolution failed, using raw ID");
-                id.to_string()
+                id.to_owned()
             }
         }
     }
@@ -259,10 +263,10 @@ impl SlackClient {
                         .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
                         .or(u.real_name)
                 })
-                .unwrap_or_else(|| id.to_string()),
+                .unwrap_or_else(|| id.to_owned()),
             Err(e) => {
                 warn!(user_id = %id, error = %e, "user resolution failed, using raw ID");
-                id.to_string()
+                id.to_owned()
             }
         }
     }
@@ -270,7 +274,7 @@ impl SlackClient {
     async fn prefetch_users(&self, ids: &HashSet<String>) -> HashMap<String, String> {
         let ids: Vec<String> = ids.iter().cloned().collect();
         let futs = ids.iter().map(|id| self.fetch_user_name(id));
-        let results = futures::future::join_all(futs).await;
+        let results = join_all(futs).await;
         ids.into_iter().zip(results).collect()
     }
 
@@ -394,7 +398,7 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
 
 fn collect_mention_ids(text: &str, ids: &mut HashSet<String>) {
     for span in parse_mentions(text) {
-        ids.insert(span.user_id.to_string());
+        ids.insert(span.user_id.to_owned());
     }
 }
 
@@ -427,7 +431,7 @@ fn resolve_messages(messages: &[Message], users: &HashMap<String, String>) -> Ve
 fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
     let spans = parse_mentions(text);
     if spans.is_empty() {
-        return text.to_string();
+        return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
@@ -437,7 +441,7 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
         out.push_str(
             cache
                 .get(span.user_id)
-                .map(|s| s.as_str())
+                .map(String::as_str)
                 .unwrap_or(span.user_id),
         );
         pos = span.end;
@@ -468,7 +472,7 @@ fn format_slack_output(
     first: &ResolvedMessage,
     replies: &[ResolvedMessage],
 ) -> String {
-    let escape = crate::fetch::converter::escape_yaml;
+    let escape = escape_yaml;
 
     let mut out = String::from("---\n");
     out.push_str(&format!(
@@ -862,7 +866,7 @@ parent body
                 .mount(&server)
                 .await;
 
-            let token = Redacted::new("xoxp-test-token".into());
+            let token = Redacted::new("xoxp-test-token");
             let mut client = SlackClient::new(Client::new(), token);
             client.base_url = server.uri();
 

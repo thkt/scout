@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::time::Duration;
 
 use futures::future::join_all;
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
+use tokio::time::timeout;
 use tracing::warn;
 
 use crate::fetch;
@@ -109,7 +111,7 @@ async fn fetch_sources(
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(urls.into_iter().enumerate())
         .map(|(idx, url)| async move {
-            let result = tokio::time::timeout(
+            let result = timeout(
                 FETCH_TIMEOUT,
                 fetch::fetch_page(http, &url, fetch::FetchOptions::default(), resolver),
             )
@@ -151,7 +153,7 @@ async fn fetch_sources(
 }
 
 fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut sources = Vec::new();
 
     for result in results {
@@ -278,7 +280,7 @@ mod tests {
 
     impl SearchClient for MockSearch {
         async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError> {
-            self.queries.lock().unwrap().push(query.to_string());
+            self.queries.lock().unwrap().push(query.to_owned());
             self.responses
                 .lock()
                 .unwrap()

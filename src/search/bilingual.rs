@@ -2,12 +2,12 @@ pub fn expand_bilingual(query: &str) -> Vec<String> {
     if contains_japanese(query) {
         let eng = to_english_query(query);
         if eng == query {
-            vec![query.to_string()]
+            vec![query.to_owned()]
         } else {
-            vec![query.to_string(), eng]
+            vec![query.to_owned(), eng]
         }
     } else {
-        vec![query.to_string()]
+        vec![query.to_owned()]
     }
 }
 
@@ -30,7 +30,7 @@ fn to_english_query(query: &str) -> String {
         .collect();
 
     if ascii_words.is_empty() {
-        query.to_string()
+        query.to_owned()
     } else {
         ascii_words.join(" ")
     }
