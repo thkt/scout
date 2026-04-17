@@ -4,7 +4,7 @@ use super::extractor::ExtractedArticle;
 
 /// Fetched page content converted to Markdown.
 #[derive(Debug)]
-pub struct FetchResult {
+pub(crate) struct FetchResult {
     pub url: String,
     pub markdown: String,
     pub used_raw_fallback: bool,
@@ -13,9 +13,9 @@ pub struct FetchResult {
 pub(crate) const RAW_FALLBACK_NOTE: &str =
     "> Note: Readability extraction failed. Showing raw page conversion.\n\n";
 
-pub(super) fn to_fetch_result(article: ExtractedArticle, url: String) -> FetchResult {
+pub(super) fn to_fetch_result(article: &ExtractedArticle, url: String) -> FetchResult {
     let markdown = html2md::rewrite_html(&article.content_html, false);
-    let output = format_with_frontmatter(&article, &markdown);
+    let output = format_with_frontmatter(article, &markdown);
 
     FetchResult {
         url,
@@ -66,7 +66,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into());
 
         assert!(result.markdown.starts_with("---\n"));
         assert!(result.markdown.contains("\n---\n\n"));
@@ -86,7 +86,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into());
 
         assert!(result.markdown.contains("title: \"Only Title\""));
         assert!(!result.markdown.contains("author:"));

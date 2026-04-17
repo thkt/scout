@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 
 /// Options for [`fetch_page`] that control rendering and output.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FetchOptions {
+pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
     pub js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
@@ -29,7 +29,7 @@ const MAX_RESPONSE_BYTES: usize = 10_000_000;
 const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
-pub enum FetchError {
+pub(crate) enum FetchError {
     #[error("invalid URL: must be HTTP(S)")]
     InvalidScheme,
 
@@ -73,7 +73,7 @@ pub enum FetchError {
 /// ~1 sentence; pages below this almost always need JS rendering.
 const EXTRACT_TEXT_THRESHOLD: usize = 50;
 
-pub async fn fetch_page(
+pub(crate) async fn fetch_page(
     client: &Client,
     url: &str,
     opts: FetchOptions,
@@ -167,7 +167,7 @@ pub async fn fetch_page(
     }
 
     debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(article, final_url))
+    Ok(to_fetch_result(&article, final_url))
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates

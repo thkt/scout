@@ -6,7 +6,7 @@ use super::GitHubError;
 
 /// How the encoding was determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetectionSource {
+pub(crate) enum DetectionSource {
     /// User supplied `--encoding <label>`.
     Explicit,
     /// Byte-order mark found at the start of the content.
@@ -19,7 +19,7 @@ pub enum DetectionSource {
 
 /// Result of decoding raw bytes into Unicode text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecodeResult {
+pub(crate) struct DecodeResult {
     /// The decoded Unicode text.
     pub text: String,
     /// The encoding label in lowercase (e.g. "shift_jis", "utf-8").
@@ -32,7 +32,7 @@ pub struct DecodeResult {
 ///
 /// This is the first half of the old `decode_content`: base64 → bytes.
 /// Encoding detection is handled separately by `decode_bytes`.
-pub fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
+pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
     let clean: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
     STANDARD
         .decode(&clean)
@@ -47,7 +47,7 @@ pub fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
 /// 3. Run chardetng on full content; if decode succeeds, use detected encoding (BR-001)
 /// 4. Fall back to strict UTF-8 validation (AssumedUtf8)
 /// 5. If all fail, return NonUtf8 error with retry hint
-pub fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
+pub(super) fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
     if let Some(label) = hint {
         return decode_explicit(bytes, label);
     }

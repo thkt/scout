@@ -4,7 +4,7 @@ mod helpers;
 pub(crate) mod types;
 
 use helpers::encode_path;
-pub use helpers::{
+pub(crate) use helpers::{
     apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
     validate_path, validate_ref,
 };
@@ -30,7 +30,7 @@ use crate::retry::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum GitHubError {
+pub(crate) enum GitHubError {
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -76,7 +76,7 @@ pub enum GitHubError {
 /// Owner/repo parameters are safe for direct URL interpolation because `parse_repo`
 /// restricts them to `[a-zA-Z0-9._-]`.
 #[derive(Clone)]
-pub struct GitHubClient {
+pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
     base_url: String,

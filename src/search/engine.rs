@@ -42,7 +42,7 @@ pub(crate) struct ResearchRequest<'a> {
     pub(crate) lang: Lang,
 }
 
-pub async fn research(
+pub(crate) async fn research(
     gemini: &impl SearchClient,
     http: &Client,
     req: &ResearchRequest<'_>,
@@ -165,7 +165,7 @@ fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
     sources
 }
 
-pub fn format_report(report: &ResearchReport, query: &str) -> String {
+pub(crate) fn format_report(report: &ResearchReport, query: &str) -> String {
     let mut out = format!("# Research: {}\n\n", sanitize_heading(query));
     format_search_results(&report.search_results, &mut out);
     format_fetched_pages(&report.fetched_pages, &mut out);

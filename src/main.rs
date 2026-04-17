@@ -10,7 +10,7 @@ mod slack;
 mod test_support;
 mod tools;
 
-pub const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
 use clap::Parser;
 use tools::{Command, Scout};

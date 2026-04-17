@@ -52,7 +52,7 @@ fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
         title: extract_title_from_html(html),
         byline: None,
         published_time: None,
-        content_html: html.to_string(),
+        content_html: html.to_owned(),
         used_raw_fallback,
     }
 }
@@ -64,7 +64,7 @@ fn extract_title_from_html(html: &str) -> Option<String> {
     let content_start = tag_start + lower[tag_start..].find('>')? + 1;
     let content_end = content_start + lower[content_start..].find("</title>")?;
     let title = html[content_start..content_end].trim();
-    (!title.is_empty()).then(|| title.to_string())
+    (!title.is_empty()).then(|| title.to_owned())
 }
 
 #[cfg(test)]

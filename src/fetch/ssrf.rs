@@ -3,12 +3,15 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::net::{IpAddr, Ipv6Addr};
+use std::time::Duration;
 
+use tokio::net::lookup_host;
+use tokio::time::timeout;
 use tracing::warn;
 
 use super::FetchError;
 
-const DNS_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) trait DnsResolver: Clone + Send + Sync + 'static {
     fn lookup(
@@ -23,13 +26,10 @@ pub(crate) struct TokioDnsResolver;
 
 impl DnsResolver for TokioDnsResolver {
     async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, FetchError> {
-        let addrs = tokio::time::timeout(
-            DNS_LOOKUP_TIMEOUT,
-            tokio::net::lookup_host(format!("{host}:{port}")),
-        )
-        .await
-        .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_string()))?
-        .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
+        let addrs = timeout(DNS_LOOKUP_TIMEOUT, lookup_host(format!("{host}:{port}")))
+            .await
+            .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_owned()))?
+            .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
         Ok(addrs.map(|a| a.ip()).collect())
     }
 }

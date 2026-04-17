@@ -35,7 +35,7 @@ fn is_valid_github_name(s: &str) -> bool {
 /// Parse a repository identifier into `(owner, repo)`.
 ///
 /// Accepts `"owner/repo"`, full GitHub URLs, and `.git` suffixed URLs.
-pub fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> {
+pub(crate) fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> {
     let stripped = repository
         .strip_prefix("https://github.com/")
         .or_else(|| repository.strip_prefix("http://github.com/"))
@@ -53,7 +53,7 @@ pub fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> {
 /// Validate a git ref (branch, tag, or SHA).
 ///
 /// Rejects empty, control characters, and `..` sequences (git-check-ref-format).
-pub fn validate_ref(ref_: &str) -> Result<(), GitHubError> {
+pub(crate) fn validate_ref(ref_: &str) -> Result<(), GitHubError> {
     if ref_.is_empty()
         || ref_.contains(['\0', '\n', '\r', ' ', '~', '^', ':', '\\', '*', '?', '['])
         || ref_.contains("..")
@@ -68,7 +68,7 @@ pub fn validate_ref(ref_: &str) -> Result<(), GitHubError> {
 /// Validate a file path within a repository.
 ///
 /// Rejects empty, absolute paths, control characters, and `..` path traversal.
-pub fn validate_path(path: &str) -> Result<(), GitHubError> {
+pub(crate) fn validate_path(path: &str) -> Result<(), GitHubError> {
     if path.is_empty()
         || path.starts_with('/')
         || path.contains(['\0', '\n', '\r'])
@@ -85,13 +85,16 @@ pub fn validate_path(path: &str) -> Result<(), GitHubError> {
 /// When `None`, chardetng auto-detects the encoding (BOM → chardetng → UTF-8 fallback).
 ///
 /// Returns a [`DecodeResult`] containing the decoded text, encoding label, and detection source.
-pub fn decode_content(encoded: &str, hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
+pub(crate) fn decode_content(
+    encoded: &str,
+    hint: Option<&str>,
+) -> Result<DecodeResult, GitHubError> {
     let bytes = super::encoding::decode_base64(encoded)?;
     super::encoding::decode_bytes(&bytes, hint)
 }
 
 /// Parse a line range string: `"1-80"` (range), `"50-"` (open end), `"100"` (first N lines).
-pub fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), GitHubError> {
+pub(crate) fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), GitHubError> {
     let range = range.trim();
     let err = || GitHubError::InvalidLineRange(range.to_string());
 
@@ -123,7 +126,7 @@ pub fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), GitHubErr
 }
 
 /// Extract a line range from content, returning numbered lines.
-pub fn apply_line_range(content: &str, start: usize, end: Option<usize>) -> String {
+pub(crate) fn apply_line_range(content: &str, start: usize, end: Option<usize>) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
     let start_idx = start.saturating_sub(1);
@@ -142,7 +145,7 @@ pub fn apply_line_range(content: &str, start: usize, end: Option<usize>) -> Stri
 }
 
 /// Filter tree entries to blobs matching an optional path prefix and glob pattern.
-pub fn filter_tree_entries<'a>(
+pub(crate) fn filter_tree_entries<'a>(
     entries: &'a [TreeEntry],
     path: Option<&str>,
     pattern: Option<&str>,

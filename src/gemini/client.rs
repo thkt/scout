@@ -21,7 +21,7 @@ const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
-pub enum GeminiError {
+pub(crate) enum GeminiError {
     #[error("GEMINI_API_KEY not set. Get one at https://aistudio.google.com/apikey")]
     ApiKeyNotSet,
 
@@ -38,12 +38,12 @@ pub enum GeminiError {
     Network(#[from] reqwest::Error),
 }
 
-pub trait SearchClient {
+pub(crate) trait SearchClient {
     async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError>;
 }
 
 #[derive(Clone)]
-pub struct GeminiClient {
+pub(crate) struct GeminiClient {
     http: Client,
     api_key: Redacted,
     model: String,
@@ -51,7 +51,7 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
-    pub fn from_env(http: Client) -> Result<Self, GeminiError> {
+    pub(crate) fn from_env(http: Client) -> Result<Self, GeminiError> {
         let api_key = env::var("GEMINI_API_KEY").map_err(|_| GeminiError::ApiKeyNotSet)?;
         if api_key.trim().is_empty() {
             return Err(GeminiError::ApiKeyNotSet);

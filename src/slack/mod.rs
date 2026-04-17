@@ -9,7 +9,7 @@ use crate::redacted::Redacted;
 use crate::retry::{parse_retry_after, retry_after_or_backoff, retry_after_within_cap, retry_with};
 
 #[derive(Debug, thiserror::Error)]
-pub enum SlackError {
+pub(crate) enum SlackError {
     #[error("SLACK_TOKEN is not set — export a User OAuth token (xoxp-…)")]
     TokenNotSet,
 
@@ -30,7 +30,7 @@ pub enum SlackError {
 }
 
 #[derive(Debug, Clone)]
-pub struct SlackUrl {
+pub(crate) struct SlackUrl {
     pub workspace: String,
     pub channel: String,
     pub ts: String,
@@ -41,7 +41,7 @@ pub struct SlackUrl {
 /// Parse a Slack message URL into its components.
 ///
 /// Accepts `https://{workspace}.slack.com/archives/{channel}/p{ts_raw}[?thread_ts=…]`.
-pub fn parse_slack_url(url: &str) -> Option<SlackUrl> {
+pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
     let parsed = url::Url::parse(url).ok()?;
     let workspace = parsed.host_str()?.strip_suffix(".slack.com")?;
     if workspace.is_empty() {
@@ -129,7 +129,7 @@ struct FetchedThread {
     is_thread: bool,
 }
 
-pub struct SlackClient {
+pub(crate) struct SlackClient {
     http: Client,
     token: Redacted,
     base_url: String,
