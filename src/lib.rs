@@ -12,11 +12,19 @@ mod tools;
 
 pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
-use std::io::stderr;
+use std::io::{self, ErrorKind, Write, stderr, stdout};
 use std::process::ExitCode;
 
 use clap::Parser;
 use tools::{Command, Scout};
+
+fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
+    w.write_all(output.as_bytes())?;
+    if !output.ends_with('\n') {
+        w.write_all(b"\n")?;
+    }
+    Ok(())
+}
 
 #[derive(Parser)]
 #[command(
@@ -63,11 +71,15 @@ pub async fn run() -> ExitCode {
 
     match scout.run(cli.command).await {
         Ok(output) => {
-            print!("{output}");
-            if !output.ends_with('\n') {
-                println!();
+            let mut handle = stdout().lock();
+            match write_output(&mut handle, &output) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(2)
+                }
             }
-            ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("error: {e}");
@@ -78,7 +90,44 @@ pub async fn run() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+
     use clap::CommandFactory;
+
+    use super::write_output;
+
+    /// [T-W001] write_output appends newline when output lacks trailing newline
+    #[test]
+    fn t_w001_write_output_appends_newline_when_missing() {
+        let mut buf = Vec::new();
+        write_output(&mut buf, "hello").unwrap();
+        assert_eq!(&buf, b"hello\n");
+    }
+
+    /// [T-W002] write_output preserves single trailing newline
+    #[test]
+    fn t_w002_write_output_preserves_existing_newline() {
+        let mut buf = Vec::new();
+        write_output(&mut buf, "hello\n").unwrap();
+        assert_eq!(&buf, b"hello\n");
+    }
+
+    /// [T-W003] write_output propagates BrokenPipe error from writer
+    #[test]
+    fn t_w003_write_output_propagates_broken_pipe() {
+        struct BrokenPipeWriter;
+        impl Write for BrokenPipeWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = BrokenPipeWriter;
+        let err = write_output(&mut w, "hello").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
 
     /// [T-H000] root --help contains Exit codes: and Environment: sections
     #[test]
