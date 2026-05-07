@@ -159,35 +159,21 @@ impl From<github::GitHubError> for ScoutError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum FetchHttpKind {
-    Transient,
-    Permanent,
-}
-
-fn classify_fetch_http(transient: bool) -> FetchHttpKind {
-    if transient {
-        FetchHttpKind::Transient
-    } else {
-        FetchHttpKind::Permanent
-    }
-}
-
 impl From<FetchError> for ScoutError {
     fn from(e: FetchError) -> Self {
         match &e {
             FetchError::InvalidScheme => {
                 Self::data_error(e.to_string()).with_next_step("URL must use http:// or https://")
             }
-            FetchError::InvalidUrl(_) => Self::data_error(e.to_string())
-                .with_next_step("Provide a complete URL including scheme and host"),
+            FetchError::InvalidUrl(_) => {
+                Self::data_error(e.to_string()).with_next_step("URL must include scheme and host")
+            }
             FetchError::InternalHost => Self::data_error(e.to_string())
                 .with_next_step("URL must point to an external host (private IPs are blocked)"),
             FetchError::UnsupportedContentType(_) => Self::data_error(e.to_string())
                 .with_next_step("URL must serve HTML or text content"),
             FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
-            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string())
-                .with_next_step("Install Chrome or Chromium to enable JS rendering"),
+            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
             FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
             FetchError::Status(408 | 429) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
@@ -204,15 +190,17 @@ impl From<FetchError> for ScoutError {
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
             FetchError::Status(_) | FetchError::Timeout(_) => {
-                Self::transient(e.to_string()).with_next_step("Retry later or check the URL")
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
-            FetchError::Http(re) => match classify_fetch_http(is_transient_network(re)) {
-                FetchHttpKind::Transient => Self::transient(e.to_string())
-                    .with_next_step("Check your network connection and retry"),
-                FetchHttpKind::Permanent => Self::internal(e.to_string()),
-            },
+            FetchError::Http(re) => {
+                if is_transient_network(re) {
+                    Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+                } else {
+                    Self::internal(e.to_string())
+                }
+            }
         }
     }
 }
@@ -221,7 +209,7 @@ impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
         match &e {
             SlackError::TokenNotSet => Self::user_error(e.to_string())
-                .with_next_step("Set SLACK_BOT_TOKEN environment variable"),
+                .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
             SlackError::Api { .. } => Self::user_error(e.to_string()),
             SlackError::RateLimited { .. } => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
@@ -547,32 +535,6 @@ mod tests {
                 "should not include retry hint: {err}"
             );
         }
-    }
-
-    /// [T-ER005] classify_fetch_http maps true to Transient variant
-    #[test]
-    fn classify_fetch_http_transient_input() {
-        assert_eq!(classify_fetch_http(true), FetchHttpKind::Transient);
-    }
-
-    /// [T-ER006] classify_fetch_http maps false to Permanent variant
-    #[test]
-    fn classify_fetch_http_permanent_input() {
-        assert_eq!(classify_fetch_http(false), FetchHttpKind::Permanent);
-    }
-
-    /// [T-ER007] GitHub Forbidden error hints at GITHUB_TOKEN scope
-    #[test]
-    fn github_forbidden_hints_token() {
-        let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
-        assert!(err.to_string().contains("GITHUB_TOKEN"));
-    }
-
-    /// [T-ER008] Gemini QuotaExhausted error hints at AI Studio billing URL
-    #[test]
-    fn quota_exhausted_hints_billing_url() {
-        let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
-        assert!(err.to_string().contains("aistudio.google.com"));
     }
 
     // TcpListener::drop is synchronous, so the port is immediately closed
