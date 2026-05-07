@@ -23,15 +23,18 @@ const MAX_PAGE_BYTES: usize = 4_500;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a multi-source research session.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct ResearchReport {
+    /// Internal: per-query grounded results consumed by the report formatter.
+    /// Not part of scout's public JSON output (#67/ADR-0065).
+    #[serde(skip_serializing)]
     pub(crate) search_results: Vec<GroundedResult>,
     pub(crate) fetched_pages: Vec<FetchResult>,
     pub(crate) failed_urls: Vec<FailedUrl>,
     pub(crate) all_sources: Vec<Source>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct FailedUrl {
     pub(crate) url: String,
     pub(crate) reason: String,

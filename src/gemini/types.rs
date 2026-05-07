@@ -64,13 +64,13 @@ pub(crate) struct ApiError {
 }
 
 /// LLM answer with grounding sources from Google Search.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct GroundedResult {
     pub(crate) answer: Option<String>,
     pub(crate) sources: Vec<Source>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct Source {
     pub(crate) url: String,
     pub(crate) title: String,

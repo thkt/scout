@@ -1,9 +1,44 @@
 //! Output envelopes per ADR-0065 (scout JSON output schema).
 //!
-//! Production wiring lands in Phase 2.2 (`--json` global flag); Phase 2.1
-//! exposes the types so `ScoutError::error_kind()` can classify against them.
+//! `CommandOutput` is the internal shape produced by each command handler;
+//! `lib::run` then serializes it as Markdown (default) or as a `SuccessEnvelope`
+//! JSON line (when `--json` is set).
 
 use serde::Serialize;
+
+/// Internal command output: holds both the Markdown rendering and the
+/// structured `data` payload, plus degradation signals. Each handler builds
+/// one of these; `lib::run` picks the path (Markdown or JSON) at the boundary.
+#[derive(Debug)]
+pub(crate) struct CommandOutput {
+    pub markdown: String,
+    pub data: serde_json::Value,
+    pub notes: Vec<String>,
+    pub degraded: bool,
+}
+
+impl CommandOutput {
+    /// Construct an output with no degradation signal (notes empty, degraded=false).
+    pub fn ok(markdown: String, data: serde_json::Value) -> Self {
+        Self {
+            markdown,
+            data,
+            notes: Vec::new(),
+            degraded: false,
+        }
+    }
+
+    /// Construct an output with degradation notes; `degraded` is set iff `notes` is non-empty.
+    pub fn with_notes(markdown: String, data: serde_json::Value, notes: Vec<String>) -> Self {
+        let degraded = !notes.is_empty();
+        Self {
+            markdown,
+            data,
+            notes,
+            degraded,
+        }
+    }
+}
 
 /// JSON-serializable error classification per ADR-0065.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -159,6 +194,36 @@ mod tests {
             json.contains(r#""notes":["Could not fetch contributors"]"#),
             "got: {json}"
         );
+    }
+
+    /// [T-EN008] CommandOutput::ok produces non-degraded with empty notes
+    #[test]
+    fn t_en008_command_output_ok_is_not_degraded() {
+        let out = CommandOutput::ok(String::from("md"), serde_json::json!({"a": 1}));
+        assert_eq!(out.markdown, "md");
+        assert_eq!(out.data, serde_json::json!({"a": 1}));
+        assert!(out.notes.is_empty());
+        assert!(!out.degraded);
+    }
+
+    /// [T-EN009] CommandOutput::with_notes sets degraded=true when notes non-empty
+    #[test]
+    fn t_en009_command_output_with_notes_is_degraded() {
+        let out = CommandOutput::with_notes(
+            String::from("md"),
+            serde_json::Value::Null,
+            vec![String::from("partial fetch")],
+        );
+        assert!(out.degraded);
+        assert_eq!(out.notes, vec!["partial fetch"]);
+    }
+
+    /// [T-EN010] CommandOutput::with_notes sets degraded=false when notes empty
+    #[test]
+    fn t_en010_command_output_with_empty_notes_is_not_degraded() {
+        let out =
+            CommandOutput::with_notes(String::from("md"), serde_json::Value::Null, Vec::new());
+        assert!(!out.degraded);
     }
 
     /// [T-EN001] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
