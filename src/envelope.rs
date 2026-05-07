@@ -65,7 +65,6 @@ impl ErrorCode {
 }
 
 /// Success envelope wrapping command output per ADR-0065.
-#[allow(dead_code)] // consumed in Phase 2.2 (--json output path)
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
     pub data: serde_json::Value,
@@ -75,14 +74,12 @@ pub(crate) struct SuccessEnvelope {
 
 /// Error envelope per ADR-0065. Wraps the payload under an `error` key so
 /// JSON output matches `{"error": { "code": ..., "message": ..., ... }}`.
-#[allow(dead_code)] // consumed in Phase 2.2 (--json output path)
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorEnvelope {
     pub error: ErrorPayload,
 }
 
 /// Error payload nested under `ErrorEnvelope::error` per ADR-0065.
-#[allow(dead_code)] // consumed in Phase 2.2 (--json output path)
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorPayload {
     pub code: ErrorCode,

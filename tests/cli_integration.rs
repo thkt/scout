@@ -141,8 +141,10 @@ fn t_c007_json_emits_envelope_on_error() {
         "message should describe the input failure, got: {value}"
     );
     assert!(
-        value["error"].get("next_step").is_none(),
-        "next_step should be omitted when None, got: {value}"
+        value["error"]["next_step"]
+            .as_str()
+            .is_some_and(|s| s.contains("owner/repo")),
+        "next_step should hint at owner/repo format, got: {value}"
     );
     assert!(
         value["error"].get("candidates").is_none(),
@@ -150,9 +152,9 @@ fn t_c007_json_emits_envelope_on_error() {
     );
 }
 
-// T-C008: --json missing API key surfaces a USAGE_ERROR envelope on stderr
+// T-C008: --json missing API key surfaces a USAGE_ERROR envelope with next_step on stderr
 #[test]
-fn t_c008_json_missing_api_key_emits_usage_error() {
+fn t_c008_json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
         .args(["--json", "search", "test query"])
         .env_remove("GEMINI_API_KEY")
@@ -172,6 +174,12 @@ fn t_c008_json_missing_api_key_emits_usage_error() {
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
         "missing API key is a usage problem per ADR-0065, got: {value}"
+    );
+    assert!(
+        value["error"]["next_step"]
+            .as_str()
+            .is_some_and(|s| s.contains("GEMINI_API_KEY")),
+        "next_step should point user to GEMINI_API_KEY, got: {value}"
     );
 }
 
