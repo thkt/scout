@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
+use crate::envelope::ErrorCode;
 use crate::fetch::FetchError;
 use crate::gemini::client::GeminiError;
 use crate::github;
@@ -13,6 +14,7 @@ pub struct ScoutError {
     message: String,
     exit_code: i32,
     retryable: bool,
+    kind: ErrorCode,
 }
 
 impl fmt::Display for ScoutError {
@@ -33,6 +35,7 @@ impl ScoutError {
             message: msg.into(),
             exit_code: 1,
             retryable: false,
+            kind: ErrorCode::UsageError,
         }
     }
 
@@ -41,6 +44,7 @@ impl ScoutError {
             message: msg.into(),
             exit_code: 2,
             retryable: false,
+            kind: ErrorCode::IoError,
         }
     }
 
@@ -49,6 +53,25 @@ impl ScoutError {
             message: msg.into(),
             exit_code: 2,
             retryable: true,
+            kind: ErrorCode::TempFailure,
+        }
+    }
+
+    pub(super) fn not_found(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            exit_code: 1,
+            retryable: false,
+            kind: ErrorCode::NotFound,
+        }
+    }
+
+    pub(super) fn data_error(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            exit_code: 1,
+            retryable: false,
+            kind: ErrorCode::DataError,
         }
     }
 
@@ -61,6 +84,12 @@ impl ScoutError {
     pub fn retryable(&self) -> bool {
         self.retryable
     }
+
+    /// JSON-serializable error classification per ADR-0065.
+    #[allow(dead_code)] // public API for future --json output
+    pub fn error_kind(&self) -> ErrorCode {
+        self.kind
+    }
 }
 
 pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutError> {
@@ -70,13 +99,13 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
 impl From<github::GitHubError> for ScoutError {
     fn from(e: github::GitHubError) -> Self {
         match &e {
-            github::GitHubError::NotFound(_)
-            | github::GitHubError::InvalidRepo(_)
+            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()),
+            github::GitHubError::InvalidRepo(_)
             | github::GitHubError::InvalidRef(_)
             | github::GitHubError::InvalidPath(_)
             | github::GitHubError::InvalidLineRange(_)
             | github::GitHubError::InvalidPattern(_)
-            | github::GitHubError::NonUtf8(_) => Self::user_error(e.to_string()),
+            | github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string()),
             github::GitHubError::RateLimited { .. } => Self::transient(e.to_string()),
             github::GitHubError::Forbidden(_) => Self::user_error(format!(
                 "{e} — check that your GITHUB_TOKEN has the required scopes"
@@ -113,15 +142,17 @@ impl From<FetchError> for ScoutError {
             | FetchError::InvalidUrl(_)
             | FetchError::InternalHost
             | FetchError::UnsupportedContentType(_)
-            | FetchError::RedirectMissingLocation => Self::user_error(e.to_string()),
+            | FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
             FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
             FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
             FetchError::Status(408 | 429) => Self::transient(e.to_string()),
+            FetchError::Status(404) => Self::not_found(e.to_string()),
+            FetchError::Status(401 | 403) => Self::user_error(e.to_string()),
             FetchError::Status(code) if (400..500).contains(code) => {
-                Self::user_error(e.to_string())
+                Self::data_error(e.to_string())
             }
             FetchError::TooLarge | FetchError::TooManyRedirects(_) => {
-                Self::user_error(e.to_string())
+                Self::data_error(e.to_string())
             }
             FetchError::Status(_) | FetchError::Timeout(_) | FetchError::DnsResolution(_) => {
                 Self::transient(e.to_string())
@@ -181,6 +212,55 @@ pub(super) fn unwrap_or_note<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [T-ER010] user_error returns ErrorCode::UsageError
+    #[test]
+    fn t_er010_user_error_kind_is_usage() {
+        let err = ScoutError::user_error("test");
+        assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    }
+
+    /// [T-ER011] transient returns ErrorCode::TempFailure
+    #[test]
+    fn t_er011_transient_kind_is_temp_failure() {
+        let err = ScoutError::transient("test");
+        assert_eq!(err.error_kind(), ErrorCode::TempFailure);
+    }
+
+    /// [T-ER012] internal returns ErrorCode::IoError
+    #[test]
+    fn t_er012_internal_kind_is_io_error() {
+        let err = ScoutError::internal("test");
+        assert_eq!(err.error_kind(), ErrorCode::IoError);
+    }
+
+    /// [T-ER013] GitHubError::NotFound classifies as ErrorCode::NotFound
+    #[test]
+    fn t_er013_github_not_found_classifies_as_not_found() {
+        let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
+        assert_eq!(err.error_kind(), ErrorCode::NotFound);
+    }
+
+    /// [T-ER014] GitHubError::InvalidRepo classifies as ErrorCode::DataError
+    #[test]
+    fn t_er014_github_invalid_repo_classifies_as_data_error() {
+        let err = ScoutError::from(github::GitHubError::InvalidRepo("bad".into()));
+        assert_eq!(err.error_kind(), ErrorCode::DataError);
+    }
+
+    /// [T-ER015] FetchError::InvalidScheme classifies as ErrorCode::DataError
+    #[test]
+    fn t_er015_fetch_invalid_scheme_classifies_as_data_error() {
+        let err = ScoutError::from(FetchError::InvalidScheme);
+        assert_eq!(err.error_kind(), ErrorCode::DataError);
+    }
+
+    /// [T-ER016] FetchError::Status(404) classifies as ErrorCode::NotFound
+    #[test]
+    fn t_er016_fetch_status_404_classifies_as_not_found() {
+        let err = ScoutError::from(FetchError::Status(404));
+        assert_eq!(err.error_kind(), ErrorCode::NotFound);
+    }
 
     /// [T-ER001] User-facing errors surface with exit code 1
     #[test]
