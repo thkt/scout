@@ -20,6 +20,7 @@ use params::{
     resolve_input,
 };
 
+use crate::envelope::CommandOutput;
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
@@ -171,7 +172,7 @@ impl Scout {
             .ok_or_else(|| ScoutError::from(GeminiError::ApiKeyNotSet))
     }
 
-    pub async fn run(&self, cmd: Command) -> Result<String, ScoutError> {
+    pub async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
         match cmd {
             Command::Search(params) => self.search(params).await,
             Command::Fetch(params) => self.fetch(params).await,
@@ -182,7 +183,7 @@ impl Scout {
         }
     }
 
-    async fn search(&self, params: SearchParams) -> Result<String, ScoutError> {
+    async fn search(&self, params: SearchParams) -> Result<CommandOutput, ScoutError> {
         let query = resolve_stdin_arg(params.query, "query", "<QUERY>").await?;
 
         info!(query = %query, "search");
@@ -192,18 +193,15 @@ impl Scout {
         let result = gemini.search(&search_query).await?;
 
         // Shift by 2, consistent with fetch standalone output.
-        let mut output = shift_headings(
-            &result.answer.unwrap_or_else(|| {
-                "(No answer returned — the query may have been filtered by safety settings.)"
-                    .to_owned()
-            }),
-            2,
-        );
+        let answer_md = result.answer.clone().unwrap_or_else(|| {
+            "(No answer returned — the query may have been filtered by safety settings.)".to_owned()
+        });
+        let mut markdown = shift_headings(&answer_md, 2);
 
         if !result.sources.is_empty() {
-            output.push_str("\n\n---\n**Sources:**\n");
+            markdown.push_str("\n\n---\n**Sources:**\n");
             for source in &result.sources {
-                output.push_str(&format!(
+                markdown.push_str(&format!(
                     "- [{}]({})\n",
                     escape_md_inline(&source.title),
                     escape_md_link(&source.url)
@@ -212,10 +210,11 @@ impl Scout {
         }
 
         info!(sources = result.sources.len(), "search complete");
-        Ok(output)
+        let data = serde_json::to_value(&result).expect("GroundedResult is Serialize");
+        Ok(CommandOutput::ok(markdown, data))
     }
 
-    async fn fetch(&self, params: FetchParams) -> Result<String, ScoutError> {
+    async fn fetch(&self, params: FetchParams) -> Result<CommandOutput, ScoutError> {
         let url = resolve_stdin_arg(params.url, "url", "<URL>").await?;
 
         if let Some(slack_url) = parse_slack_url(&url) {
@@ -245,31 +244,42 @@ impl Scout {
         }
 
         info!(url = %url, "fetch complete");
-        Ok(format_fetch_output(&result))
+        let markdown = format_fetch_output(&result);
+        let data = serde_json::to_value(&result).expect("FetchResult is Serialize");
+        let notes = if result.used_raw_fallback {
+            vec![String::from(
+                "Readability extraction failed; raw page conversion was used instead.",
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok(CommandOutput::with_notes(markdown, data, notes))
     }
 
-    async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<String, ScoutError> {
+    async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
         info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack)");
         let client = SlackClient::from_env(self.http.clone())?;
-        let output = timeout(
-            SLACK_TOOL_TIMEOUT,
-            client.fetch_message(&slack_url),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(SlackError::Timeout(format!(
-                "slack fetch timed out after {}s",
-                SLACK_TOOL_TIMEOUT.as_secs()
-            )))
-        })
-        .inspect_err(|e| {
-            warn!(workspace = %slack_url.workspace, channel = %slack_url.channel, error = %e, "slack fetch failed");
-        })?;
+        let output = timeout(SLACK_TOOL_TIMEOUT, client.fetch_message(&slack_url))
+            .await
+            .unwrap_or_else(|_| {
+                Err(SlackError::Timeout(format!(
+                    "slack fetch timed out after {}s",
+                    SLACK_TOOL_TIMEOUT.as_secs()
+                )))
+            })
+            .inspect_err(|e| {
+                warn!(workspace = %slack_url.workspace, channel = %slack_url.channel, error = %e, "slack fetch failed");
+            })?;
         info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack) complete");
-        Ok(truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned())
+        let markdown = truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned();
+        let data = serde_json::json!({
+            "url": slack_url.raw_url,
+            "markdown": markdown,
+        });
+        Ok(CommandOutput::ok(markdown, data))
     }
 
-    async fn research(&self, params: ResearchParams) -> Result<String, ScoutError> {
+    async fn research(&self, params: ResearchParams) -> Result<CommandOutput, ScoutError> {
         let query = resolve_stdin_arg(params.query, "query", "<QUERY>").await?;
 
         info!(query = %query, depth = params.depth, "research");
@@ -290,10 +300,32 @@ impl Scout {
             "research complete"
         );
 
-        Ok(engine::format_report(&report, &query))
+        let markdown = engine::format_report(&report, &query);
+        let mut data = serde_json::to_value(&report).expect("ResearchReport is Serialize");
+        if let Some(map) = data.as_object_mut() {
+            map.insert("query".to_owned(), serde_json::Value::String(query.clone()));
+        }
+        let mut notes: Vec<String> = report
+            .failed_urls
+            .iter()
+            .map(|f| format!("Failed to fetch {}: {}", f.url, f.reason))
+            .collect();
+        let raw_fallback_pages: Vec<&str> = report
+            .fetched_pages
+            .iter()
+            .filter(|p| p.used_raw_fallback)
+            .map(|p| p.url.as_str())
+            .collect();
+        if !raw_fallback_pages.is_empty() {
+            notes.push(format!(
+                "Readability extraction failed for: {}",
+                raw_fallback_pages.join(", ")
+            ));
+        }
+        Ok(CommandOutput::with_notes(markdown, data, notes))
     }
 
-    async fn repo_tree(&self, params: RepoTreeParams) -> Result<String, ScoutError> {
+    async fn repo_tree(&self, params: RepoTreeParams) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
         let (owner, repo) = parse_repo_param(&repository)?;
@@ -322,13 +354,20 @@ impl Scout {
             params.pattern.as_deref(),
         )?;
 
-        let output = github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
+        let markdown = github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
+        let data = serde_json::json!({
+            "owner": owner,
+            "repo": repo,
+            "ref": ref_,
+            "entries": filtered,
+            "truncated": tree.truncated,
+        });
 
         info!(files = filtered.len(), "repo_tree complete");
-        Ok(output)
+        Ok(CommandOutput::ok(markdown, data))
     }
 
-    async fn repo_read(&self, params: RepoReadParams) -> Result<String, ScoutError> {
+    async fn repo_read(&self, params: RepoReadParams) -> Result<CommandOutput, ScoutError> {
         let is_terminal = stdin().is_terminal();
         let content = read_stdin(
             params.repository.as_deref() == Some("-")
@@ -384,14 +423,20 @@ impl Scout {
             github::apply_line_range(&raw, 1, None)
         };
 
-        let output =
+        let markdown =
             github::format::format_file_content(&path, total, &content, encoding_label.as_deref());
+        let data = serde_json::json!({
+            "path": path,
+            "total_lines": total,
+            "content": content,
+            "encoding": encoding_label,
+        });
 
         info!(path = %path, lines = total, "repo_read complete");
-        Ok(output)
+        Ok(CommandOutput::ok(markdown, data))
     }
 
-    async fn repo_overview(&self, params: RepoOverviewParams) -> Result<String, ScoutError> {
+    async fn repo_overview(&self, params: RepoOverviewParams) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
         let (owner, repo) = parse_repo_param(&repository)?;
@@ -416,7 +461,7 @@ impl Scout {
         let pulls = unwrap_or_note(pulls, "pull requests", &mut notes);
         let releases = unwrap_or_note(releases, "releases", &mut notes);
 
-        let mut output = github::format::format_overview(
+        let mut markdown = github::format::format_overview(
             &repo_info,
             readme_content.as_deref(),
             &issues,
@@ -425,10 +470,22 @@ impl Scout {
         );
 
         if !notes.is_empty() {
-            output.push_str("\n> **Note:** ");
-            output.push_str(&notes.join(". "));
-            output.push_str(".\n");
+            markdown.push_str("\n> **Note:** ");
+            markdown.push_str(&notes.join(". "));
+            markdown.push_str(".\n");
         }
+
+        // GitHub's issues endpoint returns PRs too; filter them out so JSON
+        // consumers don't see PRs duplicated under issues.
+        let real_issues: Vec<&github::types::IssueInfo> =
+            issues.iter().filter(|i| i.pull_request.is_none()).collect();
+        let data = serde_json::json!({
+            "repository": repo_info,
+            "readme": readme_content,
+            "issues": real_issues,
+            "pulls": pulls,
+            "releases": releases,
+        });
 
         info!(
             issues = issues.len(),
@@ -437,7 +494,7 @@ impl Scout {
             has_readme = readme_content.is_some(),
             "repo_overview complete"
         );
-        Ok(output)
+        Ok(CommandOutput::with_notes(markdown, data, notes))
     }
 }
 
@@ -555,13 +612,15 @@ mod tests {
         };
 
         let result = s.search(params).await.unwrap();
-        assert!(!result.is_empty());
+        assert!(!result.markdown.is_empty());
         assert!(
-            result.contains("Rust is a systems programming language"),
+            result
+                .markdown
+                .contains("Rust is a systems programming language"),
             "should contain answer text"
         );
         assert!(
-            !result.contains("**Query:**"),
+            !result.markdown.contains("**Query:**"),
             "should not contain Query header (redundant for LLMs)"
         );
     }
@@ -602,11 +661,11 @@ mod tests {
 
         let result = s.research(params).await.unwrap();
         assert!(
-            result.contains("Rust"),
-            "report should contain search answer, got: {result}"
+            result.markdown.contains("Rust"),
+            "report should contain search answer, got: {result:?}"
         );
         assert!(
-            result.contains("rust-lang.org"),
+            result.markdown.contains("rust-lang.org"),
             "report should reference source URL"
         );
     }
@@ -672,8 +731,8 @@ mod tests {
 
         let result = s.search(params).await.unwrap();
         assert!(
-            result.contains("No answer returned"),
-            "should contain fallback message, got:\n{result}"
+            result.markdown.contains("No answer returned"),
+            "should contain fallback message, got:\n{result:?}"
         );
     }
 
@@ -707,12 +766,12 @@ mod tests {
 
         let result = s.search(params).await.unwrap();
         assert!(
-            result.contains("### Title"),
-            "h1 should shift to h3 (shift by 2), got:\n{result}"
+            result.markdown.contains("### Title"),
+            "h1 should shift to h3 (shift by 2), got:\n{result:?}"
         );
         assert!(
-            result.contains("#### Sub"),
-            "h2 should shift to h4 (shift by 2), got:\n{result}"
+            result.markdown.contains("#### Sub"),
+            "h2 should shift to h4 (shift by 2), got:\n{result:?}"
         );
     }
 
@@ -747,16 +806,16 @@ mod tests {
 
         let result = s.search(params).await.unwrap();
         assert!(
-            result.contains("### Real heading"),
-            "h1 outside code block should shift to h3, got:\n{result}"
+            result.markdown.contains("### Real heading"),
+            "h1 outside code block should shift to h3, got:\n{result:?}"
         );
         assert!(
-            result.contains("#### Another heading"),
-            "h2 outside code block should shift to h4, got:\n{result}"
+            result.markdown.contains("#### Another heading"),
+            "h2 outside code block should shift to h4, got:\n{result:?}"
         );
         assert!(
-            result.contains("# comment in script"),
-            "# inside fenced code block should remain unchanged, got:\n{result}"
+            result.markdown.contains("# comment in script"),
+            "# inside fenced code block should remain unchanged, got:\n{result:?}"
         );
     }
 
@@ -1141,12 +1200,12 @@ mod tests {
 
         let result = s.repo_read(params).await.unwrap();
         assert!(
-            result.contains("テスト"),
-            "output should contain decoded Shift_JIS text, got: {result}"
+            result.markdown.contains("テスト"),
+            "output should contain decoded Shift_JIS text, got: {result:?}"
         );
         assert!(
-            result.contains("[encoding: shift_jis]"),
-            "header should include encoding label, got: {result}"
+            result.markdown.contains("[encoding: shift_jis]"),
+            "header should include encoding label, got: {result:?}"
         );
     }
 
@@ -1199,16 +1258,16 @@ mod tests {
 
         let result = s.repo_tree(params).await.unwrap();
         assert!(
-            result.contains("src/main.rs"),
-            "path filter should include src/main.rs, got:\n{result}"
+            result.markdown.contains("src/main.rs"),
+            "path filter should include src/main.rs, got:\n{result:?}"
         );
         assert!(
-            !result.contains("README.md"),
-            "path filter should exclude README.md, got:\n{result}"
+            !result.markdown.contains("README.md"),
+            "path filter should exclude README.md, got:\n{result:?}"
         );
         assert!(
-            !result.contains("Cargo.toml"),
-            "path filter should exclude Cargo.toml, got:\n{result}"
+            !result.markdown.contains("Cargo.toml"),
+            "path filter should exclude Cargo.toml, got:\n{result:?}"
         );
     }
 

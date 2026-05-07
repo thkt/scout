@@ -13,11 +13,13 @@ mod tools;
 
 pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
+use std::env;
 use std::io::{self, ErrorKind, Write, stderr, stdout};
 use std::process::ExitCode;
 
 use clap::Parser;
-use tools::{Command, Scout};
+use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, SuccessEnvelope};
+use tools::{Command, Scout, ScoutError};
 
 fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     w.write_all(output.as_bytes())?;
@@ -43,6 +45,11 @@ Environment:
   GITHUB_TOKEN    Optional for GitHub commands (higher rate limits)"
 )]
 pub(crate) struct Cli {
+    /// Emit output as a JSON envelope (one line per ADR-0065) on stdout
+    /// instead of Markdown. Errors print a JSON envelope on stderr.
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -60,20 +67,30 @@ pub async fn run() -> ExitCode {
         )
         .init();
 
-    let cli = Cli::parse();
+    // Pre-scan argv so a clap parse error (which exits before `cli.json` is
+    // populated) still routes through the JSON envelope path when requested.
+    let json_mode_pre = env::args().any(|a| a == "--json");
+
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => return handle_parse_error(&e, json_mode_pre),
+    };
+    let json_mode = cli.json;
 
     let scout = match Scout::new().await {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(1_u8));
-        }
+        Err(e) => return emit_error(&e, json_mode),
     };
 
     match scout.run(cli.command).await {
         Ok(output) => {
+            let rendered = if json_mode {
+                render_json_success(output)
+            } else {
+                output.markdown
+            };
             let mut handle = stdout().lock();
-            match write_output(&mut handle, &output) {
+            match write_output(&mut handle, &rendered) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
                 Err(e) => {
@@ -82,11 +99,77 @@ pub async fn run() -> ExitCode {
                 }
             }
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(1_u8))
+        Err(e) => emit_error(&e, json_mode),
+    }
+}
+
+/// Serialize a successful `CommandOutput` as a one-line JSON envelope per ADR-0065.
+/// Takes `CommandOutput` by value so `data` and `notes` move into the envelope
+/// instead of being deep-cloned.
+fn render_json_success(output: CommandOutput) -> String {
+    let envelope = SuccessEnvelope {
+        data: output.data,
+        degraded: output.degraded,
+        notes: output.notes,
+    };
+    serde_json::to_string(&envelope).expect("envelope is Serialize")
+}
+
+/// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0065.
+fn render_json_error(err: &ScoutError) -> String {
+    let envelope = ErrorEnvelope {
+        error: ErrorPayload {
+            code: err.error_kind(),
+            message: err.to_string(),
+            next_step: None,
+            candidates: Vec::new(),
+            retryable: err.retryable(),
+        },
+    };
+    serde_json::to_string(&envelope).expect("envelope is Serialize")
+}
+
+/// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
+/// stay on stdout per clap convention; usage errors route through the JSON
+/// envelope when `--json` was passed in argv.
+fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
+    use clap::error::ErrorKind;
+    match err.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            let _ = err.print();
+            ExitCode::SUCCESS
+        }
+        _ => {
+            if json_mode {
+                let envelope = ErrorEnvelope {
+                    error: ErrorPayload {
+                        code: ErrorCode::UsageError,
+                        message: err.to_string().trim().to_owned(),
+                        next_step: None,
+                        candidates: Vec::new(),
+                        retryable: false,
+                    },
+                };
+                let line = serde_json::to_string(&envelope).expect("envelope is Serialize");
+                eprintln!("{line}");
+            } else {
+                let _ = err.print();
+            }
+            ExitCode::from(2)
         }
     }
+}
+
+/// Print error to stderr (JSON envelope when `--json`, plain `error: <msg>` otherwise)
+/// and return the appropriate `ExitCode`.
+fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
+    if json_mode {
+        let line = render_json_error(err);
+        eprintln!("{line}");
+    } else {
+        eprintln!("error: {err}");
+    }
+    ExitCode::from(u8::try_from(err.exit_code()).unwrap_or(1_u8))
 }
 
 #[cfg(test)]

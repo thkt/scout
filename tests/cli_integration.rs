@@ -92,3 +92,112 @@ fn t_c005_repo_tree_bad_format_exits_1() {
         "stderr should contain error: prefix, got:\n{stderr}"
     );
 }
+
+// T-C006: --json appears in --help under Options
+#[test]
+fn t_c006_help_advertises_json_flag() {
+    let output = scout().arg("--help").output().expect("scout --help failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--json"),
+        "help output should advertise --json flag, got:\n{stdout}"
+    );
+}
+
+// T-C007: --json with malformed repo emits a JSON envelope on stderr
+#[test]
+fn t_c007_json_emits_envelope_on_error() {
+    let output = scout()
+        .args(["--json", "repo-tree", "no-slash-here"])
+        .output()
+        .expect("scout --json repo-tree failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed owner/repo should still exit 1 in --json mode"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "code should be DATA_ERROR per ADR-0065, got: {value}"
+    );
+    assert_eq!(
+        value["error"]["retryable"], false,
+        "retryable should be false for DATA_ERROR, got: {value}"
+    );
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Invalid repository format")),
+        "message should describe the input failure, got: {value}"
+    );
+    assert!(
+        value["error"].get("next_step").is_none(),
+        "next_step should be omitted when None, got: {value}"
+    );
+    assert!(
+        value["error"].get("candidates").is_none(),
+        "candidates should be omitted when empty, got: {value}"
+    );
+}
+
+// T-C008: --json missing API key surfaces a USAGE_ERROR envelope on stderr
+#[test]
+fn t_c008_json_missing_api_key_emits_usage_error() {
+    let output = scout()
+        .args(["--json", "search", "test query"])
+        .env_remove("GEMINI_API_KEY")
+        .output()
+        .expect("scout --json search failed to run");
+    assert_eq!(output.status.code(), Some(1), "missing API key → exit 1");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "USAGE_ERROR",
+        "missing API key is a usage problem per ADR-0065, got: {value}"
+    );
+}
+
+// T-C010: --json with a clap parse error (unknown flag) routes through JSON envelope
+#[test]
+fn t_c010_json_clap_parse_error_emits_envelope() {
+    let output = scout()
+        .args(["--json", "--definitely-not-a-flag"])
+        .output()
+        .expect("scout failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line for clap parse errors");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "USAGE_ERROR",
+        "clap parse error should be USAGE_ERROR per ADR-0065, got: {value}"
+    );
+}
+
+// T-C009: --json error envelope is exactly one line (single-line JSON contract)
+#[test]
+fn t_c009_json_error_envelope_is_single_line() {
+    let output = scout()
+        .args(["--json", "repo-tree", "no-slash-here"])
+        .output()
+        .expect("scout --json repo-tree failed to run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json_lines: Vec<&str> = stderr.lines().filter(|l| l.starts_with('{')).collect();
+    assert_eq!(
+        json_lines.len(),
+        1,
+        "expected exactly one JSON envelope line, got: {json_lines:?}"
+    );
+}

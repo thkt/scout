@@ -1,12 +1,16 @@
 use std::fmt::Write;
 
+use serde::Serialize;
+
 use super::extractor::ExtractedArticle;
 
 /// Fetched page content converted to Markdown.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub(crate) struct FetchResult {
     pub url: String,
     pub markdown: String,
+    /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
+    #[serde(skip_serializing)]
     pub used_raw_fallback: bool,
 }
 

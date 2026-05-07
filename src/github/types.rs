@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Repository metadata from `GET /repos/{owner}/{repo}`.
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct RepoInfo {
     pub full_name: String,
     pub description: Option<String>,
@@ -15,7 +15,7 @@ pub(crate) struct RepoInfo {
     pub license: Option<LicenseInfo>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct LicenseInfo {
     pub spdx_id: Option<String>,
     pub name: String,
@@ -29,7 +29,7 @@ pub(crate) struct TreeResponse {
 }
 
 /// Git object type. `Other` captures unknown types via `#[serde(other)]` for forward compat.
-#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EntryType {
     Blob,
@@ -40,7 +40,7 @@ pub(crate) enum EntryType {
 }
 
 /// A single entry in a git tree (file, directory, or submodule).
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct TreeEntry {
     pub path: String,
     #[serde(rename = "type")]
@@ -61,22 +61,25 @@ pub(crate) struct BlobResponse {
     pub content: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct IssueInfo {
     pub number: u64,
     pub title: String,
     pub html_url: String,
     pub labels: Vec<LabelInfo>,
     pub user: Option<UserInfo>,
+    /// Internal: present when GitHub's issues endpoint returns a PR.
+    /// Not part of scout's public JSON output (#67/ADR-0065).
+    #[serde(skip_serializing)]
     pub pull_request: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct LabelInfo {
     pub name: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct PullInfo {
     pub number: u64,
     pub title: String,
@@ -85,12 +88,12 @@ pub(crate) struct PullInfo {
     pub user: Option<UserInfo>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct UserInfo {
     pub login: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct ReleaseInfo {
     pub tag_name: String,
     pub name: Option<String>,
