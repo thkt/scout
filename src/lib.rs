@@ -119,12 +119,13 @@ fn render_json_success(output: CommandOutput) -> String {
 }
 
 /// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0065.
+/// Uses `err.message()` (bare) so `next_step` is not duplicated in `message`.
 fn render_json_error(err: &ScoutError) -> String {
     let envelope = ErrorEnvelope {
         error: ErrorPayload {
             code: err.error_kind(),
-            message: err.to_string(),
-            next_step: None,
+            message: err.message().to_owned(),
+            next_step: err.next_step().map(str::to_owned),
             candidates: Vec::new(),
             retryable: err.retryable(),
         },

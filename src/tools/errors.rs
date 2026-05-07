@@ -9,16 +9,24 @@ use crate::github;
 use crate::retry::is_transient_network;
 use crate::slack::SlackError;
 
+/// Reusable next_step hints so transient/network errors stay consistent.
+const HINT_RETRY_DELAY: &str = "Retry after a short delay";
+const HINT_CHECK_NETWORK: &str = "Check your network connection";
+
 #[derive(Debug)]
 pub struct ScoutError {
     message: String,
     retryable: bool,
     kind: ErrorCode,
+    next_step: Option<String>,
 }
 
 impl fmt::Display for ScoutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)?;
+        if let Some(hint) = &self.next_step {
+            write!(f, " — {hint}")?;
+        }
         if self.retryable {
             write!(f, " (temporary failure; retry may succeed)")?;
         }
@@ -34,6 +42,7 @@ impl ScoutError {
             message: msg.into(),
             retryable: false,
             kind: ErrorCode::UsageError,
+            next_step: None,
         }
     }
 
@@ -42,6 +51,7 @@ impl ScoutError {
             message: msg.into(),
             retryable: false,
             kind: ErrorCode::IoError,
+            next_step: None,
         }
     }
 
@@ -50,6 +60,7 @@ impl ScoutError {
             message: msg.into(),
             retryable: true,
             kind: ErrorCode::TempFailure,
+            next_step: None,
         }
     }
 
@@ -58,6 +69,7 @@ impl ScoutError {
             message: msg.into(),
             retryable: false,
             kind: ErrorCode::NotFound,
+            next_step: None,
         }
     }
 
@@ -66,7 +78,14 @@ impl ScoutError {
             message: msg.into(),
             retryable: false,
             kind: ErrorCode::DataError,
+            next_step: None,
         }
+    }
+
+    /// Attach a recovery hint to this error per ADR-0065 `error.next_step`.
+    pub(super) fn with_next_step(mut self, hint: impl Into<String>) -> Self {
+        self.next_step = Some(hint.into());
+        self
     }
 
     /// sysexits.h exit code derived from `kind` per ADR-0065.
@@ -74,16 +93,24 @@ impl ScoutError {
         self.kind.exit_code()
     }
 
-    /// Whether the error is transient and the operation may succeed on retry.
-    #[allow(dead_code)] // public API for future --json output
     pub fn retryable(&self) -> bool {
         self.retryable
     }
 
     /// JSON-serializable error classification per ADR-0065.
-    #[allow(dead_code)] // public API for future --json output
     pub fn error_kind(&self) -> ErrorCode {
         self.kind
+    }
+
+    /// Plain message without next_step / retry hints. Use for JSON `error.message`
+    /// where `error.next_step` and `error.retryable` are surfaced separately.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Recovery hint per ADR-0065 `error.next_step`.
+    pub fn next_step(&self) -> Option<&str> {
+        self.next_step.as_deref()
     }
 }
 
@@ -94,20 +121,36 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
 impl From<github::GitHubError> for ScoutError {
     fn from(e: github::GitHubError) -> Self {
         match &e {
-            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()),
-            github::GitHubError::InvalidRepo(_)
-            | github::GitHubError::InvalidRef(_)
-            | github::GitHubError::InvalidPath(_)
-            | github::GitHubError::InvalidLineRange(_)
-            | github::GitHubError::InvalidPattern(_)
-            | github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string()),
-            github::GitHubError::RateLimited { .. } => Self::transient(e.to_string()),
-            github::GitHubError::Forbidden(_) => Self::user_error(format!(
-                "{e} — check that your GITHUB_TOKEN has the required scopes"
-            )),
-            github::GitHubError::Network(_) => Self::transient(e.to_string()),
+            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()).with_next_step(
+                "Check that the repository or path exists, and that you have access",
+            ),
+            github::GitHubError::InvalidRepo(_) => Self::data_error(e.to_string())
+                .with_next_step("Use 'owner/repo' format, e.g., 'facebook/react'"),
+            github::GitHubError::InvalidRef(_) => Self::data_error(e.to_string())
+                .with_next_step("Use a branch name, tag, or commit SHA"),
+            github::GitHubError::InvalidPath(_) => {
+                Self::data_error(e.to_string()).with_next_step("Use a path within the repository")
+            }
+            github::GitHubError::InvalidLineRange(_) => Self::data_error(e.to_string())
+                .with_next_step("Use format like '1-80', '50-', or '100' (first N lines)"),
+            github::GitHubError::InvalidPattern(_) => Self::data_error(e.to_string())
+                .with_next_step("Use a glob pattern like '*.rs' or '*.{ts,tsx}'"),
+            github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
+                .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
+            github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
+                .with_next_step(match retry_after {
+                    Some(secs) => format!(
+                        "Retry after {secs} seconds, or set GITHUB_TOKEN to increase rate limit"
+                    ),
+                    None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
+                }),
+            github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
+                .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
+            github::GitHubError::Network(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+            }
             github::GitHubError::Api { code, .. } if (500..=599).contains(code) => {
-                Self::transient(e.to_string())
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             github::GitHubError::Api { .. } | github::GitHubError::Decode(_) => {
                 Self::internal(e.to_string())
@@ -116,46 +159,48 @@ impl From<github::GitHubError> for ScoutError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum FetchHttpKind {
-    Transient,
-    Permanent,
-}
-
-fn classify_fetch_http(transient: bool) -> FetchHttpKind {
-    if transient {
-        FetchHttpKind::Transient
-    } else {
-        FetchHttpKind::Permanent
-    }
-}
-
 impl From<FetchError> for ScoutError {
     fn from(e: FetchError) -> Self {
         match &e {
-            FetchError::InvalidScheme
-            | FetchError::InvalidUrl(_)
-            | FetchError::InternalHost
-            | FetchError::UnsupportedContentType(_)
-            | FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
+            FetchError::InvalidScheme => {
+                Self::data_error(e.to_string()).with_next_step("URL must use http:// or https://")
+            }
+            FetchError::InvalidUrl(_) => {
+                Self::data_error(e.to_string()).with_next_step("URL must include scheme and host")
+            }
+            FetchError::InternalHost => Self::data_error(e.to_string())
+                .with_next_step("URL must point to an external host (private IPs are blocked)"),
+            FetchError::UnsupportedContentType(_) => Self::data_error(e.to_string())
+                .with_next_step("URL must serve HTML or text content"),
+            FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
             FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
             FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
-            FetchError::Status(408 | 429) => Self::transient(e.to_string()),
-            FetchError::Status(404) => Self::not_found(e.to_string()),
-            FetchError::Status(401 | 403) => Self::user_error(e.to_string()),
+            FetchError::Status(408 | 429) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            FetchError::Status(404) => Self::not_found(e.to_string())
+                .with_next_step("Check that the URL is correct and the resource exists"),
+            FetchError::Status(401 | 403) => Self::user_error(e.to_string())
+                .with_next_step("URL requires authentication that scout does not support"),
             FetchError::Status(code) if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
-            FetchError::TooLarge | FetchError::TooManyRedirects(_) => {
-                Self::data_error(e.to_string())
+            FetchError::TooLarge => Self::data_error(e.to_string())
+                .with_next_step("URL response exceeds 10MB; fetch a smaller resource"),
+            FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
+                .with_next_step("URL has too many redirects; check for a redirect loop"),
+            FetchError::Status(_) | FetchError::Timeout(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            FetchError::Status(_) | FetchError::Timeout(_) | FetchError::DnsResolution(_) => {
-                Self::transient(e.to_string())
+            FetchError::DnsResolution(_) => Self::transient(e.to_string())
+                .with_next_step("Check the URL's domain name and your DNS resolver"),
+            FetchError::Http(re) => {
+                if is_transient_network(re) {
+                    Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+                } else {
+                    Self::internal(e.to_string())
+                }
             }
-            FetchError::Http(re) => match classify_fetch_http(is_transient_network(re)) {
-                FetchHttpKind::Transient => Self::transient(e.to_string()),
-                FetchHttpKind::Permanent => Self::internal(e.to_string()),
-            },
         }
     }
 }
@@ -163,9 +208,17 @@ impl From<FetchError> for ScoutError {
 impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
         match &e {
-            SlackError::TokenNotSet | SlackError::Api { .. } => Self::user_error(e.to_string()),
-            SlackError::RateLimited { .. } | SlackError::Network(_) | SlackError::Timeout(_) => {
-                Self::transient(e.to_string())
+            SlackError::TokenNotSet => Self::user_error(e.to_string())
+                .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
+            SlackError::Api { .. } => Self::user_error(e.to_string()),
+            SlackError::RateLimited { .. } => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            SlackError::Network(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+            }
+            SlackError::Timeout(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             SlackError::Decode(_) => Self::internal(e.to_string()),
         }
@@ -175,14 +228,18 @@ impl From<SlackError> for ScoutError {
 impl From<GeminiError> for ScoutError {
     fn from(e: GeminiError) -> Self {
         match &e {
-            GeminiError::ApiKeyNotSet => Self::user_error(e.to_string()),
-            GeminiError::RateLimited { .. } => Self::transient(e.to_string()),
-            GeminiError::QuotaExhausted(_) => Self::user_error(format!(
-                "{e} — check your API billing at https://aistudio.google.com"
-            )),
-            GeminiError::Network(_) => Self::transient(e.to_string()),
+            GeminiError::ApiKeyNotSet => Self::user_error(e.to_string())
+                .with_next_step("Set GEMINI_API_KEY environment variable"),
+            GeminiError::RateLimited { .. } => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            GeminiError::QuotaExhausted(_) => Self::user_error(e.to_string())
+                .with_next_step("Check your API billing at https://aistudio.google.com"),
+            GeminiError::Network(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+            }
             GeminiError::Api { code, .. } if (500..=599).contains(code) => {
-                Self::transient(e.to_string())
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             GeminiError::Api { .. } => Self::internal(e.to_string()),
         }
@@ -227,6 +284,93 @@ mod tests {
     fn t_er012_internal_kind_is_io_error() {
         let err = ScoutError::internal("test");
         assert_eq!(err.error_kind(), ErrorCode::IoError);
+    }
+
+    /// [T-NS001] ApiKeyNotSet sets next_step pointing to GEMINI_API_KEY env var
+    #[test]
+    fn t_ns001_gemini_api_key_not_set_has_next_step() {
+        let err = ScoutError::from(GeminiError::ApiKeyNotSet);
+        assert_eq!(
+            err.next_step(),
+            Some("Set GEMINI_API_KEY environment variable")
+        );
+    }
+
+    /// [T-NS002] GitHubError::Forbidden separates GITHUB_TOKEN hint into next_step (not message)
+    #[test]
+    fn t_ns002_github_forbidden_separates_hint_into_next_step() {
+        let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
+        assert_eq!(
+            err.next_step(),
+            Some("Check that your GITHUB_TOKEN has the required scopes")
+        );
+    }
+
+    /// [T-NS003] GitHubError::NotFound has actionable next_step
+    #[test]
+    fn t_ns003_github_not_found_has_next_step() {
+        let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
+        assert!(
+            err.next_step()
+                .is_some_and(|h| h.contains("Check that the repository or path exists"))
+        );
+    }
+
+    /// [T-NS004] FetchError::Status(404) has next_step about the URL
+    #[test]
+    fn t_ns004_fetch_404_has_next_step() {
+        let err = ScoutError::from(FetchError::Status(404));
+        assert!(
+            err.next_step()
+                .is_some_and(|h| h.contains("Check that the URL is correct"))
+        );
+    }
+
+    /// [T-NS005] GeminiError::QuotaExhausted separates billing URL hint into next_step
+    #[test]
+    fn t_ns005_gemini_quota_exhausted_separates_billing_hint() {
+        let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
+        assert!(
+            err.next_step()
+                .is_some_and(|h| h.contains("aistudio.google.com"))
+        );
+    }
+
+    /// [T-NS006] GitHubError::RateLimited with retry_after embeds the duration in next_step
+    #[test]
+    fn t_ns006_github_rate_limited_with_retry_after_embeds_duration() {
+        let err = ScoutError::from(github::GitHubError::RateLimited {
+            retry_after: Some(42),
+        });
+        assert!(
+            err.next_step().is_some_and(|h| h.contains("42 seconds")),
+            "next_step should mention retry_after seconds, got: {:?}",
+            err.next_step()
+        );
+    }
+
+    /// [T-NS007] GitHubError::RateLimited without retry_after still suggests setting GITHUB_TOKEN
+    #[test]
+    fn t_ns007_github_rate_limited_without_retry_after_suggests_token() {
+        let err = ScoutError::from(github::GitHubError::RateLimited { retry_after: None });
+        assert!(err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")));
+    }
+
+    /// [T-NS008] Display includes next_step appended to message
+    #[test]
+    fn t_ns008_display_includes_next_step() {
+        let err = ScoutError::user_error("Something is wrong").with_next_step("Try X");
+        let display = err.to_string();
+        assert!(display.contains("Something is wrong"));
+        assert!(display.contains("Try X"));
+    }
+
+    /// [T-NS009] Errors without next_step omit the hint from Display
+    #[test]
+    fn t_ns009_display_omits_next_step_when_absent() {
+        let err = ScoutError::internal("internal failure");
+        let display = err.to_string();
+        assert_eq!(display, "internal failure");
     }
 
     /// [T-ER013] GitHubError::NotFound classifies as ErrorCode::NotFound
@@ -391,32 +535,6 @@ mod tests {
                 "should not include retry hint: {err}"
             );
         }
-    }
-
-    /// [T-ER005] classify_fetch_http maps true to Transient variant
-    #[test]
-    fn classify_fetch_http_transient_input() {
-        assert_eq!(classify_fetch_http(true), FetchHttpKind::Transient);
-    }
-
-    /// [T-ER006] classify_fetch_http maps false to Permanent variant
-    #[test]
-    fn classify_fetch_http_permanent_input() {
-        assert_eq!(classify_fetch_http(false), FetchHttpKind::Permanent);
-    }
-
-    /// [T-ER007] GitHub Forbidden error hints at GITHUB_TOKEN scope
-    #[test]
-    fn github_forbidden_hints_token() {
-        let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
-        assert!(err.to_string().contains("GITHUB_TOKEN"));
-    }
-
-    /// [T-ER008] Gemini QuotaExhausted error hints at AI Studio billing URL
-    #[test]
-    fn quota_exhausted_hints_billing_url() {
-        let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
-        assert!(err.to_string().contains("aistudio.google.com"));
     }
 
     // TcpListener::drop is synchronous, so the port is immediately closed
