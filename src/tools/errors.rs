@@ -12,7 +12,6 @@ use crate::slack::SlackError;
 #[derive(Debug)]
 pub struct ScoutError {
     message: String,
-    exit_code: i32,
     retryable: bool,
     kind: ErrorCode,
 }
@@ -33,7 +32,6 @@ impl ScoutError {
     pub(super) fn user_error(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 64, // EX_USAGE
             retryable: false,
             kind: ErrorCode::UsageError,
         }
@@ -42,7 +40,6 @@ impl ScoutError {
     pub(super) fn internal(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 74, // EX_IOERR
             retryable: false,
             kind: ErrorCode::IoError,
         }
@@ -51,7 +48,6 @@ impl ScoutError {
     pub(super) fn transient(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 75, // EX_TEMPFAIL
             retryable: true,
             kind: ErrorCode::TempFailure,
         }
@@ -60,7 +56,6 @@ impl ScoutError {
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 66, // EX_NOINPUT
             retryable: false,
             kind: ErrorCode::NotFound,
         }
@@ -69,14 +64,14 @@ impl ScoutError {
     pub(super) fn data_error(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 65, // EX_DATAERR
             retryable: false,
             kind: ErrorCode::DataError,
         }
     }
 
-    pub fn exit_code(&self) -> i32 {
-        self.exit_code
+    /// sysexits.h exit code derived from `kind` per ADR-0065.
+    pub fn exit_code(&self) -> u8 {
+        self.kind.exit_code()
     }
 
     /// Whether the error is transient and the operation may succeed on retry.

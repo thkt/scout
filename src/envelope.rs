@@ -51,6 +51,19 @@ pub(crate) enum ErrorCode {
     TempFailure,
 }
 
+impl ErrorCode {
+    /// sysexits.h exit code mapped 1:1 from `error.code` per ADR-0065.
+    pub(crate) fn exit_code(self) -> u8 {
+        match self {
+            Self::UsageError => 64,  // EX_USAGE
+            Self::DataError => 65,   // EX_DATAERR
+            Self::NotFound => 66,    // EX_NOINPUT
+            Self::IoError => 74,     // EX_IOERR
+            Self::TempFailure => 75, // EX_TEMPFAIL
+        }
+    }
+}
+
 /// Success envelope wrapping command output per ADR-0065.
 #[allow(dead_code)] // consumed in Phase 2.2 (--json output path)
 #[derive(Debug, Serialize)]

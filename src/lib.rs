@@ -98,7 +98,7 @@ pub async fn run() -> ExitCode {
                 Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("error: {e}");
-                    ExitCode::from(74) // EX_IOERR
+                    ExitCode::from(ErrorCode::IoError.exit_code())
                 }
             }
         }
@@ -158,7 +158,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
             } else {
                 let _ = err.print();
             }
-            ExitCode::from(64) // EX_USAGE
+            ExitCode::from(ErrorCode::UsageError.exit_code())
         }
     }
 }
@@ -172,7 +172,7 @@ fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
     } else {
         eprintln!("error: {err}");
     }
-    ExitCode::from(u8::try_from(err.exit_code()).unwrap_or(1_u8))
+    ExitCode::from(err.exit_code())
 }
 
 #[cfg(test)]
