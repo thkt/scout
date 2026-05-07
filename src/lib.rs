@@ -1,3 +1,4 @@
+mod envelope;
 mod fetch;
 mod gemini;
 mod github;
