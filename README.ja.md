@@ -54,7 +54,7 @@ LLMは介在せず、一次ソースを直接読んで何が重要かを自分�
 brew install thkt/tap/scout
 ```
 
-ソースからビルドする場合は、Rust 1.85+が必要です。
+ソースからビルドする場合は、Rust 1.95+が必要です。
 
 ```sh
 cargo install --path .
@@ -67,6 +67,7 @@ cargo install --path .
 ```sh
 export GEMINI_API_KEY="..."   # search/researchに必要（無料枠: https://aistudio.google.com/apikey）
 export GITHUB_TOKEN="..."     # 任意: 5,000回/時 vs 未設定60回/時
+export SLACK_TOKEN="..."      # 任意: Slackパーマリンクを `fetch` するときに必要（User OAuthトークン、xoxp-…）
 ```
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` の順で認証されます。
@@ -98,6 +99,10 @@ cargo install --path . --features js-rendering
 
 ## コマンド
 
+すべてのコマンドはクエリ/URL/リポジトリを位置引数・パイプ入力・対話的stdin（`-`）のいずれかで受け取れます（例: `echo "クエリ" | scout search`、`scout search -`）。
+
+任意のコマンドに `--json` を付けると、Markdownの代わりに1行JSONエンベロープが標準出力に出ます。`jq` パイプラインやAIエージェントへの構造化データ受け渡しに便利です。
+
 ### `scout research` — 複数ソース深掘り調査
 
 Gemini Groundingで検索し、上位Nページを取得してレポートにまとめます。回答・ページ全文・ソースリストを一括で返します。`search` がAI回答とURLリストを返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
@@ -119,6 +124,10 @@ Gemini GroundingとGoogle検索で、リンク一覧ではなくソースURL付�
 scout search "Next.js server actions security"
 ```
 
+| フラグ       | 説明                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------- |
+| `-l, --lang` | `ja`、`en`、または `auto`（デフォルト）— 日本語を検出すると日英両方のクエリに自動展開 |
+
 ### `scout fetch` — WebページをMarkdownに変換
 
 ページをダウンロードし、Readabilityで本文を抽出してMarkdownに変換します。`js-rendering` feature有効時、JS依存ページ（SPA）は自動検出しヘッドレスChrome（CDP）でレンダリングします。LLMは介在しません。
@@ -133,6 +142,8 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 | `--raw` | Readabilityをスキップしてページ全体を変換                            |
 
 ページのメタデータ（タイトル/著者/日付）はYAMLフロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
+
+**Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式のURLを検出し、HTMLスクレイピングではなくSlack Web APIへルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuthトークン、`xoxp-…`）が必要です。
 
 ### `scout repo-tree` — リモートファイル一覧
 
@@ -208,12 +219,26 @@ src/
 ├── gemini/              Gemini APIクライアント、グラウンディングレスポンス解析
 ├── github/              GitHub APIクライアント（遅延初期化）、ツリーフィルタリング、出力整形
 ├── slack/               Slackメッセージ取得（スレッド、リプライパーマリンク）
+├── envelope.rs          JSON出力エンベロープ
 ├── markdown.rs          Markdownユーティリティ（見出しシフト、切り詰め、エスケープ）
 ├── retry.rs             バックオフ付きリトライ（一時エラー、レート制限）
 └── redacted.rs          トークン用秘匿ラッパー
 ```
 
 シングルバイナリで、ランタイム依存はありません。
+
+## 終了コード
+
+[`sysexits.h`](https://man.openbsd.org/sysexits) 規約に準拠。
+
+| コード | 意味                                                                                      |
+| ------ | ----------------------------------------------------------------------------------------- |
+| 0      | 成功                                                                                      |
+| 64     | 使い方エラー（clapパース失敗、APIキー未設定、`conflicts_with` 違反）                      |
+| 65     | データエラー（不正入力、フォーマット異常、エンコーディングエラー）                        |
+| 66     | Not Found（リポジトリ/ファイルが存在しない、404）                                         |
+| 74     | IOエラー（ネットワークIO、BrokenPipe以外の書き込み失敗）                                  |
+| 75     | 一時的失敗（レート制限、5xx、リトライ可能）                                               |
 
 ## 制限事項
 
