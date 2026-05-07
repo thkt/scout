@@ -197,43 +197,43 @@ mod tests {
 
     /// [T-H001] search --help contains Examples: and Environment: sections
     #[test]
-    fn t_h001_search_help_contains_examples_and_environment() {
+    fn search_help_contains_examples_and_environment() {
         assert_help_sections::<super::SearchParams>(Some("GEMINI_API_KEY"));
     }
 
     /// [T-H002] fetch --help contains Examples: section
     #[test]
-    fn t_h002_fetch_help_contains_examples() {
+    fn fetch_help_contains_examples() {
         assert_help_sections::<super::FetchParams>(None);
     }
 
     /// [T-H003] research --help contains Examples: and Environment: sections
     #[test]
-    fn t_h003_research_help_contains_examples_and_environment() {
+    fn research_help_contains_examples_and_environment() {
         assert_help_sections::<super::ResearchParams>(Some("GEMINI_API_KEY"));
     }
 
     /// [T-H004] repo-tree --help contains Examples: and Environment: sections
     #[test]
-    fn t_h004_repo_tree_help_contains_examples_and_environment() {
+    fn repo_tree_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoTreeParams>(Some("GITHUB_TOKEN"));
     }
 
     /// [T-H005] repo-read --help contains Examples: and Environment: sections
     #[test]
-    fn t_h005_repo_read_help_contains_examples_and_environment() {
+    fn repo_read_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoReadParams>(Some("GITHUB_TOKEN"));
     }
 
     /// [T-H006] repo-overview --help contains Examples: and Environment: sections
     #[test]
-    fn t_h006_repo_overview_help_contains_examples_and_environment() {
+    fn repo_overview_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoOverviewParams>(Some("GITHUB_TOKEN"));
     }
 
     /// [T-H009] stdin-supporting subcommand help contains stdin usage examples
     #[test]
-    fn t_h009_subcommand_help_contains_stdin_examples() {
+    fn subcommand_help_contains_stdin_examples() {
         let cases: &[(&str, &str)] = &[
             ("search", "| scout search"),
             ("fetch", "| scout fetch"),
@@ -260,7 +260,7 @@ mod tests {
 
     /// [T-P001] research --depth accepts valid range 1..=10 and rejects out-of-range
     #[test]
-    fn t_p001_research_depth_valid_range() {
+    fn research_depth_valid_range() {
         use clap::Parser;
 
         #[derive(Parser)]
@@ -281,7 +281,7 @@ mod tests {
 
     /// [T-S001] optional positional arg is None when omitted from command line
     #[test]
-    fn t_s001_optional_positional_is_none_when_omitted() {
+    fn optional_positional_is_none_when_omitted() {
         use clap::Parser;
 
         #[derive(Parser)]
@@ -301,7 +301,7 @@ mod tests {
 
     /// [T-S002] ARG wins over piped stdin when both are present
     #[test]
-    fn t_s002_arg_wins_over_stdin() {
+    fn arg_wins_over_stdin() {
         let result = resolve_input(
             Some("from_arg".into()),
             Some("from_stdin"),
@@ -314,14 +314,14 @@ mod tests {
 
     /// [T-S003] ARG omitted + piped stdin → reads from stdin
     #[test]
-    fn t_s003_stdin_used_when_arg_omitted_and_piped() {
+    fn stdin_used_when_arg_omitted_and_piped() {
         let result = resolve_input(None, Some("from_stdin"), false, "query", "<QUERY>");
         assert_eq!(result.unwrap(), "from_stdin");
     }
 
     /// [T-S004] `-` reads from stdin even when terminal
     #[test]
-    fn t_s004_dash_reads_from_stdin() {
+    fn dash_reads_from_stdin() {
         let result = resolve_input(
             Some("-".into()),
             Some("from_stdin"),
@@ -334,7 +334,7 @@ mod tests {
 
     /// [T-S005] terminal + no arg → fail-fast error with canonical message
     #[test]
-    fn t_s005_terminal_no_arg_returns_fail_fast_error() {
+    fn terminal_no_arg_returns_fail_fast_error() {
         let result = resolve_input(None, None, true, "query", "<QUERY>");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -357,7 +357,7 @@ mod tests {
 
     /// [T-S006] empty stdin → error with "No X provided" canonical message
     #[test]
-    fn t_s006_empty_stdin_returns_no_provided_error() {
+    fn empty_stdin_returns_no_provided_error() {
         let result = resolve_input(None, Some("   "), false, "query", "<QUERY>");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -368,7 +368,7 @@ mod tests {
 
     /// [T-S007] `-` with empty stdin → same "No X provided" error
     #[test]
-    fn t_s007_dash_with_empty_stdin_returns_error() {
+    fn dash_with_empty_stdin_returns_error() {
         let result = resolve_input(Some("-".into()), Some(""), true, "url", "<URL>");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -379,7 +379,7 @@ mod tests {
 
     /// [T-S008] stdin content is trimmed before use
     #[test]
-    fn t_s008_stdin_content_is_trimmed() {
+    fn stdin_content_is_trimmed() {
         let result = resolve_input(
             None,
             Some("  facebook/react\n"),

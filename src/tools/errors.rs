@@ -284,35 +284,35 @@ mod tests {
 
     /// [T-ER010] user_error returns ErrorCode::UsageError
     #[test]
-    fn t_er010_user_error_kind_is_usage() {
+    fn user_error_kind_is_usage() {
         let err = ScoutError::user_error("test");
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
     /// [T-ER011] transient returns ErrorCode::TempFailure
     #[test]
-    fn t_er011_transient_kind_is_temp_failure() {
+    fn transient_kind_is_temp_failure() {
         let err = ScoutError::transient("test");
         assert_eq!(err.error_kind(), ErrorCode::TempFailure);
     }
 
     /// [T-ER012] internal returns ErrorCode::IoError
     #[test]
-    fn t_er012_internal_kind_is_io_error() {
+    fn internal_kind_is_io_error() {
         let err = ScoutError::internal("test");
         assert_eq!(err.error_kind(), ErrorCode::IoError);
     }
 
     /// [T-CD001] Errors default to empty candidates list
     #[test]
-    fn t_cd001_default_candidates_empty() {
+    fn default_candidates_empty() {
         let err = ScoutError::not_found("test");
         assert!(err.candidates().is_empty());
     }
 
     /// [T-CD002] with_candidates attaches correction suggestions
     #[test]
-    fn t_cd002_with_candidates_attaches_list() {
+    fn with_candidates_attaches_list() {
         let err = ScoutError::not_found("path not found")
             .with_candidates(vec!["README.md".into(), "REDAME.md".into()]);
         assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
@@ -320,7 +320,7 @@ mod tests {
 
     /// [T-NS001] ApiKeyNotSet sets next_step pointing to GEMINI_API_KEY env var
     #[test]
-    fn t_ns001_gemini_api_key_not_set_has_next_step() {
+    fn gemini_api_key_not_set_has_next_step() {
         let err = ScoutError::from(GeminiError::ApiKeyNotSet);
         assert_eq!(
             err.next_step(),
@@ -330,7 +330,7 @@ mod tests {
 
     /// [T-NS002] GitHubError::Forbidden separates GITHUB_TOKEN hint into next_step (not message)
     #[test]
-    fn t_ns002_github_forbidden_separates_hint_into_next_step() {
+    fn github_forbidden_separates_hint_into_next_step() {
         let err = ScoutError::from(github::GitHubError::Forbidden("denied".into()));
         assert_eq!(
             err.next_step(),
@@ -340,7 +340,7 @@ mod tests {
 
     /// [T-NS003] GitHubError::NotFound has actionable next_step
     #[test]
-    fn t_ns003_github_not_found_has_next_step() {
+    fn github_not_found_has_next_step() {
         let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
         assert!(
             err.next_step()
@@ -350,7 +350,7 @@ mod tests {
 
     /// [T-NS004] FetchError::Status(404) has next_step about the URL
     #[test]
-    fn t_ns004_fetch_404_has_next_step() {
+    fn fetch_404_has_next_step() {
         let err = ScoutError::from(FetchError::Status(404));
         assert!(
             err.next_step()
@@ -360,7 +360,7 @@ mod tests {
 
     /// [T-NS005] GeminiError::QuotaExhausted separates billing URL hint into next_step
     #[test]
-    fn t_ns005_gemini_quota_exhausted_separates_billing_hint() {
+    fn gemini_quota_exhausted_separates_billing_hint() {
         let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
         assert!(
             err.next_step()
@@ -370,7 +370,7 @@ mod tests {
 
     /// [T-NS006] GitHubError::RateLimited with retry_after embeds the duration in next_step
     #[test]
-    fn t_ns006_github_rate_limited_with_retry_after_embeds_duration() {
+    fn github_rate_limited_with_retry_after_embeds_duration() {
         let err = ScoutError::from(github::GitHubError::RateLimited {
             retry_after: Some(42),
         });
@@ -383,14 +383,14 @@ mod tests {
 
     /// [T-NS007] GitHubError::RateLimited without retry_after still suggests setting GITHUB_TOKEN
     #[test]
-    fn t_ns007_github_rate_limited_without_retry_after_suggests_token() {
+    fn github_rate_limited_without_retry_after_suggests_token() {
         let err = ScoutError::from(github::GitHubError::RateLimited { retry_after: None });
         assert!(err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")));
     }
 
     /// [T-NS008] Display includes next_step appended to message
     #[test]
-    fn t_ns008_display_includes_next_step() {
+    fn display_includes_next_step() {
         let err = ScoutError::user_error("Something is wrong").with_next_step("Try X");
         let display = err.to_string();
         assert!(display.contains("Something is wrong"));
@@ -399,7 +399,7 @@ mod tests {
 
     /// [T-NS009] Errors without next_step omit the hint from Display
     #[test]
-    fn t_ns009_display_omits_next_step_when_absent() {
+    fn display_omits_next_step_when_absent() {
         let err = ScoutError::internal("internal failure");
         let display = err.to_string();
         assert_eq!(display, "internal failure");
@@ -407,35 +407,35 @@ mod tests {
 
     /// [T-ER013] GitHubError::NotFound classifies as ErrorCode::NotFound
     #[test]
-    fn t_er013_github_not_found_classifies_as_not_found() {
+    fn github_not_found_classifies_as_not_found() {
         let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
         assert_eq!(err.error_kind(), ErrorCode::NotFound);
     }
 
     /// [T-ER014] GitHubError::InvalidRepo classifies as ErrorCode::DataError
     #[test]
-    fn t_er014_github_invalid_repo_classifies_as_data_error() {
+    fn github_invalid_repo_classifies_as_data_error() {
         let err = ScoutError::from(github::GitHubError::InvalidRepo("bad".into()));
         assert_eq!(err.error_kind(), ErrorCode::DataError);
     }
 
     /// [T-ER015] FetchError::InvalidScheme classifies as ErrorCode::DataError
     #[test]
-    fn t_er015_fetch_invalid_scheme_classifies_as_data_error() {
+    fn fetch_invalid_scheme_classifies_as_data_error() {
         let err = ScoutError::from(FetchError::InvalidScheme);
         assert_eq!(err.error_kind(), ErrorCode::DataError);
     }
 
     /// [T-ER016] FetchError::Status(404) classifies as ErrorCode::NotFound
     #[test]
-    fn t_er016_fetch_status_404_classifies_as_not_found() {
+    fn fetch_status_404_classifies_as_not_found() {
         let err = ScoutError::from(FetchError::Status(404));
         assert_eq!(err.error_kind(), ErrorCode::NotFound);
     }
 
     /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0065)
     #[test]
-    fn t_er001a_usage_errors_have_exit_code_64() {
+    fn usage_errors_have_exit_code_64() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::Forbidden("denied".into()).into(),
             FetchError::BrowserNotFound("not installed".into()).into(),
@@ -457,7 +457,7 @@ mod tests {
 
     /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0065)
     #[test]
-    fn t_er001b_data_errors_have_exit_code_65() {
+    fn data_errors_have_exit_code_65() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::InvalidRepo("bad".into()).into(),
             FetchError::InvalidScheme.into(),
@@ -477,7 +477,7 @@ mod tests {
 
     /// [T-ER001c] NotFound errors surface with exit 66 (EX_NOINPUT per ADR-0065)
     #[test]
-    fn t_er001c_not_found_errors_have_exit_code_66() {
+    fn not_found_errors_have_exit_code_66() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::NotFound("/test".into()).into(),
             FetchError::Status(404).into(),
@@ -490,7 +490,7 @@ mod tests {
 
     /// [T-ER002] IoError errors surface with exit 74 (EX_IOERR) and are non-retryable
     #[test]
-    fn t_er002_io_errors_have_exit_code_74() {
+    fn io_errors_have_exit_code_74() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::Api {
                 code: 400,
@@ -515,7 +515,7 @@ mod tests {
 
     /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL)
     #[test]
-    fn t_er003_temp_failure_errors_have_exit_code_75() {
+    fn temp_failure_errors_have_exit_code_75() {
         let cases: Vec<ScoutError> = vec![
             FetchError::Status(408).into(),
             FetchError::Status(429).into(),
@@ -573,7 +573,7 @@ mod tests {
     // with no async shutdown race (unlike MockServer).
     /// [T-ER009] Connection-refused FetchError::Http maps to transient ScoutError
     #[tokio::test]
-    async fn t003_fetch_error_http_connection_refused_is_transient() {
+    async fn fetch_error_http_connection_refused_is_transient() {
         use reqwest::Client;
         use std::net::TcpListener;
 

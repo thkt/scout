@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(shift_headings(input, 3), input);
     }
 
-    /// [T-005] Non-ATX-heading `#` lines must not be shifted.
+    /// [T-MD013] Non-ATX-heading `#` lines must not be shifted.
     #[test]
     fn shift_headings_skips_non_atx_lines() {
         let input = "#include <stdio.h>\n# Real heading\n#123 issue ref\n## Also real";

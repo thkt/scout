@@ -408,9 +408,9 @@ mod tests {
         );
     }
 
-    /// [T-002] research report: answer with headings should have them shifted by 2
+    /// [T-SE012] research report: answer with headings should have them shifted by 2
     #[test]
-    fn t_002_research_report_shifts_headings_in_answer() {
+    fn research_report_shifts_headings_in_answer() {
         let result = GroundedResult {
             answer: Some("# Title\n\nSome text\n\n## Details".into()),
             sources: vec![Source {
@@ -439,9 +439,9 @@ mod tests {
         );
     }
 
-    /// [T-004] research report: answer with no headings passes through unchanged
+    /// [T-SE013] research report: answer with no headings passes through unchanged
     #[test]
-    fn t_004_research_report_no_headings_unchanged() {
+    fn research_report_no_headings_unchanged() {
         let body = "This is plain text without any headings.\n\nJust paragraphs.";
         let result = GroundedResult {
             answer: Some(body.into()),

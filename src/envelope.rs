@@ -95,9 +95,9 @@ pub(crate) struct ErrorPayload {
 mod tests {
     use super::*;
 
-    /// [T-EN002] ErrorPayload omits next_step when None
+    /// [T-EN001] ErrorPayload omits next_step when None
     #[test]
-    fn t_en002_error_payload_omits_optional_next_step() {
+    fn error_payload_omits_optional_next_step() {
         let payload = ErrorPayload {
             code: ErrorCode::UsageError,
             message: String::from("Missing query"),
@@ -112,9 +112,9 @@ mod tests {
         );
     }
 
-    /// [T-EN003] ErrorPayload omits candidates when empty
+    /// [T-EN002] ErrorPayload omits candidates when empty
     #[test]
-    fn t_en003_error_payload_omits_empty_candidates() {
+    fn error_payload_omits_empty_candidates() {
         let payload = ErrorPayload {
             code: ErrorCode::UsageError,
             message: String::from("invalid"),
@@ -129,9 +129,9 @@ mod tests {
         );
     }
 
-    /// [T-EN004] ErrorPayload includes next_step and candidates when present
+    /// [T-EN003] ErrorPayload includes next_step and candidates when present
     #[test]
-    fn t_en004_error_payload_includes_present_optional_fields() {
+    fn error_payload_includes_present_optional_fields() {
         let payload = ErrorPayload {
             code: ErrorCode::UsageError,
             message: String::from("did you mean"),
@@ -150,9 +150,9 @@ mod tests {
         );
     }
 
-    /// [T-EN007] ErrorEnvelope wraps payload under `error` key per ADR-0065
+    /// [T-EN004] ErrorEnvelope wraps payload under `error` key per ADR-0065
     #[test]
-    fn t_en007_error_envelope_wraps_payload_under_error_key() {
+    fn error_envelope_wraps_payload_under_error_key() {
         let env = ErrorEnvelope {
             error: ErrorPayload {
                 code: ErrorCode::UsageError,
@@ -175,7 +175,7 @@ mod tests {
 
     /// [T-EN005] SuccessEnvelope serializes data + degraded + notes
     #[test]
-    fn t_en005_success_envelope_serializes_required_fields() {
+    fn success_envelope_serializes_required_fields() {
         let env = SuccessEnvelope {
             data: serde_json::json!({"markdown": "hello"}),
             degraded: false,
@@ -192,7 +192,7 @@ mod tests {
 
     /// [T-EN006] SuccessEnvelope surfaces degraded=true with notes
     #[test]
-    fn t_en006_success_envelope_surfaces_degradation() {
+    fn success_envelope_surfaces_degradation() {
         let env = SuccessEnvelope {
             data: serde_json::json!(null),
             degraded: true,
@@ -206,9 +206,9 @@ mod tests {
         );
     }
 
-    /// [T-EN008] CommandOutput::ok produces non-degraded with empty notes
+    /// [T-EN007] CommandOutput::ok produces non-degraded with empty notes
     #[test]
-    fn t_en008_command_output_ok_is_not_degraded() {
+    fn command_output_ok_is_not_degraded() {
         let out = CommandOutput::ok(String::from("md"), serde_json::json!({"a": 1}));
         assert_eq!(out.markdown, "md");
         assert_eq!(out.data, serde_json::json!({"a": 1}));
@@ -216,9 +216,9 @@ mod tests {
         assert!(!out.degraded);
     }
 
-    /// [T-EN009] CommandOutput::with_notes sets degraded=true when notes non-empty
+    /// [T-EN008] CommandOutput::with_notes sets degraded=true when notes non-empty
     #[test]
-    fn t_en009_command_output_with_notes_is_degraded() {
+    fn command_output_with_notes_is_degraded() {
         let out = CommandOutput::with_notes(
             String::from("md"),
             serde_json::Value::Null,
@@ -228,17 +228,17 @@ mod tests {
         assert_eq!(out.notes, vec!["partial fetch"]);
     }
 
-    /// [T-EN010] CommandOutput::with_notes sets degraded=false when notes empty
+    /// [T-EN009] CommandOutput::with_notes sets degraded=false when notes empty
     #[test]
-    fn t_en010_command_output_with_empty_notes_is_not_degraded() {
+    fn command_output_with_empty_notes_is_not_degraded() {
         let out =
             CommandOutput::with_notes(String::from("md"), serde_json::Value::Null, Vec::new());
         assert!(!out.degraded);
     }
 
-    /// [T-EN001] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
+    /// [T-EN010] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
     #[test]
-    fn t_en001_error_code_serializes_screaming_snake_case() {
+    fn error_code_serializes_screaming_snake_case() {
         let pairs = [
             (ErrorCode::UsageError, r#""USAGE_ERROR""#),
             (ErrorCode::DataError, r#""DATA_ERROR""#),

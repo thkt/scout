@@ -678,12 +678,12 @@ mod tests {
         );
     }
 
-    // ── T-001 through T-008: format_file_content / lang_for_path / fence_delimiter ──
+    // ── format_file_content / lang_for_path / fence_delimiter ──
 
     /// [T-GF026] format_file_content wraps a Rust file in a ```rust fenced block
     #[test]
-    fn t_001_format_file_content_wraps_rust_file_in_fenced_code_block() {
-        // [T-001] FR-001, FR-002
+    fn format_file_content_wraps_rust_file_in_fenced_code_block() {
+        // FR-001, FR-002
         let output = format_file_content("src/main.rs", 3, "    1\tfn main() {}\n", None);
         assert!(
             output.starts_with("src/main.rs (3 lines)\n\n```rust\n"),
@@ -697,8 +697,8 @@ mod tests {
 
     /// [T-GF027] lang_for_path returns the canonical identifier for known extensions
     #[test]
-    fn t_002_lang_for_path_returns_canonical_identifier_for_known_extensions() {
-        // [T-002] FR-002
+    fn lang_for_path_returns_canonical_identifier_for_known_extensions() {
+        // FR-002
         let cases: &[(&str, &str)] = &[
             ("main.rs", "rust"),
             ("app.ts", "typescript"),
@@ -735,16 +735,16 @@ mod tests {
 
     /// [T-GF028] lang_for_path returns empty string for missing or unknown extensions
     #[test]
-    fn t_003_lang_for_path_returns_empty_for_no_extension_and_unknown() {
-        // [T-003] FR-002
+    fn lang_for_path_returns_empty_for_no_extension_and_unknown() {
+        // FR-002
         assert_eq!(lang_for_path("Makefile"), "", "no dot in path");
         assert_eq!(lang_for_path("file.xyz"), "", "unknown extension");
     }
 
     /// [T-GF029] fence_delimiter grows past three backticks when content contains a triple-backtick run
     #[test]
-    fn t_004_fence_delimiter_returns_longer_fence_when_content_has_triple_backticks() {
-        // [T-004] FR-003
+    fn fence_delimiter_returns_longer_fence_when_content_has_triple_backticks() {
+        // FR-003
         let content = "some\n```\ncode\n```\n";
         let delim = fence_delimiter(content);
         assert!(
@@ -760,15 +760,15 @@ mod tests {
 
     /// [T-GF030] fence_delimiter defaults to triple backticks for content without backticks
     #[test]
-    fn t_005_fence_delimiter_returns_triple_backtick_for_plain_content() {
-        // [T-005] FR-003, FR-004
+    fn fence_delimiter_returns_triple_backtick_for_plain_content() {
+        // FR-003, FR-004
         assert_eq!(fence_delimiter("hello world"), "```");
     }
 
     /// [T-GF031] fence_delimiter grows past five backticks when content has a five-backtick run
     #[test]
-    fn t_006_fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
-        // [T-006] FR-003
+    fn fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
+        // FR-003
         let content = "text `````more";
         let delim = fence_delimiter(content);
         assert!(
@@ -784,8 +784,8 @@ mod tests {
 
     /// [T-GF032] format_file_content picks a fence longer than any inner backtick run
     #[test]
-    fn t_007_format_file_content_fence_does_not_collide_with_inner_backticks() {
-        // [T-007] FR-001, FR-003
+    fn format_file_content_fence_does_not_collide_with_inner_backticks() {
+        // FR-001, FR-003
         let inner = "    1\t```\n    2\tsome code\n    3\t```\n";
         let output = format_file_content("doc.md", 3, inner, None);
 
@@ -809,8 +809,8 @@ mod tests {
 
     /// [T-GF033] format_file_content emits a bare triple-backtick fence for paths without extensions
     #[test]
-    fn t_008_format_file_content_uses_empty_lang_for_extensionless_path() {
-        // [T-008] FR-001, FR-002
+    fn format_file_content_uses_empty_lang_for_extensionless_path() {
+        // FR-001, FR-002
         let output = format_file_content("config", 1, "    1\tkey=val", None);
         let lines: Vec<&str> = output.lines().collect();
         // line 2 is the opening fence
@@ -822,8 +822,8 @@ mod tests {
 
     /// [T-GF034] format_file_content appends the encoding label to the header when provided
     #[test]
-    fn t_009_format_file_content_includes_encoding_label_in_header() {
-        // [T-009] FR-009: encoding label appended to header when provided
+    fn format_file_content_includes_encoding_label_in_header() {
+        // FR-009: encoding label appended to header when provided
         let output = format_file_content("file.txt", 2, "    1\thello\n", Some("shift_jis"));
         assert!(
             output.starts_with("file.txt (2 lines) [encoding: shift_jis]\n\n"),
@@ -833,8 +833,8 @@ mod tests {
 
     /// [T-GF035] format_file_content omits the encoding label when none is given
     #[test]
-    fn t_010_format_file_content_omits_encoding_when_none() {
-        // [T-010] FR-009: no encoding label when None
+    fn format_file_content_omits_encoding_when_none() {
+        // FR-009: no encoding label when None
         let output = format_file_content("file.txt", 1, "    1\thello\n", None);
         assert!(
             output.starts_with("file.txt (1 lines)\n\n"),
