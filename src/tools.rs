@@ -513,8 +513,19 @@ impl Scout {
     }
 }
 
-/// Best-effort: fetch the repo tree and return up to 3 paths most similar
-/// to `target` (OSA distance ≤ 3). Returns empty on any API failure.
+/// Maximum time spent on best-effort candidate generation in the NotFound
+/// error path. The user is already waiting on a failure; we'd rather skip
+/// candidates than block them on a slow tree fetch.
+const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum OSA distance and number of suggestions returned per error.
+const CANDIDATE_MAX_DISTANCE: usize = 3;
+const CANDIDATE_TOP_N: usize = 3;
+
+/// Best-effort: fetch the repo tree and return up to `CANDIDATE_TOP_N` paths
+/// most similar to `target` (OSA distance ≤ `CANDIDATE_MAX_DISTANCE`).
+/// Returns empty on any API failure or if the fetch exceeds
+/// `CANDIDATE_FETCH_TIMEOUT`.
 async fn collect_path_candidates(
     github: &GitHubClient,
     owner: &str,
@@ -522,24 +533,37 @@ async fn collect_path_candidates(
     ref_: Option<&str>,
     target: &str,
 ) -> Vec<String> {
-    let resolved_ref = match ref_ {
-        Some(r) => r.to_owned(),
-        None => match github.get_repo(owner, repo).await {
-            Ok(info) => info.default_branch,
-            Err(_) => return Vec::new(),
-        },
+    let fut = async {
+        let resolved_ref = match ref_ {
+            Some(r) => r.to_owned(),
+            None => match github.get_repo(owner, repo).await {
+                Ok(info) => info.default_branch,
+                Err(e) => {
+                    warn!(%e, "candidate fetch: get_repo failed");
+                    return Vec::new();
+                }
+            },
+        };
+        let tree = match github.get_tree(owner, repo, &resolved_ref).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(%e, "candidate fetch: get_tree failed");
+                return Vec::new();
+            }
+        };
+        if tree.truncated {
+            warn!("candidate fetch: tree truncated (>100k entries); candidates may be incomplete");
+        }
+        let entries = tree
+            .tree
+            .iter()
+            .filter(|e| matches!(e.entry_type, github::types::EntryType::Blob))
+            .map(|e| e.path.as_str());
+        typo::closest_matches(target, entries, CANDIDATE_MAX_DISTANCE, CANDIDATE_TOP_N)
     };
-    let tree = match github.get_tree(owner, repo, &resolved_ref).await {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
-    };
-    let entries: Vec<&str> = tree
-        .tree
-        .iter()
-        .filter(|e| matches!(e.entry_type, github::types::EntryType::Blob))
-        .map(|e| e.path.as_str())
-        .collect();
-    typo::closest_matches(target, entries.iter().copied(), 3, 3)
+    timeout(CANDIDATE_FETCH_TIMEOUT, fut)
+        .await
+        .unwrap_or_default()
 }
 
 async fn resolve_readme(

@@ -3,11 +3,16 @@
 //! Uses Optimal String Alignment (OSA) distance — Levenshtein extended with
 //! adjacent transpositions, so "REDAME" matches "README" at distance 1.
 
-/// Compute the OSA distance between two strings.
-/// Allowed edit operations: insert, delete, substitute, transpose adjacent.
-pub(super) fn osa_distance(a: &str, b: &str) -> usize {
+#[cfg(test)]
+fn osa_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
+    osa_distance_chars(&a, &b)
+}
+
+/// Compute the OSA distance between two char slices.
+/// Allowed edit operations: insert, delete, substitute, transpose adjacent.
+fn osa_distance_chars(a: &[char], b: &[char]) -> usize {
     let m = a.len();
     let n = b.len();
 
@@ -50,9 +55,13 @@ pub(super) fn closest_matches<'a>(
     max_distance: usize,
     top_n: usize,
 ) -> Vec<String> {
+    let target: Vec<char> = target.chars().collect();
     let mut scored: Vec<(usize, &str)> = pool
         .into_iter()
-        .map(|c| (osa_distance(target, c), c))
+        .map(|c| {
+            let candidate: Vec<char> = c.chars().collect();
+            (osa_distance_chars(&target, &candidate), c)
+        })
         .filter(|(d, _)| *d <= max_distance)
         .collect();
     scored.sort_by_key(|(d, _)| *d);
