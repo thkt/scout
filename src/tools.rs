@@ -1,5 +1,6 @@
 mod errors;
 mod params;
+mod typo;
 
 pub use errors::ScoutError;
 pub use params::Command;
@@ -394,9 +395,23 @@ impl Scout {
 
         let github = self.github().await;
 
-        let contents = github
+        let contents = match github
             .get_contents(owner, repo, &path, params.ref_.as_deref())
-            .await?;
+            .await
+        {
+            Ok(c) => c,
+            Err(github::GitHubError::NotFound(_)) => {
+                let candidates =
+                    collect_path_candidates(github, owner, repo, params.ref_.as_deref(), &path)
+                        .await;
+                let mut err = ScoutError::from(github::GitHubError::NotFound(path.clone()));
+                if !candidates.is_empty() {
+                    err = err.with_candidates(candidates);
+                }
+                return Err(err);
+            }
+            Err(e) => return Err(ScoutError::from(e)),
+        };
 
         let hint = params.encoding.as_deref();
         let decode_result =
@@ -496,6 +511,35 @@ impl Scout {
         );
         Ok(CommandOutput::with_notes(markdown, data, notes))
     }
+}
+
+/// Best-effort: fetch the repo tree and return up to 3 paths most similar
+/// to `target` (OSA distance ≤ 3). Returns empty on any API failure.
+async fn collect_path_candidates(
+    github: &GitHubClient,
+    owner: &str,
+    repo: &str,
+    ref_: Option<&str>,
+    target: &str,
+) -> Vec<String> {
+    let resolved_ref = match ref_ {
+        Some(r) => r.to_owned(),
+        None => match github.get_repo(owner, repo).await {
+            Ok(info) => info.default_branch,
+            Err(_) => return Vec::new(),
+        },
+    };
+    let tree = match github.get_tree(owner, repo, &resolved_ref).await {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let entries: Vec<&str> = tree
+        .tree
+        .iter()
+        .filter(|e| matches!(e.entry_type, github::types::EntryType::Blob))
+        .map(|e| e.path.as_str())
+        .collect();
+    typo::closest_matches(target, entries.iter().copied(), 3, 3)
 }
 
 async fn resolve_readme(

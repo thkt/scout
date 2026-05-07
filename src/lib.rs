@@ -126,7 +126,7 @@ fn render_json_error(err: &ScoutError) -> String {
             code: err.error_kind(),
             message: err.message().to_owned(),
             next_step: err.next_step().map(str::to_owned),
-            candidates: Vec::new(),
+            candidates: err.candidates().to_vec(),
             retryable: err.retryable(),
         },
     };

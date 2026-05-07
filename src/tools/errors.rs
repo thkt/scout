@@ -19,6 +19,7 @@ pub struct ScoutError {
     retryable: bool,
     kind: ErrorCode,
     next_step: Option<String>,
+    candidates: Vec<String>,
 }
 
 impl fmt::Display for ScoutError {
@@ -43,6 +44,7 @@ impl ScoutError {
             retryable: false,
             kind: ErrorCode::UsageError,
             next_step: None,
+            candidates: Vec::new(),
         }
     }
 
@@ -52,6 +54,7 @@ impl ScoutError {
             retryable: false,
             kind: ErrorCode::IoError,
             next_step: None,
+            candidates: Vec::new(),
         }
     }
 
@@ -61,6 +64,7 @@ impl ScoutError {
             retryable: true,
             kind: ErrorCode::TempFailure,
             next_step: None,
+            candidates: Vec::new(),
         }
     }
 
@@ -70,6 +74,7 @@ impl ScoutError {
             retryable: false,
             kind: ErrorCode::NotFound,
             next_step: None,
+            candidates: Vec::new(),
         }
     }
 
@@ -79,12 +84,19 @@ impl ScoutError {
             retryable: false,
             kind: ErrorCode::DataError,
             next_step: None,
+            candidates: Vec::new(),
         }
     }
 
     /// Attach a recovery hint to this error per ADR-0065 `error.next_step`.
     pub(super) fn with_next_step(mut self, hint: impl Into<String>) -> Self {
         self.next_step = Some(hint.into());
+        self
+    }
+
+    /// Attach correction candidates per ADR-0065 `error.candidates` (e.g., typo suggestions).
+    pub(super) fn with_candidates(mut self, candidates: Vec<String>) -> Self {
+        self.candidates = candidates;
         self
     }
 
@@ -111,6 +123,11 @@ impl ScoutError {
     /// Recovery hint per ADR-0065 `error.next_step`.
     pub fn next_step(&self) -> Option<&str> {
         self.next_step.as_deref()
+    }
+
+    /// Correction candidates per ADR-0065 `error.candidates` (e.g., similar paths after typo).
+    pub fn candidates(&self) -> &[String] {
+        &self.candidates
     }
 }
 
@@ -284,6 +301,21 @@ mod tests {
     fn t_er012_internal_kind_is_io_error() {
         let err = ScoutError::internal("test");
         assert_eq!(err.error_kind(), ErrorCode::IoError);
+    }
+
+    /// [T-CD001] Errors default to empty candidates list
+    #[test]
+    fn t_cd001_default_candidates_empty() {
+        let err = ScoutError::not_found("test");
+        assert!(err.candidates().is_empty());
+    }
+
+    /// [T-CD002] with_candidates attaches correction suggestions
+    #[test]
+    fn t_cd002_with_candidates_attaches_list() {
+        let err = ScoutError::not_found("path not found")
+            .with_candidates(vec!["README.md".into(), "REDAME.md".into()]);
+        assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
     }
 
     /// [T-NS001] ApiKeyNotSet sets next_step pointing to GEMINI_API_KEY env var
