@@ -1,5 +1,6 @@
 mod errors;
 mod params;
+mod typo;
 
 pub use errors::ScoutError;
 pub use params::Command;
@@ -394,9 +395,23 @@ impl Scout {
 
         let github = self.github().await;
 
-        let contents = github
+        let contents = match github
             .get_contents(owner, repo, &path, params.ref_.as_deref())
-            .await?;
+            .await
+        {
+            Ok(c) => c,
+            Err(github::GitHubError::NotFound(_)) => {
+                let candidates =
+                    collect_path_candidates(github, owner, repo, params.ref_.as_deref(), &path)
+                        .await;
+                let mut err = ScoutError::from(github::GitHubError::NotFound(path.clone()));
+                if !candidates.is_empty() {
+                    err = err.with_candidates(candidates);
+                }
+                return Err(err);
+            }
+            Err(e) => return Err(ScoutError::from(e)),
+        };
 
         let hint = params.encoding.as_deref();
         let decode_result =
@@ -496,6 +511,59 @@ impl Scout {
         );
         Ok(CommandOutput::with_notes(markdown, data, notes))
     }
+}
+
+/// Maximum time spent on best-effort candidate generation in the NotFound
+/// error path. The user is already waiting on a failure; we'd rather skip
+/// candidates than block them on a slow tree fetch.
+const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum OSA distance and number of suggestions returned per error.
+const CANDIDATE_MAX_DISTANCE: usize = 3;
+const CANDIDATE_TOP_N: usize = 3;
+
+/// Best-effort: fetch the repo tree and return up to `CANDIDATE_TOP_N` paths
+/// most similar to `target` (OSA distance ≤ `CANDIDATE_MAX_DISTANCE`).
+/// Returns empty on any API failure or if the fetch exceeds
+/// `CANDIDATE_FETCH_TIMEOUT`.
+async fn collect_path_candidates(
+    github: &GitHubClient,
+    owner: &str,
+    repo: &str,
+    ref_: Option<&str>,
+    target: &str,
+) -> Vec<String> {
+    let fut = async {
+        let resolved_ref = match ref_ {
+            Some(r) => r.to_owned(),
+            None => match github.get_repo(owner, repo).await {
+                Ok(info) => info.default_branch,
+                Err(e) => {
+                    warn!(%e, "candidate fetch: get_repo failed");
+                    return Vec::new();
+                }
+            },
+        };
+        let tree = match github.get_tree(owner, repo, &resolved_ref).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(%e, "candidate fetch: get_tree failed");
+                return Vec::new();
+            }
+        };
+        if tree.truncated {
+            warn!("candidate fetch: tree truncated (>100k entries); candidates may be incomplete");
+        }
+        let entries = tree
+            .tree
+            .iter()
+            .filter(|e| matches!(e.entry_type, github::types::EntryType::Blob))
+            .map(|e| e.path.as_str());
+        typo::closest_matches(target, entries, CANDIDATE_MAX_DISTANCE, CANDIDATE_TOP_N)
+    };
+    timeout(CANDIDATE_FETCH_TIMEOUT, fut)
+        .await
+        .unwrap_or_default()
 }
 
 async fn resolve_readme(
