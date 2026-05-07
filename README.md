@@ -65,7 +65,7 @@ Japanese queries are handled automatically: "Next.js 認証 ベストプラク�
 brew install thkt/tap/scout
 ```
 
-Or build from source (requires Rust 1.85+):
+Or build from source (requires Rust 1.95+):
 
 ```sh
 cargo install --path .
@@ -78,6 +78,7 @@ Pre-built binaries in [Releases](https://github.com/thkt/scout/releases) — mac
 ```sh
 export GEMINI_API_KEY="..."   # Required for search/research (free tier: https://aistudio.google.com/apikey)
 export GITHUB_TOKEN="..."     # Optional: 5,000 req/hour vs 60/hour unauthenticated
+export SLACK_TOKEN="..."      # Optional: required for `fetch` on Slack permalinks (User OAuth token, xoxp-…)
 ```
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` are all supported, in that order.
@@ -109,6 +110,10 @@ Claude Code will pick up the commands naturally — no MCP configuration needed.
 
 ## Commands
 
+All commands accept the query/URL/repo as a positional argument, piped stdin, or `-` to read stdin interactively (e.g., `echo "query" | scout search`, `scout search -`).
+
+Add `--json` to any command for a one-line JSON envelope on stdout instead of Markdown — useful for `jq` pipelines and feeding structured data back to AI agents.
+
 ### `scout research` — Multi-source deep research
 
 Searches the web via Gemini Grounding, fetches the top N source pages, and compiles a report — grounded answer, full page content, and deduplicated source list. Unlike `search` which returns an AI answer with URLs, `research` actually reads those pages and includes the full content — so you (or your AI agent) can verify claims against primary sources.
@@ -130,6 +135,10 @@ Gemini Grounding with Google Search. Returns a synthesized answer with source UR
 scout search "Next.js server actions security"
 ```
 
+| Flag         | Description                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `-l, --lang` | `ja`, `en`, or `auto` (default) — auto-detects Japanese and expands to bilingual queries |
+
 ### `scout fetch` — Web page to Markdown
 
 Downloads a page, extracts main content via Readability, converts to Markdown. With `js-rendering` feature, JS-dependent pages (SPAs) are automatically detected and rendered via headless Chrome (CDP). No LLM round-trip.
@@ -144,6 +153,8 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 | `--raw` | Skip Readability, convert entire page                                 |
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
+
+**Slack permalinks** — `fetch` detects `*.slack.com/archives/{channel}/p{ts}` URLs and routes them to the Slack Web API instead of HTML scraping. Thread parent + replies are preserved with author/timestamp metadata. Requires `SLACK_TOKEN` (User OAuth token, `xoxp-…`).
 
 ### `scout repo-tree` — Remote file listing
 
@@ -218,12 +229,26 @@ src/
 ├── gemini/              Gemini API client, grounding response parsing
 ├── github/              GitHub API client (lazy-init), tree filtering, formatting
 ├── slack/               Slack message fetching (thread, reply permalink)
+├── envelope.rs          JSON output envelope
 ├── markdown.rs          Markdown utilities (heading shift, truncation, escaping)
 ├── retry.rs             Retry with backoff (transient error, rate limit)
 └── redacted.rs          Secret-safe wrapper for tokens
 ```
 
 Single binary, zero runtime dependencies.
+
+## Exit codes
+
+Following [`sysexits.h`](https://man.openbsd.org/sysexits) conventions:
+
+| Code | Meaning                                                             |
+| ---- | ------------------------------------------------------------------- |
+| 0    | Success                                                             |
+| 64   | Usage error (clap parse, missing API key, conflicts_with violation) |
+| 65   | Data error (invalid input, malformed format, encoding error)        |
+| 66   | Not found (repo/file not found, 404)                                |
+| 74   | IO error (network IO, write failure other than BrokenPipe)          |
+| 75   | Temporary failure (rate limit, 5xx, retryable)                      |
 
 ## Limitations
 
