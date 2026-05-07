@@ -35,7 +35,7 @@ fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     version,
     about = "Web search, page fetching, and GitHub repository exploration",
     after_help = "\
-Exit codes (sysexits.h, ADR-0065):
+Exit codes (sysexits.h):
   0   Success
   64  Usage error (clap parse, missing API key, conflicts_with violation)
   65  Data error (invalid input, malformed format, encoding error)
@@ -48,7 +48,7 @@ Environment:
   GITHUB_TOKEN    Optional for GitHub commands (higher rate limits)"
 )]
 pub(crate) struct Cli {
-    /// Emit output as a JSON envelope (one line per ADR-0065) on stdout
+    /// Emit output as a JSON envelope (one line) on stdout
     /// instead of Markdown. Errors print a JSON envelope on stderr.
     #[arg(long, global = true)]
     json: bool,
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
-    /// [T-H000] root --help contains sysexits Exit codes (ADR-0065) and Environment sections
+    /// [T-H000] root --help contains sysexits Exit codes and Environment sections
     #[test]
     fn t_h000_root_help_contains_exit_codes_and_environment() {
         let help = super::Cli::command().render_long_help().to_string();
@@ -226,8 +226,8 @@ mod tests {
             "root help missing Exit codes section"
         );
         assert!(
-            help.contains("ADR-0065"),
-            "root help should reference ADR-0065"
+            help.contains("sysexits.h"),
+            "root help should reference sysexits.h"
         );
         assert!(
             help.contains("GEMINI_API_KEY"),

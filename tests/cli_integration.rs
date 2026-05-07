@@ -19,8 +19,8 @@ fn t_c001_help_exits_zero_and_contains_app_name() {
         "help output should contain Exit codes section, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("ADR-0065"),
-        "help should reference ADR-0065, got:\n{stdout}"
+        stdout.contains("sysexits.h"),
+        "help should reference sysexits.h, got:\n{stdout}"
     );
 }
 
