@@ -35,10 +35,13 @@ fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     version,
     about = "Web search, page fetching, and GitHub repository exploration",
     after_help = "\
-Exit codes:
-  0  Success
-  1  User error (invalid input, not found, auth failure)
-  2  Internal error or transient network failure
+Exit codes (sysexits.h, ADR-0065):
+  0   Success
+  64  Usage error (clap parse, missing API key, conflicts_with violation)
+  65  Data error (invalid input, malformed format, encoding error)
+  66  Not found (repo/file not found, 404)
+  74  IO error (network IO, write failure other than BrokenPipe)
+  75  Temporary failure (rate limit, 5xx, retryable)
 
 Environment:
   GEMINI_API_KEY  Required for search and research commands
@@ -95,7 +98,7 @@ pub async fn run() -> ExitCode {
                 Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("error: {e}");
-                    ExitCode::from(2)
+                    ExitCode::from(ErrorCode::IoError.exit_code())
                 }
             }
         }
@@ -155,7 +158,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
             } else {
                 let _ = err.print();
             }
-            ExitCode::from(2)
+            ExitCode::from(ErrorCode::UsageError.exit_code())
         }
     }
 }
@@ -169,7 +172,7 @@ fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
     } else {
         eprintln!("error: {err}");
     }
-    ExitCode::from(u8::try_from(err.exit_code()).unwrap_or(1_u8))
+    ExitCode::from(err.exit_code())
 }
 
 #[cfg(test)]
@@ -213,13 +216,17 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
-    /// [T-H000] root --help contains Exit codes: and Environment: sections
+    /// [T-H000] root --help contains sysexits Exit codes (ADR-0065) and Environment sections
     #[test]
     fn t_h000_root_help_contains_exit_codes_and_environment() {
         let help = super::Cli::command().render_long_help().to_string();
         assert!(
-            help.contains("Exit codes:"),
-            "root help missing Exit codes:"
+            help.contains("Exit codes"),
+            "root help missing Exit codes section"
+        );
+        assert!(
+            help.contains("ADR-0065"),
+            "root help should reference ADR-0065"
         );
         assert!(
             help.contains("GEMINI_API_KEY"),
@@ -229,13 +236,19 @@ mod tests {
             help.contains("GITHUB_TOKEN"),
             "root help missing GITHUB_TOKEN"
         );
+        for code in ["64", "65", "66", "74", "75"] {
+            assert!(
+                help.contains(code),
+                "root help should document sysexits code {code}"
+            );
+        }
         assert!(
-            help.contains("User error"),
-            "root help missing exit code 1 description"
+            help.contains("Usage error"),
+            "root help missing EX_USAGE description"
         );
         assert!(
-            help.contains("transient network failure"),
-            "root help missing exit code 2 description"
+            help.contains("Temporary failure"),
+            "root help missing EX_TEMPFAIL description"
         );
     }
 }

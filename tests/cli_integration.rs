@@ -15,8 +15,12 @@ fn t_c001_help_exits_zero_and_contains_app_name() {
         "help output should mention app name, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("Exit codes:"),
-        "help output should contain Exit codes: section, got:\n{stdout}"
+        stdout.contains("Exit codes"),
+        "help output should contain Exit codes section, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ADR-0065"),
+        "help should reference ADR-0065, got:\n{stdout}"
     );
 }
 
@@ -37,7 +41,7 @@ fn t_c002_version_exits_zero() {
 
 // T-C003
 #[test]
-fn t_c003_search_without_api_key_exits_1() {
+fn t_c003_search_without_api_key_exits_64() {
     let output = scout()
         .args(["search", "test query"])
         .env_remove("GEMINI_API_KEY")
@@ -45,8 +49,8 @@ fn t_c003_search_without_api_key_exits_1() {
         .expect("scout search failed to run");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "missing API key should be exit code 1 (user error)"
+        Some(64),
+        "missing API key should be exit 64 (EX_USAGE per ADR-0065)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -57,15 +61,15 @@ fn t_c003_search_without_api_key_exits_1() {
 
 // T-C004
 #[test]
-fn t_c004_fetch_invalid_url_exits_1() {
+fn t_c004_fetch_invalid_url_exits_65() {
     let output = scout()
         .args(["fetch", "not-a-valid-url"])
         .output()
         .expect("scout fetch failed to run");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "invalid URL should be exit code 1 (user error)"
+        Some(65),
+        "invalid URL should be exit 65 (EX_DATAERR per ADR-0065)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -76,15 +80,15 @@ fn t_c004_fetch_invalid_url_exits_1() {
 
 // T-C005
 #[test]
-fn t_c005_repo_tree_bad_format_exits_1() {
+fn t_c005_repo_tree_bad_format_exits_65() {
     let output = scout()
         .args(["repo-tree", "no-slash-here"])
         .output()
         .expect("scout repo-tree failed to run");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "malformed owner/repo should be exit code 1 (user error)"
+        Some(65),
+        "malformed owner/repo should be exit 65 (EX_DATAERR per ADR-0065)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -113,8 +117,8 @@ fn t_c007_json_emits_envelope_on_error() {
         .expect("scout --json repo-tree failed to run");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "malformed owner/repo should still exit 1 in --json mode"
+        Some(65),
+        "malformed owner/repo should still exit 65 (EX_DATAERR) in --json mode"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
@@ -154,7 +158,11 @@ fn t_c008_json_missing_api_key_emits_usage_error() {
         .env_remove("GEMINI_API_KEY")
         .output()
         .expect("scout --json search failed to run");
-    assert_eq!(output.status.code(), Some(1), "missing API key → exit 1");
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "missing API key → exit 64 (EX_USAGE)"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
         .lines()
@@ -174,6 +182,11 @@ fn t_c010_json_clap_parse_error_emits_envelope() {
         .args(["--json", "--definitely-not-a-flag"])
         .output()
         .expect("scout failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "clap parse error should exit 64 (EX_USAGE per ADR-0065)"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
         .lines()

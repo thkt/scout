@@ -12,7 +12,6 @@ use crate::slack::SlackError;
 #[derive(Debug)]
 pub struct ScoutError {
     message: String,
-    exit_code: i32,
     retryable: bool,
     kind: ErrorCode,
 }
@@ -33,7 +32,6 @@ impl ScoutError {
     pub(super) fn user_error(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 1,
             retryable: false,
             kind: ErrorCode::UsageError,
         }
@@ -42,7 +40,6 @@ impl ScoutError {
     pub(super) fn internal(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 2,
             retryable: false,
             kind: ErrorCode::IoError,
         }
@@ -51,7 +48,6 @@ impl ScoutError {
     pub(super) fn transient(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 2,
             retryable: true,
             kind: ErrorCode::TempFailure,
         }
@@ -60,7 +56,6 @@ impl ScoutError {
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 1,
             retryable: false,
             kind: ErrorCode::NotFound,
         }
@@ -69,14 +64,14 @@ impl ScoutError {
     pub(super) fn data_error(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            exit_code: 1,
             retryable: false,
             kind: ErrorCode::DataError,
         }
     }
 
-    pub fn exit_code(&self) -> i32 {
-        self.exit_code
+    /// sysexits.h exit code derived from `kind` per ADR-0065.
+    pub fn exit_code(&self) -> u8 {
+        self.kind.exit_code()
     }
 
     /// Whether the error is transient and the operation may succeed on retry.
@@ -262,24 +257,14 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::NotFound);
     }
 
-    /// [T-ER001] User-facing errors surface with exit code 1
+    /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0065)
     #[test]
-    fn user_errors_have_exit_code_1() {
+    fn t_er001a_usage_errors_have_exit_code_64() {
         let cases: Vec<ScoutError> = vec![
-            github::GitHubError::NotFound("/test".into()).into(),
             github::GitHubError::Forbidden("denied".into()).into(),
-            github::GitHubError::InvalidRepo("bad".into()).into(),
-            FetchError::InvalidScheme.into(),
-            FetchError::InternalHost.into(),
-            FetchError::UnsupportedContentType("image/png".into()).into(),
-            FetchError::RedirectMissingLocation.into(),
             FetchError::BrowserNotFound("not installed".into()).into(),
-            FetchError::Status(400).into(),
-            FetchError::Status(404).into(),
+            FetchError::Status(401).into(),
             FetchError::Status(403).into(),
-            FetchError::Status(499).into(),
-            FetchError::TooLarge.into(),
-            FetchError::TooManyRedirects(10).into(),
             SlackError::TokenNotSet.into(),
             SlackError::Api {
                 error: "err".into(),
@@ -289,13 +274,47 @@ mod tests {
             GeminiError::QuotaExhausted("limit".into()).into(),
         ];
         for err in &cases {
-            assert_eq!(err.exit_code(), 1, "expected user error (1): {err}");
+            assert_eq!(err.error_kind(), ErrorCode::UsageError, "{err}");
+            assert_eq!(err.exit_code(), 64, "expected EX_USAGE (64): {err}");
         }
     }
 
-    /// [T-ER002] Internal errors surface with exit code 2 and are non-retryable
+    /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0065)
     #[test]
-    fn internal_errors_have_exit_code_2() {
+    fn t_er001b_data_errors_have_exit_code_65() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::InvalidRepo("bad".into()).into(),
+            FetchError::InvalidScheme.into(),
+            FetchError::InternalHost.into(),
+            FetchError::UnsupportedContentType("image/png".into()).into(),
+            FetchError::RedirectMissingLocation.into(),
+            FetchError::Status(400).into(),
+            FetchError::Status(499).into(),
+            FetchError::TooLarge.into(),
+            FetchError::TooManyRedirects(10).into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::DataError, "{err}");
+            assert_eq!(err.exit_code(), 65, "expected EX_DATAERR (65): {err}");
+        }
+    }
+
+    /// [T-ER001c] NotFound errors surface with exit 66 (EX_NOINPUT per ADR-0065)
+    #[test]
+    fn t_er001c_not_found_errors_have_exit_code_66() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::NotFound("/test".into()).into(),
+            FetchError::Status(404).into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::NotFound, "{err}");
+            assert_eq!(err.exit_code(), 66, "expected EX_NOINPUT (66): {err}");
+        }
+    }
+
+    /// [T-ER002] IoError errors surface with exit 74 (EX_IOERR) and are non-retryable
+    #[test]
+    fn t_er002_io_errors_have_exit_code_74() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::Api {
                 code: 400,
@@ -312,14 +331,15 @@ mod tests {
             .into(),
         ];
         for err in &cases {
-            assert_eq!(err.exit_code(), 2, "expected internal error (2): {err}");
-            assert!(!err.retryable(), "internal should not be retryable: {err}");
+            assert_eq!(err.error_kind(), ErrorCode::IoError, "{err}");
+            assert_eq!(err.exit_code(), 74, "expected EX_IOERR (74): {err}");
+            assert!(!err.retryable(), "IoError should not be retryable: {err}");
         }
     }
 
-    /// [T-ER003] Transient errors are retryable and display retry hint
+    /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL)
     #[test]
-    fn transient_errors_are_retryable() {
+    fn t_er003_temp_failure_errors_have_exit_code_75() {
         let cases: Vec<ScoutError> = vec![
             FetchError::Status(408).into(),
             FetchError::Status(429).into(),
@@ -344,8 +364,9 @@ mod tests {
             SlackError::Timeout("err".into()).into(),
         ];
         for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
             assert!(err.retryable(), "expected retryable: {err}");
-            assert_eq!(err.exit_code(), 2, "retryable should be exit 2: {err}");
+            assert_eq!(err.exit_code(), 75, "expected EX_TEMPFAIL (75): {err}");
             assert!(
                 err.to_string().contains("retry may succeed"),
                 "should include retry hint: {err}"
