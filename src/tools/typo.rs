@@ -78,40 +78,40 @@ mod tests {
 
     /// [T-TY001] osa_distance: identical strings have distance 0
     #[test]
-    fn t_ty001_identical_strings_have_distance_zero() {
+    fn identical_strings_have_distance_zero() {
         assert_eq!(osa_distance("README.md", "README.md"), 0);
         assert_eq!(osa_distance("", ""), 0);
     }
 
     /// [T-TY002] osa_distance: empty input returns the other's length
     #[test]
-    fn t_ty002_empty_input_returns_length() {
+    fn empty_input_returns_length() {
         assert_eq!(osa_distance("", "hello"), 5);
         assert_eq!(osa_distance("hello", ""), 5);
     }
 
     /// [T-TY003] osa_distance: single transposition counts as 1
     #[test]
-    fn t_ty003_transposition_counts_as_one() {
+    fn transposition_counts_as_one() {
         assert_eq!(osa_distance("REDAME", "README"), 1);
         assert_eq!(osa_distance("ab", "ba"), 1);
     }
 
     /// [T-TY004] osa_distance: substitution counts as 1
     #[test]
-    fn t_ty004_substitution_counts_as_one() {
+    fn substitution_counts_as_one() {
         assert_eq!(osa_distance("kitten", "sitten"), 1);
     }
 
     /// [T-TY005] osa_distance: classic kitten/sitting case is 3
     #[test]
-    fn t_ty005_kitten_sitting_distance_three() {
+    fn kitten_sitting_distance_three() {
         assert_eq!(osa_distance("kitten", "sitting"), 3);
     }
 
     /// [T-TY006] closest_matches: returns top-N filtered by max_distance
     #[test]
-    fn t_ty006_closest_matches_filters_by_distance() {
+    fn closest_matches_filters_by_distance() {
         let pool = ["README.md", "Cargo.toml", "src/main.rs", "REDAME.md"];
         let matches = closest_matches("REDME.md", pool.iter().copied(), 3, 3);
         assert!(matches.contains(&"REDAME.md".to_owned()));
@@ -122,7 +122,7 @@ mod tests {
 
     /// [T-TY007] closest_matches: empty pool returns empty
     #[test]
-    fn t_ty007_closest_matches_empty_pool_returns_empty() {
+    fn closest_matches_empty_pool_returns_empty() {
         let pool: Vec<&str> = vec![];
         let matches = closest_matches("REDAME.md", pool, 3, 3);
         assert!(matches.is_empty());
@@ -130,7 +130,7 @@ mod tests {
 
     /// [T-TY008] closest_matches: all-too-far returns empty
     #[test]
-    fn t_ty008_closest_matches_all_too_far_returns_empty() {
+    fn closest_matches_all_too_far_returns_empty() {
         let pool = ["totally-different.txt", "completely-unrelated.json"];
         let matches = closest_matches("REDAME.md", pool.iter().copied(), 3, 3);
         assert!(matches.is_empty());
@@ -138,7 +138,7 @@ mod tests {
 
     /// [T-TY009] closest_matches: respects top_n cap even with many in-range
     #[test]
-    fn t_ty009_closest_matches_respects_top_n_cap() {
+    fn closest_matches_respects_top_n_cap() {
         let pool = ["a", "ab", "abc", "abcd", "abcde"];
         let matches = closest_matches("a", pool.iter().copied(), 5, 2);
         assert_eq!(matches.len(), 2);

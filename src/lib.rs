@@ -186,7 +186,7 @@ mod tests {
 
     /// [T-W001] write_output appends newline when output lacks trailing newline
     #[test]
-    fn t_w001_write_output_appends_newline_when_missing() {
+    fn write_output_appends_newline_when_missing() {
         let mut buf = Vec::new();
         write_output(&mut buf, "hello").unwrap();
         assert_eq!(&buf, b"hello\n");
@@ -194,7 +194,7 @@ mod tests {
 
     /// [T-W002] write_output preserves single trailing newline
     #[test]
-    fn t_w002_write_output_preserves_existing_newline() {
+    fn write_output_preserves_existing_newline() {
         let mut buf = Vec::new();
         write_output(&mut buf, "hello\n").unwrap();
         assert_eq!(&buf, b"hello\n");
@@ -202,7 +202,7 @@ mod tests {
 
     /// [T-W003] write_output propagates BrokenPipe error from writer
     #[test]
-    fn t_w003_write_output_propagates_broken_pipe() {
+    fn write_output_propagates_broken_pipe() {
         struct BrokenPipeWriter;
         impl Write for BrokenPipeWriter {
             fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
@@ -219,7 +219,7 @@ mod tests {
 
     /// [T-H000] root --help contains sysexits Exit codes and Environment sections
     #[test]
-    fn t_h000_root_help_contains_exit_codes_and_environment() {
+    fn root_help_contains_exit_codes_and_environment() {
         let help = super::Cli::command().render_long_help().to_string();
         assert!(
             help.contains("Exit codes"),

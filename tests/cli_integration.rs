@@ -4,9 +4,9 @@ fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
 }
 
-// T-C001
+// T-C001: help_exits_zero_and_contains_app_name
 #[test]
-fn t_c001_help_exits_zero_and_contains_app_name() {
+fn help_exits_zero_and_contains_app_name() {
     let output = scout().arg("--help").output().expect("scout --help failed");
     assert_eq!(output.status.code(), Some(0), "help should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -24,9 +24,9 @@ fn t_c001_help_exits_zero_and_contains_app_name() {
     );
 }
 
-// T-C002
+// T-C002: version_exits_zero
 #[test]
-fn t_c002_version_exits_zero() {
+fn version_exits_zero() {
     let output = scout()
         .arg("--version")
         .output()
@@ -39,9 +39,9 @@ fn t_c002_version_exits_zero() {
     );
 }
 
-// T-C003
+// T-C003: search_without_api_key_exits_64
 #[test]
-fn t_c003_search_without_api_key_exits_64() {
+fn search_without_api_key_exits_64() {
     let output = scout()
         .args(["search", "test query"])
         .env_remove("GEMINI_API_KEY")
@@ -59,9 +59,9 @@ fn t_c003_search_without_api_key_exits_64() {
     );
 }
 
-// T-C004
+// T-C004: fetch_invalid_url_exits_65
 #[test]
-fn t_c004_fetch_invalid_url_exits_65() {
+fn fetch_invalid_url_exits_65() {
     let output = scout()
         .args(["fetch", "not-a-valid-url"])
         .output()
@@ -78,9 +78,9 @@ fn t_c004_fetch_invalid_url_exits_65() {
     );
 }
 
-// T-C005
+// T-C005: repo_tree_bad_format_exits_65
 #[test]
-fn t_c005_repo_tree_bad_format_exits_65() {
+fn repo_tree_bad_format_exits_65() {
     let output = scout()
         .args(["repo-tree", "no-slash-here"])
         .output()
@@ -97,9 +97,9 @@ fn t_c005_repo_tree_bad_format_exits_65() {
     );
 }
 
-// T-C006: --json appears in --help under Options
+// T-C006: help_advertises_json_flag — --json appears in --help under Options
 #[test]
-fn t_c006_help_advertises_json_flag() {
+fn help_advertises_json_flag() {
     let output = scout().arg("--help").output().expect("scout --help failed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -108,9 +108,9 @@ fn t_c006_help_advertises_json_flag() {
     );
 }
 
-// T-C007: --json with malformed repo emits a JSON envelope on stderr
+// T-C007: json_emits_envelope_on_error — --json with malformed repo emits a JSON envelope on stderr
 #[test]
-fn t_c007_json_emits_envelope_on_error() {
+fn json_emits_envelope_on_error() {
     let output = scout()
         .args(["--json", "repo-tree", "no-slash-here"])
         .output()
@@ -152,9 +152,9 @@ fn t_c007_json_emits_envelope_on_error() {
     );
 }
 
-// T-C008: --json missing API key surfaces a USAGE_ERROR envelope with next_step on stderr
+// T-C008: json_missing_api_key_emits_usage_error_with_next_step — --json missing API key surfaces a USAGE_ERROR envelope with next_step on stderr
 #[test]
-fn t_c008_json_missing_api_key_emits_usage_error_with_next_step() {
+fn json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
         .args(["--json", "search", "test query"])
         .env_remove("GEMINI_API_KEY")
@@ -183,9 +183,9 @@ fn t_c008_json_missing_api_key_emits_usage_error_with_next_step() {
     );
 }
 
-// T-C010: --json with a clap parse error (unknown flag) routes through JSON envelope
+// T-C010: json_clap_parse_error_emits_envelope — --json with a clap parse error (unknown flag) routes through JSON envelope
 #[test]
-fn t_c010_json_clap_parse_error_emits_envelope() {
+fn json_clap_parse_error_emits_envelope() {
     let output = scout()
         .args(["--json", "--definitely-not-a-flag"])
         .output()
@@ -207,9 +207,9 @@ fn t_c010_json_clap_parse_error_emits_envelope() {
     );
 }
 
-// T-C009: --json error envelope is exactly one line (single-line JSON contract)
+// T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)
 #[test]
-fn t_c009_json_error_envelope_is_single_line() {
+fn json_error_envelope_is_single_line() {
     let output = scout()
         .args(["--json", "repo-tree", "no-slash-here"])
         .output()

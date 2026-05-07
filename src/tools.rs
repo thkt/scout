@@ -767,7 +767,7 @@ mod tests {
         assert!(output.contains("### Raw Title"), "h1 should shift to h3");
     }
 
-    /// [TC-5] search standalone: empty answer text becomes None via
+    /// [T-TS006] search standalone: empty answer text becomes None via
     /// `extract_grounded_result` (.filter(|t| !t.is_empty())), triggering
     /// the fallback message path in `search()`.
     #[tokio::test]
@@ -804,9 +804,9 @@ mod tests {
         );
     }
 
-    /// [T-001] search standalone: answer with headings should have them shifted by 2
+    /// [T-TS007] search standalone: answer with headings should have them shifted by 2
     #[tokio::test]
-    async fn t_001_search_shifts_headings_in_answer() {
+    async fn search_shifts_headings_in_answer() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
         };
@@ -843,9 +843,9 @@ mod tests {
         );
     }
 
-    /// [T-003] search standalone: # inside fenced code block should NOT be shifted
+    /// [T-TS008] search standalone: # inside fenced code block should NOT be shifted
     #[tokio::test]
-    async fn t_003_search_preserves_headings_in_code_blocks() {
+    async fn search_preserves_headings_in_code_blocks() {
         let answer = "# Real heading\n\n```bash\n# comment in script\n```\n\n## Another heading";
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
@@ -936,10 +936,10 @@ mod tests {
         }
     }
 
-    /// [T-001] repo_overview: get_repo 404 -> readme/issues/pulls/releases
+    /// [T-TS009] repo_overview: get_repo 404 -> readme/issues/pulls/releases
     /// APIs receive 0 requests.
     #[tokio::test]
-    async fn t_001_repo_overview_404_skips_remaining_apis() {
+    async fn repo_overview_404_skips_remaining_apis() {
         let Some(server) = try_spawn_mock_server("tools::t_001").await else {
             return;
         };
@@ -993,14 +993,14 @@ mod tests {
         // wiremock verifies expect(0) on server drop
     }
 
-    /// [T-002] repo_overview: after get_repo succeeds, readme/issues/pulls/
+    /// [T-TS010] repo_overview: after get_repo succeeds, readme/issues/pulls/
     /// releases run in parallel.
     ///
     /// Proof: a barrier-synchronized TCP server requires all 4 API requests to
     /// arrive before any response is sent. If requests are sequential, only one
     /// arrives at a time and the barrier never releases → deadlock → timeout.
     #[tokio::test(flavor = "multi_thread")]
-    async fn t_002_repo_overview_parallel_after_get_repo() {
+    async fn repo_overview_parallel_after_get_repo() {
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -1074,10 +1074,10 @@ mod tests {
         server.abort();
     }
 
-    /// [T-003] scout_lazy: github OnceCell is None immediately after
+    /// [T-TS011] scout_lazy: github OnceCell is None immediately after
     /// construction.
     #[test]
-    fn t_003_scout_lazy_github_initially_none() {
+    fn scout_lazy_github_initially_none() {
         let s = scout_lazy("http://localhost:0");
         assert!(
             s.github.get().is_none(),
@@ -1085,9 +1085,9 @@ mod tests {
         );
     }
 
-    /// [T-004] search command does not initialize the GitHub client.
+    /// [T-TS012] search command does not initialize the GitHub client.
     #[tokio::test]
-    async fn t_004_search_leaves_github_uninitialized() {
+    async fn search_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_004").await else {
             return;
         };
@@ -1121,9 +1121,9 @@ mod tests {
         );
     }
 
-    /// [T-005] fetch command does not initialize the GitHub client.
+    /// [T-TS013] fetch command does not initialize the GitHub client.
     #[tokio::test]
-    async fn t_005_fetch_leaves_github_uninitialized() {
+    async fn fetch_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_005").await else {
             return;
         };
@@ -1153,9 +1153,9 @@ mod tests {
         );
     }
 
-    /// [T-006] research command does not initialize the GitHub client.
+    /// [T-TS014] research command does not initialize the GitHub client.
     #[tokio::test]
-    async fn t_006_research_leaves_github_uninitialized() {
+    async fn research_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_006").await else {
             return;
         };
@@ -1195,10 +1195,10 @@ mod tests {
         );
     }
 
-    /// [T-007] github() called twice returns the same reference
+    /// [T-TS015] github() called twice returns the same reference
     /// (OnceCell caching verified via std::ptr::eq).
     #[tokio::test]
-    async fn t_007_github_returns_same_reference() {
+    async fn github_returns_same_reference() {
         use std::ptr;
         // Use pre-set OnceCell to avoid triggering real `gh auth token` subprocess.
         let s = scout_with_github("http://localhost:0", "http://localhost:0");
@@ -1210,14 +1210,14 @@ mod tests {
         );
     }
 
-    /// [T-007b] github() initializes an empty OnceCell via from_env and caches
+    /// [T-TS016] github() initializes an empty OnceCell via from_env and caches
     /// the result. Exercises the lazy-init code path at mod.rs:80-84.
     ///
     /// from_env is infallible: it resolves token from env vars or `gh auth token`
     /// (with TOKEN_RESOLVE_TIMEOUT = 5s), then returns a client. No timeout
     /// wrapper — a hang here is a real bug, not a flaky environment.
     #[tokio::test]
-    async fn t_007b_github_lazy_init_from_empty_cell() {
+    async fn github_lazy_init_from_empty_cell() {
         use std::ptr;
         let s = scout_lazy("http://localhost:0");
         assert!(s.github.get().is_none(), "starts empty");
@@ -1235,10 +1235,10 @@ mod tests {
         );
     }
 
-    /// [T-008] repo_read: --encoding hint is passed to decode_content and
+    /// [T-TS017] repo_read: --encoding hint is passed to decode_content and
     /// used to decode non-UTF-8 content correctly.
     #[tokio::test]
-    async fn t_008_repo_read_decodes_with_encoding_hint() {
+    async fn repo_read_decodes_with_encoding_hint() {
         let Some(server) = try_spawn_mock_server("tools::t_008").await else {
             return;
         };
@@ -1277,10 +1277,10 @@ mod tests {
         );
     }
 
-    /// [T-009] repo_tree: --path filter is wired through RepoTreeParams to
+    /// [T-TS018] repo_tree: --path filter is wired through RepoTreeParams to
     /// filter_tree_entries; files outside the prefix are excluded from output.
     #[tokio::test]
-    async fn t_009_repo_tree_path_filter_excludes_non_matching_files() {
+    async fn repo_tree_path_filter_excludes_non_matching_files() {
         let Some(server) = try_spawn_mock_server("tools::t_009").await else {
             return;
         };
@@ -1341,7 +1341,7 @@ mod tests {
 
     /// [T-R001] StdinResolver: first arg consumes stdin, second uses its own value
     #[test]
-    fn t_r001_stdin_resolver_first_consumes_second_uses_arg() {
+    fn stdin_resolver_first_consumes_second_uses_arg() {
         let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
         let first = r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
         assert_eq!(first, "from_stdin");
@@ -1353,7 +1353,7 @@ mod tests {
 
     /// [T-R002] StdinResolver: arg wins over stdin, stdin preserved for next resolve
     #[test]
-    fn t_r002_stdin_resolver_arg_wins_stdin_preserved() {
+    fn stdin_resolver_arg_wins_stdin_preserved() {
         let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
         let first = r
             .resolve(Some("owner/repo".into()), "repository", "<OWNER/REPO>")
@@ -1365,7 +1365,7 @@ mod tests {
 
     /// [T-R003] StdinResolver: second arg fails when stdin already consumed
     #[test]
-    fn t_r003_stdin_resolver_consumed_stdin_fails_second() {
+    fn stdin_resolver_consumed_stdin_fails_second() {
         let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
         r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
         let result = r.resolve(None, "path", "<FILE_PATH>");
@@ -1377,7 +1377,7 @@ mod tests {
 
     /// [T-R005] StdinResolver: error message hints stdin was consumed, not missing
     #[test]
-    fn t_r005_stdin_resolver_consumed_error_hints_stdin_exhausted() {
+    fn stdin_resolver_consumed_error_hints_stdin_exhausted() {
         let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
         r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
         let err = r
@@ -1396,7 +1396,7 @@ mod tests {
 
     /// [T-R004] StdinResolver: both args provided, stdin unused
     #[test]
-    fn t_r004_stdin_resolver_both_args_stdin_unused() {
+    fn stdin_resolver_both_args_stdin_unused() {
         let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
         let first = r
             .resolve(Some("owner/repo".into()), "repository", "<OWNER/REPO>")

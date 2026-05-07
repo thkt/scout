@@ -166,12 +166,12 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
 mod tests {
     use super::*;
 
-    // ── T-001: Explicit Shift_JIS decoding ──
+    // ── Explicit Shift_JIS decoding ──
 
     /// [T-GE001] decode_bytes with shift_jis hint returns Explicit DecodeResult
     #[test]
-    fn t_001_decode_bytes_with_shift_jis_hint_returns_explicit_result() {
-        // [T-001] FR-001, BR-003
+    fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
+        // FR-001, BR-003
         // "テスト" in Shift_JIS
         let bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
 
@@ -182,12 +182,12 @@ mod tests {
         assert_eq!(result.source, DetectionSource::Explicit);
     }
 
-    // ── T-002: Explicit EUC-JP decoding ──
+    // ── Explicit EUC-JP decoding ──
 
     /// [T-GE002] decode_bytes with euc-jp hint returns Explicit DecodeResult
     #[test]
-    fn t_002_decode_bytes_with_euc_jp_hint_returns_explicit_result() {
-        // [T-002] FR-001, BR-003
+    fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
+        // FR-001, BR-003
         // "日本語" in EUC-JP
         let bytes: &[u8] = &[0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC];
 
@@ -198,12 +198,12 @@ mod tests {
         assert_eq!(result.source, DetectionSource::Explicit);
     }
 
-    // ── T-003: Invalid encoding hint ──
+    // ── Invalid encoding hint ──
 
     /// [T-GE003] decode_bytes with unknown encoding hint returns NonUtf8 error with retry guidance
     #[test]
-    fn t_003_decode_bytes_with_invalid_hint_returns_non_utf8_error() {
-        // [T-003] FR-002
+    fn decode_bytes_with_invalid_hint_returns_non_utf8_error() {
+        // FR-002
         let result = decode_bytes(b"any", Some("zzz-invalid-encoding"));
 
         let err = result.unwrap_err();
@@ -222,12 +222,12 @@ mod tests {
         );
     }
 
-    // ── T-004: Auto-detect Shift_JIS (chardetng) ──
+    // ── Auto-detect Shift_JIS (chardetng) ──
 
     /// [T-GE004] decode_bytes without hint auto-detects Shift_JIS via chardetng
     #[test]
-    fn t_004_decode_bytes_without_hint_detects_shift_jis() {
-        // [T-004] FR-004, FR-005
+    fn decode_bytes_without_hint_detects_shift_jis() {
+        // FR-004, FR-005
         // "テスト" in Shift_JIS — enough Japanese bytes for chardetng to detect
         let bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
 
@@ -238,12 +238,12 @@ mod tests {
         assert_eq!(result.source, DetectionSource::Detected);
     }
 
-    // ── T-005: ASCII-heavy Shift_JIS detected before UTF-8 (BR-001) ──
+    // ── ASCII-heavy Shift_JIS detected before UTF-8 (BR-001) ──
 
     /// [T-GE005] decode_bytes runs chardetng before UTF-8 fallback on ASCII-heavy Shift_JIS
     #[test]
-    fn t_005_decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
-        // [T-005] BR-001: chardetng runs BEFORE UTF-8 check
+    fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
+        // BR-001: chardetng runs BEFORE UTF-8 check
         // Simulate a source file with English comments and Japanese string literals.
         // The ASCII portion is valid UTF-8, but the Shift_JIS bytes are not.
         // chardetng must detect Shift_JIS before UTF-8 is tried.
@@ -275,12 +275,12 @@ mod tests {
         );
     }
 
-    // ── T-006: UTF-16 BE BOM detection ──
+    // ── UTF-16 BE BOM detection ──
 
     /// [T-GE006] decode_bytes recognizes UTF-16 BE BOM and reports Bom detection source
     #[test]
-    fn t_006_decode_bytes_with_utf16be_bom_returns_bom_source() {
-        // [T-006] FR-003, BR-002
+    fn decode_bytes_with_utf16be_bom_returns_bom_source() {
+        // FR-003, BR-002
         // UTF-16 BE BOM (FE FF) followed by "AB" in UTF-16 BE
         let bytes: &[u8] = &[
             0xFE, 0xFF, // BOM
@@ -299,7 +299,7 @@ mod tests {
         );
     }
 
-    // ── T-007: Bytes invalid in the specified encoding produce NonUtf8 error ──
+    // ── Bytes invalid in the specified encoding produce NonUtf8 error ──
     // Spec Evolution: original design tested auto-detect failure, but chardetng always
     // falls back to windows-1252 which encoding_rs decodes without errors (maps undefined
     // bytes to C1 control characters, not U+FFFD). The NonUtf8 path is reliably reached
@@ -307,8 +307,8 @@ mod tests {
 
     /// [T-GE007] decode_bytes returns NonUtf8 with --encoding hint when explicit encoding fails
     #[test]
-    fn t_007_decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
-        // [T-007] FR-002 (bytes invalid for specified encoding → NonUtf8 with retry hint)
+    fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
+        // FR-002: bytes invalid for specified encoding → NonUtf8 with retry hint
         // 0x83 is a valid Shift_JIS lead byte; 0x3F ('?') is NOT a valid trail byte
         // (trail must be 0x40-0x7E or 0x80-0xFC; 0x3F < 0x40).
         // Every pair is an invalid Shift_JIS 2-byte sequence → had_errors=true.
@@ -331,12 +331,12 @@ mod tests {
         );
     }
 
-    // ── T-008: Binary file (null bytes) returns NonUtf8 error ──
+    // ── Binary file (null bytes) returns NonUtf8 error ──
 
     /// [T-GE008] decode_bytes treats null-byte content as binary and returns NonUtf8 error
     #[test]
-    fn t_008_decode_bytes_with_null_bytes_returns_non_utf8_error() {
-        // [T-008] Binary heuristic: null bytes indicate non-text content
+    fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
+        // Binary heuristic: null bytes indicate non-text content
         // chardetng would otherwise guess windows-1252 and return Detected with garbage text
         let bytes: &[u8] = &[0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00];
 
@@ -354,12 +354,12 @@ mod tests {
         );
     }
 
-    // ── T-009: Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
+    // ── Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
 
     /// [T-GE009] decode_bytes rejects non-NUL random bytes that chardetng would guess as single-byte encoding
     #[test]
-    fn t_009_decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
-        // [T-009] Single-byte encoding guard: chardetng can return windows-1251, windows-1252,
+    fn decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
+        // Single-byte encoding guard: chardetng can return windows-1251, windows-1252,
         // or other single-byte encodings for arbitrary non-NUL bytes. Those encodings accept
         // every byte without error, so `had_errors == false` is meaningless as a quality signal.
         // The `is_reliable_detection` guard must reject single-byte encodings and fall through
@@ -390,14 +390,14 @@ mod tests {
         );
     }
 
-    // ── T-011: NonUtf8 maps to exit code 1 (user_error) ──
+    // ── NonUtf8 Display output ──
     // Note: This test validates the error variant exists and its Display output.
-    // The ScoutError mapping test belongs in tools/errors.rs (Phase 2).
+    // The ScoutError mapping test belongs in tools/errors.rs.
 
     /// [T-GE010] GitHubError::NonUtf8 Display output contains the inner descriptive message
     #[test]
-    fn t_011_non_utf8_error_contains_descriptive_message() {
-        // [T-011] FR-011
+    fn non_utf8_error_contains_descriptive_message() {
+        // FR-011
         let err = GitHubError::NonUtf8("shift_jis not forced".into());
         let msg = err.to_string();
         assert!(
@@ -406,12 +406,12 @@ mod tests {
         );
     }
 
-    // ── T-012: Decode (base64) error remains distinct ──
+    // ── Decode (base64) error remains distinct ──
 
     /// [T-GE011] GitHubError::Decode and NonUtf8 variants produce distinct Display output
     #[test]
-    fn t_012_decode_error_is_distinct_from_non_utf8() {
-        // [T-012] FR-012
+    fn decode_error_is_distinct_from_non_utf8() {
+        // FR-012
         let decode_err = GitHubError::Decode("bad base64".into());
         let non_utf8_err = GitHubError::NonUtf8("encoding failed".into());
 
