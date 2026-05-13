@@ -8,6 +8,8 @@ This directory contains important decisions about the project's architecture.
 |--------|-------|--------|------|
 | [0001](0001-ssrf-defense-architecture-and-fetchrs-module-structure.md) | SSRF Defense Architecture and fetch.rs Module Structure | accepted | 2026-05-13 |
 | [0002](0002-adopt-sysexitsh-exit-code-convention-for-cli.md) | Adopt sysexits.h Exit Code Convention for CLI | accepted | 2026-05-13 |
+| [0003](0003-error-classification-contract-for-sysexits-and-json-output.md) | Error Classification Contract for sysexits and JSON Output | accepted | 2026-05-13 |
+| [0004](0004-github-client-behavioral-limits.md) | GitHub Client Behavioral Limits | accepted | 2026-05-13 |
 
 ## By Status
 
@@ -15,6 +17,8 @@ This directory contains important decisions about the project's architecture.
 
 - **0001**: SSRF Defense Architecture and fetch.rs Module Structure
 - **0002**: Adopt sysexits.h Exit Code Convention for CLI
+- **0003**: Error Classification Contract for sysexits and JSON Output
+- **0004**: GitHub Client Behavioral Limits
 
 ## About MADR Format
 
