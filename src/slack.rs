@@ -271,6 +271,12 @@ impl SlackClient {
         }
     }
 
+    /// Slack `users.info` per-ID fetch via `join_all`.
+    ///
+    /// No concurrency cap because Slack Tier-4 allows 50+ req/min and a single
+    /// thread rarely has more than ~20 unique users. Sustained violation would
+    /// require a thread with hundreds of participants. If that becomes a real
+    /// case, switch to `buffer_unordered` with an explicit cap.
     async fn prefetch_users(&self, ids: &HashSet<String>) -> HashMap<String, String> {
         let ids: Vec<String> = ids.iter().cloned().collect();
         let futs = ids.iter().map(|id| self.fetch_user_name(id));
