@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
-use crate::envelope::ErrorCode;
+use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
 use crate::gemini::client::GeminiError;
 use crate::github;
@@ -284,16 +284,22 @@ impl From<GeminiError> for ScoutError {
     }
 }
 
-pub(super) fn unwrap_or_note<T>(
+/// Unwrap a `Result<Vec<T>, GitHubError>` returning the value on success, or
+/// push a degradation entry (paired `notes` message + typed `reason`) on
+/// failure and return an empty vec. Per ADR-0003, callers supply only the
+/// typed `reason`; the human-readable label is derived from the variant via
+/// [`DegradedReason::label`] so the `(label, reason)` pair stays in sync.
+pub(super) fn unwrap_or_degraded<T>(
     result: Result<Vec<T>, github::GitHubError>,
-    label: &str,
-    notes: &mut Vec<String>,
+    reason: DegradedReason,
+    degradation: &mut Degradation,
 ) -> Vec<T> {
     match result {
         Ok(v) => v,
         Err(e) => {
+            let label = reason.label();
             warn!(%e, "failed to fetch {}", label);
-            notes.push(format!("Could not fetch {label} ({e})"));
+            degradation.push(format!("Could not fetch {label} ({e})"), reason);
             vec![]
         }
     }

@@ -114,6 +114,7 @@ fn render_json_success(output: CommandOutput) -> String {
         data: output.data,
         degraded: output.degraded,
         notes: output.notes,
+        degraded_reasons: output.degraded_reasons,
     };
     serde_json::to_string(&envelope).expect("envelope is Serialize")
 }

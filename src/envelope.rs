@@ -1,10 +1,78 @@
-//! Output envelopes per ADR-0065 (scout JSON output schema).
+//! Output envelopes per ADR-0065 (scout JSON output schema) and ADR-0003
+//! (degraded_reasons typed enum).
 //!
 //! `CommandOutput` is the internal shape produced by each command handler;
 //! `lib::run` then serializes it as Markdown (default) or as a `SuccessEnvelope`
 //! JSON line (when `--json` is set).
 
 use serde::Serialize;
+
+/// Typed reason for a degraded command output (partial failure) per ADR-0003.
+/// Exposed under `degraded_reasons` in JSON output so callers can detect
+/// specific failure modes programmatically rather than parsing free-form notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum DegradedReason {
+    IssuesFetchFailed,
+    PullsFetchFailed,
+    ReleasesFetchFailed,
+    ReadmeFetchFailed,
+    ReadmeBlobFetchFailed,
+    ReadmeDecodeFailed,
+    UrlFetchFailed,
+    ReadabilityFallback,
+}
+
+impl DegradedReason {
+    /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
+    /// to build the `"Could not fetch {label} ({e})"` message. Only the three
+    /// `*FetchFailed` variants that flow through that helper get a meaningful
+    /// label; other variants build bespoke messages at their callsite.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::IssuesFetchFailed => "issues",
+            Self::PullsFetchFailed => "pull requests",
+            Self::ReleasesFetchFailed => "releases",
+            Self::ReadmeFetchFailed
+            | Self::ReadmeBlobFetchFailed
+            | Self::ReadmeDecodeFailed
+            | Self::UrlFetchFailed
+            | Self::ReadabilityFallback => "resource",
+        }
+    }
+}
+
+/// Bundle of human-readable notes and typed reasons collected during a
+/// degraded command path. The `(notes[i], reasons[i])` pairing invariant is
+/// enforced by making the fields private and exposing [`Degradation::push`]
+/// as the sole mutator.
+#[derive(Debug, Default)]
+pub(crate) struct Degradation {
+    notes: Vec<String>,
+    reasons: Vec<DegradedReason>,
+}
+
+impl Degradation {
+    /// Push a human-readable message paired with its typed reason.
+    pub fn push(&mut self, message: String, reason: DegradedReason) {
+        self.notes.push(message);
+        self.reasons.push(reason);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.notes.is_empty() && self.reasons.is_empty()
+    }
+
+    /// Read access to the human-readable notes for Markdown rendering.
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    /// Consume and return the underlying vectors.
+    pub fn into_parts(self) -> (Vec<String>, Vec<DegradedReason>) {
+        (self.notes, self.reasons)
+    }
+}
 
 /// Internal command output: holds both the Markdown rendering and the
 /// structured `data` payload, plus degradation signals. Each handler builds
@@ -14,27 +82,36 @@ pub(crate) struct CommandOutput {
     pub markdown: String,
     pub data: serde_json::Value,
     pub notes: Vec<String>,
+    pub degraded_reasons: Vec<DegradedReason>,
     pub degraded: bool,
 }
 
 impl CommandOutput {
-    /// Construct an output with no degradation signal (notes empty, degraded=false).
+    /// Construct an output with no degradation signal.
     pub fn ok(markdown: String, data: serde_json::Value) -> Self {
         Self {
             markdown,
             data,
             notes: Vec::new(),
+            degraded_reasons: Vec::new(),
             degraded: false,
         }
     }
 
-    /// Construct an output with degradation notes; `degraded` is set iff `notes` is non-empty.
-    pub fn with_notes(markdown: String, data: serde_json::Value, notes: Vec<String>) -> Self {
-        let degraded = !notes.is_empty();
+    /// Construct an output from a [`Degradation`] bundle. `degraded` is set
+    /// when either `notes` or `reasons` is non-empty.
+    pub fn with_degradation(
+        markdown: String,
+        data: serde_json::Value,
+        degradation: Degradation,
+    ) -> Self {
+        let degraded = !degradation.is_empty();
+        let (notes, degraded_reasons) = degradation.into_parts();
         Self {
             markdown,
             data,
             notes,
+            degraded_reasons,
             degraded,
         }
     }
@@ -66,12 +143,15 @@ impl ErrorCode {
     }
 }
 
-/// Success envelope wrapping command output per ADR-0065.
+/// Success envelope wrapping command output per ADR-0065. ADR-0003 added
+/// `degraded_reasons` as an additive field (omitted from JSON when empty).
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
     pub data: serde_json::Value,
     pub degraded: bool,
     pub notes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded_reasons: Vec<DegradedReason>,
 }
 
 /// Error envelope per ADR-0065. Wraps the payload under an `error` key so
@@ -182,6 +262,7 @@ mod tests {
             data: serde_json::json!({"markdown": "hello"}),
             degraded: false,
             notes: vec![],
+            degraded_reasons: vec![],
         };
         let json = serde_json::to_string(&env).unwrap();
         assert!(
@@ -190,6 +271,10 @@ mod tests {
         );
         assert!(json.contains(r#""degraded":false"#), "got: {json}");
         assert!(json.contains(r#""notes":[]"#), "got: {json}");
+        assert!(
+            !json.contains("degraded_reasons"),
+            "degraded_reasons should be omitted when empty per ADR-0003, got: {json}"
+        );
     }
 
     /// [T-EN006] SuccessEnvelope surfaces degraded=true with notes
@@ -199,6 +284,7 @@ mod tests {
             data: serde_json::json!(null),
             degraded: true,
             notes: vec![String::from("Could not fetch contributors")],
+            degraded_reasons: vec![],
         };
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains(r#""degraded":true"#), "got: {json}");
@@ -215,27 +301,37 @@ mod tests {
         assert_eq!(out.markdown, "md");
         assert_eq!(out.data, serde_json::json!({"a": 1}));
         assert!(out.notes.is_empty());
+        assert!(out.degraded_reasons.is_empty());
         assert!(!out.degraded);
     }
 
-    /// [T-EN008] CommandOutput::with_notes sets degraded=true when notes non-empty
+    /// [T-EN008] CommandOutput::with_degradation sets degraded=true when degradation non-empty
     #[test]
-    fn command_output_with_notes_is_degraded() {
-        let out = CommandOutput::with_notes(
-            String::from("md"),
-            serde_json::Value::Null,
-            vec![String::from("partial fetch")],
+    fn command_output_with_degradation_is_degraded() {
+        let mut deg = Degradation::default();
+        deg.push(
+            String::from("partial fetch"),
+            DegradedReason::IssuesFetchFailed,
         );
+        let out = CommandOutput::with_degradation(String::from("md"), serde_json::Value::Null, deg);
         assert!(out.degraded);
         assert_eq!(out.notes, vec!["partial fetch"]);
+        assert_eq!(
+            out.degraded_reasons,
+            vec![DegradedReason::IssuesFetchFailed]
+        );
     }
 
-    /// [T-EN009] CommandOutput::with_notes sets degraded=false when notes empty
+    /// [T-EN009] CommandOutput::with_degradation sets degraded=false when degradation empty
     #[test]
-    fn command_output_with_empty_notes_is_not_degraded() {
-        let out =
-            CommandOutput::with_notes(String::from("md"), serde_json::Value::Null, Vec::new());
+    fn command_output_with_empty_degradation_is_not_degraded() {
+        let out = CommandOutput::with_degradation(
+            String::from("md"),
+            serde_json::Value::Null,
+            Degradation::default(),
+        );
         assert!(!out.degraded);
+        assert!(out.degraded_reasons.is_empty());
     }
 
     /// [T-EN010] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
@@ -255,5 +351,79 @@ mod tests {
                 "code {code:?} should serialize as {expected}"
             );
         }
+    }
+
+    /// [T-EN011] DegradedReason serializes per ADR-0003 SCREAMING_SNAKE_CASE
+    #[test]
+    fn degraded_reason_serializes_screaming_snake_case() {
+        let pairs = [
+            (
+                DegradedReason::IssuesFetchFailed,
+                r#""ISSUES_FETCH_FAILED""#,
+            ),
+            (DegradedReason::PullsFetchFailed, r#""PULLS_FETCH_FAILED""#),
+            (
+                DegradedReason::ReleasesFetchFailed,
+                r#""RELEASES_FETCH_FAILED""#,
+            ),
+            (
+                DegradedReason::ReadmeFetchFailed,
+                r#""README_FETCH_FAILED""#,
+            ),
+            (
+                DegradedReason::ReadmeBlobFetchFailed,
+                r#""README_BLOB_FETCH_FAILED""#,
+            ),
+            (
+                DegradedReason::ReadmeDecodeFailed,
+                r#""README_DECODE_FAILED""#,
+            ),
+            (DegradedReason::UrlFetchFailed, r#""URL_FETCH_FAILED""#),
+            (
+                DegradedReason::ReadabilityFallback,
+                r#""READABILITY_FALLBACK""#,
+            ),
+        ];
+        for (reason, expected) in pairs {
+            let actual = serde_json::to_string(&reason).unwrap();
+            assert_eq!(
+                actual, expected,
+                "reason {reason:?} should serialize as {expected}"
+            );
+        }
+    }
+
+    /// [T-EN012] Degradation::push pairs notes and reasons in order
+    #[test]
+    fn degradation_push_pairs_notes_and_reasons() {
+        let mut deg = Degradation::default();
+        deg.push(String::from("first"), DegradedReason::IssuesFetchFailed);
+        deg.push(String::from("second"), DegradedReason::PullsFetchFailed);
+        assert!(!deg.is_empty());
+        let (notes, reasons) = deg.into_parts();
+        assert_eq!(notes, vec!["first", "second"]);
+        assert_eq!(
+            reasons,
+            vec![
+                DegradedReason::IssuesFetchFailed,
+                DegradedReason::PullsFetchFailed,
+            ]
+        );
+    }
+
+    /// [T-EN013] SuccessEnvelope includes degraded_reasons when non-empty
+    #[test]
+    fn success_envelope_surfaces_degraded_reasons() {
+        let env = SuccessEnvelope {
+            data: serde_json::json!(null),
+            degraded: true,
+            notes: vec![String::from("Could not fetch issues")],
+            degraded_reasons: vec![DegradedReason::IssuesFetchFailed],
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            json.contains(r#""degraded_reasons":["ISSUES_FETCH_FAILED"]"#),
+            "got: {json}"
+        );
     }
 }

@@ -53,6 +53,10 @@ Chosen option: Option A, because public CLI contract として一貫した class
 * silent log-only fallback (`unwrap_or_note` 系) は廃止
 
 > **Note (2026-05-13, post-implementation audit)**: `degraded: bool` field は本 ADR 起票前から `src/envelope.rs` に既存。本 ADR は既存 behavior を canonical contract として formalize し、残り (`DegradedReason` typed enum + `unwrap_or_note` → `unwrap_or_degraded` refactor + JSON schema 拡張) を follow-up scope として明示する。
+>
+> **Note (2026-05-13, follow-up implementation)**: 残り scope を additive route で実装完了。実装した variants は callsite から逆算した 8 種類 (`IssuesFetchFailed`, `PullsFetchFailed`, `ReleasesFetchFailed`, `ReadmeFetchFailed`, `ReadmeBlobFetchFailed`, `ReadmeDecodeFailed`, `UrlFetchFailed`, `ReadabilityFallback`)。当初挙げた `ReadmeMissing` は `resolve_readme` 実装が 404 を silent 扱い (notes 追加なし) としていたため variant 化せず、README 系は failure mode で 3 種に分割。JSON schema 変更は additive (`degraded_reasons` field を `skip_serializing_if = "Vec::is_empty"` で追加) なので Cargo `version = "1.0.0"` → `"1.1.0"` の minor bump。既存 caller (`notes` の `Vec<String>` 構造を見る) は無影響。
+>
+> **README 404 silent の意図的選択**: 「README が存在しない repo」は scout として degraded ではない (overview は他フィールドだけで成立)。404 を silent にすることで `degraded` flag を「abnormal なときだけ立てる」契約に保つ。代わりに JSON consumer は `data.readme` が null か否かで「README の有無」を直接判別可能 (404 と fetch error の区別は `degraded_reasons` の `ReadmeFetchFailed` の有無で行う)。403 等の non-404 4xx は `ReadmeFetchFailed` で集約しており、status code 別の細分は当面 scope 外。
 
 ### Consequences
 
