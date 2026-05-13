@@ -67,6 +67,9 @@ pub(crate) enum GitHubError {
     #[error("Invalid glob pattern: {0}")]
     InvalidPattern(String),
 
+    #[error("per_page must be <= 100 (GitHub API limit), got {0}")]
+    InvalidPerPage(u8),
+
     #[error("Content decode error: {0}")]
     Decode(String),
 
@@ -151,17 +154,30 @@ impl GitHubClient {
                 Err(GitHubError::RateLimited { retry_after })
             }
             403 => {
+                // ADR-0004 Rule 1: 403 + missing `x-ratelimit-remaining` defaults to
+                // RateLimited (retry) because GitHub does not guarantee this header
+                // on all 403 responses (e.g., secondary rate limits). Only treat as
+                // Forbidden when the header is present and remaining > 0 (genuine
+                // auth misconfig).
                 let remaining = response
                     .headers()
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
                 let retry_after = secs_until_ratelimit_reset(response.headers());
-                if remaining == Some(0) {
-                    Err(GitHubError::RateLimited { retry_after })
-                } else {
-                    let message = extract_error_message(&response.text().await.unwrap_or_default());
-                    Err(GitHubError::Forbidden(message))
+                match remaining {
+                    Some(r) if r > 0 => {
+                        let message =
+                            extract_error_message(&response.text().await.unwrap_or_default());
+                        Err(GitHubError::Forbidden(message))
+                    }
+                    _ => {
+                        warn!(
+                            retry_after_secs = retry_after,
+                            "GitHub 403 with missing or zero rate-limit-remaining, treating as RateLimited (ADR-0004)"
+                        );
+                        Err(GitHubError::RateLimited { retry_after })
+                    }
                 }
             }
             _ => {
@@ -236,7 +252,7 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<IssueInfo>, GitHubError> {
-        let per_page = per_page.min(100);
+        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -249,7 +265,7 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<PullInfo>, GitHubError> {
-        let per_page = per_page.min(100);
+        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -262,11 +278,24 @@ impl GitHubClient {
         repo: &str,
         per_page: u8,
     ) -> Result<Vec<ReleaseInfo>, GitHubError> {
-        let per_page = per_page.min(100);
+        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/releases?per_page={per_page}"
         ))
         .await
+    }
+}
+
+/// ADR-0004 Rule 2: per_page > 100 returns explicit error rather than silent
+/// clamp. GitHub API caps per_page at 100; previously the code did
+/// `per_page.min(100)` silently, returning fewer results than requested with
+/// no diagnostic. Now callers receive `GitHubError::InvalidPerPage` (mapped
+/// to `data_error`, exit 65) and can correct the input.
+fn validate_per_page(per_page: u8) -> Result<(), GitHubError> {
+    if per_page > 100 {
+        Err(GitHubError::InvalidPerPage(per_page))
+    } else {
+        Ok(())
     }
 }
 
@@ -435,6 +464,41 @@ mod http_tests {
         let client = GitHubClient::with_base_url(Client::new(), &server.uri());
         let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
         assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
+    }
+
+    /// [T-GH010] 403 without x-ratelimit-remaining header maps to RateLimited (ADR-0004 Rule 1)
+    #[tokio::test]
+    async fn get_json_403_with_missing_remaining_returns_rate_limited() {
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"message": "secondary rate limit"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+        let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
+        assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
+    }
+
+    /// [T-GH011] validate_per_page rejects values over 100 (ADR-0004 Rule 2)
+    #[test]
+    fn validate_per_page_rejects_over_100() {
+        assert!(matches!(
+            super::validate_per_page(101),
+            Err(GitHubError::InvalidPerPage(101))
+        ));
+        assert!(matches!(
+            super::validate_per_page(255),
+            Err(GitHubError::InvalidPerPage(255))
+        ));
+        assert!(super::validate_per_page(100).is_ok());
+        assert!(super::validate_per_page(1).is_ok());
     }
 
     /// [T-GH005] resolve_token_with reads token from GITHUB_TOKEN env var

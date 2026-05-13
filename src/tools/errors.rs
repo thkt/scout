@@ -152,6 +152,10 @@ impl From<github::GitHubError> for ScoutError {
                 .with_next_step("Use format like '1-80', '50-', or '100' (first N lines)"),
             github::GitHubError::InvalidPattern(_) => Self::data_error(e.to_string())
                 .with_next_step("Use a glob pattern like '*.rs' or '*.{ts,tsx}'"),
+            github::GitHubError::InvalidPerPage(_) => Self::data_error(e.to_string())
+                .with_next_step(
+                    "GitHub API limits per_page to 100; pass a value between 1 and 100",
+                ),
             github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
                 .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
             github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())

@@ -174,10 +174,11 @@ pub(crate) fn filter_tree_entries<'a>(
             })
         })
         .filter(|e| {
-            matcher.as_ref().is_none_or(|m| {
-                let filename = e.path.rsplit('/').next().unwrap_or(&e.path);
-                m.is_match(filename)
-            })
+            // ADR-0004 Rule 3: glob matches against the full repo-relative path
+            // (e.g., `src/*.rs` matches `src/main.rs`). Previously matched only
+            // the filename component, causing path-scoped patterns to silently
+            // produce zero results.
+            matcher.as_ref().is_none_or(|m| m.is_match(&e.path))
         })
         .collect())
 }
@@ -433,6 +434,21 @@ mod tests {
         let filtered = filter_tree_entries(&entries, None, Some("*.rs")).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].path, "src/main.rs");
+    }
+
+    /// [T-GHH023] filter_tree_entries glob matches against full repo-relative path (ADR-0004 Rule 3)
+    #[test]
+    fn filter_by_glob_matches_full_path() {
+        let entries = vec![
+            blob("src/main.rs"),
+            blob("tests/integration.rs"),
+            blob("src/lib.rs"),
+        ];
+        let filtered = filter_tree_entries(&entries, None, Some("src/*.rs")).unwrap();
+        assert_eq!(filtered.len(), 2);
+        let paths: Vec<&str> = filtered.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/main.rs"));
+        assert!(paths.contains(&"src/lib.rs"));
     }
 
     /// [T-GHH021] filter_tree_entries excludes directory tree entries
