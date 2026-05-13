@@ -1,0 +1,15 @@
+rules:
+  artipacked:
+    ignore:
+      # update-homebrew job requires HOMEBREW_TAP_TOKEN to be persisted for git push
+      - release.yml:122
+  cache-poisoning:
+    ignore:
+      # Swatinem/rust-cache in build job; release workflow runs on tag push only,
+      # no PR-driven cache injection path exists for poisoning to reach release artifacts
+      - release.yml:47
+  superfluous-actions:
+    ignore:
+      # softprops/action-gh-release retained for generate_release_notes feature
+      # which gh CLI does not provide equivalently in script step
+      - release.yml:109
