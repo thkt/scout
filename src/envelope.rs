@@ -52,7 +52,9 @@ pub(crate) enum ErrorCode {
 }
 
 impl ErrorCode {
-    /// sysexits.h exit code mapped 1:1 from `error.code` per ADR-0065.
+    /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
+    /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
+    /// governed by ADR-0065 (dotclaude) until a scout-local ADR captures it.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE

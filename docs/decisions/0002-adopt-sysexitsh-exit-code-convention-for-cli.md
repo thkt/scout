@@ -85,6 +85,12 @@ scout 独自の意味づけ (例: 10 = network, 20 = parse, 30 = auth)。
 
 ## More Information
 
+### Supersedes (sysexits portion)
+
+This ADR supersedes the **sysexits portion** of `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta ADR). The exit-code mapping table (64/65/66/74/75) was originally defined there as part of the agent-friendly CLI policy (ADR-0060 → ADR-0065 chain). It is now scout-local under this ADR.
+
+The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mode, error envelope structure) is **not** included in this ADR and remains active in ADR-0065 until a scout-local ADR is promoted to capture it. Until then, code that maps `ErrorCode` → exit code is governed by this ADR; code that maps domain errors → `ErrorCode` JSON tags is governed by ADR-0065.
+
 ### 採用 code 詳細
 
 | Code | 利用箇所 (例)                       |
