@@ -15,13 +15,13 @@ use tokio::sync::OnceCell;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
-use errors::{parse_repo_param, unwrap_or_note};
+use errors::{parse_repo_param, unwrap_or_degraded};
 use params::{
     FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
     resolve_input,
 };
 
-use crate::envelope::CommandOutput;
+use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
 use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
@@ -247,14 +247,16 @@ impl Scout {
         info!(url = %url, "fetch complete");
         let markdown = format_fetch_output(&result);
         let data = serde_json::to_value(&result).expect("FetchResult is Serialize");
-        let notes = if result.used_raw_fallback {
-            vec![String::from(
-                "Readability extraction failed; raw page conversion was used instead.",
-            )]
-        } else {
-            Vec::new()
-        };
-        Ok(CommandOutput::with_notes(markdown, data, notes))
+        let mut degradation = Degradation::default();
+        if result.used_raw_fallback {
+            degradation.push(
+                String::from(
+                    "Readability extraction failed; raw page conversion was used instead.",
+                ),
+                DegradedReason::ReadabilityFallback,
+            );
+        }
+        Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
@@ -306,11 +308,13 @@ impl Scout {
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query.clone()));
         }
-        let mut notes: Vec<String> = report
-            .failed_urls
-            .iter()
-            .map(|f| format!("Failed to fetch {}: {}", f.url, f.reason))
-            .collect();
+        let mut degradation = Degradation::default();
+        for f in &report.failed_urls {
+            degradation.push(
+                format!("Failed to fetch {}: {}", f.url, f.reason),
+                DegradedReason::UrlFetchFailed,
+            );
+        }
         let raw_fallback_pages: Vec<&str> = report
             .fetched_pages
             .iter()
@@ -318,12 +322,15 @@ impl Scout {
             .map(|p| p.url.as_str())
             .collect();
         if !raw_fallback_pages.is_empty() {
-            notes.push(format!(
-                "Readability extraction failed for: {}",
-                raw_fallback_pages.join(", ")
-            ));
+            degradation.push(
+                format!(
+                    "Readability extraction failed for: {}",
+                    raw_fallback_pages.join(", ")
+                ),
+                DegradedReason::ReadabilityFallback,
+            );
         }
-        Ok(CommandOutput::with_notes(markdown, data, notes))
+        Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
     async fn repo_tree(&self, params: RepoTreeParams) -> Result<CommandOutput, ScoutError> {
@@ -470,11 +477,16 @@ impl Scout {
             github.get_releases(owner, repo, OVERVIEW_RELEASES),
         );
 
-        let mut notes = Vec::new();
-        let readme_content = resolve_readme(github, owner, repo, readme, &mut notes).await;
-        let issues = unwrap_or_note(issues, "issues", &mut notes);
-        let pulls = unwrap_or_note(pulls, "pull requests", &mut notes);
-        let releases = unwrap_or_note(releases, "releases", &mut notes);
+        let mut degradation = Degradation::default();
+        let readme_content = resolve_readme(github, owner, repo, readme, &mut degradation).await;
+        let issues =
+            unwrap_or_degraded(issues, DegradedReason::IssuesFetchFailed, &mut degradation);
+        let pulls = unwrap_or_degraded(pulls, DegradedReason::PullsFetchFailed, &mut degradation);
+        let releases = unwrap_or_degraded(
+            releases,
+            DegradedReason::ReleasesFetchFailed,
+            &mut degradation,
+        );
 
         let mut markdown = github::format::format_overview(
             &repo_info,
@@ -484,9 +496,9 @@ impl Scout {
             &releases,
         );
 
-        if !notes.is_empty() {
+        if !degradation.is_empty() {
             markdown.push_str("\n> **Note:** ");
-            markdown.push_str(&notes.join(". "));
+            markdown.push_str(&degradation.notes().join(". "));
             markdown.push_str(".\n");
         }
 
@@ -509,7 +521,7 @@ impl Scout {
             has_readme = readme_content.is_some(),
             "repo_overview complete"
         );
-        Ok(CommandOutput::with_notes(markdown, data, notes))
+        Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 }
 
@@ -571,14 +583,17 @@ async fn resolve_readme(
     owner: &str,
     repo: &str,
     readme: Result<ContentsResponse, github::GitHubError>,
-    notes: &mut Vec<String>,
+    degradation: &mut Degradation,
 ) -> Option<String> {
     let entry = match readme {
         Ok(r) => Some(r),
         Err(e) => {
             if !matches!(e, github::GitHubError::NotFound(_)) {
                 warn!(%e, "failed to fetch README");
-                notes.push(format!("Could not fetch README ({e})"));
+                degradation.push(
+                    format!("Could not fetch README ({e})"),
+                    DegradedReason::ReadmeFetchFailed,
+                );
             }
             None
         }
@@ -591,7 +606,10 @@ async fn resolve_readme(
             Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
             Err(e) => {
                 warn!(%e, "failed to fetch README blob");
-                notes.push(format!("README could not be fetched ({e})"));
+                degradation.push(
+                    format!("README could not be fetched ({e})"),
+                    DegradedReason::ReadmeBlobFetchFailed,
+                );
                 None
             }
         },
@@ -601,7 +619,10 @@ async fn resolve_readme(
         Ok(result) => Some(result.text),
         Err(e) => {
             warn!(%e, "failed to decode README");
-            notes.push(format!("README could not be decoded ({e})"));
+            degradation.push(
+                format!("README could not be decoded ({e})"),
+                DegradedReason::ReadmeDecodeFailed,
+            );
             None
         }
     })
