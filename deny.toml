@@ -4,6 +4,9 @@ ignore = []
 
 [licenses]
 version = 2
+# Policy: OSI permissive (MIT/Apache/BSD/ISC/0BSD/Zlib/Unlicense) + weak copyleft (MPL-2.0)
+# + public-domain-equivalent (CDLA-Permissive-2.0) + Boost (BSL-1.0) + Unicode-3.0.
+# Strong copyleft (GPL/AGPL/LGPL) is implicitly rejected by omission.
 allow = [
     "MIT",
     "Apache-2.0",

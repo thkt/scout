@@ -88,19 +88,19 @@ impl ScoutError {
         }
     }
 
-    /// Attach a recovery hint to this error per ADR-0065 `error.next_step`.
+    /// Attach a recovery hint to this error per ADR-0002 `error.next_step`.
     pub(super) fn with_next_step(mut self, hint: impl Into<String>) -> Self {
         self.next_step = Some(hint.into());
         self
     }
 
-    /// Attach correction candidates per ADR-0065 `error.candidates` (e.g., typo suggestions).
+    /// Attach correction candidates per ADR-0002 `error.candidates` (e.g., typo suggestions).
     pub(super) fn with_candidates(mut self, candidates: Vec<String>) -> Self {
         self.candidates = candidates;
         self
     }
 
-    /// sysexits.h exit code derived from `kind` per ADR-0065.
+    /// sysexits.h exit code derived from `kind` per ADR-0002.
     pub fn exit_code(&self) -> u8 {
         self.kind.exit_code()
     }
@@ -109,7 +109,7 @@ impl ScoutError {
         self.retryable
     }
 
-    /// JSON-serializable error classification per ADR-0065.
+    /// JSON-serializable error classification per ADR-0002.
     pub fn error_kind(&self) -> ErrorCode {
         self.kind
     }
@@ -120,12 +120,12 @@ impl ScoutError {
         &self.message
     }
 
-    /// Recovery hint per ADR-0065 `error.next_step`.
+    /// Recovery hint per ADR-0002 `error.next_step`.
     pub fn next_step(&self) -> Option<&str> {
         self.next_step.as_deref()
     }
 
-    /// Correction candidates per ADR-0065 `error.candidates` (e.g., similar paths after typo).
+    /// Correction candidates per ADR-0002 `error.candidates` (e.g., similar paths after typo).
     pub fn candidates(&self) -> &[String] {
         &self.candidates
     }
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::NotFound);
     }
 
-    /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0065)
+    /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0002)
     #[test]
     fn usage_errors_have_exit_code_64() {
         let cases: Vec<ScoutError> = vec![
@@ -455,7 +455,7 @@ mod tests {
         }
     }
 
-    /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0065)
+    /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002)
     #[test]
     fn data_errors_have_exit_code_65() {
         let cases: Vec<ScoutError> = vec![
@@ -475,7 +475,7 @@ mod tests {
         }
     }
 
-    /// [T-ER001c] NotFound errors surface with exit 66 (EX_NOINPUT per ADR-0065)
+    /// [T-ER001c] NotFound errors surface with exit 66 (EX_NOINPUT per ADR-0002)
     #[test]
     fn not_found_errors_have_exit_code_66() {
         let cases: Vec<ScoutError> = vec![

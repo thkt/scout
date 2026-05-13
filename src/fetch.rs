@@ -368,6 +368,15 @@ fn build_launch_args() -> Vec<&'static str> {
     ]
 }
 
+/// SSRF check for a browser-initiated subrequest URL (CDP `Fetch.RequestPaused`).
+///
+/// Scheme handling rationale:
+/// - `http`/`https`: passed directly to `ssrf::ssrf_check`
+/// - `ws`/`wss`: WebSocket can reach internal services; rewritten to http(s) for SSRF allowlist check
+/// - `data:`/`about:`/`chrome:`/`blob:`: synthetic browser schemes with no external egress, allowed without SSRF check
+/// - Unrecognized scheme: blocked (warn + return false) because the scheme cannot be classified
+///
+/// See ADR-0001 for the SSRF defense architecture.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -526,6 +535,11 @@ fn resolve_browser_binary_from(
 }
 
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
+///
+/// `reqwest::redirect::Policy::limited(n)` is not acceptable: it follows
+/// redirects before the application can re-check the resolved URL against
+/// the SSRF allowlist. Manual per-hop validation is the only way to enforce
+/// the SSRF contract. See ADR-0001 for the contract details.
 async fn download(
     client: &Client,
     url: &str,

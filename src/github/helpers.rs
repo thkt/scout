@@ -6,7 +6,12 @@ use super::encoding::DecodeResult;
 use super::types::{EntryType, TreeEntry};
 
 /// Characters to percent-encode in URL path segments.
+///
 /// Preserves `/` for path structure but encodes query/fragment delimiters and special chars.
+/// `:` is intentionally NOT in this set because GitHub API paths may legitimately contain
+/// it (e.g., refs in URL form). `validate_ref` separately rejects `:` in ref-only positions
+/// per `git-check-ref-format`. The asymmetry reflects two distinct rule surfaces:
+/// URL path encoding (this set) vs git ref name validation (`validate_ref`).
 const PATH_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'?')

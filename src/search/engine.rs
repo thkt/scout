@@ -128,6 +128,9 @@ async fn fetch_sources(
             };
             (idx, url, result)
         })
+        // Concurrency cap = 5: balances fetch parallelism (faster overall research)
+        // against per-host rate limits (multiple URLs in one query may share an origin).
+        // Adjust if research depth grows or per-host caps change.
         .buffer_unordered(5)
         .collect()
         .await;
