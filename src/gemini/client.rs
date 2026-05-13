@@ -31,6 +31,9 @@ pub(crate) enum GeminiError {
     #[error("API quota exhausted: {0}")]
     QuotaExhausted(String),
 
+    #[error("Permission denied (IAM): {0}")]
+    PermissionDenied(String),
+
     #[error("API error ({code}): {message}")]
     Api { code: u16, message: String },
 
@@ -189,7 +192,25 @@ fn classify_api_error(err: &ApiError, retry_after: Option<u64>) -> GeminiError {
 
     match err.code {
         Some(429) => GeminiError::RateLimited { retry_after },
-        Some(403) => GeminiError::QuotaExhausted(message),
+        Some(403) => {
+            // Google API 403 covers both quota exhaustion (RESOURCE_EXHAUSTED)
+            // and IAM permission errors (PERMISSION_DENIED). Distinguish via
+            // the canonical `status` field; fall back to message heuristic
+            // when status is absent. See ADR-0003 (Error Classification).
+            let is_permission = err
+                .status
+                .as_deref()
+                .map(|s| s == "PERMISSION_DENIED")
+                .unwrap_or_else(|| {
+                    let m = message.to_ascii_lowercase();
+                    m.contains("permission") && m.contains("denied")
+                });
+            if is_permission {
+                GeminiError::PermissionDenied(message)
+            } else {
+                GeminiError::QuotaExhausted(message)
+            }
+        }
         Some(code) => GeminiError::Api { code, message },
         None => GeminiError::Api {
             code: 0,
@@ -208,6 +229,7 @@ mod tests {
         let err = ApiError {
             code: Some(429),
             message: Some("Resource exhausted".into()),
+            status: None,
         };
         assert!(matches!(
             classify_api_error(&err, None),
@@ -221,6 +243,7 @@ mod tests {
         let err = ApiError {
             code: Some(403),
             message: Some("Quota exceeded".into()),
+            status: None,
         };
         assert!(matches!(
             classify_api_error(&err, None),
@@ -234,6 +257,7 @@ mod tests {
         let err = ApiError {
             code: Some(500),
             message: Some("Internal server error".into()),
+            status: None,
         };
         match classify_api_error(&err, None) {
             GeminiError::Api { code, message } => {
@@ -242,6 +266,48 @@ mod tests {
             }
             other => panic!("expected Api error, got: {other:?}"),
         }
+    }
+
+    /// [T-GC010] classify_api_error maps 403 with status=PERMISSION_DENIED to PermissionDenied (ADR-0003)
+    #[test]
+    fn classify_403_permission_denied_via_status() {
+        let err = ApiError {
+            code: Some(403),
+            message: Some("The caller does not have permission".into()),
+            status: Some("PERMISSION_DENIED".into()),
+        };
+        assert!(matches!(
+            classify_api_error(&err, None),
+            GeminiError::PermissionDenied(_)
+        ));
+    }
+
+    /// [T-GC011] classify_api_error maps 403 with status=RESOURCE_EXHAUSTED to QuotaExhausted
+    #[test]
+    fn classify_403_quota_exhausted_via_status() {
+        let err = ApiError {
+            code: Some(403),
+            message: Some("Quota exceeded".into()),
+            status: Some("RESOURCE_EXHAUSTED".into()),
+        };
+        assert!(matches!(
+            classify_api_error(&err, None),
+            GeminiError::QuotaExhausted(_)
+        ));
+    }
+
+    /// [T-GC012] classify_api_error falls back to message heuristic when status is absent
+    #[test]
+    fn classify_403_message_heuristic_for_permission() {
+        let err = ApiError {
+            code: Some(403),
+            message: Some("Permission denied by IAM policy".into()),
+            status: None,
+        };
+        assert!(matches!(
+            classify_api_error(&err, None),
+            GeminiError::PermissionDenied(_)
+        ));
     }
 }
 

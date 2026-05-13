@@ -152,6 +152,10 @@ impl From<github::GitHubError> for ScoutError {
                 .with_next_step("Use format like '1-80', '50-', or '100' (first N lines)"),
             github::GitHubError::InvalidPattern(_) => Self::data_error(e.to_string())
                 .with_next_step("Use a glob pattern like '*.rs' or '*.{ts,tsx}'"),
+            github::GitHubError::InvalidPerPage(_) => Self::data_error(e.to_string())
+                .with_next_step(
+                    "GitHub API limits per_page to 100; pass a value between 1 and 100",
+                ),
             github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
                 .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
             github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
@@ -227,7 +231,21 @@ impl From<SlackError> for ScoutError {
         match &e {
             SlackError::TokenNotSet => Self::user_error(e.to_string())
                 .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
-            SlackError::Api { .. } => Self::user_error(e.to_string()),
+            SlackError::Api { error } => {
+                // ADR-0003: Slack API uses error code strings (not HTTP status)
+                // for API-level failures. Classify by the canonical `error` field
+                // so transient/not-found cases get the correct exit code instead
+                // of a uniform user_error (exit 64).
+                match error.as_str() {
+                    "internal_error" | "service_unavailable" | "fatal_error" => {
+                        Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                    }
+                    "channel_not_found" | "message_not_found" | "thread_not_found" => {
+                        Self::not_found(e.to_string())
+                    }
+                    _ => Self::user_error(e.to_string()),
+                }
+            }
             SlackError::RateLimited { .. } => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
@@ -252,6 +270,9 @@ impl From<GeminiError> for ScoutError {
             }
             GeminiError::QuotaExhausted(_) => Self::user_error(e.to_string())
                 .with_next_step("Check your API billing at https://aistudio.google.com"),
+            GeminiError::PermissionDenied(_) => Self::user_error(e.to_string()).with_next_step(
+                "Check IAM permissions for the Gemini API in your Google Cloud project",
+            ),
             GeminiError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
@@ -431,6 +452,36 @@ mod tests {
     fn fetch_status_404_classifies_as_not_found() {
         let err = ScoutError::from(FetchError::Status(404));
         assert_eq!(err.error_kind(), ErrorCode::NotFound);
+    }
+
+    /// [T-ER020] SlackError::Api with internal_error classifies as TempFailure (ADR-0003)
+    #[test]
+    fn slack_internal_error_classifies_as_temp_failure() {
+        use crate::slack::SlackError;
+        let err = ScoutError::from(SlackError::Api {
+            error: "internal_error".to_owned(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::TempFailure);
+    }
+
+    /// [T-ER021] SlackError::Api with channel_not_found classifies as NotFound (ADR-0003)
+    #[test]
+    fn slack_channel_not_found_classifies_as_not_found() {
+        use crate::slack::SlackError;
+        let err = ScoutError::from(SlackError::Api {
+            error: "channel_not_found".to_owned(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::NotFound);
+    }
+
+    /// [T-ER022] SlackError::Api with other error codes (e.g., invalid_auth) classifies as UsageError
+    #[test]
+    fn slack_other_api_error_classifies_as_usage_error() {
+        use crate::slack::SlackError;
+        let err = ScoutError::from(SlackError::Api {
+            error: "invalid_auth".to_owned(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
     /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0002)

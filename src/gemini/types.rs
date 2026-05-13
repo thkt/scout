@@ -61,6 +61,11 @@ pub(crate) struct WebChunk {
 pub(crate) struct ApiError {
     pub(crate) code: Option<u16>,
     pub(crate) message: Option<String>,
+    /// Google API canonical status string (e.g., "PERMISSION_DENIED",
+    /// "RESOURCE_EXHAUSTED"). Used to distinguish 403 IAM errors from
+    /// 403 quota exhaustion. See `classify_api_error` and ADR-0003.
+    #[serde(default)]
+    pub(crate) status: Option<String>,
 }
 
 /// LLM answer with grounding sources from Google Search.
