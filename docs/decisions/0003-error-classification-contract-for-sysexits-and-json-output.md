@@ -52,6 +52,8 @@ Chosen option: Option A, because public CLI contract として一貫した class
 * `DegradedReason` は `ReadmeMissing`, `IssuesFetchFailed`, `PullsFetchFailed`, `ReleasesFetchFailed` 等 enum で typed
 * silent log-only fallback (`unwrap_or_note` 系) は廃止
 
+> **Note (2026-05-13, post-implementation audit)**: `degraded: bool` field は本 ADR 起票前から `src/envelope.rs` に既存。本 ADR は既存 behavior を canonical contract として formalize し、残り (`DegradedReason` typed enum + `unwrap_or_note` → `unwrap_or_degraded` refactor + JSON schema 拡張) を follow-up scope として明示する。
+
 ### Consequences
 
 * Good, because CLI script が exit code で retry/fail-fast 判断可能、ADR-0002 contract が enforced される
