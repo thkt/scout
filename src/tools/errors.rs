@@ -252,6 +252,9 @@ impl From<GeminiError> for ScoutError {
             }
             GeminiError::QuotaExhausted(_) => Self::user_error(e.to_string())
                 .with_next_step("Check your API billing at https://aistudio.google.com"),
+            GeminiError::PermissionDenied(_) => Self::user_error(e.to_string()).with_next_step(
+                "Check IAM permissions for the Gemini API in your Google Cloud project",
+            ),
             GeminiError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
