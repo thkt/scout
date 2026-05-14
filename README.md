@@ -112,7 +112,9 @@ Claude Code will pick up the commands naturally — no MCP configuration needed.
 
 All commands accept the query/URL/repo as a positional argument, piped stdin, or `-` to read stdin interactively (e.g., `echo "query" | scout search`, `scout search -`).
 
-Add `--json` to any command for a one-line JSON envelope on stdout instead of Markdown — useful for `jq` pipelines and feeding structured data back to AI agents.
+Add `--json` to any command for a one-line JSON envelope instead of Markdown — useful for `jq` pipelines and feeding structured data back to AI agents. Successful output goes to stdout; errors emit a JSON envelope on stderr.
+
+Use `scout --version` (or `-V`) to print the version and `scout --help` / `scout <command> --help` for built-in help.
 
 ### `scout research` — Multi-source deep research
 
@@ -239,7 +241,7 @@ Single binary, zero runtime dependencies.
 
 ## Exit codes
 
-Following [`sysexits.h`](https://man.openbsd.org/sysexits) conventions, with a PJ extension code for unclassifiable failures:
+Following [`sysexits.h`](https://man.openbsd.org/sysexits), with a GNU coreutils `timeout` code (124) and a PJ extension code (104) for unclassifiable failures:
 
 | Code | Meaning                                                             |
 | ---- | ------------------------------------------------------------------- |

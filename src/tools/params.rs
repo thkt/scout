@@ -73,7 +73,7 @@ Examples:
 pub struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub url: Option<String>,
-    /// Force JavaScript rendering via headless Chrome / CDP. Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
+    /// Force JavaScript rendering via headless Chrome / CDP (requires the `js-rendering` build feature and Chrome/Chromium). Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
     pub js: bool,
     /// Skip Readability extraction and convert entire page
