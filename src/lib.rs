@@ -35,13 +35,15 @@ fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     version,
     about = "Web search, page fetching, and GitHub repository exploration",
     after_help = "\
-Exit codes (sysexits.h):
-  0   Success
-  64  Usage error (clap parse, missing API key, conflicts_with violation)
-  65  Data error (invalid input, malformed format, encoding error)
-  66  Not found (repo/file not found, 404)
-  74  IO error (network IO, write failure other than BrokenPipe)
-  75  Temporary failure (rate limit, 5xx, retryable)
+Exit codes (sysexits.h + GNU coreutils + PJ extension):
+  0    Success
+  64   Usage error (clap parse, missing API key, conflicts_with violation)
+  65   Data error (invalid input, malformed format, encoding error, 4xx body)
+  66   Not found (repo/file not found, 404)
+  70   Internal (scout-side invariant violation, unexpected response schema)
+  74   IO error (external tool failure such as headless browser)
+  75   Temporary failure (rate limit, 5xx, retryable)
+  104  Unknown (unclassifiable failure; rising rate signals classification gap)
 
 Environment:
   GEMINI_API_KEY  Required for search and research commands
@@ -238,10 +240,10 @@ mod tests {
             help.contains("GITHUB_TOKEN"),
             "root help missing GITHUB_TOKEN"
         );
-        for code in ["64", "65", "66", "74", "75"] {
+        for code in ["64", "65", "66", "70", "74", "75", "104"] {
             assert!(
                 help.contains(code),
-                "root help should document sysexits code {code}"
+                "root help should document sysexits/PJ code {code}"
             );
         }
         assert!(
@@ -251,6 +253,14 @@ mod tests {
         assert!(
             help.contains("Temporary failure"),
             "root help missing EX_TEMPFAIL description"
+        );
+        assert!(
+            help.contains("Internal"),
+            "root help missing EX_SOFTWARE (70) description"
+        );
+        assert!(
+            help.contains("Unknown"),
+            "root help missing PJ extension (104) description"
         );
     }
 }

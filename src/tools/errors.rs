@@ -58,6 +58,34 @@ impl ScoutError {
         }
     }
 
+    /// scout-side invariant violation (e.g., unexpected API schema during
+    /// deserialize). Maps to `ErrorCode::Internal` (exit 70 EX_SOFTWARE) per
+    /// ADR-0065 priority 5. Distinct from [`Self::internal`] which folds onto
+    /// IoError(74) for external tool failures (browser, IO).
+    pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            retryable: false,
+            kind: ErrorCode::Internal,
+            next_step: None,
+            candidates: Vec::new(),
+        }
+    }
+
+    /// Unclassifiable failure — the priority rules (1-5) did not match.
+    /// Maps to `ErrorCode::Unknown` (exit 104, PJ extension) per ADR-0065
+    /// §Classification Priority. A rising Unknown rate signals the
+    /// classification design needs revisiting.
+    pub(super) fn unknown(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            retryable: false,
+            kind: ErrorCode::Unknown,
+            next_step: None,
+            candidates: Vec::new(),
+        }
+    }
+
     pub(super) fn transient(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
@@ -190,10 +218,10 @@ impl From<github::GitHubError> for ScoutError {
             github::GitHubError::Api { code, .. } if (500..=599).contains(code) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
-            github::GitHubError::Api { .. } | github::GitHubError::Decode(_) => {
-                Self::internal(e.to_string())
-            }
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
+            github::GitHubError::Decode(_) => Self::internal_bug(e.to_string()),
+            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
+            github::GitHubError::Api { .. } => Self::unknown(e.to_string()),
         }
     }
 }
@@ -241,9 +269,10 @@ impl From<FetchError> for ScoutError {
             FetchError::Http(re) if is_transient_network(re) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
-            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
+            // IO_ERROR — external tool failure (browser) outside scout's invariants
             FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
-            FetchError::Http(_) => Self::internal(e.to_string()),
+            // Unknown — reqwest errors that do not match transient network patterns
+            FetchError::Http(_) => Self::unknown(e.to_string()),
         }
     }
 }
@@ -278,8 +307,8 @@ impl From<SlackError> for ScoutError {
             SlackError::Timeout(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
-            SlackError::Decode(_) => Self::internal(e.to_string()),
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
+            SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }
     }
 }
@@ -309,8 +338,8 @@ impl From<GeminiError> for ScoutError {
             GeminiError::Api { code, .. } if (500..=599).contains(code) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
-            GeminiError::Api { .. } => Self::internal(e.to_string()),
+            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
+            GeminiError::Api { .. } => Self::unknown(e.to_string()),
         }
     }
 }
@@ -566,6 +595,48 @@ mod tests {
         }
     }
 
+    /// [T-ER025] INTERNAL (70) reserved for scout-side schema bugs.
+    /// `Decode` variants from GitHub and Slack APIs indicate an unexpected
+    /// response shape — by ADR-0065 priority 5 these are scout's invariant
+    /// violation, not external IO failure (which maps to IoError 74).
+    #[test]
+    fn schema_decode_classifies_as_internal_exit_70() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::Decode("decode error".into()).into(),
+            SlackError::Decode("err".into()).into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::Internal, "{err}");
+            assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70): {err}");
+            assert!(!err.retryable(), "Internal must not be retryable: {err}");
+        }
+    }
+
+    /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
+    /// neither 4xx (priority 2) nor 5xx (priority 4). Exit 104 is the PJ
+    /// extension reserved by ADR-0065 §Classification Priority. A rising rate
+    /// of Unknown signals the classification design needs revisiting.
+    #[test]
+    fn unclassified_api_classifies_as_unknown_exit_104() {
+        let cases: Vec<ScoutError> = vec![
+            github::GitHubError::Api {
+                code: 304,
+                message: "not modified".into(),
+            }
+            .into(),
+            GeminiError::Api {
+                code: 304,
+                message: "not modified".into(),
+            }
+            .into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::Unknown, "{err}");
+            assert_eq!(err.exit_code(), 104, "expected PJ extension (104): {err}");
+            assert!(!err.retryable(), "Unknown must not be retryable: {err}");
+        }
+    }
+
     /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0002)
     #[test]
     fn usage_errors_have_exit_code_64() {
@@ -639,16 +710,13 @@ mod tests {
     }
 
     /// [T-ER002] IoError errors surface with exit 74 (EX_IOERR) and are non-retryable.
-    /// Covers the remaining `internal()` callsites that fold onto IoError until #84
-    /// promotes scout-side bugs to `Internal(70)` and unclassified Api codes to
-    /// `Unknown(104)`.
+    /// Reserved for external-tool IO failures (browser); scout-side schema bugs
+    /// route to `Internal(70)` (T-ER025) and unclassifiable Api codes to
+    /// `Unknown(104)` (T-ER026).
     #[test]
     fn io_errors_have_exit_code_74() {
-        let cases: Vec<ScoutError> = vec![
-            github::GitHubError::Decode("decode error".into()).into(),
-            FetchError::BrowserFailed("CDP protocol error".into()).into(),
-            SlackError::Decode("err".into()).into(),
-        ];
+        let cases: Vec<ScoutError> =
+            vec![FetchError::BrowserFailed("CDP protocol error".into()).into()];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::IoError, "{err}");
             assert_eq!(err.exit_code(), 74, "expected EX_IOERR (74): {err}");

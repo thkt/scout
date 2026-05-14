@@ -117,28 +117,38 @@ impl CommandOutput {
     }
 }
 
-/// JSON-serializable error classification per ADR-0065.
+/// JSON-serializable error classification per ADR-0065 (9-code policy).
+///
+/// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
+/// API schema during deserialize). `Unknown` is the explicit escape hatch for
+/// inputs that no priority rule classified; a rising rate of `Unknown` signals
+/// the classification design needs revisiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
     UsageError,
     DataError,
     NotFound,
+    Internal,
     IoError,
     TempFailure,
+    Unknown,
 }
 
 impl ErrorCode {
     /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
     /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
     /// governed by ADR-0065 (dotclaude) until a scout-local ADR captures it.
+    /// `Unknown` (104) is the PJ extension reserved for unclassifiable failures.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE
             Self::DataError => 65,   // EX_DATAERR
             Self::NotFound => 66,    // EX_NOINPUT
+            Self::Internal => 70,    // EX_SOFTWARE (scout-side invariant)
             Self::IoError => 74,     // EX_IOERR
             Self::TempFailure => 75, // EX_TEMPFAIL
+            Self::Unknown => 104,    // PJ extension, ADR-0065 §Classification Priority
         }
     }
 }
@@ -341,8 +351,10 @@ mod tests {
             (ErrorCode::UsageError, r#""USAGE_ERROR""#),
             (ErrorCode::DataError, r#""DATA_ERROR""#),
             (ErrorCode::NotFound, r#""NOT_FOUND""#),
+            (ErrorCode::Internal, r#""INTERNAL""#),
             (ErrorCode::IoError, r#""IO_ERROR""#),
             (ErrorCode::TempFailure, r#""TEMP_FAILURE""#),
+            (ErrorCode::Unknown, r#""UNKNOWN""#),
         ];
         for (code, expected) in pairs {
             let actual = serde_json::to_string(&code).unwrap();
@@ -351,6 +363,18 @@ mod tests {
                 "code {code:?} should serialize as {expected}"
             );
         }
+    }
+
+    /// [T-EN014] ErrorCode::Internal maps to exit 70 (EX_SOFTWARE) per ADR-0065
+    #[test]
+    fn error_code_internal_exits_70() {
+        assert_eq!(ErrorCode::Internal.exit_code(), 70);
+    }
+
+    /// [T-EN015] ErrorCode::Unknown maps to exit 104 (PJ extension) per ADR-0065
+    #[test]
+    fn error_code_unknown_exits_104() {
+        assert_eq!(ErrorCode::Unknown.exit_code(), 104);
     }
 
     /// [T-EN011] DegradedReason serializes per ADR-0003 SCREAMING_SNAKE_CASE

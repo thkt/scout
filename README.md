@@ -239,16 +239,18 @@ Single binary, zero runtime dependencies.
 
 ## Exit codes
 
-Following [`sysexits.h`](https://man.openbsd.org/sysexits) conventions:
+Following [`sysexits.h`](https://man.openbsd.org/sysexits) conventions, with a PJ extension code for unclassifiable failures:
 
 | Code | Meaning                                                             |
 | ---- | ------------------------------------------------------------------- |
 | 0    | Success                                                             |
 | 64   | Usage error (clap parse, missing API key, conflicts_with violation) |
-| 65   | Data error (invalid input, malformed format, encoding error)        |
+| 65   | Data error (invalid input, malformed format, encoding error, 4xx body) |
 | 66   | Not found (repo/file not found, 404)                                |
-| 74   | IO error (network IO, write failure other than BrokenPipe)          |
+| 70   | Internal (scout-side invariant violation, unexpected response schema) |
+| 74   | IO error (external tool failure such as headless browser)           |
 | 75   | Temporary failure (rate limit, 5xx, retryable)                      |
+| 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
 
 ## Limitations
 
