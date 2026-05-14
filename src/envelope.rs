@@ -156,6 +156,13 @@ impl ErrorCode {
             Self::Unknown => 104,    // PJ extension, ADR-0065 §Classification Priority
         }
     }
+
+    /// Whether this classification recommends retry. Determined structurally
+    /// from `kind` so `ScoutError` cannot drift out of sync with the JSON
+    /// `error.retryable` contract.
+    pub(crate) fn is_retryable(self) -> bool {
+        matches!(self, Self::TempFailure | Self::Timeout)
+    }
 }
 
 /// Success envelope wrapping command output per ADR-0065. ADR-0003 added
@@ -371,24 +378,28 @@ mod tests {
         }
     }
 
-    /// [T-EN014] ErrorCode::Internal maps to exit 70 (EX_SOFTWARE) per ADR-0065
+    /// [T-EN014] ErrorCode → exit-code mapping per ADR-0065 9-code policy.
+    /// Locks the full table so adding a new variant without an `exit_code()`
+    /// arm fails compile, and drift on any existing variant fails this test.
     #[test]
-    fn error_code_internal_exits_70() {
-        assert_eq!(ErrorCode::Internal.exit_code(), 70);
-    }
-
-    /// [T-EN015] ErrorCode::Unknown maps to exit 104 (PJ extension) per ADR-0065
-    #[test]
-    fn error_code_unknown_exits_104() {
-        assert_eq!(ErrorCode::Unknown.exit_code(), 104);
-    }
-
-    /// [T-EN016] ErrorCode::Timeout maps to exit 124 (GNU coreutils `timeout`)
-    /// per ADR-0065. Independent from TempFailure(75) so callers can apply a
-    /// longer retry backoff than for rate limits / 5xx.
-    #[test]
-    fn error_code_timeout_exits_124() {
-        assert_eq!(ErrorCode::Timeout.exit_code(), 124);
+    fn error_code_exit_code_table() {
+        let pairs = [
+            (ErrorCode::UsageError, 64),
+            (ErrorCode::DataError, 65),
+            (ErrorCode::NotFound, 66),
+            (ErrorCode::Internal, 70),
+            (ErrorCode::IoError, 74),
+            (ErrorCode::TempFailure, 75),
+            (ErrorCode::Unknown, 104),
+            (ErrorCode::Timeout, 124),
+        ];
+        for (code, expected) in pairs {
+            assert_eq!(
+                code.exit_code(),
+                expected,
+                "{code:?} should exit {expected}"
+            );
+        }
     }
 
     /// [T-EN011] DegradedReason serializes per ADR-0003 SCREAMING_SNAKE_CASE

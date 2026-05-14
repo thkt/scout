@@ -38,38 +38,34 @@ impl fmt::Display for ScoutError {
 impl Error for ScoutError {}
 
 impl ScoutError {
-    pub(super) fn user_error(msg: impl Into<String>) -> Self {
+    /// Shared construction path. `retryable` is derived from `kind` so the
+    /// public exit-code/JSON contract cannot drift between callers.
+    fn new(kind: ErrorCode, msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::UsageError,
+            retryable: kind.is_retryable(),
+            kind,
             next_step: None,
             candidates: Vec::new(),
         }
     }
 
-    pub(super) fn internal(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::IoError,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+    pub(super) fn user_error(msg: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UsageError, msg)
+    }
+
+    /// External tool / IO failure outside scout's invariants (e.g. headless
+    /// browser CDP error). Maps to `ErrorCode::IoError` (exit 74 EX_IOERR).
+    /// Use [`Self::internal_bug`] for scout-side schema bugs (exit 70).
+    pub(super) fn io_error(msg: impl Into<String>) -> Self {
+        Self::new(ErrorCode::IoError, msg)
     }
 
     /// scout-side invariant violation (e.g., unexpected API schema during
     /// deserialize). Maps to `ErrorCode::Internal` (exit 70 EX_SOFTWARE) per
-    /// ADR-0065 priority 5. Distinct from [`Self::internal`] which folds onto
-    /// IoError(74) for external tool failures (browser, IO).
+    /// ADR-0065 priority 5.
     pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::Internal,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::Internal, msg)
     }
 
     /// Unclassifiable failure — the priority rules (1-5) did not match.
@@ -77,23 +73,11 @@ impl ScoutError {
     /// §Classification Priority. A rising Unknown rate signals the
     /// classification design needs revisiting.
     pub(super) fn unknown(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::Unknown,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::Unknown, msg)
     }
 
     pub(super) fn transient(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: true,
-            kind: ErrorCode::TempFailure,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::TempFailure, msg)
     }
 
     /// Timeout (request-level or transport-level). Maps to `ErrorCode::Timeout`
@@ -101,33 +85,15 @@ impl ScoutError {
     /// `transient`, but separated so caller scripts/agents can apply a longer
     /// backoff than for rate-limit / 5xx temp failures.
     pub(super) fn timeout(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: true,
-            kind: ErrorCode::Timeout,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::Timeout, msg)
     }
 
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::NotFound,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::NotFound, msg)
     }
 
     pub(super) fn data_error(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-            retryable: false,
-            kind: ErrorCode::DataError,
-            next_step: None,
-            candidates: Vec::new(),
-        }
+        Self::new(ErrorCode::DataError, msg)
     }
 
     /// Attach a recovery hint to this error per ADR-0002 `error.next_step`.
@@ -182,9 +148,9 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
 //   1. USAGE_ERROR  — env/config/argument misuse
 //   2. DATA_ERROR   — format violations (URL, owner/repo, encoding, 4xx body)
 //   3. NOT_FOUND    — resource absence (404, search 0 hits)
-//   4. TEMP_FAILURE — retryable (rate limit, 5xx, network)
-//   5. INTERNAL     — scout-side invariant violation (folded onto IoError(74)
-//                     until ADR-0065 INTERNAL(70) variant lands)
+//   4. TEMP_FAILURE — retryable (rate limit, 5xx, network); TIMEOUT(124) splits off
+//   5. INTERNAL     — scout-side invariant violation (unexpected schema); IO_ERROR(74)
+//                     is the sibling for external tool failure (browser)
 // Disjoint variants are otherwise free to be reordered; the priority comments
 // document intent so a reviewer can spot a misclassification mechanically.
 impl From<github::GitHubError> for ScoutError {
@@ -265,31 +231,41 @@ impl From<FetchError> for ScoutError {
                 .with_next_step("URL response exceeds 10MB; fetch a smaller resource"),
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
-            // Status arms: specific HTTP code first, then 4xx/_ fallback. Priority noted per arm.
-            FetchError::Status(401 | 403) => Self::user_error(e.to_string()) // Priority 1
+            // Status arms order specific HTTP codes before the 4xx / _ fallback;
+            // the per-arm priority label restores ADR-0065 ranking for review.
+            // Priority 1: USAGE_ERROR
+            FetchError::Status(401 | 403) => Self::user_error(e.to_string())
                 .with_next_step("URL requires authentication that scout does not support"),
-            FetchError::Status(404) => Self::not_found(e.to_string()) // Priority 3
+            // Priority 3: NOT_FOUND
+            FetchError::Status(404) => Self::not_found(e.to_string())
                 .with_next_step("Check that the URL is correct and the resource exists"),
-            FetchError::Status(408 | 429) => Self::transient(e.to_string()) // Priority 4
-                .with_next_step(HINT_RETRY_DELAY),
-            FetchError::Status(code) if (400..500).contains(code) => {
-                Self::data_error(e.to_string()) // Priority 2
+            // Priority 4: TEMP_FAILURE
+            FetchError::Status(408 | 429) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
+            // Priority 2: DATA_ERROR (4xx body)
+            FetchError::Status(code) if (400..500).contains(code) => {
+                Self::data_error(e.to_string())
+            }
+            // Priority 4: TEMP_FAILURE (5xx and other unmatched)
             FetchError::Status(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY) // Priority 4 (5xx, ...)
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
-            FetchError::Timeout(_) => {
-                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            FetchError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
             // Priority 4: TEMP_FAILURE (non-Status variants)
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
+            // `is_transient_network` covers both connect and timeout, but
+            // ADR-0065 splits timeout into 124. Check `is_timeout()` first.
+            FetchError::Http(re) if re.is_timeout() => {
+                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
             FetchError::Http(re) if is_transient_network(re) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
-            // IO_ERROR — external tool failure (browser) outside scout's invariants
-            FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
+            // Priority 5 sibling: IO_ERROR — external tool failure (browser)
+            FetchError::BrowserFailed(_) => Self::io_error(e.to_string()),
             // Unknown — reqwest errors that do not match transient network patterns
             FetchError::Http(_) => Self::unknown(e.to_string()),
         }
@@ -405,10 +381,10 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::TempFailure);
     }
 
-    /// [T-ER012] internal returns ErrorCode::IoError
+    /// [T-ER012] io_error returns ErrorCode::IoError
     #[test]
-    fn internal_kind_is_io_error() {
-        let err = ScoutError::internal("test");
+    fn io_error_kind_is_io_error() {
+        let err = ScoutError::io_error("test");
         assert_eq!(err.error_kind(), ErrorCode::IoError);
     }
 
@@ -509,9 +485,9 @@ mod tests {
     /// [T-NS009] Errors without next_step omit the hint from Display
     #[test]
     fn display_omits_next_step_when_absent() {
-        let err = ScoutError::internal("internal failure");
+        let err = ScoutError::io_error("io failure");
         let display = err.to_string();
-        assert_eq!(display, "internal failure");
+        assert_eq!(display, "io failure");
     }
 
     /// [T-ER013] GitHubError::NotFound classifies as ErrorCode::NotFound
