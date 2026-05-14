@@ -120,9 +120,11 @@ impl CommandOutput {
 /// JSON-serializable error classification per ADR-0065 (9-code policy).
 ///
 /// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
-/// API schema during deserialize). `Unknown` is the explicit escape hatch for
-/// inputs that no priority rule classified; a rising rate of `Unknown` signals
-/// the classification design needs revisiting.
+/// API schema during deserialize). `Timeout` splits from `TempFailure` so
+/// callers can apply a longer retry backoff than for rate limits / 5xx.
+/// `Unknown` is the explicit escape hatch for inputs that no priority rule
+/// classified; a rising rate of `Unknown` signals the classification design
+/// needs revisiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
@@ -132,6 +134,7 @@ pub(crate) enum ErrorCode {
     Internal,
     IoError,
     TempFailure,
+    Timeout,
     Unknown,
 }
 
@@ -139,7 +142,8 @@ impl ErrorCode {
     /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
     /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
     /// governed by ADR-0065 (dotclaude) until a scout-local ADR captures it.
-    /// `Unknown` (104) is the PJ extension reserved for unclassifiable failures.
+    /// `Timeout` (124) follows GNU coreutils `timeout` and `Unknown` (104) is
+    /// the PJ extension for unclassifiable failures.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE
@@ -148,6 +152,7 @@ impl ErrorCode {
             Self::Internal => 70,    // EX_SOFTWARE (scout-side invariant)
             Self::IoError => 74,     // EX_IOERR
             Self::TempFailure => 75, // EX_TEMPFAIL
+            Self::Timeout => 124,    // GNU coreutils `timeout` convention
             Self::Unknown => 104,    // PJ extension, ADR-0065 §Classification Priority
         }
     }
@@ -354,6 +359,7 @@ mod tests {
             (ErrorCode::Internal, r#""INTERNAL""#),
             (ErrorCode::IoError, r#""IO_ERROR""#),
             (ErrorCode::TempFailure, r#""TEMP_FAILURE""#),
+            (ErrorCode::Timeout, r#""TIMEOUT""#),
             (ErrorCode::Unknown, r#""UNKNOWN""#),
         ];
         for (code, expected) in pairs {
@@ -375,6 +381,14 @@ mod tests {
     #[test]
     fn error_code_unknown_exits_104() {
         assert_eq!(ErrorCode::Unknown.exit_code(), 104);
+    }
+
+    /// [T-EN016] ErrorCode::Timeout maps to exit 124 (GNU coreutils `timeout`)
+    /// per ADR-0065. Independent from TempFailure(75) so callers can apply a
+    /// longer retry backoff than for rate limits / 5xx.
+    #[test]
+    fn error_code_timeout_exits_124() {
+        assert_eq!(ErrorCode::Timeout.exit_code(), 124);
     }
 
     /// [T-EN011] DegradedReason serializes per ADR-0003 SCREAMING_SNAKE_CASE

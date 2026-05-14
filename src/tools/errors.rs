@@ -96,6 +96,20 @@ impl ScoutError {
         }
     }
 
+    /// Timeout (request-level or transport-level). Maps to `ErrorCode::Timeout`
+    /// (exit 124, GNU coreutils `timeout`) per ADR-0065. Retryable like
+    /// `transient`, but separated so caller scripts/agents can apply a longer
+    /// backoff than for rate-limit / 5xx temp failures.
+    pub(super) fn timeout(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            retryable: true,
+            kind: ErrorCode::Timeout,
+            next_step: None,
+            candidates: Vec::new(),
+        }
+    }
+
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
@@ -260,10 +274,11 @@ impl From<FetchError> for ScoutError {
             FetchError::Status(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY) // Priority 4 (5xx, ...)
             }
-            // Priority 4: TEMP_FAILURE (non-Status variants)
+            // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
             FetchError::Timeout(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
+            // Priority 4: TEMP_FAILURE (non-Status variants)
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
             FetchError::Http(re) if is_transient_network(re) => {
@@ -304,9 +319,8 @@ impl From<SlackError> for ScoutError {
             SlackError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
-            SlackError::Timeout(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            // Priority 4: TIMEOUT
+            SlackError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }
@@ -724,7 +738,8 @@ mod tests {
         }
     }
 
-    /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL)
+    /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
+    /// Timeout cases moved to T-ER027 with exit 124 per ADR-0065.
     #[test]
     fn temp_failure_errors_have_exit_code_75() {
         let cases: Vec<ScoutError> = vec![
@@ -733,7 +748,6 @@ mod tests {
             FetchError::Status(500).into(),
             FetchError::Status(503).into(),
             FetchError::DnsResolution("dns failed".into()).into(),
-            FetchError::Timeout("timed out".into()).into(),
             github::GitHubError::RateLimited { retry_after: None }.into(),
             github::GitHubError::Api {
                 code: 502,
@@ -748,12 +762,32 @@ mod tests {
             .into(),
             SlackError::RateLimited { retry_after: None }.into(),
             SlackError::Network("err".into()).into(),
-            SlackError::Timeout("err".into()).into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
             assert!(err.retryable(), "expected retryable: {err}");
             assert_eq!(err.exit_code(), 75, "expected EX_TEMPFAIL (75): {err}");
+            assert!(
+                err.to_string().contains("retry may succeed"),
+                "should include retry hint: {err}"
+            );
+        }
+    }
+
+    /// [T-ER027] Timeout errors are retryable, surface exit 124 (GNU coreutils
+    /// `timeout`) independent from TempFailure(75). The split lets caller
+    /// scripts apply a longer retry backoff than for rate-limit / 5xx since
+    /// timeouts imply an unknown counterparty load condition.
+    #[test]
+    fn timeout_errors_have_exit_code_124() {
+        let cases: Vec<ScoutError> = vec![
+            FetchError::Timeout("timed out".into()).into(),
+            SlackError::Timeout("timed out".into()).into(),
+        ];
+        for err in &cases {
+            assert_eq!(err.error_kind(), ErrorCode::Timeout, "{err}");
+            assert!(err.retryable(), "Timeout must be retryable: {err}");
+            assert_eq!(err.exit_code(), 124, "expected 124 (GNU timeout): {err}");
             assert!(
                 err.to_string().contains("retry may succeed"),
                 "should include retry hint: {err}"

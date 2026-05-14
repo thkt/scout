@@ -249,7 +249,8 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits) conventions, with a P
 | 66   | Not found (repo/file not found, 404)                                |
 | 70   | Internal (scout-side invariant violation, unexpected response schema) |
 | 74   | IO error (external tool failure such as headless browser)           |
-| 75   | Temporary failure (rate limit, 5xx, retryable)                      |
+| 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)      |
+| 124  | Timeout (request/transport timeout, retryable — longer backoff advised) |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
 
 ## Limitations
