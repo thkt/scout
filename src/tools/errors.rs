@@ -218,6 +218,10 @@ impl From<github::GitHubError> for ScoutError {
             github::GitHubError::NotFound(_) => Self::not_found(e.to_string()).with_next_step(
                 "Check that the repository or path exists, and that you have access",
             ),
+            // Priority 4: TIMEOUT (request timeout via reqwest builder)
+            github::GitHubError::Network(re) if re.is_timeout() => {
+                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
             // Priority 4: TEMP_FAILURE
             github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
                 .with_next_step(match retry_after {
@@ -341,6 +345,10 @@ impl From<GeminiError> for ScoutError {
             // Priority 2: DATA_ERROR (4xx body)
             GeminiError::Api { code, .. } if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
+            }
+            // Priority 4: TIMEOUT (request timeout via reqwest builder)
+            GeminiError::Network(re) if re.is_timeout() => {
+                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             // Priority 4: TEMP_FAILURE
             GeminiError::RateLimited { .. } => {
