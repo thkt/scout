@@ -135,12 +135,23 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
     github::parse_repo(repository).map_err(ScoutError::from)
 }
 
+// Match arms in each `From<...>` impl below evaluate in classification-priority
+// order per ADR-0065 §Classification Priority:
+//   1. USAGE_ERROR  — env/config/argument misuse
+//   2. DATA_ERROR   — format violations (URL, owner/repo, encoding, 4xx body)
+//   3. NOT_FOUND    — resource absence (404, search 0 hits)
+//   4. TEMP_FAILURE — retryable (rate limit, 5xx, network)
+//   5. INTERNAL     — scout-side invariant violation (folded onto IoError(74)
+//                     until ADR-0065 INTERNAL(70) variant lands)
+// Disjoint variants are otherwise free to be reordered; the priority comments
+// document intent so a reviewer can spot a misclassification mechanically.
 impl From<github::GitHubError> for ScoutError {
     fn from(e: github::GitHubError) -> Self {
         match &e {
-            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()).with_next_step(
-                "Check that the repository or path exists, and that you have access",
-            ),
+            // Priority 1: USAGE_ERROR
+            github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
+                .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
+            // Priority 2: DATA_ERROR
             github::GitHubError::InvalidRepo(_) => Self::data_error(e.to_string())
                 .with_next_step("Use 'owner/repo' format, e.g., 'facebook/react'"),
             github::GitHubError::InvalidRef(_) => Self::data_error(e.to_string())
@@ -158,6 +169,14 @@ impl From<github::GitHubError> for ScoutError {
                 ),
             github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
                 .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
+            github::GitHubError::Api { code, .. } if (400..500).contains(code) => {
+                Self::data_error(e.to_string())
+            }
+            // Priority 3: NOT_FOUND
+            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()).with_next_step(
+                "Check that the repository or path exists, and that you have access",
+            ),
+            // Priority 4: TEMP_FAILURE
             github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
                 .with_next_step(match retry_after {
                     Some(secs) => format!(
@@ -165,14 +184,13 @@ impl From<github::GitHubError> for ScoutError {
                     ),
                     None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
                 }),
-            github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
-                .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
             github::GitHubError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
             github::GitHubError::Api { code, .. } if (500..=599).contains(code) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
+            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
             github::GitHubError::Api { .. } | github::GitHubError::Decode(_) => {
                 Self::internal(e.to_string())
             }
@@ -183,6 +201,9 @@ impl From<github::GitHubError> for ScoutError {
 impl From<FetchError> for ScoutError {
     fn from(e: FetchError) -> Self {
         match &e {
+            // Priority 1: USAGE_ERROR
+            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
+            // Priority 2: DATA_ERROR (non-Status variants)
             FetchError::InvalidScheme => {
                 Self::data_error(e.to_string()).with_next_step("URL must use http:// or https://")
             }
@@ -194,34 +215,35 @@ impl From<FetchError> for ScoutError {
             FetchError::UnsupportedContentType(_) => Self::data_error(e.to_string())
                 .with_next_step("URL must serve HTML or text content"),
             FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
-            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
-            FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
-            FetchError::Status(408 | 429) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            FetchError::Status(404) => Self::not_found(e.to_string())
-                .with_next_step("Check that the URL is correct and the resource exists"),
-            FetchError::Status(401 | 403) => Self::user_error(e.to_string())
-                .with_next_step("URL requires authentication that scout does not support"),
-            FetchError::Status(code) if (400..500).contains(code) => {
-                Self::data_error(e.to_string())
-            }
             FetchError::TooLarge => Self::data_error(e.to_string())
                 .with_next_step("URL response exceeds 10MB; fetch a smaller resource"),
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
-            FetchError::Status(_) | FetchError::Timeout(_) => {
+            // Status arms: specific HTTP code first, then 4xx/_ fallback. Priority noted per arm.
+            FetchError::Status(401 | 403) => Self::user_error(e.to_string()) // Priority 1
+                .with_next_step("URL requires authentication that scout does not support"),
+            FetchError::Status(404) => Self::not_found(e.to_string()) // Priority 3
+                .with_next_step("Check that the URL is correct and the resource exists"),
+            FetchError::Status(408 | 429) => Self::transient(e.to_string()) // Priority 4
+                .with_next_step(HINT_RETRY_DELAY),
+            FetchError::Status(code) if (400..500).contains(code) => {
+                Self::data_error(e.to_string()) // Priority 2
+            }
+            FetchError::Status(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY) // Priority 4 (5xx, ...)
+            }
+            // Priority 4: TEMP_FAILURE (non-Status variants)
+            FetchError::Timeout(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
-            FetchError::Http(re) => {
-                if is_transient_network(re) {
-                    Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-                } else {
-                    Self::internal(e.to_string())
-                }
+            FetchError::Http(re) if is_transient_network(re) => {
+                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
+            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
+            FetchError::BrowserFailed(_) => Self::internal(e.to_string()),
+            FetchError::Http(_) => Self::internal(e.to_string()),
         }
     }
 }
@@ -229,23 +251,24 @@ impl From<FetchError> for ScoutError {
 impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
         match &e {
+            // Priority 1: USAGE_ERROR
             SlackError::TokenNotSet => Self::user_error(e.to_string())
                 .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
-            SlackError::Api { error } => {
-                // ADR-0003: Slack API uses error code strings (not HTTP status)
-                // for API-level failures. Classify by the canonical `error` field
-                // so transient/not-found cases get the correct exit code instead
-                // of a uniform user_error (exit 64).
-                match error.as_str() {
-                    "internal_error" | "service_unavailable" | "fatal_error" => {
-                        Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-                    }
-                    "channel_not_found" | "message_not_found" | "thread_not_found" => {
-                        Self::not_found(e.to_string())
-                    }
-                    _ => Self::user_error(e.to_string()),
+            // Slack API surfaces failures as error code strings (not HTTP status),
+            // so per-string classification replaces the priority-2 HTTP arm.
+            SlackError::Api { error } => match error.as_str() {
+                // Priority 3: NOT_FOUND
+                "channel_not_found" | "message_not_found" | "thread_not_found" => {
+                    Self::not_found(e.to_string())
                 }
-            }
+                // Priority 4: TEMP_FAILURE
+                "internal_error" | "service_unavailable" | "fatal_error" => {
+                    Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                }
+                // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
+                _ => Self::user_error(e.to_string()),
+            },
+            // Priority 4: TEMP_FAILURE
             SlackError::RateLimited { .. } => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
@@ -255,6 +278,7 @@ impl From<SlackError> for ScoutError {
             SlackError::Timeout(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
+            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
             SlackError::Decode(_) => Self::internal(e.to_string()),
         }
     }
@@ -263,22 +287,29 @@ impl From<SlackError> for ScoutError {
 impl From<GeminiError> for ScoutError {
     fn from(e: GeminiError) -> Self {
         match &e {
+            // Priority 1: USAGE_ERROR
             GeminiError::ApiKeyNotSet => Self::user_error(e.to_string())
                 .with_next_step("Set GEMINI_API_KEY environment variable"),
-            GeminiError::RateLimited { .. } => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
             GeminiError::QuotaExhausted(_) => Self::user_error(e.to_string())
                 .with_next_step("Check your API billing at https://aistudio.google.com"),
             GeminiError::PermissionDenied(_) => Self::user_error(e.to_string()).with_next_step(
                 "Check IAM permissions for the Gemini API in your Google Cloud project",
             ),
+            // Priority 2: DATA_ERROR (4xx body)
+            GeminiError::Api { code, .. } if (400..500).contains(code) => {
+                Self::data_error(e.to_string())
+            }
+            // Priority 4: TEMP_FAILURE
+            GeminiError::RateLimited { .. } => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
             GeminiError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
             GeminiError::Api { code, .. } if (500..=599).contains(code) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
+            // Priority 5: INTERNAL (folded onto IoError until #84 lands)
             GeminiError::Api { .. } => Self::internal(e.to_string()),
         }
     }
@@ -490,6 +521,51 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
+    /// [T-ER023] ADR-0065 priority 2 wins over priority 5 for Api 4xx codes.
+    /// Prior to the priority rule reflection, `GitHubError::Api { code: 4xx }` and
+    /// `GeminiError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).
+    /// Per ADR-0065 they must classify as DataError (exit 65).
+    #[test]
+    fn api_4xx_classifies_as_data_error_per_priority_2() {
+        let github_400 = ScoutError::from(github::GitHubError::Api {
+            code: 400,
+            message: "bad request".into(),
+        });
+        let github_422 = ScoutError::from(github::GitHubError::Api {
+            code: 422,
+            message: "unprocessable entity".into(),
+        });
+        let gemini_400 = ScoutError::from(GeminiError::Api {
+            code: 400,
+            message: "err".into(),
+        });
+        for err in [&github_400, &github_422, &gemini_400] {
+            assert_eq!(err.error_kind(), ErrorCode::DataError, "{err}");
+            assert_eq!(err.exit_code(), 65, "{err}");
+            assert!(!err.retryable(), "4xx must not be retryable: {err}");
+        }
+    }
+
+    /// [T-ER024] ADR-0065 priority 4 (TEMP_FAILURE) takes precedence for `Api { 5xx }`
+    /// even though priority 5 (INTERNAL) could match the bare `Api { .. }` arm.
+    /// Match-arm ordering enforces the priority ranking.
+    #[test]
+    fn api_5xx_classifies_as_temp_failure_per_priority_4() {
+        let github_502 = ScoutError::from(github::GitHubError::Api {
+            code: 502,
+            message: "bad gateway".into(),
+        });
+        let gemini_503 = ScoutError::from(GeminiError::Api {
+            code: 503,
+            message: "unavailable".into(),
+        });
+        for err in [&github_502, &gemini_503] {
+            assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
+            assert_eq!(err.exit_code(), 75, "{err}");
+            assert!(err.retryable(), "5xx must be retryable: {err}");
+        }
+    }
+
     /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0002)
     #[test]
     fn usage_errors_have_exit_code_64() {
@@ -512,11 +588,23 @@ mod tests {
         }
     }
 
-    /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002)
+    /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002).
+    /// Per ADR-0065 priority 2, `*Error::Api { code }` 4xx (other than 401/403/404) now
+    /// routes to DataError instead of folding onto IoError via `internal()`.
     #[test]
     fn data_errors_have_exit_code_65() {
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::InvalidRepo("bad".into()).into(),
+            github::GitHubError::Api {
+                code: 400,
+                message: "bad request".into(),
+            }
+            .into(),
+            github::GitHubError::Api {
+                code: 422,
+                message: "unprocessable entity".into(),
+            }
+            .into(),
             FetchError::InvalidScheme.into(),
             FetchError::InternalHost.into(),
             FetchError::UnsupportedContentType("image/png".into()).into(),
@@ -525,6 +613,11 @@ mod tests {
             FetchError::Status(499).into(),
             FetchError::TooLarge.into(),
             FetchError::TooManyRedirects(10).into(),
+            GeminiError::Api {
+                code: 400,
+                message: "err".into(),
+            }
+            .into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::DataError, "{err}");
@@ -545,23 +638,16 @@ mod tests {
         }
     }
 
-    /// [T-ER002] IoError errors surface with exit 74 (EX_IOERR) and are non-retryable
+    /// [T-ER002] IoError errors surface with exit 74 (EX_IOERR) and are non-retryable.
+    /// Covers the remaining `internal()` callsites that fold onto IoError until #84
+    /// promotes scout-side bugs to `Internal(70)` and unclassified Api codes to
+    /// `Unknown(104)`.
     #[test]
     fn io_errors_have_exit_code_74() {
         let cases: Vec<ScoutError> = vec![
-            github::GitHubError::Api {
-                code: 400,
-                message: "bad request".into(),
-            }
-            .into(),
             github::GitHubError::Decode("decode error".into()).into(),
             FetchError::BrowserFailed("CDP protocol error".into()).into(),
             SlackError::Decode("err".into()).into(),
-            GeminiError::Api {
-                code: 400,
-                message: "err".into(),
-            }
-            .into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::IoError, "{err}");
