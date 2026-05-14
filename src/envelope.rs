@@ -117,29 +117,51 @@ impl CommandOutput {
     }
 }
 
-/// JSON-serializable error classification per ADR-0065.
+/// JSON-serializable error classification per ADR-0065 (9-code policy).
+///
+/// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
+/// API schema during deserialize). `Timeout` splits from `TempFailure` so
+/// callers can apply a longer retry backoff than for rate limits / 5xx.
+/// `Unknown` is the explicit escape hatch for inputs that no priority rule
+/// classified; a rising rate of `Unknown` signals the classification design
+/// needs revisiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
     UsageError,
     DataError,
     NotFound,
+    Internal,
     IoError,
     TempFailure,
+    Timeout,
+    Unknown,
 }
 
 impl ErrorCode {
     /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
     /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
     /// governed by ADR-0065 (dotclaude) until a scout-local ADR captures it.
+    /// `Timeout` (124) follows GNU coreutils `timeout` and `Unknown` (104) is
+    /// the PJ extension for unclassifiable failures.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE
             Self::DataError => 65,   // EX_DATAERR
             Self::NotFound => 66,    // EX_NOINPUT
+            Self::Internal => 70,    // EX_SOFTWARE (scout-side invariant)
             Self::IoError => 74,     // EX_IOERR
             Self::TempFailure => 75, // EX_TEMPFAIL
+            Self::Timeout => 124,    // GNU coreutils `timeout` convention
+            Self::Unknown => 104,    // PJ extension, ADR-0065 §Classification Priority
         }
+    }
+
+    /// Whether this classification recommends retry. Determined structurally
+    /// from `kind` so `ScoutError` cannot drift out of sync with the JSON
+    /// `error.retryable` contract.
+    pub(crate) fn is_retryable(self) -> bool {
+        matches!(self, Self::TempFailure | Self::Timeout)
     }
 }
 
@@ -341,14 +363,41 @@ mod tests {
             (ErrorCode::UsageError, r#""USAGE_ERROR""#),
             (ErrorCode::DataError, r#""DATA_ERROR""#),
             (ErrorCode::NotFound, r#""NOT_FOUND""#),
+            (ErrorCode::Internal, r#""INTERNAL""#),
             (ErrorCode::IoError, r#""IO_ERROR""#),
             (ErrorCode::TempFailure, r#""TEMP_FAILURE""#),
+            (ErrorCode::Timeout, r#""TIMEOUT""#),
+            (ErrorCode::Unknown, r#""UNKNOWN""#),
         ];
         for (code, expected) in pairs {
             let actual = serde_json::to_string(&code).unwrap();
             assert_eq!(
                 actual, expected,
                 "code {code:?} should serialize as {expected}"
+            );
+        }
+    }
+
+    /// [T-EN014] ErrorCode → exit-code mapping per ADR-0065 9-code policy.
+    /// Locks the full table so adding a new variant without an `exit_code()`
+    /// arm fails compile, and drift on any existing variant fails this test.
+    #[test]
+    fn error_code_exit_code_table() {
+        let pairs = [
+            (ErrorCode::UsageError, 64),
+            (ErrorCode::DataError, 65),
+            (ErrorCode::NotFound, 66),
+            (ErrorCode::Internal, 70),
+            (ErrorCode::IoError, 74),
+            (ErrorCode::TempFailure, 75),
+            (ErrorCode::Unknown, 104),
+            (ErrorCode::Timeout, 124),
+        ];
+        for (code, expected) in pairs {
+            assert_eq!(
+                code.exit_code(),
+                expected,
+                "{code:?} should exit {expected}"
             );
         }
     }

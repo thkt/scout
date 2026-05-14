@@ -22,6 +22,17 @@ fn help_exits_zero_and_contains_app_name() {
         stdout.contains("sysexits.h"),
         "help should reference sysexits.h, got:\n{stdout}"
     );
+    // ADR-0065 — every documented non-zero exit code must surface in --help so
+    // agent/script callers can discover the contract without reading source.
+    // Match the `  CODE  ` table layout to avoid substring collisions (e.g.,
+    // "75" inside a future "175 RPM" mention).
+    for code in ["64", "65", "66", "70", "74", "75", "104", "124"] {
+        let needle = format!("  {code}  ");
+        assert!(
+            stdout.contains(&needle),
+            "help should advertise exit code {code} as `{needle}` per ADR-0065, got:\n{stdout}"
+        );
+    }
 }
 
 // T-C002: version_exits_zero

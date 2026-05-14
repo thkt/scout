@@ -99,6 +99,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 * 各 `ErrorCode` バリアントの construction site で本 ADR の mapping table を参照
 * `unwrap_or_note` は `unwrap_or_degraded` (仮称) に rename し、`Result<T, DegradedReason>` を返す形に refactor
 * `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (4-6 variant 程度を想定)
+* ADR-0065 §Classification Priority の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 `From<...>` 実装の match arm 順序と `// Priority N` コメントで明示する。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約し、`internal()` への fold off は priority 5 (scout-side invariant violation) と Unknown 退避にのみ使用する
 
 ### Reassessment Triggers
 

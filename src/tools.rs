@@ -143,13 +143,13 @@ impl Scout {
             .timeout(HTTP_TIMEOUT)
             .redirect(Policy::limited(MAX_REDIRECTS))
             .build()
-            .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
+            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
         let fetch_http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
             .redirect(Policy::none())
             .build()
-            .map_err(|e| ScoutError::internal(format!("HTTP client init failed: {e}")))?;
+            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
         let gemini = GeminiClient::from_env(http.clone())
             .inspect_err(|e| warn!("Gemini client not available: {e}"))
             .ok();
