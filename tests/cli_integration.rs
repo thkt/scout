@@ -22,6 +22,14 @@ fn help_exits_zero_and_contains_app_name() {
         stdout.contains("sysexits.h"),
         "help should reference sysexits.h, got:\n{stdout}"
     );
+    // ADR-0065 9-code policy — every documented exit code must surface in --help
+    // so agent/script callers can discover the contract without reading source.
+    for code in ["64", "65", "66", "70", "74", "75", "104", "124"] {
+        assert!(
+            stdout.contains(code),
+            "help should advertise exit code {code} per ADR-0065, got:\n{stdout}"
+        );
+    }
 }
 
 // T-C002: version_exits_zero
