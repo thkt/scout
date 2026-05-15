@@ -1,7 +1,6 @@
 mod brave;
 mod envelope;
 mod fetch;
-mod gemini;
 mod github;
 mod markdown;
 mod redacted;
@@ -53,8 +52,7 @@ Exit codes (sysexits.h + GNU coreutils + PJ extension):
   104  Unknown (unclassifiable failure; rising rate signals classification gap)
 
 Environment:
-  BRAVE_SEARCH_API_KEY  Required for search command
-  GEMINI_API_KEY        Required for research command (Phase 3 で Brave に移行予定)
+  BRAVE_SEARCH_API_KEY  Required for search and research commands
   GITHUB_TOKEN          Optional for GitHub commands (higher rate limits)"
 )]
 pub(crate) struct Cli {
@@ -241,8 +239,8 @@ mod tests {
             "root help should reference sysexits.h"
         );
         assert!(
-            help.contains("GEMINI_API_KEY"),
-            "root help missing GEMINI_API_KEY"
+            help.contains("BRAVE_SEARCH_API_KEY"),
+            "root help missing BRAVE_SEARCH_API_KEY"
         );
         assert!(
             help.contains("GITHUB_TOKEN"),

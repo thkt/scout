@@ -3,7 +3,7 @@ name = "scout"
 version = "1.1.2"
 edition = "2024"
 rust-version = "1.95"
-description = "CLI tool for web search (Gemini Grounding), page fetching, and GitHub repository exploration"
+description = "CLI tool for web search (Brave Search), page fetching, and GitHub repository exploration"
 license = "MIT"
 repository = "https://github.com/thkt/scout"
 

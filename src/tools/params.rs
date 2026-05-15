@@ -30,7 +30,7 @@ pub(super) fn resolve_input(
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Search the web using Gemini Grounding with Google Search
+    /// Search the web using Brave Search API
     Search(SearchParams),
     /// Fetch a web page and convert it to clean Markdown
     Fetch(FetchParams),
@@ -53,7 +53,7 @@ Examples:
   scout search -
 
 Environment:
-  GEMINI_API_KEY  Required. Gemini API key for web search.")]
+  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
 pub struct SearchParams {
     /// Search query
     pub query: Option<String>,
@@ -91,7 +91,7 @@ Examples:
   scout research -
 
 Environment:
-  GEMINI_API_KEY  Required. Gemini API key for web search.")]
+  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
 pub struct ResearchParams {
     /// Research query
     pub query: Option<String>,
@@ -198,7 +198,7 @@ mod tests {
     /// [T-H001] search --help contains Examples: and Environment: sections
     #[test]
     fn search_help_contains_examples_and_environment() {
-        assert_help_sections::<super::SearchParams>(Some("GEMINI_API_KEY"));
+        assert_help_sections::<super::SearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
     /// [T-H002] fetch --help contains Examples: section
@@ -210,7 +210,7 @@ mod tests {
     /// [T-H003] research --help contains Examples: and Environment: sections
     #[test]
     fn research_help_contains_examples_and_environment() {
-        assert_help_sections::<super::ResearchParams>(Some("GEMINI_API_KEY"));
+        assert_help_sections::<super::ResearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
     /// [T-H004] repo-tree --help contains Examples: and Environment: sections

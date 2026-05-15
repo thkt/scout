@@ -260,7 +260,7 @@ mod tests {
         let text = format_report(&report, "test");
         assert!(
             !text.contains("## Search Result"),
-            "Brave-era report must not contain Gemini-era Search Result header, got:\n{text}"
+            "report must not contain the obsolete Search Result header, got:\n{text}"
         );
     }
 

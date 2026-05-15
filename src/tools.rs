@@ -25,7 +25,6 @@ use crate::brave::client::{BraveClient, BraveError, SearchClient as _};
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
-use crate::gemini::client::{GeminiClient, GeminiError};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient};
 use crate::markdown::{shift_headings, truncate_with_note};
@@ -132,9 +131,6 @@ pub struct Scout {
     /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
     fetch_http: Client,
     brave: Option<BraveClient>,
-    /// Retained during the Brave migration (Phase 2 transitional state):
-    /// `research` still goes through engine + Gemini until Phase 3 rewrites engine.
-    gemini: Option<GeminiClient>,
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
@@ -157,14 +153,10 @@ impl Scout {
         let brave = BraveClient::from_env(http.clone())
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
-        let gemini = GeminiClient::from_env(http.clone())
-            .inspect_err(|e| warn!("Gemini client not available: {e}"))
-            .ok();
         Ok(Self {
             http,
             fetch_http,
             brave,
-            gemini,
             github: OnceCell::new(),
         })
     }
@@ -179,12 +171,6 @@ impl Scout {
         self.brave
             .as_ref()
             .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
-    }
-
-    fn gemini(&self) -> Result<&GeminiClient, ScoutError> {
-        self.gemini
-            .as_ref()
-            .ok_or_else(|| ScoutError::from(GeminiError::ApiKeyNotSet))
     }
 
     pub async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
@@ -672,8 +658,8 @@ mod tests {
         (http, fetch_http)
     }
 
-    fn scout_with_gemini(gemini_uri: &str) -> Scout {
-        scout_with_github(gemini_uri, "http://localhost:0")
+    fn scout_with_brave(brave_uri: &str) -> Scout {
+        scout_with_github(brave_uri, "http://localhost:0")
     }
 
     /// [T-009] search returns plain URL list with no markdown decoration
@@ -695,7 +681,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = SearchParams {
             query: Some("What is Rust?".into()),
             lang: Lang::Auto,
@@ -726,7 +712,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = SearchParams {
             query: Some("foo".into()),
             lang: Lang::Auto,
@@ -742,16 +728,13 @@ mod tests {
         assert_eq!(data["sources"][0]["description"], "d");
     }
 
-    /// [T-015] search command does not invoke engine::research path
-    /// Verified at compile-time + behavior: search's mock has only Brave GET / route,
-    /// not Gemini POST :generateContent. If search went through engine (which calls
-    /// gemini.search), the unmatched mock would fail the request.
+    /// [T-015] search command issues exactly one Brave call (no engine::research fanout)
+    /// Engine path adds fetch + report; search must remain a single Brave round-trip.
     #[tokio::test]
     async fn search_does_not_traverse_engine_path() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
         };
-        // Brave route only — no Gemini route.
         Mock::given(method("GET"))
             .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -760,15 +743,8 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        // Explicitly expect no Gemini calls.
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(0)
-            .mount(&server)
-            .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = SearchParams {
             query: Some("foo".into()),
             lang: Lang::Auto,
@@ -790,7 +766,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = SearchParams {
             query: Some("foo".into()),
             lang: Lang::Auto,
@@ -800,7 +776,7 @@ mod tests {
         assert_eq!(result.data["sources"].as_array().unwrap().len(), 0);
     }
 
-    /// [T-TS002] research returns report with Brave sources and no Gemini-era Search Result header
+    /// [T-TS002] research returns report with Brave sources and no obsolete Search Result header
     #[tokio::test]
     async fn research_success_returns_report() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -820,7 +796,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = ResearchParams {
             query: Some("What is Rust?".into()),
             depth: 1,
@@ -834,7 +810,7 @@ mod tests {
         );
         assert!(
             !result.markdown.contains("## Search Result"),
-            "AC-3.1: Brave-era report must not contain Gemini-era Search Result header"
+            "AC-3.1: report must not contain the obsolete Search Result header"
         );
         assert!(
             !result.markdown.contains("vertexaisearch.cloud.google.com"),
@@ -897,7 +873,7 @@ mod tests {
 
     // --- GitHub client efficiency tests (lazy init + repo_overview) ---
 
-    fn scout_with_github(gemini_uri: &str, github_uri: &str) -> Scout {
+    fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
         let (http, fetch_http) = build_test_clients();
         let cell = OnceCell::new();
         cell.set(GitHubClient::with_base_url(http.clone(), github_uri))
@@ -905,19 +881,17 @@ mod tests {
         Scout {
             http: http.clone(),
             fetch_http,
-            brave: Some(BraveClient::with_base_url(http.clone(), gemini_uri)),
-            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
         }
     }
 
-    fn scout_lazy(gemini_uri: &str) -> Scout {
+    fn scout_lazy(brave_uri: &str) -> Scout {
         let (http, fetch_http) = build_test_clients();
         Scout {
             http: http.clone(),
             fetch_http,
-            brave: Some(BraveClient::with_base_url(http.clone(), gemini_uri)),
-            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
         }
     }
