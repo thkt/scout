@@ -294,7 +294,7 @@ impl Scout {
         info!(
             pages = report.fetched_pages.len(),
             failed = report.failed_urls.len(),
-            sources = report.all_sources.len(),
+            sources = report.sources.len(),
             "research complete"
         );
 
@@ -815,6 +815,96 @@ mod tests {
         assert!(
             !result.markdown.contains("vertexaisearch.cloud.google.com"),
             "AC-3.2: Sources must not contain Google redirect URLs"
+        );
+    }
+
+    /// [T-10] AC-4.2: --json research data schema (query, sources, fetched_pages, failed_urls)
+    #[tokio::test]
+    async fn research_json_schema_includes_required_keys() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {
+                    "results": [
+                        {"url": "https://a.test/", "title": "A", "description": "snippet"}
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = ResearchParams {
+            query: Some("foo".into()),
+            depth: 1,
+            lang: Lang::Auto,
+        };
+        let result = s.research(params).await.unwrap();
+        let data = &result.data;
+
+        assert_eq!(data["query"], "foo", "data.query must echo the request");
+        assert!(data["sources"].is_array(), "data.sources must be an array");
+        assert_eq!(data["sources"][0]["url"], "https://a.test/");
+        assert_eq!(data["sources"][0]["title"], "A");
+        assert_eq!(data["sources"][0]["description"], "snippet");
+        assert!(
+            data["fetched_pages"].is_array(),
+            "data.fetched_pages must be an array (possibly empty)"
+        );
+        assert!(
+            data["failed_urls"].is_array(),
+            "data.failed_urls must be an array (possibly empty)"
+        );
+        assert!(
+            data.get("answer").is_none(),
+            "data.answer must be absent (AC-4.1: no LLM-generated answer)"
+        );
+        assert!(
+            data.get("all_sources").is_none(),
+            "data.all_sources is the legacy key — must be renamed to sources"
+        );
+    }
+
+    /// [T-11] AC-4.3: zero results yield empty arrays, not null
+    #[tokio::test]
+    async fn research_json_zero_results_returns_empty_arrays() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {"results": []}
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = ResearchParams {
+            query: Some("foo".into()),
+            depth: 1,
+            lang: Lang::Auto,
+        };
+        let result = s.research(params).await.unwrap();
+        let data = &result.data;
+
+        assert_eq!(
+            data["sources"].as_array().unwrap().len(),
+            0,
+            "data.sources must be an empty array (not null)"
+        );
+        assert_eq!(
+            data["fetched_pages"].as_array().unwrap().len(),
+            0,
+            "data.fetched_pages must be an empty array"
+        );
+        assert_eq!(
+            data["failed_urls"].as_array().unwrap().len(),
+            0,
+            "data.failed_urls must be an empty array"
         );
     }
 

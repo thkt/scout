@@ -24,7 +24,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) struct ResearchReport {
     pub(crate) fetched_pages: Vec<FetchResult>,
     pub(crate) failed_urls: Vec<FailedUrl>,
-    pub(crate) all_sources: Vec<SearchResult>,
+    pub(crate) sources: Vec<SearchResult>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -47,9 +47,9 @@ pub(crate) async fn research(
     resolver: &impl DnsResolver,
 ) -> Result<ResearchReport, BraveError> {
     let search_lang = req.lang.to_brave_param();
-    let all_sources = brave.search(req.query, search_lang).await?;
+    let sources = brave.search(req.query, search_lang).await?;
 
-    let urls: Vec<String> = all_sources
+    let urls: Vec<String> = sources
         .iter()
         .take(req.depth as usize)
         .map(|s| s.url.clone())
@@ -60,7 +60,7 @@ pub(crate) async fn research(
     Ok(ResearchReport {
         fetched_pages,
         failed_urls,
-        all_sources,
+        sources,
     })
 }
 
@@ -118,7 +118,7 @@ pub(crate) fn format_report(report: &ResearchReport, query: &str) -> String {
     let mut out = format!("# Research: {}\n\n", sanitize_heading(query));
     format_fetched_pages(&report.fetched_pages, &mut out);
     format_failed_urls(&report.failed_urls, &mut out);
-    format_sources(&report.all_sources, &mut out);
+    format_sources(&report.sources, &mut out);
     out
 }
 
@@ -237,7 +237,7 @@ mod tests {
                 url: "https://fail.com".into(),
                 reason: "timeout".into(),
             }],
-            all_sources: vec![make_source("https://a.com", "A")],
+            sources: vec![make_source("https://a.com", "A")],
         };
 
         let text = format_report(&report, "test query");
@@ -254,7 +254,7 @@ mod tests {
         let report = ResearchReport {
             fetched_pages: vec![],
             failed_urls: vec![],
-            all_sources: vec![make_source("https://a.com", "A")],
+            sources: vec![make_source("https://a.com", "A")],
         };
 
         let text = format_report(&report, "test");
@@ -274,7 +274,7 @@ mod tests {
                 used_raw_fallback: false,
             }],
             failed_urls: vec![],
-            all_sources: vec![],
+            sources: vec![],
         };
 
         let text = format_report(&report, "test");
@@ -303,7 +303,7 @@ mod tests {
                 used_raw_fallback: false,
             }],
             failed_urls: vec![],
-            all_sources: vec![],
+            sources: vec![],
         };
 
         let text = format_report(&report, "test");
@@ -321,7 +321,7 @@ mod tests {
         let report = ResearchReport {
             fetched_pages: vec![],
             failed_urls: vec![],
-            all_sources: vec![],
+            sources: vec![],
         };
 
         let text = format_report(&report, "line1\nline2");
@@ -343,7 +343,7 @@ mod tests {
         };
         let report = research(&mock, &http, &req, &resolver).await.unwrap();
 
-        assert_eq!(report.all_sources.len(), 1);
+        assert_eq!(report.sources.len(), 1);
 
         let captured = mock.captured();
         assert_eq!(
