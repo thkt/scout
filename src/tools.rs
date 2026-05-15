@@ -296,14 +296,14 @@ impl Scout {
 
         info!(query = %query, depth = params.depth, "research");
 
-        let gemini = self.gemini()?;
+        let brave = self.brave()?;
 
         let req = engine::ResearchRequest {
             query: &query,
             depth: params.depth,
             lang: params.lang,
         };
-        let report = engine::research(gemini, &self.fetch_http, &req, &TokioDnsResolver).await?;
+        let report = engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver).await?;
 
         info!(
             pages = report.fetched_pages.len(),
@@ -800,29 +800,22 @@ mod tests {
         assert_eq!(result.data["sources"].as_array().unwrap().len(), 0);
     }
 
-    /// [T-TS002] research_success_returns_report
+    /// [T-TS002] research returns report with Brave sources and no Gemini-era Search Result header
     #[tokio::test]
     async fn research_success_returns_report() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        // Brave search response. The URL is unreachable, so fetch will fail and land in
+        // failed_urls, but the Sources section still proves the Brave URL flowed through.
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "Rust is a systems programming language focused on safety."}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": [{
-                            "web": {
-                                "uri": "https://rust-lang.org",
-                                "title": "Rust Language"
-                            }
-                        }]
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://rust-lang.test/", "title": "Rust Language", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
@@ -836,12 +829,16 @@ mod tests {
 
         let result = s.research(params).await.unwrap();
         assert!(
-            result.markdown.contains("Rust"),
-            "report should contain search answer, got: {result:?}"
+            result.markdown.contains("rust-lang.test"),
+            "report should reference Brave source URL, got: {result:?}"
         );
         assert!(
-            result.markdown.contains("rust-lang.org"),
-            "report should reference source URL"
+            !result.markdown.contains("## Search Result"),
+            "AC-3.1: Brave-era report must not contain Gemini-era Search Result header"
+        );
+        assert!(
+            !result.markdown.contains("vertexaisearch.cloud.google.com"),
+            "AC-3.2: Sources must not contain Google redirect URLs"
         );
     }
 

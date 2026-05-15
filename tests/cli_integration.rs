@@ -55,7 +55,7 @@ fn version_exits_zero() {
 fn search_without_api_key_exits_64() {
     let output = scout()
         .args(["search", "test query"])
-        .env_remove("GEMINI_API_KEY")
+        .env_remove("BRAVE_SEARCH_API_KEY")
         .output()
         .expect("scout search failed to run");
     assert_eq!(
@@ -168,7 +168,7 @@ fn json_emits_envelope_on_error() {
 fn json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
         .args(["--json", "search", "test query"])
-        .env_remove("GEMINI_API_KEY")
+        .env_remove("BRAVE_SEARCH_API_KEY")
         .output()
         .expect("scout --json search failed to run");
     assert_eq!(
@@ -189,8 +189,8 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
     assert!(
         value["error"]["next_step"]
             .as_str()
-            .is_some_and(|s| s.contains("GEMINI_API_KEY")),
-        "next_step should point user to GEMINI_API_KEY, got: {value}"
+            .is_some_and(|s| s.contains("BRAVE_SEARCH_API_KEY")),
+        "next_step should point user to BRAVE_SEARCH_API_KEY, got: {value}"
     );
 }
 

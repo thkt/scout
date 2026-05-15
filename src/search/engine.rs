@@ -1,37 +1,30 @@
-use std::collections::HashSet;
 use std::fmt::Write;
 use std::time::Duration;
 
-use futures::future::join_all;
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use tokio::time::timeout;
 use tracing::warn;
 
+use crate::brave::client::{BraveError, SearchClient};
+use crate::brave::types::SearchResult;
 use crate::fetch;
 use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
-use crate::gemini::client::{GeminiError, SearchClient};
-use crate::gemini::types::{GroundedResult, Source};
 use crate::markdown::{
     escape_md_inline, escape_md_link, sanitize_heading, shift_headings, truncate_with_note,
 };
 use crate::search::Lang;
-use crate::search::bilingual::expand_bilingual;
 
 const MAX_PAGE_BYTES: usize = 4_500;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Aggregated output of a multi-source research session.
+/// Aggregated output of a research session: search hits + their fetched bodies.
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct ResearchReport {
-    /// Internal: per-query grounded results consumed by the report formatter.
-    /// Not part of scout's public JSON output (#67/ADR-0065).
-    #[serde(skip_serializing)]
-    pub(crate) search_results: Vec<GroundedResult>,
     pub(crate) fetched_pages: Vec<FetchResult>,
     pub(crate) failed_urls: Vec<FailedUrl>,
-    pub(crate) all_sources: Vec<Source>,
+    pub(crate) all_sources: Vec<SearchResult>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -48,18 +41,13 @@ pub(crate) struct ResearchRequest<'a> {
 }
 
 pub(crate) async fn research(
-    gemini: &impl SearchClient,
+    brave: &impl SearchClient,
     http: &Client,
     req: &ResearchRequest<'_>,
     resolver: &impl DnsResolver,
-) -> Result<ResearchReport, GeminiError> {
-    let queries = match req.lang {
-        Lang::Auto => expand_bilingual(req.query),
-        _ => vec![req.lang.apply_to_query(req.query)],
-    };
-
-    let search_results = run_searches(gemini, &queries).await?;
-    let all_sources = collect_unique_sources(&search_results);
+) -> Result<ResearchReport, BraveError> {
+    let search_lang = req.lang.to_brave_param();
+    let all_sources = brave.search(req.query, search_lang).await?;
 
     let urls: Vec<String> = all_sources
         .iter()
@@ -70,41 +58,10 @@ pub(crate) async fn research(
     let (fetched_pages, failed_urls) = fetch_sources(http, urls, resolver).await;
 
     Ok(ResearchReport {
-        search_results,
         fetched_pages,
         failed_urls,
         all_sources,
     })
-}
-
-async fn run_searches(
-    gemini: &impl SearchClient,
-    queries: &[String],
-) -> Result<Vec<GroundedResult>, GeminiError> {
-    let search_futures = queries.iter().map(|q| gemini.search(q));
-    let search_outcomes = join_all(search_futures).await;
-
-    let (successes, failures): (Vec<_>, Vec<_>) =
-        search_outcomes.into_iter().partition(Result::is_ok);
-
-    if successes.is_empty() {
-        let first_err = failures
-            .into_iter()
-            .find_map(Result::err)
-            .unwrap_or(GeminiError::RateLimited { retry_after: None });
-        warn!(
-            queries = ?queries,
-            error = %first_err,
-            "all search queries failed"
-        );
-        return Err(first_err);
-    }
-
-    for e in failures.iter().filter_map(|r| r.as_ref().err()) {
-        warn!(error = %e, "partial search failure (continuing with other results)");
-    }
-
-    Ok(successes.into_iter().filter_map(Result::ok).collect())
 }
 
 async fn fetch_sources(
@@ -130,7 +87,6 @@ async fn fetch_sources(
         })
         // Concurrency cap = 5: balances fetch parallelism (faster overall research)
         // against per-host rate limits (multiple URLs in one query may share an origin).
-        // Adjust if research depth grows or per-host caps change.
         .buffer_unordered(5)
         .collect()
         .await;
@@ -158,43 +114,12 @@ async fn fetch_sources(
     (fetched_pages, failed_urls)
 }
 
-fn collect_unique_sources(results: &[GroundedResult]) -> Vec<Source> {
-    let mut seen = HashSet::new();
-    let mut sources = Vec::new();
-
-    for result in results {
-        for source in &result.sources {
-            if !source.url.is_empty() && seen.insert(source.url.clone()) {
-                sources.push(source.clone());
-            }
-        }
-    }
-
-    sources
-}
-
 pub(crate) fn format_report(report: &ResearchReport, query: &str) -> String {
     let mut out = format!("# Research: {}\n\n", sanitize_heading(query));
-    format_search_results(&report.search_results, &mut out);
     format_fetched_pages(&report.fetched_pages, &mut out);
     format_failed_urls(&report.failed_urls, &mut out);
     format_sources(&report.all_sources, &mut out);
     out
-}
-
-fn format_search_results(results: &[GroundedResult], out: &mut String) {
-    for (i, result) in results.iter().enumerate() {
-        if results.len() > 1 {
-            let _ = writeln!(out, "## Search Result {}\n", i + 1);
-        }
-        match &result.answer {
-            Some(answer) => out.push_str(&shift_headings(answer, 2)),
-            None => out.push_str(
-                "(No answer returned — the query may have been filtered by safety settings.)\n",
-            ),
-        }
-        out.push_str("\n\n");
-    }
 }
 
 fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
@@ -207,7 +132,7 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         if page.used_raw_fallback {
             out.push_str(fetch::converter::RAW_FALLBACK_NOTE);
         }
-        // Shift headings by 3 levels so page content (h1→h4, h2→h5, …)
+        // Shift headings by 3 levels so page content (h1->h4, h2->h5, ...)
         // does not collide with the report's own heading hierarchy.
         let content = shift_headings(&page.markdown, 3);
         out.push_str(&truncate_with_note(&content, MAX_PAGE_BYTES));
@@ -231,7 +156,7 @@ fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     out.push('\n');
 }
 
-fn format_sources(sources: &[Source], out: &mut String) {
+fn format_sources(sources: &[SearchResult], out: &mut String) {
     if sources.is_empty() {
         return;
     }
@@ -253,116 +178,96 @@ mod tests {
     use std::sync::Mutex;
 
     struct MockSearch {
-        responses: Mutex<VecDeque<Result<GroundedResult, GeminiError>>>,
-        queries: Mutex<Vec<String>>,
+        responses: Mutex<VecDeque<Result<Vec<SearchResult>, BraveError>>>,
+        captured: Mutex<Vec<(String, Option<String>)>>,
     }
 
     impl MockSearch {
-        fn with_results(results: Vec<GroundedResult>) -> Self {
+        fn with_results(results: Vec<SearchResult>) -> Self {
             Self {
-                responses: Mutex::new(results.into_iter().map(Ok).collect()),
-                queries: Mutex::new(Vec::new()),
+                responses: Mutex::new(VecDeque::from([Ok(results)])),
+                captured: Mutex::new(Vec::new()),
             }
         }
 
-        fn success_then_failure(first: GroundedResult, failure: GeminiError) -> Self {
-            Self {
-                responses: Mutex::new(VecDeque::from([Ok(first), Err(failure)])),
-                queries: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn all_fail(error: GeminiError) -> Self {
+        fn all_fail(error: BraveError) -> Self {
             Self {
                 responses: Mutex::new(VecDeque::from([Err(error)])),
-                queries: Mutex::new(Vec::new()),
+                captured: Mutex::new(Vec::new()),
             }
         }
 
-        fn captured_queries(&self) -> Vec<String> {
-            self.queries.lock().unwrap().clone()
+        fn captured(&self) -> Vec<(String, Option<String>)> {
+            self.captured.lock().unwrap().clone()
         }
     }
 
     impl SearchClient for MockSearch {
-        async fn search(&self, query: &str) -> Result<GroundedResult, GeminiError> {
-            self.queries.lock().unwrap().push(query.to_owned());
+        async fn search(
+            &self,
+            query: &str,
+            search_lang: Option<&str>,
+        ) -> Result<Vec<SearchResult>, BraveError> {
+            self.captured
+                .lock()
+                .unwrap()
+                .push((query.to_owned(), search_lang.map(str::to_owned)));
             self.responses
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(Err(GeminiError::RateLimited { retry_after: None }))
+                .unwrap_or(Err(BraveError::RateLimited { retry_after: None }))
         }
     }
 
-    fn make_grounded(sources: Vec<(&str, &str)>) -> GroundedResult {
-        GroundedResult {
-            answer: Some("test answer".into()),
-            sources: sources
-                .into_iter()
-                .map(|(url, title)| Source {
-                    url: url.into(),
-                    title: title.into(),
-                })
-                .collect(),
+    fn make_source(url: &str, title: &str) -> SearchResult {
+        SearchResult {
+            url: url.into(),
+            title: title.into(),
+            description: String::new(),
         }
     }
 
-    /// [T-SE001] collect_sources_deduplicates
-    #[test]
-    fn collect_sources_deduplicates() {
-        let results = vec![
-            make_grounded(vec![("https://a.com", "A"), ("https://b.com", "B")]),
-            make_grounded(vec![("https://a.com", "A"), ("https://c.com", "C")]),
-        ];
-
-        let sources = collect_unique_sources(&results);
-        assert_eq!(sources.len(), 3);
-        assert_eq!(sources[0].url, "https://a.com");
-        assert_eq!(sources[1].url, "https://b.com");
-        assert_eq!(sources[2].url, "https://c.com");
-    }
-
-    /// [T-SE002] collect_sources_skips_empty_urls
-    #[test]
-    fn collect_sources_skips_empty_urls() {
-        let results = vec![make_grounded(vec![("", "Empty"), ("https://a.com", "A")])];
-
-        let sources = collect_unique_sources(&results);
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].url, "https://a.com");
-    }
-
-    /// [T-SE003] format_report_includes_sections
+    /// [T-SE003] format_report includes Sources section with shaped data
     #[test]
     fn format_report_includes_sections() {
         let report = ResearchReport {
-            search_results: vec![make_grounded(vec![("https://a.com", "A")])],
             fetched_pages: vec![],
             failed_urls: vec![FailedUrl {
                 url: "https://fail.com".into(),
                 reason: "timeout".into(),
             }],
-            all_sources: vec![Source {
-                url: "https://a.com".into(),
-                title: "A".into(),
-            }],
+            all_sources: vec![make_source("https://a.com", "A")],
         };
 
         let text = format_report(&report, "test query");
         assert!(text.contains("# Research: test query"));
-        assert!(text.contains("test answer"));
         assert!(text.contains("Failed URLs"));
         assert!(text.contains("https://fail.com"));
         assert!(text.contains("Sources"));
         assert!(text.contains("[A](https://a.com)"));
     }
 
-    /// [T-SE004] format_report_includes_fetched_pages
+    /// [T-7] AC-3.1: format_report does not emit "## Search Result" header
+    #[test]
+    fn format_report_omits_search_result_header() {
+        let report = ResearchReport {
+            fetched_pages: vec![],
+            failed_urls: vec![],
+            all_sources: vec![make_source("https://a.com", "A")],
+        };
+
+        let text = format_report(&report, "test");
+        assert!(
+            !text.contains("## Search Result"),
+            "Brave-era report must not contain Gemini-era Search Result header, got:\n{text}"
+        );
+    }
+
+    /// [T-SE004] format_report shifts page headings to avoid hierarchy collision
     #[test]
     fn format_report_includes_fetched_pages() {
         let report = ResearchReport {
-            search_results: vec![make_grounded(vec![])],
             fetched_pages: vec![FetchResult {
                 url: "https://example.com".into(),
                 markdown: "# Example Page\n\n## Section\n\nSome content here.".into(),
@@ -386,13 +291,12 @@ mod tests {
         );
     }
 
-    /// [T-SE005] format_report_truncates_long_pages
+    /// [T-SE005] format_report truncates long pages with a byte-count note
     #[test]
     fn format_report_truncates_long_pages() {
         let total = MAX_PAGE_BYTES + 2_000;
         let long_content = "x".repeat(total);
         let report = ResearchReport {
-            search_results: vec![make_grounded(vec![])],
             fetched_pages: vec![FetchResult {
                 url: "https://long.com".into(),
                 markdown: long_content,
@@ -411,82 +315,10 @@ mod tests {
         );
     }
 
-    /// [T-SE012] research report: answer with headings should have them shifted by 2
-    #[test]
-    fn research_report_shifts_headings_in_answer() {
-        let result = GroundedResult {
-            answer: Some("# Title\n\nSome text\n\n## Details".into()),
-            sources: vec![Source {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-            }],
-        };
-        let report = ResearchReport {
-            search_results: vec![result],
-            fetched_pages: vec![],
-            failed_urls: vec![],
-            all_sources: vec![Source {
-                url: "https://example.com".into(),
-                title: "Example".into(),
-            }],
-        };
-
-        let text = format_report(&report, "test query");
-        assert!(
-            text.contains("### Title"),
-            "h1 in answer should shift to h3 (shift by 2), got:\n{text}"
-        );
-        assert!(
-            text.contains("#### Details"),
-            "h2 in answer should shift to h4 (shift by 2), got:\n{text}"
-        );
-    }
-
-    /// [T-SE013] research report: answer with no headings passes through unchanged
-    #[test]
-    fn research_report_no_headings_unchanged() {
-        let body = "This is plain text without any headings.\n\nJust paragraphs.";
-        let result = GroundedResult {
-            answer: Some(body.into()),
-            sources: vec![],
-        };
-        let report = ResearchReport {
-            search_results: vec![result],
-            fetched_pages: vec![],
-            failed_urls: vec![],
-            all_sources: vec![],
-        };
-
-        let text = format_report(&report, "test");
-        assert!(
-            text.contains(body),
-            "answer without headings should appear verbatim, got:\n{text}"
-        );
-    }
-
-    /// [T-SE006] format_report_multiple_search_results_numbered
-    #[test]
-    fn format_report_multiple_search_results_numbered() {
-        let report = ResearchReport {
-            search_results: vec![
-                make_grounded(vec![("https://a.com", "A")]),
-                make_grounded(vec![("https://b.com", "B")]),
-            ],
-            fetched_pages: vec![],
-            failed_urls: vec![],
-            all_sources: vec![],
-        };
-
-        let text = format_report(&report, "test");
-        assert!(text.contains("## Search Result 1"));
-        assert!(text.contains("## Search Result 2"));
-    }
-
-    /// [T-SE007] format_report_sanitizes_query_newlines
+    /// [T-SE007] format_report sanitizes newline characters in the heading
     #[test]
     fn format_report_sanitizes_query_newlines() {
         let report = ResearchReport {
-            search_results: vec![make_grounded(vec![])],
             fetched_pages: vec![],
             failed_urls: vec![],
             all_sources: vec![],
@@ -497,10 +329,10 @@ mod tests {
         assert!(!text.contains("# Research: line1\n"));
     }
 
-    /// [T-SE008] research_with_mock_returns_report
+    /// [T-SE008] research returns a populated report when search succeeds
     #[tokio::test]
     async fn research_with_mock_returns_report() {
-        let mock = MockSearch::with_results(vec![make_grounded(vec![("https://a.com", "A")])]);
+        let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
         let http = Client::new();
         let resolver = fetch::TokioDnsResolver;
 
@@ -511,43 +343,53 @@ mod tests {
         };
         let report = research(&mock, &http, &req, &resolver).await.unwrap();
 
-        assert_eq!(report.search_results.len(), 1);
         assert_eq!(report.all_sources.len(), 1);
 
-        let queries = mock.captured_queries();
-        assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0], "test (answer in English)");
+        let captured = mock.captured();
+        assert_eq!(
+            captured.len(),
+            1,
+            "research must issue exactly one Brave query"
+        );
+        assert_eq!(captured[0].0, "test", "query must be sent verbatim");
+        assert_eq!(
+            captured[0].1,
+            Some("en".to_owned()),
+            "Lang::En -> search_lang=en"
+        );
     }
 
-    /// [T-SE009] research_partial_search_failure_still_returns
+    /// [T-8] AC-3: bilingual expansion is gone; Lang::Auto issues exactly one Brave call
     #[tokio::test]
-    async fn research_partial_search_failure_still_returns() {
-        let mock = MockSearch::success_then_failure(
-            make_grounded(vec![("https://a.com", "A")]),
-            GeminiError::RateLimited { retry_after: None },
-        );
+    async fn research_auto_lang_issues_single_call() {
+        let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
         let http = Client::new();
         let resolver = fetch::TokioDnsResolver;
 
         let req = ResearchRequest {
-            query: "テスト query",
+            query: "型安全 TypeScript",
             depth: 3,
             lang: Lang::Auto,
         };
-        let report = research(&mock, &http, &req, &resolver).await.unwrap();
+        let _ = research(&mock, &http, &req, &resolver).await.unwrap();
 
-        assert_eq!(report.search_results.len(), 1);
-
-        let queries = mock.captured_queries();
-        assert_eq!(queries.len(), 2);
-        assert_eq!(queries[0], "テスト query");
-        assert!(queries[1].contains("query"));
+        let captured = mock.captured();
+        assert_eq!(
+            captured.len(),
+            1,
+            "Lang::Auto must NOT trigger bilingual expansion under Brave"
+        );
+        assert_eq!(
+            captured[0].0, "型安全 TypeScript",
+            "query must be sent verbatim"
+        );
+        assert_eq!(captured[0].1, None, "Lang::Auto -> search_lang omitted");
     }
 
-    /// [T-SE010] research_all_searches_fail_returns_error
+    /// [T-SE010] research surfaces the underlying Brave error when search fails
     #[tokio::test]
-    async fn research_all_searches_fail_returns_error() {
-        let mock = MockSearch::all_fail(GeminiError::RateLimited { retry_after: None });
+    async fn research_search_failure_returns_error() {
+        let mock = MockSearch::all_fail(BraveError::RateLimited { retry_after: None });
         let http = Client::new();
         let resolver = fetch::TokioDnsResolver;
 
@@ -557,13 +399,12 @@ mod tests {
             lang: Lang::En,
         };
         let err = research(&mock, &http, &req, &resolver).await.unwrap_err();
-        assert!(err.to_string().contains("rate limit"));
+        assert!(matches!(err, BraveError::RateLimited { .. }));
     }
 
-    /// [T-SE011] fetch_sources_sort_restores_input_order
+    /// [T-SE011] fetch_sources sort restores input order after buffer_unordered
     #[test]
     fn fetch_sources_sort_restores_input_order() {
-        // Simulate buffer_unordered completion order (2,0,1) differing from input order (0,1,2)
         let mut indexed_pages: Vec<(usize, FetchResult)> = vec![
             (
                 2,
