@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
+use crate::brave::client::BraveError;
 use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
 use crate::gemini::client::GeminiError;
@@ -338,6 +339,43 @@ impl From<GeminiError> for ScoutError {
             }
             // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
             GeminiError::Api { .. } => Self::unknown(e.to_string()),
+        }
+    }
+}
+
+impl From<BraveError> for ScoutError {
+    fn from(e: BraveError) -> Self {
+        match &e {
+            // Priority 1: USAGE_ERROR / config
+            BraveError::ApiKeyNotSet => Self::user_error(e.to_string())
+                .with_next_step("Set BRAVE_SEARCH_API_KEY environment variable"),
+            BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
+                "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
+            ),
+            // Priority 2: DATA_ERROR (4xx body or response parse failure)
+            BraveError::Parse(_) => Self::data_error(e.to_string()),
+            BraveError::Api { code, .. } if (400..500).contains(code) => {
+                Self::data_error(e.to_string())
+            }
+            // Priority 4: TIMEOUT
+            BraveError::Network(re) if re.is_timeout() => {
+                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            // Priority 4: TEMP_FAILURE
+            BraveError::RateLimited { .. } => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            BraveError::Server(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            BraveError::Network(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+            }
+            BraveError::Api { code, .. } if (500..=599).contains(code) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            // Unknown — Api codes that did not match 4xx or 5xx
+            BraveError::Api { .. } => Self::unknown(e.to_string()),
         }
     }
 }
