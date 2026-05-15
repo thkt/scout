@@ -11,12 +11,20 @@ Next.js App Routerの認証方式を調べたい場合に、どのような課�
 | 方法      | 手順                                    | 結果                                                    |
 | --------- | --------------------------------------- | ------------------------------------------------------- |
 | scoutなし | `curl` でHTML取得、`gh api` でJSON取得… | HTMLの壁、生JSON、ノイズだらけ                          |
-| scoutあり | `scout research "クエリ"` 一発          | Google検索ベースの回答 + ソースページを生Markdownで取得 |
+| scoutあり | `scout search` / `scout research`       | 生のソースURL一覧、または上位ページ全文をMarkdownで取得 |
+
+```sh
+scout search "Next.js App Router authentication"
+
+  https://nextjs.org/docs/.../authentication
+  https://authjs.dev/getting-started/installation
+  ...
+```
 
 ```sh
 scout research "Next.js App Router authentication best practices" --depth 5
 
-  Google検索に裏付けされた回答（ソースURL付き）...
+  # Research: Next.js App Router authentication best practices
 
   ## Fetched Pages
   ### https://nextjs.org/docs/.../authentication
@@ -28,9 +36,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
   - [Auth.js](https://authjs.dev/...)
 ```
 
-LLMは介在せず、一次ソースを直接読んで何が重要かを自分で判断できます。
-
-日本語クエリは自動で処理されます。「Next.js認証ベストプラクティス」は日本語のまま検索しつつ、ASCII技術用語（例: "Next.js"）を抽出した補助クエリにも展開するため、それらの用語を含む英語ドキュメントがヒットしやすくなります。ASCII用語を含まない純粋な日本語クエリではそのまま検索されます。
+`search` はBrave Searchから取得した生のURLを返し、`research` は上位Nページをクリーン Markdownで取得します。一次ソースとの間にLLMの要約レイヤーは入りません。
 
 ## scoutを使うべき場面（と使わなくていい場面）
 
@@ -65,9 +71,9 @@ cargo install --path .
 ### 環境変数
 
 ```sh
-export GEMINI_API_KEY="..."   # search/researchに必要（無料枠: https://aistudio.google.com/apikey）
-export GITHUB_TOKEN="..."     # 任意: 5,000回/時 vs 未設定60回/時
-export SLACK_TOKEN="..."      # 任意: Slackパーマリンクを `fetch` するときに必要（User OAuthトークン、xoxp-…）
+export BRAVE_SEARCH_API_KEY="..."   # search/researchに必要（無料枠: https://api-dashboard.search.brave.com/）
+export GITHUB_TOKEN="..."           # 任意: 5,000回/時 vs 未設定60回/時
+export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch` するときに必要（User OAuthトークン、xoxp-…）
 ```
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` の順で認証されます。
@@ -87,7 +93,7 @@ cargo install --path . --features js-rendering
 ```markdown
 ## Tools
 
-- `scout search "query"` — Gemini GroundingによるWeb検索
+- `scout search "query"` — BraveによるWeb検索（URLリスト）
 - `scout fetch URL` — WebページをクリーンなMarkdownに変換
 - `scout research "query" --depth N` — 複数ソース深掘り調査
 - `scout repo-tree owner/repo` — GitHubリポジトリのファイル一覧
@@ -105,30 +111,41 @@ cargo install --path . --features js-rendering
 
 バージョン確認は `scout --version`（または `-V`）、ヘルプは `scout --help` / `scout <command> --help` で表示できます。
 
+### `scout search` — ソースURLを返すWeb検索
+
+Brave Search APIで検索し、1行1URLでstdoutに出力します。Markdown装飾・要約・回答は含まれません。結果を `scout fetch`（あるいはエージェント側のツール）に渡して実際のソースを読みます。
+
+```sh
+scout search "Next.js server actions security"
+
+  https://nextjs.org/docs/...
+  https://...
+```
+
+```sh
+scout search "Rust async runtime" | head -3 | xargs -I _ scout fetch _
+```
+
+| フラグ       | 説明                                                                  |
+| ------------ | --------------------------------------------------------------------- |
+| `-l, --lang` | `ja`、`en`、または `auto`（デフォルト）— Braveの `search_lang` パラメータにマップ（クエリ文字列は書き換えない） |
+
+JSONエンベロープ: `data = {query, sources}`、各 `sources[i] = {url, title, description}`。`description` は検索エンジンのスニペット（LLM要約ではなく、Brave側で生成されたもの）。0件結果時は `sources: []`（`null` ではなく空配列）。
+
 ### `scout research` — 複数ソース深掘り調査
 
-Gemini Groundingで検索し、上位Nページを取得してレポートにまとめます。回答・ページ全文・ソースリストを一括で返します。`search` がAI回答とURLリストを返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
+BraveでWeb検索し、上位Nページを取得してレポートにまとめます。ページ全文とURLリストを返します。`search` がURL一覧のみ返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
 ```
 
-| フラグ        | 説明                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------- |
-| `-d, --depth` | 取得するページ数（1〜10、デフォルト3）                                                |
-| `-l, --lang`  | `ja`、`en`、または `auto`（デフォルト）— 日本語を検出すると日英両方のクエリに自動展開 |
+| フラグ        | 説明                                                                |
+| ------------- | ------------------------------------------------------------------- |
+| `-d, --depth` | 取得するページ数（1〜10、デフォルト3）                              |
+| `-l, --lang`  | `ja`、`en`、または `auto`（デフォルト）— Braveの `search_lang` にマップ |
 
-### `scout search` — ソース付きWeb検索
-
-Gemini GroundingとGoogle検索で、リンク一覧ではなくソースURL付きの合成回答を返します。
-
-```sh
-scout search "Next.js server actions security"
-```
-
-| フラグ       | 説明                                                                                  |
-| ------------ | ------------------------------------------------------------------------------------- |
-| `-l, --lang` | `ja`、`en`、または `auto`（デフォルト）— 日本語を検出すると日英両方のクエリに自動展開 |
+JSONエンベロープ: `data = {query, sources, fetched_pages, failed_urls}`。配列フィールドは空のときも `[]`（`null` ではない）。
 
 ### `scout fetch` — WebページをMarkdownに変換
 
@@ -190,12 +207,12 @@ scout repo-overview denoland/deno
 
 ## 仕組み
 
-| コマンド | 仕組み                                                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Research | Gemini Grounding検索（日本語クエリはバイリンガル展開）→ ソースURL収集 → 最大Nページを並行取得（5並列） → レポート組み立て |
-| Fetch    | SSRF多層防御（下記参照）                                                                                                  |
-| Search   | Gemini `generateContent` に `google_search` グラウンディングツールを有効化し、AI生成回答とソースURLの両方を返す           |
-| GitHub   | Git Trees APIでツリー全体を取得 → クライアント側でglobフィルタリング。大きなファイルにはContents APIのblobフォールバック  |
+| コマンド | 仕組み                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Research | Brave Search を1回呼び出し（`--lang` は `search_lang` にマップ）→ 最大Nページを並行取得（5並列）→ レポート組み立て                  |
+| Fetch    | SSRF多層防御（下記参照）                                                                                                            |
+| Search   | `GET https://api.search.brave.com/res/v1/web/search` を `X-Subscription-Token` 認証で呼び出し、`web.results[]` を `{url, title, description}` にマップして出力 |
+| GitHub   | Git Trees APIでツリー全体を取得 → クライアント側でglobフィルタリング。大きなファイルにはContents APIのblobフォールバック            |
 
 ### Fetchパイプライン
 
@@ -213,12 +230,12 @@ src/
 ├── tools/               コマンドハンドラー、パラメータ、エラー型
 ├── search/
 │   ├── engine.rs        リサーチエンジン（検索 + 取得 + まとめ）
-│   └── bilingual.rs     日英クエリ展開
+│   └── lang.rs          Lang → Brave search_lang のマッピング
 ├── fetch/
 │   ├── extractor.rs     Readability記事抽出
 │   ├── converter.rs     HTML → Markdown変換
 │   └── ssrf.rs          SSRF防御（URL検証、DNS事前チェック）
-├── gemini/              Gemini APIクライアント、グラウンディングレスポンス解析
+├── brave/               Brave Search APIクライアントとレスポンス型
 ├── github/              GitHub APIクライアント（遅延初期化）、ツリーフィルタリング、出力整形
 ├── slack/               Slackメッセージ取得（スレッド、リプライパーマリンク）
 ├── envelope.rs          JSON出力エンベロープ
@@ -245,14 +262,57 @@ src/
 | 124    | タイムアウト（リクエスト/転送タイムアウト、より長めのバックオフ推奨）                          |
 | 104    | 不明（分類不能。発生率上昇は分類カテゴリ不足のシグナル）                                       |
 
+## v2への移行ガイド
+
+scout v2.0.0は検索バックエンドをGemini GroundingからBrave Search APIに切り替えました。env var・出力フォーマット・JSONスキーマすべてが変更されています（破壊的変更）。
+
+**環境変数**
+
+```diff
+-export GEMINI_API_KEY="..."
++export BRAVE_SEARCH_API_KEY="..."   # 取得先: https://api-dashboard.search.brave.com/
+```
+
+`search` と `research` の両方が `BRAVE_SEARCH_API_KEY` を必要とします。無料枠: $5/月相当の継続クレジット（約1,000クエリ/月）。
+
+**`scout search` の出力**
+
+v1はGeminiが合成した回答と `**Sources:**` Markdownリストを返していましたが、v2は装飾なしの生URLを1行ずつ出力します。
+
+```diff
+- Claude, developed by Anthropic, offers robust capabilities...
+- ---
+- **Sources:**
+- - [Claude Code](https://vertexaisearch.cloud.google.com/grounding-api-redirect/...)
++ https://www.anthropic.com/claude-code
++ https://docs.anthropic.com/...
+```
+
+Sourcesは実際の到達先URL（Googleのリダイレクト経由ではない）になります。
+
+**`scout research` の出力**
+
+`## Search Result` セクション（Geminiが生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）と `## Sources`（URLリスト）は維持されます。
+
+**`--json` スキーマ**
+
+- `data.answer` は廃止（v1ではGeminiの回答を載せていた）
+- `data.sources[i]` は `{url, title, description}` の3フィールド（v1は `{url, title}` の2フィールド）。`description` はBrave検索エンジンのスニペットで、LLM要約ではない
+- `data.fetched_pages` と `data.failed_urls`（research のみ）は形は変わらず、空のときも `[]` を返す（`null` にはならない）
+
+**削除**
+
+- `Lang::apply_to_query`: クエリ末尾に `(日本語で回答)` / `(answer in English)` を追記する動作は廃止。`--lang ja/en` はBraveの `search_lang` パラメータにマップされ、クエリ文字列自体は変更されません
+- `--lang auto` のバイリンガル展開: 日本語入力に対する英語クエリの追加発行は廃止。両方必要な場合は呼び出し側で2回 `scout` を実行してください
+
 ## 制限事項
 
-| 制限                         | 内容                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Gemini APIキーが必要         | `search` と `research` には `GEMINI_API_KEY` が必要。無料枠: 100 RPM、1,500回/日                                                |
-| JSレンダリングにChromeが必要 | `fetch` はSPAを自動検出。`--features js-rendering` でビルドするとヘッドレスChrome（CDP）でJSレンダリング。Chrome/Chromiumが必要 |
-| GitHubレート制限             | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5〜6リクエスト消費                                        |
-| 取得サイズ上限               | ダウンロード10MB、出力100Kバイト                                                                                                |
+| 制限                          | 内容                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Brave Search APIキーが必要    | `search` と `research` には `BRAVE_SEARCH_API_KEY` が必要。無料枠: $5/月相当の継続クレジット（約1,000クエリ/月）               |
+| JSレンダリングにChromeが必要  | `fetch` はSPAを自動検出。`--features js-rendering` でビルドするとヘッドレスChrome（CDP）でJSレンダリング。Chrome/Chromiumが必要 |
+| GitHubレート制限              | 未認証: 60回/時。トークンあり: 5,000回/時。`repo-overview` は1回あたり5〜6リクエスト消費                                        |
+| 取得サイズ上限                | ダウンロード10MB、出力100Kバイト                                                                                                |
 
 ## ライセンス
 

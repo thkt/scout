@@ -20,9 +20,17 @@ Multiple tools, multiple formats, lots of noise.
 **With scout:**
 
 ```sh
+scout search "Next.js App Router authentication"
+
+  https://nextjs.org/docs/.../authentication
+  https://authjs.dev/getting-started/installation
+  ...
+```
+
+```sh
 scout research "Next.js App Router authentication best practices" --depth 5
 
-  Grounded answer with citations...
+  # Research: Next.js App Router authentication best practices
 
   ## Fetched Pages
   ### https://nextjs.org/docs/.../authentication
@@ -36,12 +44,9 @@ scout research "Next.js App Router authentication best practices" --depth 5
   ## Sources
   - [Next.js Authentication](https://nextjs.org/docs/...)
   - [Auth.js](https://authjs.dev/...)
-  - ...
 ```
 
-One command, grounded answer from Google Search, plus 5 source pages as clean Markdown. No LLM intermediary — you read the primary sources and decide what matters.
-
-Japanese queries are handled automatically: "Next.js 認証 ベストプラクティス" expands to both the original and a query built from extracted ASCII technical terms (e.g., "Next.js"), improving coverage of English documentation that uses those terms. Pure Japanese queries without ASCII terms are searched as-is.
+`search` returns raw source URLs from Brave Search. `research` fetches the top N pages as clean Markdown. No LLM summarization layer between you and the primary sources.
 
 ## When to use scout (and when not to)
 
@@ -76,9 +81,9 @@ Pre-built binaries in [Releases](https://github.com/thkt/scout/releases) — mac
 ### Environment
 
 ```sh
-export GEMINI_API_KEY="..."   # Required for search/research (free tier: https://aistudio.google.com/apikey)
-export GITHUB_TOKEN="..."     # Optional: 5,000 req/hour vs 60/hour unauthenticated
-export SLACK_TOKEN="..."      # Optional: required for `fetch` on Slack permalinks (User OAuth token, xoxp-…)
+export BRAVE_SEARCH_API_KEY="..."   # Required for search/research (free tier: https://api-dashboard.search.brave.com/)
+export GITHUB_TOKEN="..."           # Optional: 5,000 req/hour vs 60/hour unauthenticated
+export SLACK_TOKEN="..."            # Optional: required for `fetch` on Slack permalinks (User OAuth token, xoxp-…)
 ```
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` are all supported, in that order.
@@ -98,7 +103,7 @@ Add to your project's `CLAUDE.md`:
 ```markdown
 ## Tools
 
-- `scout search "query"` — web search via Gemini Grounding
+- `scout search "query"` — web search via Brave (URL list)
 - `scout fetch URL` — web page to clean Markdown
 - `scout research "query" --depth N` — multi-source deep research
 - `scout repo-tree owner/repo` — list files in a GitHub repo
@@ -116,30 +121,41 @@ Add `--json` to any command for a one-line JSON envelope instead of Markdown —
 
 Use `scout --version` (or `-V`) to print the version and `scout --help` / `scout <command> --help` for built-in help.
 
+### `scout search` — Web search returning source URLs
+
+Brave Search API. Returns one URL per line on stdout — no markdown decoration, no summary, no answer. Pipe the result into `scout fetch` (or your agent's tool of choice) to read the actual sources.
+
+```sh
+scout search "Next.js server actions security"
+
+  https://nextjs.org/docs/...
+  https://...
+```
+
+```sh
+scout search "Rust async runtime" | head -3 | xargs -I _ scout fetch _
+```
+
+| Flag         | Description                                                                          |
+| ------------ | ------------------------------------------------------------------------------------ |
+| `-l, --lang` | `ja`, `en`, or `auto` (default) — maps to Brave's `search_lang` parameter, no rewrite of the query string |
+
+JSON envelope: `data = {query, sources}`, where each `sources[i] = {url, title, description}`. `description` is the search-engine snippet (Brave-provided, not an LLM summary). Zero-result responses return `sources: []`, not `null`.
+
 ### `scout research` — Multi-source deep research
 
-Searches the web via Gemini Grounding, fetches the top N source pages, and compiles a report — grounded answer, full page content, and deduplicated source list. Unlike `search` which returns an AI answer with URLs, `research` actually reads those pages and includes the full content — so you (or your AI agent) can verify claims against primary sources.
+Searches the web via Brave, fetches the top N source pages, and compiles a report — full page content plus the URL list. Unlike `search` which returns URLs only, `research` actually reads those pages so you (or your AI agent) can verify claims against primary sources.
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
 ```
 
-| Flag          | Description                                                                              |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| `-d, --depth` | Pages to fetch (1–10, default 3)                                                         |
-| `-l, --lang`  | `ja`, `en`, or `auto` (default) — auto-detects Japanese and expands to bilingual queries |
+| Flag          | Description                                                  |
+| ------------- | ------------------------------------------------------------ |
+| `-d, --depth` | Pages to fetch (1–10, default 3)                             |
+| `-l, --lang`  | `ja`, `en`, or `auto` (default) — maps to Brave's `search_lang` |
 
-### `scout search` — Grounded web search
-
-Gemini Grounding with Google Search. Returns a synthesized answer with source URLs — not a list of links to follow.
-
-```sh
-scout search "Next.js server actions security"
-```
-
-| Flag         | Description                                                                              |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| `-l, --lang` | `ja`, `en`, or `auto` (default) — auto-detects Japanese and expands to bilingual queries |
+JSON envelope: `data = {query, sources, fetched_pages, failed_urls}`. All array fields are `[]` (never `null`) when empty.
 
 ### `scout fetch` — Web page to Markdown
 
@@ -201,7 +217,7 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 
 ## How it works
 
-**Research** — Runs Gemini Grounding search (with bilingual expansion for Japanese queries), collects unique source URLs, fetches up to N pages concurrently (5 parallel), then assembles the report: search answers + page content + source list.
+**Research** — Single Brave Search call (respecting `--lang` via `search_lang`), then up to N URLs are fetched in parallel (5 at a time) and assembled into the report: fetched page content + failed URLs + source list.
 
 **Fetch** — SSRF defense-in-depth:
 
@@ -211,7 +227,7 @@ URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → 
 
 Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. 10 MB download cap, 100K byte output. Note: SSRF defense is designed for local CLI use where the user controls URL input. If embedding scout in a service that accepts untrusted URLs, additional measures (e.g., DNS pinning) are required to close the TOCTOU gap between DNS check and connection.
 
-**Search** — Gemini `generateContent` with `google_search` grounding tool. The response includes both the generated answer and `groundingMetadata` with source URLs extracted from Google Search.
+**Search** — `GET https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` auth. The response's `web.results[]` is mapped 1:1 to `{url, title, description}` and emitted verbatim.
 
 **GitHub** — Git Trees API for full-tree retrieval with client-side glob filtering. Contents API with blob fallback for large files.
 
@@ -223,12 +239,12 @@ src/
 ├── tools/               Command handlers, params, error types
 ├── search/
 │   ├── engine.rs        Research engine (search + fetch + compile)
-│   └── bilingual.rs     Japanese/English query expansion
+│   └── lang.rs          Lang → Brave search_lang mapping
 ├── fetch/
 │   ├── extractor.rs     Readability article extraction
 │   ├── converter.rs     HTML → Markdown conversion
 │   └── ssrf.rs          SSRF defense (URL validation, DNS pre-check)
-├── gemini/              Gemini API client, grounding response parsing
+├── brave/               Brave Search API client and response types
 ├── github/              GitHub API client (lazy-init), tree filtering, formatting
 ├── slack/               Slack message fetching (thread, reply permalink)
 ├── envelope.rs          JSON output envelope
@@ -255,14 +271,57 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with a GNU coreutils
 | 124  | Timeout (request/transport timeout, retryable — longer backoff advised) |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
 
+## Migration to v2
+
+scout v2.0.0 switches the search backend from Gemini Grounding to Brave Search API. The change is breaking: env var, output format, and JSON schema all changed.
+
+**Env var**
+
+```diff
+-export GEMINI_API_KEY="..."
++export BRAVE_SEARCH_API_KEY="..."   # Get one at https://api-dashboard.search.brave.com/
+```
+
+`search` and `research` both need `BRAVE_SEARCH_API_KEY`. Free tier: ~1,000 queries/month recurring credit ($5/month equivalent).
+
+**`scout search` output**
+
+v1 returned a Gemini-synthesized answer plus a `**Sources:**` markdown list. v2 returns plain URLs — one per line, no decoration:
+
+```diff
+- Claude, developed by Anthropic, offers robust capabilities...
+- ---
+- **Sources:**
+- - [Claude Code](https://vertexaisearch.cloud.google.com/grounding-api-redirect/...)
++ https://www.anthropic.com/claude-code
++ https://docs.anthropic.com/...
+```
+
+Sources are now the actual destination URLs (not Google redirect URLs).
+
+**`scout research` output**
+
+The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content) and `## Sources` (URL list).
+
+**`--json` schema**
+
+- `data.answer` is gone (v1 carried the Gemini answer)
+- `data.sources[i]` is now `{url, title, description}` instead of `{url, title}`. `description` is the Brave-provided search-engine snippet, not an LLM summary
+- `data.fetched_pages` and `data.failed_urls` (research only) are unchanged in shape; both default to `[]` (never `null`) when empty
+
+**Removed**
+
+- `Lang::apply_to_query`: queries are no longer suffixed with `(日本語で回答)` / `(answer in English)`. `--lang ja/en` now maps to Brave's `search_lang` parameter and the query string itself is unmodified
+- Bilingual expansion for `--lang auto`: scout no longer issues a second English-only query for Japanese inputs. If you need both, call `scout` twice from the caller side
+
 ## Limitations
 
-| Limitation                | Details                                                                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Gemini API key required   | `search` and `research` need `GEMINI_API_KEY`. Free tier: 100 RPM, 1,500/day                                                              |
-| JS rendering needs Chrome | `fetch` auto-detects SPAs. With `--features js-rendering`, falls back to headless Chrome (CDP) for JS rendering. Requires Chrome/Chromium |
-| GitHub rate limits        | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5–6 requests per call                                              |
-| Fetch size cap            | 10 MB download limit, 100K byte output                                                                                                    |
+| Limitation                  | Details                                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Brave Search API key needed | `search` and `research` need `BRAVE_SEARCH_API_KEY`. Free tier: $5/month recurring credit (~1,000 q/month)                                |
+| JS rendering needs Chrome   | `fetch` auto-detects SPAs. With `--features js-rendering`, falls back to headless Chrome (CDP) for JS rendering. Requires Chrome/Chromium |
+| GitHub rate limits          | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5–6 requests per call                                              |
+| Fetch size cap              | 10 MB download limit, 100K byte output                                                                                                    |
 
 ## License
 
