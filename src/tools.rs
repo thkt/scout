@@ -335,27 +335,7 @@ impl Scout {
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query));
         }
-        for f in &report.failed_urls {
-            degradation.push(
-                format!("Failed to fetch {}: {}", f.url, f.reason),
-                DegradedReason::UrlFetchFailed,
-            );
-        }
-        let raw_fallback_pages: Vec<&str> = report
-            .fetched_pages
-            .iter()
-            .filter(|p| p.used_raw_fallback)
-            .map(|p| p.url.as_str())
-            .collect();
-        if !raw_fallback_pages.is_empty() {
-            degradation.push(
-                format!(
-                    "Readability extraction failed for: {}",
-                    raw_fallback_pages.join(", ")
-                ),
-                DegradedReason::ReadabilityFallback,
-            );
-        }
+        collect_research_degradations(&report, &mut degradation);
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
@@ -652,6 +632,30 @@ async fn resolve_readme(
             None
         }
     })
+}
+
+fn collect_research_degradations(report: &engine::ResearchReport, degradation: &mut Degradation) {
+    for f in &report.failed_urls {
+        degradation.push(
+            format!("Failed to fetch {}: {}", f.url, f.reason),
+            DegradedReason::UrlFetchFailed,
+        );
+    }
+    let raw_fallback_pages: Vec<&str> = report
+        .fetched_pages
+        .iter()
+        .filter(|p| p.used_raw_fallback)
+        .map(|p| p.url.as_str())
+        .collect();
+    if !raw_fallback_pages.is_empty() {
+        degradation.push(
+            format!(
+                "Readability extraction failed for: {}",
+                raw_fallback_pages.join(", ")
+            ),
+            DegradedReason::ReadabilityFallback,
+        );
+    }
 }
 
 fn format_fetch_output(result: &FetchResult) -> String {

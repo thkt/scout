@@ -164,27 +164,31 @@ async fn classify_response(response: reqwest::Response) -> Result<reqwest::Respo
         return Err(BraveError::Server(status.as_u16()));
     }
     if !status.is_success() {
-        let mut text = match response.text().await {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(status = %status, error = %e, "Brave API error; body unreadable");
-                "(body unreadable)".to_owned()
-            }
-        };
-        if text.len() > BODY_SNIPPET_BYTES {
-            let mut end = BODY_SNIPPET_BYTES;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-        }
+        let snippet = read_error_body_snippet(response, status).await;
         warn!(status = %status, "Brave API error");
         return Err(BraveError::Api {
             code: status.as_u16(),
-            message: format!("HTTP {status}: {text}"),
+            message: format!("HTTP {status}: {snippet}"),
         });
     }
     Ok(response)
+}
+
+async fn read_error_body_snippet(
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+) -> String {
+    let mut text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(status = %status, error = %e, "Brave API error; body unreadable");
+            return "(body unreadable)".to_owned();
+        }
+    };
+    if text.len() > BODY_SNIPPET_BYTES {
+        text.truncate(text.floor_char_boundary(BODY_SNIPPET_BYTES));
+    }
+    text
 }
 
 impl SearchClient for BraveClient {
