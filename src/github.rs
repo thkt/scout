@@ -29,8 +29,7 @@ const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
-    retry_with,
+    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -131,10 +130,13 @@ impl GitHubClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
-        retry_with(
+        retry_with_rate_limit(
             || self.get_json_once(path),
             is_retriable,
-            github_delay,
+            |e| match e {
+                GitHubError::RateLimited { retry_after } => *retry_after,
+                _ => None,
+            },
             || GitHubError::RateLimited { retry_after: None },
         )
         .await
@@ -315,14 +317,6 @@ fn is_retriable(e: &GitHubError) -> bool {
         GitHubError::Network(e) => is_transient_network(e),
         _ => false,
     }
-}
-
-fn github_delay(e: &GitHubError, attempt: u32) -> Duration {
-    let retry_after = match e {
-        GitHubError::RateLimited { retry_after } => *retry_after,
-        _ => None,
-    };
-    retry_after_or_backoff(retry_after, attempt)
 }
 
 fn secs_until_ratelimit_reset(headers: &HeaderMap) -> Option<u64> {

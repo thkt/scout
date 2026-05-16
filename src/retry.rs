@@ -83,7 +83,6 @@ pub(crate) fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32) -> 
 /// The cap policy (refuse retry when retry-after exceeds
 /// `MAX_RETRY_AFTER_SECS`) is the caller's `is_retriable` responsibility,
 /// typically via `retry_after_within_cap`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
     operation: F,
     is_retriable: impl Fn(&E) -> bool,

@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::time::Duration;
 
 use futures::future::join_all;
 use reqwest::Client;
@@ -10,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, assert_https};
-use crate::retry::{parse_retry_after, retry_after_or_backoff, retry_after_within_cap, retry_with};
+use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SlackError {
@@ -172,10 +171,13 @@ impl SlackClient {
         method: &str,
         params: &[(&str, &str)],
     ) -> Result<T, SlackError> {
-        retry_with(
+        retry_with_rate_limit(
             || self.api_get_once(method, params),
             is_retriable,
-            slack_delay,
+            |e| match e {
+                SlackError::RateLimited { retry_after } => *retry_after,
+                _ => None,
+            },
             || SlackError::RateLimited { retry_after: None },
         )
         .await
@@ -521,14 +523,6 @@ fn is_retriable(e: &SlackError) -> bool {
         SlackError::Network(_) | SlackError::Timeout(_) => true,
         _ => false,
     }
-}
-
-fn slack_delay(e: &SlackError, attempt: u32) -> Duration {
-    let retry_after = match e {
-        SlackError::RateLimited { retry_after } => *retry_after,
-        _ => None,
-    };
-    retry_after_or_backoff(retry_after, attempt)
 }
 
 #[cfg(test)]
