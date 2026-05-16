@@ -90,18 +90,19 @@ pub(crate) struct BraveClient {
 impl BraveClient {
     /// Constructs a `BraveClient` from the `BRAVE_SEARCH_API_KEY` env var.
     pub(crate) fn from_env(http: Client) -> Result<Self, BraveError> {
-        Self::from_env_with(http, |k| env::var(k).map_err(|_| BraveError::ApiKeyNotSet))
+        Self::from_env_with(http, |k| env::var(k))
     }
 
     /// Constructs a `BraveClient` using a caller-supplied env reader. The
-    /// production [`from_env`] delegates here with `std::env::var`; unit
-    /// tests pass a closure so the env-not-set / whitespace branches can
-    /// be exercised without `unsafe_code = "forbid"` rejecting `set_var`.
+    /// production [`Self::from_env`] delegates here with `std::env::var`;
+    /// unit tests pass a closure so the env-not-set / whitespace branches
+    /// can be exercised without `unsafe_code = "forbid"` rejecting
+    /// `set_var`.
     pub(crate) fn from_env_with<F>(http: Client, get_var: F) -> Result<Self, BraveError>
     where
-        F: FnOnce(&str) -> Result<String, BraveError>,
+        F: Fn(&str) -> Result<String, env::VarError>,
     {
-        let api_key = get_var("BRAVE_SEARCH_API_KEY")?;
+        let api_key = get_var("BRAVE_SEARCH_API_KEY").map_err(|_| BraveError::ApiKeyNotSet)?;
         if api_key.trim().is_empty() {
             return Err(BraveError::ApiKeyNotSet);
         }
@@ -124,17 +125,30 @@ impl BraveClient {
         }
     }
 
+    /// Returns `true` when `send_request` should run [`validate_https`]
+    /// against `self.base_url`. Production builds always check; test
+    /// builds honor the per-client `skip_https_check` flag so wiremock
+    /// servers on `http://127.0.0.1` keep working without re-introducing
+    /// a global `cfg!(test)` bypass on the production codepath.
+    fn should_check_https(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.skip_https_check
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
     async fn send_request(
         &self,
         query: &str,
         search_lang: Option<&str>,
     ) -> Result<WebSearchResponse, BraveError> {
-        #[cfg(test)]
-        if !self.skip_https_check {
+        if self.should_check_https() {
             validate_https(&self.base_url)?;
         }
-        #[cfg(not(test))]
-        validate_https(&self.base_url)?;
         let url = build_url(&self.base_url, query, search_lang)?;
 
         let response = self
@@ -485,12 +499,12 @@ mod http_tests {
     }
 
     // T-RC001: from_env_with_returns_api_key_not_set_when_closure_errs
-    /// FR-001 / FR-002: closure returning `Err(BraveError::ApiKeyNotSet)` must surface
-    /// as the same error from `from_env_with`. Exercises the injectable env path that
-    /// `from_env` delegates to.
+    /// FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
+    /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
+    /// env path that `from_env` delegates to.
     #[test]
     fn from_env_with_returns_api_key_not_set_when_closure_errs() {
-        let result = BraveClient::from_env_with(Client::new(), |_| Err(BraveError::ApiKeyNotSet));
+        let result = BraveClient::from_env_with(Client::new(), |_| Err(env::VarError::NotPresent));
         assert!(
             matches!(result, Err(BraveError::ApiKeyNotSet)),
             "expected ApiKeyNotSet, got: {result:?}"

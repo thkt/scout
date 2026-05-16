@@ -36,9 +36,13 @@ pub(crate) fn validate_https(url: &str) -> Result<(), BraveError> {
     }
 }
 
-/// Panicking HTTPS check retained for backends (github, slack) that have
-/// not migrated to the [`validate_https`] `Result` form. Bypassed under
-/// `cfg!(test)` so wiremock servers on `http://127.0.0.1` keep working.
+/// Panicking HTTPS check retained for backends that have not migrated to
+/// the [`validate_https`] `Result` form. Bypassed under `cfg!(test)` so
+/// wiremock servers on `http://127.0.0.1` keep working.
+// FIXME: callers `github.rs::request` and `slack.rs::api_get_once` still
+//        use this panic form; migrate both to validate_https + a per-client
+//        skip flag (parallel to BraveClient::skip_https_check) and delete
+//        this function.
 pub(crate) fn assert_https(url: &str) {
     assert!(
         url.starts_with("https://") || cfg!(test),
