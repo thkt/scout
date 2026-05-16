@@ -6,6 +6,8 @@ decision-makers: thkt (project owner)
 
 # Switch Search Backend from Gemini Grounding to Brave Search API
 
+> **Implementation Status:** Completed 2026-05-16 on branch `feat/brave-migration-v2`. The Confirmation checklist below and References to `src/gemini/*`, `src/search/bilingual.rs`, `Lang::apply_to_query` reflect the pre-migration state at the time this ADR was authored; those files and APIs no longer exist in the codebase.
+
 ## Context and Problem Statement
 
 `.claude/OUTCOME.md` は scout を「AI エージェントが一次ソースを直接読むためのツール」と定義し、Non-goals に「LLM による要約や統合判断を scout 側で代替すること」を明示する。
