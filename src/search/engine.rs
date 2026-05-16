@@ -49,13 +49,8 @@ pub(crate) async fn research(
     let search_lang = req.lang.to_brave_param();
     let sources = brave.search(req.query, search_lang).await?;
 
-    let urls: Vec<String> = sources
-        .iter()
-        .take(req.depth as usize)
-        .map(|s| s.url.clone())
-        .collect();
-
-    let (fetched_pages, failed_urls) = fetch_sources(http, urls, resolver).await;
+    let (fetched_pages, failed_urls) =
+        fetch_sources(http, &sources, req.depth as usize, resolver).await;
 
     Ok(ResearchReport {
         fetched_pages,
@@ -66,14 +61,16 @@ pub(crate) async fn research(
 
 async fn fetch_sources(
     http: &Client,
-    urls: Vec<String>,
+    sources: &[SearchResult],
+    depth: usize,
     resolver: &impl DnsResolver,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
-    let fetch_outcomes: Vec<_> = stream::iter(urls.into_iter().enumerate())
-        .map(|(idx, url)| async move {
+    let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
+        .map(|(idx, source)| async move {
+            let url = source.url.as_str();
             let result = timeout(
                 FETCH_TIMEOUT,
-                fetch::fetch_page(http, &url, fetch::FetchOptions::default(), resolver),
+                fetch::fetch_page(http, url, fetch::FetchOptions::default(), resolver),
             )
             .await;
             let result = match result {
@@ -97,10 +94,13 @@ async fn fetch_sources(
     for (idx, url, outcome) in fetch_outcomes {
         match outcome {
             Ok(page) => indexed_pages.push((idx, page)),
-            Err(e) => failed_urls.push(FailedUrl {
-                url,
-                reason: e.to_string(),
-            }),
+            Err(e) => {
+                warn!(url = %url, error = %e, "page fetch failed");
+                failed_urls.push(FailedUrl {
+                    url: url.to_owned(),
+                    reason: e.to_string(),
+                });
+            }
         }
     }
 
