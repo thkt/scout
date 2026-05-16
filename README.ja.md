@@ -273,7 +273,7 @@ scout v2.0.0は検索バックエンドをGemini GroundingからBrave Search API
 +export BRAVE_SEARCH_API_KEY="..."   # 取得先: https://api-dashboard.search.brave.com/
 ```
 
-`search` と `research` の両方が `BRAVE_SEARCH_API_KEY` を必要とします。無料枠: $5/月相当の継続クレジット（約1,000クエリ/月）。
+`search` と `research` の両方が `BRAVE_SEARCH_API_KEY` を必要とします。Brave Search の無料枠詳細は制限事項を参照してください。
 
 **`scout search` の出力**
 
@@ -293,6 +293,8 @@ Sourcesは実際の到達先URL（Googleのリダイレクト経由ではない�
 **`scout research` の出力**
 
 `## Search Result` セクション（Geminiが生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）と `## Sources`（URLリスト）は維持されます。
+
+`research` は Brave Search 自体が retry 後も失敗した場合に hard-fail しなくなりました。代わりに degraded report（`data.sources: []`、fetched pages なし）を返し、`degraded_reasons` に `BraveSearchFailed` を追加するため、呼び出し側はエラーメッセージを parse せずに検索段階の失敗を検知できます。
 
 **`--json` スキーマ**
 

@@ -225,7 +225,7 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → Post-redirect recheck → Readability → Markdown
 ```
 
-Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. 10 MB download cap, 100K byte output. Note: SSRF defense is designed for local CLI use where the user controls URL input. If embedding scout in a service that accepts untrusted URLs, additional measures (e.g., DNS pinning) are required to close the TOCTOU gap between DNS check and connection.
+Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. See Limitations for size caps. Note: SSRF defense is designed for local CLI use where the user controls URL input. If embedding scout in a service that accepts untrusted URLs, additional measures (e.g., DNS pinning) are required to close the TOCTOU gap between DNS check and connection.
 
 **Search** — `GET https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` auth. The response's `web.results[]` is mapped 1:1 to `{url, title, description}` and emitted verbatim.
 
@@ -282,7 +282,7 @@ scout v2.0.0 switches the search backend from Gemini Grounding to Brave Search A
 +export BRAVE_SEARCH_API_KEY="..."   # Get one at https://api-dashboard.search.brave.com/
 ```
 
-`search` and `research` both need `BRAVE_SEARCH_API_KEY`. Free tier: ~1,000 queries/month recurring credit ($5/month equivalent).
+`search` and `research` both need `BRAVE_SEARCH_API_KEY`. See Limitations for Brave Search free tier details.
 
 **`scout search` output**
 
@@ -303,6 +303,8 @@ Sources are now the actual destination URLs (not Google redirect URLs).
 
 The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content) and `## Sources` (URL list).
 
+`research` no longer hard-fails when Brave Search itself errors after retry. Instead it returns a degraded report (`data.sources: []`, no fetched pages) and adds `BraveSearchFailed` to `degraded_reasons` so callers can detect the search-tier failure without parsing error messages.
+
 **`--json` schema**
 
 - `data.answer` is gone (v1 carried the Gemini answer)
@@ -321,7 +323,7 @@ The `## Search Result` section (which carried the Gemini-generated answer) is re
 | Brave Search API key needed | `search` and `research` need `BRAVE_SEARCH_API_KEY`. Free tier: $5/month recurring credit (~1,000 q/month)                                |
 | JS rendering needs Chrome   | `fetch` auto-detects SPAs. With `--features js-rendering`, falls back to headless Chrome (CDP) for JS rendering. Requires Chrome/Chromium |
 | GitHub rate limits          | Unauthenticated: 60/hour. With token: 5,000/hour. `repo-overview` uses 5–6 requests per call                                              |
-| Fetch size cap              | 10 MB download limit, 100K byte output                                                                                                    |
+| Fetch size cap              | 10 MB download limit (response body), 100 KB output cap (markdown after extraction)                                                       |
 
 ## License
 
