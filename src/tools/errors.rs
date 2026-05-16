@@ -254,30 +254,22 @@ impl From<FetchError> for ScoutError {
             FetchError::Status(404) => Self::not_found(e.to_string())
                 .with_next_step("Check that the URL is correct and the resource exists"),
             // Priority 4: TEMP_FAILURE
-            FetchError::Status(408 | 429) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            FetchError::Status(408 | 429) => transient_with_retry_hint(&e),
             // Priority 2: DATA_ERROR (4xx body)
             FetchError::Status(code) if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
             // Priority 4: TEMP_FAILURE (5xx and other unmatched)
-            FetchError::Status(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            FetchError::Status(_) => transient_with_retry_hint(&e),
             // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
-            FetchError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
+            FetchError::Timeout(_) => timeout_with_retry_hint(&e),
             // Priority 4: TEMP_FAILURE (non-Status variants)
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
             // `is_transient_network` covers both connect and timeout, but
             // ADR-0065 splits timeout into 124. Check `is_timeout()` first.
-            FetchError::Http(re) if re.is_timeout() => {
-                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            FetchError::Http(re) if is_transient_network(re) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            FetchError::Http(re) if re.is_timeout() => timeout_with_retry_hint(&e),
+            FetchError::Http(re) if is_transient_network(re) => transient_with_network_hint(&e),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             FetchError::BrowserFailed(_) => Self::io_error(e.to_string()),
             // Unknown — reqwest errors that do not match transient network patterns
@@ -301,20 +293,16 @@ impl From<SlackError> for ScoutError {
                 }
                 // Priority 4: TEMP_FAILURE
                 "internal_error" | "service_unavailable" | "fatal_error" => {
-                    Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                    transient_with_retry_hint(&e)
                 }
                 // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
                 _ => Self::user_error(e.to_string()),
             },
             // Priority 4: TEMP_FAILURE
-            SlackError::RateLimited { .. } => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            SlackError::Network(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            SlackError::RateLimited { .. } => transient_with_retry_hint(&e),
+            SlackError::Network(_) => transient_with_network_hint(&e),
             // Priority 4: TIMEOUT
-            SlackError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
+            SlackError::Timeout(_) => timeout_with_retry_hint(&e),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }

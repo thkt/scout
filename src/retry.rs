@@ -20,7 +20,7 @@ pub(crate) fn is_transient_network(e: &Error) -> bool {
     e.is_connect() || e.is_timeout()
 }
 
-pub(crate) async fn retry_with<T, E, F, Fut>(
+async fn retry_with<T, E, F, Fut>(
     operation: F,
     is_retriable: impl Fn(&E) -> bool,
     delay_for: impl Fn(&E, u32) -> Duration,
