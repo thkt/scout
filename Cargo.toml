@@ -32,6 +32,7 @@ chromiumoxide = { version = "0.9", optional = true }
 js-rendering = ["chromiumoxide"]
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 tracing-test = "0.2"
 wiremock = "0.6"
 
