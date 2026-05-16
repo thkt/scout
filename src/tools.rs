@@ -21,13 +21,13 @@ use params::{
     resolve_input,
 };
 
+use crate::brave::client::{BraveClient, BraveError, SearchClient as _};
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
-use crate::gemini::client::{GeminiClient, GeminiError, SearchClient as _};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient};
-use crate::markdown::{escape_md_inline, escape_md_link, shift_headings, truncate_with_note};
+use crate::markdown::{shift_headings, truncate_with_note};
 use crate::search::engine;
 use crate::slack::{SlackClient, SlackError, SlackUrl, parse_slack_url};
 
@@ -124,13 +124,17 @@ const OVERVIEW_RELEASES: u8 = 3;
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 /// Slack: up to 3 API calls + N user resolutions; 60s covers large threads.
 const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Research: Brave search (up to 20s + retries) + up to 10 page fetches (15s each).
+/// 45s caps total wall-clock at the orchestration layer; without this cap a degraded
+/// Brave + full-depth fetch could block ~210s.
+const RESEARCH_TOOL_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct Scout {
     http: Client,
     /// HTTP client with redirect following disabled for SSRF-safe fetching.
     /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
     fetch_http: Client,
-    gemini: Option<GeminiClient>,
+    brave: Option<BraveClient>,
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
@@ -150,13 +154,13 @@ impl Scout {
             .redirect(Policy::none())
             .build()
             .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-        let gemini = GeminiClient::from_env(http.clone())
-            .inspect_err(|e| warn!("Gemini client not available: {e}"))
+        let brave = BraveClient::from_env(http.clone())
+            .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
         Ok(Self {
             http,
             fetch_http,
-            gemini,
+            brave,
             github: OnceCell::new(),
         })
     }
@@ -167,10 +171,10 @@ impl Scout {
             .await
     }
 
-    fn gemini(&self) -> Result<&GeminiClient, ScoutError> {
-        self.gemini
+    fn brave(&self) -> Result<&BraveClient, ScoutError> {
+        self.brave
             .as_ref()
-            .ok_or_else(|| ScoutError::from(GeminiError::ApiKeyNotSet))
+            .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
     }
 
     pub async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
@@ -189,29 +193,24 @@ impl Scout {
 
         info!(query = %query, "search");
 
-        let gemini = self.gemini()?;
-        let search_query = params.lang.apply_to_query(&query);
-        let result = gemini.search(&search_query).await?;
+        let brave = self.brave()?;
+        let search_lang = params.lang.to_brave_param();
+        let sources = brave.search(&query, search_lang).await?;
 
-        // Shift by 2, consistent with fetch standalone output.
-        let answer_md = result.answer.clone().unwrap_or_else(|| {
-            "(No answer returned — the query may have been filtered by safety settings.)".to_owned()
+        info!(sources = sources.len(), "search complete");
+
+        // Default output: one URL per line, no markdown decoration.
+        // OUTCOME.md: AI agents receive raw source URLs without intermediate summary.
+        let markdown = sources
+            .iter()
+            .map(|s| s.url.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let data = serde_json::json!({
+            "query": query,
+            "sources": sources,
         });
-        let mut markdown = shift_headings(&answer_md, 2);
-
-        if !result.sources.is_empty() {
-            markdown.push_str("\n\n---\n**Sources:**\n");
-            for source in &result.sources {
-                markdown.push_str(&format!(
-                    "- [{}]({})\n",
-                    escape_md_inline(&source.title),
-                    escape_md_link(&source.url)
-                ));
-            }
-        }
-
-        info!(sources = result.sources.len(), "search complete");
-        let data = serde_json::to_value(&result).expect("GroundedResult is Serialize");
         Ok(CommandOutput::ok(markdown, data))
     }
 
@@ -287,49 +286,56 @@ impl Scout {
 
         info!(query = %query, depth = params.depth, "research");
 
-        let gemini = self.gemini()?;
-
+        let brave = self.brave()?;
         let req = engine::ResearchRequest {
             query: &query,
             depth: params.depth,
             lang: params.lang,
         };
-        let report = engine::research(gemini, &self.fetch_http, &req, &TokioDnsResolver).await?;
+
+        let mut degradation = Degradation::default();
+
+        let report = match timeout(
+            RESEARCH_TOOL_TIMEOUT,
+            engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver),
+        )
+        .await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) if e.is_degradable() => {
+                warn!(error = %e, "Brave search failed; returning degraded report");
+                degradation.push(
+                    format!("Brave search failed: {e}"),
+                    DegradedReason::BraveSearchFailed,
+                );
+                engine::ResearchReport {
+                    fetched_pages: vec![],
+                    failed_urls: vec![],
+                    sources: vec![],
+                }
+            }
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                return Err(ScoutError::timeout(format!(
+                    "research timed out after {}s",
+                    RESEARCH_TOOL_TIMEOUT.as_secs()
+                )));
+            }
+        };
 
         info!(
             pages = report.fetched_pages.len(),
             failed = report.failed_urls.len(),
-            sources = report.all_sources.len(),
+            sources = report.sources.len(),
             "research complete"
         );
 
         let markdown = engine::format_report(&report, &query);
         let mut data = serde_json::to_value(&report).expect("ResearchReport is Serialize");
         if let Some(map) = data.as_object_mut() {
-            map.insert("query".to_owned(), serde_json::Value::String(query.clone()));
+            map.insert("query".to_owned(), serde_json::Value::String(query));
         }
-        let mut degradation = Degradation::default();
-        for f in &report.failed_urls {
-            degradation.push(
-                format!("Failed to fetch {}: {}", f.url, f.reason),
-                DegradedReason::UrlFetchFailed,
-            );
-        }
-        let raw_fallback_pages: Vec<&str> = report
-            .fetched_pages
-            .iter()
-            .filter(|p| p.used_raw_fallback)
-            .map(|p| p.url.as_str())
-            .collect();
-        if !raw_fallback_pages.is_empty() {
-            degradation.push(
-                format!(
-                    "Readability extraction failed for: {}",
-                    raw_fallback_pages.join(", ")
-                ),
-                DegradedReason::ReadabilityFallback,
-            );
-        }
+        collect_research_degradations(&report, &mut degradation);
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
@@ -628,6 +634,30 @@ async fn resolve_readme(
     })
 }
 
+fn collect_research_degradations(report: &engine::ResearchReport, degradation: &mut Degradation) {
+    for f in &report.failed_urls {
+        degradation.push(
+            format!("Failed to fetch {}: {}", f.url, f.reason),
+            DegradedReason::UrlFetchFailed,
+        );
+    }
+    let raw_fallback_pages: Vec<&str> = report
+        .fetched_pages
+        .iter()
+        .filter(|p| p.used_raw_fallback)
+        .map(|p| p.url.as_str())
+        .collect();
+    if !raw_fallback_pages.is_empty() {
+        degradation.push(
+            format!(
+                "Readability extraction failed for: {}",
+                raw_fallback_pages.join(", ")
+            ),
+            DegradedReason::ReadabilityFallback,
+        );
+    }
+}
+
 fn format_fetch_output(result: &FetchResult) -> String {
     let shifted = shift_headings(&result.markdown, 2);
     let output = if result.used_raw_fallback {
@@ -663,85 +693,145 @@ mod tests {
         (http, fetch_http)
     }
 
-    fn scout_with_gemini(gemini_uri: &str) -> Scout {
-        scout_with_github(gemini_uri, "http://localhost:0")
+    fn scout_with_brave(brave_uri: &str) -> Scout {
+        scout_with_github(brave_uri, "http://localhost:0")
     }
 
-    /// [T-TS001] search_success_returns_content
+    /// [T-009] search returns plain URL list with no markdown decoration
     #[tokio::test]
-    async fn search_success_returns_content() {
+    async fn search_returns_plain_url_list() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "Rust is a systems programming language."}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": [{
-                            "web": {
-                                "uri": "https://rust-lang.org",
-                                "title": "Rust"
-                            }
-                        }]
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://rust-lang.org", "title": "Rust", "description": "snippet"},
+                        {"url": "https://doc.rust-lang.org", "title": "Docs", "description": "more"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = SearchParams {
             query: Some("What is Rust?".into()),
             lang: Lang::Auto,
         };
 
         let result = s.search(params).await.unwrap();
-        assert!(!result.markdown.is_empty());
-        assert!(
-            result
-                .markdown
-                .contains("Rust is a systems programming language"),
-            "should contain answer text"
-        );
-        assert!(
-            !result.markdown.contains("**Query:**"),
-            "should not contain Query header (redundant for LLMs)"
+        assert_eq!(
+            result.markdown, "https://rust-lang.org\nhttps://doc.rust-lang.org",
+            "stdout should be one URL per line, no markdown decoration"
         );
     }
 
-    /// [T-TS002] research_success_returns_report
+    /// [T-009-json] search --json output schema (data.query, data.sources, no data.answer)
+    #[tokio::test]
+    async fn search_json_schema_omits_answer() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {
+                    "results": [
+                        {"url": "https://a.com", "title": "A", "description": "d"}
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = SearchParams {
+            query: Some("foo".into()),
+            lang: Lang::Auto,
+        };
+
+        let result = s.search(params).await.unwrap();
+        let data = &result.data;
+        assert!(data.get("answer").is_none(), "answer field must be absent");
+        assert_eq!(data["query"], "foo");
+        assert!(data["sources"].is_array());
+        assert_eq!(data["sources"][0]["url"], "https://a.com");
+        assert_eq!(data["sources"][0]["title"], "A");
+        assert_eq!(data["sources"][0]["description"], "d");
+    }
+
+    /// [T-015] search command issues exactly one Brave call (no engine::research fanout)
+    /// Engine path adds fetch + report; search must remain a single Brave round-trip.
+    #[tokio::test]
+    async fn search_does_not_traverse_engine_path() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {"results": [{"url": "https://a.com", "title": "A", "description": ""}]}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = SearchParams {
+            query: Some("foo".into()),
+            lang: Lang::Auto,
+        };
+        s.search(params).await.unwrap();
+    }
+
+    /// [T-009-empty] search with zero results returns empty stdout and exit 0
+    #[tokio::test]
+    async fn search_zero_results_returns_empty() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {"results": []}
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = SearchParams {
+            query: Some("foo".into()),
+            lang: Lang::Auto,
+        };
+        let result = s.search(params).await.unwrap();
+        assert_eq!(result.markdown, "", "empty stdout for zero results");
+        assert_eq!(result.data["sources"].as_array().unwrap().len(), 0);
+    }
+
+    /// [T-TS002] research returns report with Brave sources and no obsolete Search Result header
     #[tokio::test]
     async fn research_success_returns_report() {
         let Some(server) = try_spawn_mock_server("tools::integration").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        // Brave search response. The URL is unreachable, so fetch will fail and land in
+        // failed_urls, but the Sources section still proves the Brave URL flowed through.
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "Rust is a systems programming language focused on safety."}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": [{
-                            "web": {
-                                "uri": "https://rust-lang.org",
-                                "title": "Rust Language"
-                            }
-                        }]
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://rust-lang.test/", "title": "Rust Language", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
-        let s = scout_with_gemini(&server.uri());
+        let s = scout_with_brave(&server.uri());
         let params = ResearchParams {
             query: Some("What is Rust?".into()),
             depth: 1,
@@ -750,12 +840,180 @@ mod tests {
 
         let result = s.research(params).await.unwrap();
         assert!(
-            result.markdown.contains("Rust"),
-            "report should contain search answer, got: {result:?}"
+            result.markdown.contains("rust-lang.test"),
+            "report should reference Brave source URL, got: {result:?}"
         );
         assert!(
-            result.markdown.contains("rust-lang.org"),
-            "report should reference source URL"
+            !result.markdown.contains("## Search Result"),
+            "AC-3.1: report must not contain the obsolete Search Result header"
+        );
+        assert!(
+            !result.markdown.contains("vertexaisearch.cloud.google.com"),
+            "AC-3.2: Sources must not contain Google redirect URLs"
+        );
+    }
+
+    /// [T-10] AC-4.2: --json research data schema (query, sources, fetched_pages, failed_urls)
+    #[tokio::test]
+    async fn research_json_schema_includes_required_keys() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {
+                    "results": [
+                        {"url": "https://a.test/", "title": "A", "description": "snippet"}
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = ResearchParams {
+            query: Some("foo".into()),
+            depth: 1,
+            lang: Lang::Auto,
+        };
+        let result = s.research(params).await.unwrap();
+        let data = &result.data;
+
+        assert_eq!(data["query"], "foo", "data.query must echo the request");
+        assert!(data["sources"].is_array(), "data.sources must be an array");
+        assert_eq!(data["sources"][0]["url"], "https://a.test/");
+        assert_eq!(data["sources"][0]["title"], "A");
+        assert_eq!(data["sources"][0]["description"], "snippet");
+        assert!(
+            data["fetched_pages"].is_array(),
+            "data.fetched_pages must be an array (possibly empty)"
+        );
+        assert!(
+            data["failed_urls"].is_array(),
+            "data.failed_urls must be an array (possibly empty)"
+        );
+        assert!(
+            data.get("answer").is_none(),
+            "data.answer must be absent (AC-4.1: no LLM-generated answer)"
+        );
+        assert!(
+            data.get("all_sources").is_none(),
+            "data.all_sources is the legacy key — must be renamed to sources"
+        );
+    }
+
+    /// [T-028] (unit / FR-019)
+    /// Setup: wiremock always returns HTTP 503 (still fails after retry).
+    /// Action: `Scout::research(...)` is invoked.
+    /// Expected: returns `Ok(CommandOutput)` (no hard-fail);
+    /// `degraded_reasons` contains `BraveSearchFailed`; `data.sources` is empty.
+    /// RC-03 fix: cascade no longer propagates `BraveError`; failure is absorbed
+    /// into the degraded report envelope.
+    #[tokio::test]
+    async fn research_brave_failure_returns_degraded_report() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let result = s
+            .research(ResearchParams {
+                query: Some("foo".into()),
+                depth: 1,
+                lang: Lang::Auto,
+            })
+            .await
+            .expect("research should yield Ok(degraded) on Brave failure, not propagate error");
+
+        assert!(
+            result
+                .degraded_reasons
+                .contains(&DegradedReason::BraveSearchFailed),
+            "degraded_reasons must contain BraveSearchFailed; got: {:?}",
+            result.degraded_reasons
+        );
+        let data = &result.data;
+        assert_eq!(
+            data["sources"].as_array().unwrap().len(),
+            0,
+            "data.sources must be empty when Brave failed"
+        );
+    }
+
+    /// [T-029] (unit / FR-019)
+    /// Setup: wiremock always returns HTTP 401.
+    /// Action: `Scout::research(...)` is invoked.
+    /// Expected: returns `Err(ScoutError)` (not a degraded `Ok`), because
+    /// `BraveError::Unauthorized` is a configuration error and must surface to
+    /// the user instead of being silently absorbed into the degraded envelope.
+    /// Companion to T-028 which covers the transient (503) degradable path.
+    #[tokio::test]
+    async fn research_unauthorized_propagates_as_error() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let result = s
+            .research(ResearchParams {
+                query: Some("foo".into()),
+                depth: 1,
+                lang: Lang::Auto,
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Unauthorized must propagate as Err, not be degraded; got: {result:?}"
+        );
+    }
+
+    /// [T-11] AC-4.3: zero results yield empty arrays, not null
+    #[tokio::test]
+    async fn research_json_zero_results_returns_empty_arrays() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "web": {"results": []}
+            })))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let params = ResearchParams {
+            query: Some("foo".into()),
+            depth: 1,
+            lang: Lang::Auto,
+        };
+        let result = s.research(params).await.unwrap();
+        let data = &result.data;
+
+        assert_eq!(
+            data["sources"].as_array().unwrap().len(),
+            0,
+            "data.sources must be an empty array (not null)"
+        );
+        assert_eq!(
+            data["fetched_pages"].as_array().unwrap().len(),
+            0,
+            "data.fetched_pages must be an empty array"
+        );
+        assert_eq!(
+            data["failed_urls"].as_array().unwrap().len(),
+            0,
+            "data.failed_urls must be an empty array"
         );
     }
 
@@ -788,126 +1046,6 @@ mod tests {
         assert!(output.contains("### Raw Title"), "h1 should shift to h3");
     }
 
-    /// [T-TS006] search standalone: empty answer text becomes None via
-    /// `extract_grounded_result` (.filter(|t| !t.is_empty())), triggering
-    /// the fallback message path in `search()`.
-    #[tokio::test]
-    async fn search_none_answer_returns_fallback() {
-        let Some(server) = try_spawn_mock_server("tools::integration").await else {
-            return;
-        };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": ""}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": []
-                    }
-                }]
-            })))
-            .mount(&server)
-            .await;
-
-        let s = scout_with_gemini(&server.uri());
-        let params = SearchParams {
-            query: Some("test".into()),
-            lang: Lang::En,
-        };
-
-        let result = s.search(params).await.unwrap();
-        assert!(
-            result.markdown.contains("No answer returned"),
-            "should contain fallback message, got:\n{result:?}"
-        );
-    }
-
-    /// [T-TS007] search standalone: answer with headings should have them shifted by 2
-    #[tokio::test]
-    async fn search_shifts_headings_in_answer() {
-        let Some(server) = try_spawn_mock_server("tools::integration").await else {
-            return;
-        };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "# Title\n\n## Sub\n\nBody text"}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": []
-                    }
-                }]
-            })))
-            .mount(&server)
-            .await;
-
-        let s = scout_with_gemini(&server.uri());
-        let params = SearchParams {
-            query: Some("test".into()),
-            lang: Lang::En,
-        };
-
-        let result = s.search(params).await.unwrap();
-        assert!(
-            result.markdown.contains("### Title"),
-            "h1 should shift to h3 (shift by 2), got:\n{result:?}"
-        );
-        assert!(
-            result.markdown.contains("#### Sub"),
-            "h2 should shift to h4 (shift by 2), got:\n{result:?}"
-        );
-    }
-
-    /// [T-TS008] search standalone: # inside fenced code block should NOT be shifted
-    #[tokio::test]
-    async fn search_preserves_headings_in_code_blocks() {
-        let answer = "# Real heading\n\n```bash\n# comment in script\n```\n\n## Another heading";
-        let Some(server) = try_spawn_mock_server("tools::integration").await else {
-            return;
-        };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": answer}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": []
-                    }
-                }]
-            })))
-            .mount(&server)
-            .await;
-
-        let s = scout_with_gemini(&server.uri());
-        let params = SearchParams {
-            query: Some("test".into()),
-            lang: Lang::En,
-        };
-
-        let result = s.search(params).await.unwrap();
-        assert!(
-            result.markdown.contains("### Real heading"),
-            "h1 outside code block should shift to h3, got:\n{result:?}"
-        );
-        assert!(
-            result.markdown.contains("#### Another heading"),
-            "h2 outside code block should shift to h4, got:\n{result:?}"
-        );
-        assert!(
-            result.markdown.contains("# comment in script"),
-            "# inside fenced code block should remain unchanged, got:\n{result:?}"
-        );
-    }
-
     /// [T-TS005] fetch_output_truncates_long_content
     #[test]
     fn fetch_output_truncates_long_content() {
@@ -934,7 +1072,7 @@ mod tests {
 
     // --- GitHub client efficiency tests (lazy init + repo_overview) ---
 
-    fn scout_with_github(gemini_uri: &str, github_uri: &str) -> Scout {
+    fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
         let (http, fetch_http) = build_test_clients();
         let cell = OnceCell::new();
         cell.set(GitHubClient::with_base_url(http.clone(), github_uri))
@@ -942,17 +1080,17 @@ mod tests {
         Scout {
             http: http.clone(),
             fetch_http,
-            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
         }
     }
 
-    fn scout_lazy(gemini_uri: &str) -> Scout {
+    fn scout_lazy(brave_uri: &str) -> Scout {
         let (http, fetch_http) = build_test_clients();
         Scout {
             http: http.clone(),
             fetch_http,
-            gemini: Some(GeminiClient::with_base_url(http, gemini_uri)),
+            brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
         }
     }
@@ -1106,30 +1244,26 @@ mod tests {
         );
     }
 
-    /// [T-TS012] search command does not initialize the GitHub client.
+    /// [T-TS012] search command does not initialize the GitHub client on the success path.
     #[tokio::test]
     async fn search_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_004").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "answer"}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": []
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://example.com", "title": "Example", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
         let s = scout_lazy(&server.uri());
-        let _result = s
+        let result = s
             .search(SearchParams {
                 query: Some("test".into()),
                 lang: Lang::En,
@@ -1137,8 +1271,13 @@ mod tests {
             .await;
 
         assert!(
+            result.is_ok(),
+            "search should succeed against Brave mock; got: {:?}",
+            result.err()
+        );
+        assert!(
             s.github.get().is_none(),
-            "search should not initialize GitHubClient"
+            "search should not initialize GitHubClient on the success path"
         );
     }
 
@@ -1174,35 +1313,28 @@ mod tests {
         );
     }
 
-    /// [T-TS014] research command does not initialize the GitHub client.
+    /// [T-TS014] research command does not initialize the GitHub client on the success path.
+    /// Brave succeeds; the fetched URL is invalid (DNS failure), driving a degraded
+    /// ResearchReport (Ok) without touching GitHub.
     #[tokio::test]
     async fn research_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_006").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "research result"}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": [{
-                            "web": {
-                                "uri": "https://example.com",
-                                "title": "Example"
-                            }
-                        }]
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://nonexistent.invalid", "title": "Example", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
         let s = scout_lazy(&server.uri());
-        let _result = s
+        let result = s
             .research(ResearchParams {
                 query: Some("test".into()),
                 depth: 1,
@@ -1211,8 +1343,13 @@ mod tests {
             .await;
 
         assert!(
+            result.is_ok(),
+            "research should return Ok (degraded report) even when fetch fails; got: {:?}",
+            result.err()
+        );
+        assert!(
             s.github.get().is_none(),
-            "research should not initialize GitHubClient"
+            "research should not initialize GitHubClient on the success path"
         );
     }
 

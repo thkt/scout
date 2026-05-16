@@ -55,7 +55,7 @@ fn version_exits_zero() {
 fn search_without_api_key_exits_64() {
     let output = scout()
         .args(["search", "test query"])
-        .env_remove("GEMINI_API_KEY")
+        .env_remove("BRAVE_SEARCH_API_KEY")
         .output()
         .expect("scout search failed to run");
     assert_eq!(
@@ -67,6 +67,31 @@ fn search_without_api_key_exits_64() {
     assert!(
         stderr.contains("error:"),
         "stderr should contain error: prefix, got:\n{stderr}"
+    );
+}
+
+// [T-027] (integration / FR-018)
+// Setup: env `BRAVE_SEARCH_API_KEY="   "` (whitespace only).
+// Action: run `scout search "test query"`.
+// Expected: stderr contains `BRAVE_SEARCH_API_KEY`, exit code 64 (EX_USAGE);
+// whitespace-only key is treated as missing because
+// brave/client.rs::from_env applies `trim().is_empty()`.
+#[test]
+fn search_with_whitespace_only_api_key_exits_64() {
+    let output = scout()
+        .args(["search", "test query"])
+        .env("BRAVE_SEARCH_API_KEY", "   ")
+        .output()
+        .expect("scout search failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "whitespace-only API key should be treated as missing (exit 64)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("BRAVE_SEARCH_API_KEY"),
+        "stderr should mention BRAVE_SEARCH_API_KEY, got:\n{stderr}"
     );
 }
 
@@ -168,7 +193,7 @@ fn json_emits_envelope_on_error() {
 fn json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
         .args(["--json", "search", "test query"])
-        .env_remove("GEMINI_API_KEY")
+        .env_remove("BRAVE_SEARCH_API_KEY")
         .output()
         .expect("scout --json search failed to run");
     assert_eq!(
@@ -189,8 +214,8 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
     assert!(
         value["error"]["next_step"]
             .as_str()
-            .is_some_and(|s| s.contains("GEMINI_API_KEY")),
-        "next_step should point user to GEMINI_API_KEY, got: {value}"
+            .is_some_and(|s| s.contains("BRAVE_SEARCH_API_KEY")),
+        "next_step should point user to BRAVE_SEARCH_API_KEY, got: {value}"
     );
 }
 

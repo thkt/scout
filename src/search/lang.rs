@@ -9,11 +9,14 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub fn apply_to_query(self, query: &str) -> String {
+    /// Maps `Lang` to the Brave Web Search API's `search_lang` query parameter
+    /// (ISO 639-1 code). `Auto` returns `None` so the request omits the parameter
+    /// and lets Brave detect the language from the query / IP heuristics.
+    pub fn to_brave_param(self) -> Option<&'static str> {
         match self {
-            Lang::Ja => format!("{query} (日本語で回答)"),
-            Lang::En => format!("{query} (answer in English)"),
-            Lang::Auto => query.to_owned(),
+            Lang::Ja => Some("ja"),
+            Lang::En => Some("en"),
+            Lang::Auto => None,
         }
     }
 }
@@ -22,21 +25,21 @@ impl Lang {
 mod tests {
     use super::*;
 
-    /// [T-SL001] Lang::Ja appends Japanese response instruction to query
+    /// [T-SL004] Lang::Ja maps to search_lang=ja
     #[test]
-    fn ja_appends_japanese_instruction() {
-        assert_eq!(Lang::Ja.apply_to_query("test"), "test (日本語で回答)");
+    fn ja_maps_to_brave_ja() {
+        assert_eq!(Lang::Ja.to_brave_param(), Some("ja"));
     }
 
-    /// [T-SL002] Lang::En appends English response instruction to query
+    /// [T-SL005] Lang::En maps to search_lang=en
     #[test]
-    fn en_appends_english_instruction() {
-        assert_eq!(Lang::En.apply_to_query("test"), "test (answer in English)");
+    fn en_maps_to_brave_en() {
+        assert_eq!(Lang::En.to_brave_param(), Some("en"));
     }
 
-    /// [T-SL003] Lang::Auto passes query through unchanged
+    /// [T-SL006] Lang::Auto maps to None (no search_lang parameter)
     #[test]
-    fn auto_is_passthrough() {
-        assert_eq!(Lang::Auto.apply_to_query("test"), "test");
+    fn auto_maps_to_none() {
+        assert_eq!(Lang::Auto.to_brave_param(), None);
     }
 }

@@ -2,9 +2,9 @@ use std::error::Error;
 use std::fmt;
 use tracing::warn;
 
+use crate::brave::client::BraveError;
 use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
-use crate::gemini::client::GeminiError;
 use crate::github;
 use crate::retry::is_transient_network;
 use crate::slack::SlackError;
@@ -307,37 +307,39 @@ impl From<SlackError> for ScoutError {
     }
 }
 
-impl From<GeminiError> for ScoutError {
-    fn from(e: GeminiError) -> Self {
+impl From<BraveError> for ScoutError {
+    fn from(e: BraveError) -> Self {
         match &e {
-            // Priority 1: USAGE_ERROR
-            GeminiError::ApiKeyNotSet => Self::user_error(e.to_string())
-                .with_next_step("Set GEMINI_API_KEY environment variable"),
-            GeminiError::QuotaExhausted(_) => Self::user_error(e.to_string())
-                .with_next_step("Check your API billing at https://aistudio.google.com"),
-            GeminiError::PermissionDenied(_) => Self::user_error(e.to_string()).with_next_step(
-                "Check IAM permissions for the Gemini API in your Google Cloud project",
+            // Priority 1: USAGE_ERROR / config
+            BraveError::ApiKeyNotSet => Self::user_error(e.to_string())
+                .with_next_step("Set BRAVE_SEARCH_API_KEY environment variable"),
+            BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
+                "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body)
-            GeminiError::Api { code, .. } if (400..500).contains(code) => {
+            // Priority 2: DATA_ERROR (4xx body or response parse failure)
+            BraveError::ParseJson(_) | BraveError::ParseUrl(_) => Self::data_error(e.to_string()),
+            BraveError::Api { code, .. } if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
-            // Priority 4: TIMEOUT (request timeout via reqwest builder)
-            GeminiError::Network(re) if re.is_timeout() => {
+            // Priority 4: TIMEOUT
+            BraveError::Network(re) if re.is_timeout() => {
                 Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
             // Priority 4: TEMP_FAILURE
-            GeminiError::RateLimited { .. } => {
+            BraveError::RateLimited { .. } => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            GeminiError::Network(_) => {
+            BraveError::Server(_) => {
+                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+            }
+            BraveError::Network(_) => {
                 Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
             }
-            GeminiError::Api { code, .. } if (500..=599).contains(code) => {
+            BraveError::Api { code, .. } if (500..=599).contains(code) => {
                 Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
             }
-            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
-            GeminiError::Api { .. } => Self::unknown(e.to_string()),
+            // Unknown — Api codes that did not match 4xx or 5xx
+            BraveError::Api { .. } => Self::unknown(e.to_string()),
         }
     }
 }
@@ -403,13 +405,13 @@ mod tests {
         assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
     }
 
-    /// [T-NS001] ApiKeyNotSet sets next_step pointing to GEMINI_API_KEY env var
+    /// [T-NS001] ApiKeyNotSet sets next_step pointing to BRAVE_SEARCH_API_KEY env var
     #[test]
-    fn gemini_api_key_not_set_has_next_step() {
-        let err = ScoutError::from(GeminiError::ApiKeyNotSet);
+    fn brave_api_key_not_set_has_next_step() {
+        let err = ScoutError::from(BraveError::ApiKeyNotSet);
         assert_eq!(
             err.next_step(),
-            Some("Set GEMINI_API_KEY environment variable")
+            Some("Set BRAVE_SEARCH_API_KEY environment variable")
         );
     }
 
@@ -443,13 +445,13 @@ mod tests {
         );
     }
 
-    /// [T-NS005] GeminiError::QuotaExhausted separates billing URL hint into next_step
+    /// [T-NS005] BraveError::Unauthorized points users at the Brave dashboard
     #[test]
-    fn gemini_quota_exhausted_separates_billing_hint() {
-        let err = ScoutError::from(GeminiError::QuotaExhausted("limit".into()));
+    fn brave_unauthorized_separates_dashboard_hint() {
+        let err = ScoutError::from(BraveError::Unauthorized);
         assert!(
             err.next_step()
-                .is_some_and(|h| h.contains("aistudio.google.com"))
+                .is_some_and(|h| h.contains("api-dashboard.search.brave.com"))
         );
     }
 
@@ -550,7 +552,7 @@ mod tests {
 
     /// [T-ER023] ADR-0065 priority 2 wins over priority 5 for Api 4xx codes.
     /// Prior to the priority rule reflection, `GitHubError::Api { code: 4xx }` and
-    /// `GeminiError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).
+    /// `BraveError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).
     /// Per ADR-0065 they must classify as DataError (exit 65).
     #[test]
     fn api_4xx_classifies_as_data_error_per_priority_2() {
@@ -562,11 +564,11 @@ mod tests {
             code: 422,
             message: "unprocessable entity".into(),
         });
-        let gemini_400 = ScoutError::from(GeminiError::Api {
+        let brave_400 = ScoutError::from(BraveError::Api {
             code: 400,
             message: "err".into(),
         });
-        for err in [&github_400, &github_422, &gemini_400] {
+        for err in [&github_400, &github_422, &brave_400] {
             assert_eq!(err.error_kind(), ErrorCode::DataError, "{err}");
             assert_eq!(err.exit_code(), 65, "{err}");
             assert!(!err.retryable(), "4xx must not be retryable: {err}");
@@ -582,11 +584,11 @@ mod tests {
             code: 502,
             message: "bad gateway".into(),
         });
-        let gemini_503 = ScoutError::from(GeminiError::Api {
+        let brave_503 = ScoutError::from(BraveError::Api {
             code: 503,
             message: "unavailable".into(),
         });
-        for err in [&github_502, &gemini_503] {
+        for err in [&github_502, &brave_503] {
             assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
             assert_eq!(err.exit_code(), 75, "{err}");
             assert!(err.retryable(), "5xx must be retryable: {err}");
@@ -622,7 +624,7 @@ mod tests {
                 message: "not modified".into(),
             }
             .into(),
-            GeminiError::Api {
+            BraveError::Api {
                 code: 304,
                 message: "not modified".into(),
             }
@@ -648,8 +650,8 @@ mod tests {
                 error: "err".into(),
             }
             .into(),
-            GeminiError::ApiKeyNotSet.into(),
-            GeminiError::QuotaExhausted("limit".into()).into(),
+            BraveError::ApiKeyNotSet.into(),
+            BraveError::Unauthorized.into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::UsageError, "{err}");
@@ -682,7 +684,7 @@ mod tests {
             FetchError::Status(499).into(),
             FetchError::TooLarge.into(),
             FetchError::TooManyRedirects(10).into(),
-            GeminiError::Api {
+            BraveError::Api {
                 code: 400,
                 message: "err".into(),
             }
@@ -738,8 +740,8 @@ mod tests {
                 message: "bad gateway".into(),
             }
             .into(),
-            GeminiError::RateLimited { retry_after: None }.into(),
-            GeminiError::Api {
+            BraveError::RateLimited { retry_after: None }.into(),
+            BraveError::Api {
                 code: 503,
                 message: "unavailable".into(),
             }

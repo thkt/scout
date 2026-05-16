@@ -1,6 +1,6 @@
+mod brave;
 mod envelope;
 mod fetch;
-mod gemini;
 mod github;
 mod markdown;
 mod redacted;
@@ -22,6 +22,11 @@ use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, SuccessEnv
 use tools::{Command, Scout, ScoutError};
 
 fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
+    if output.is_empty() {
+        // Preserve true empty output (e.g., `scout search` with 0 results)
+        // so line-oriented downstream callers don't see a phantom empty line.
+        return Ok(());
+    }
     w.write_all(output.as_bytes())?;
     if !output.ends_with('\n') {
         w.write_all(b"\n")?;
@@ -47,8 +52,8 @@ Exit codes (sysexits.h + GNU coreutils + PJ extension):
   104  Unknown (unclassifiable failure; rising rate signals classification gap)
 
 Environment:
-  GEMINI_API_KEY  Required for search and research commands
-  GITHUB_TOKEN    Optional for GitHub commands (higher rate limits)"
+  BRAVE_SEARCH_API_KEY  Required for search and research commands
+  GITHUB_TOKEN          Optional for GitHub commands (higher rate limits)"
 )]
 pub(crate) struct Cli {
     /// Emit output as a JSON envelope (one line) on stdout
@@ -234,8 +239,8 @@ mod tests {
             "root help should reference sysexits.h"
         );
         assert!(
-            help.contains("GEMINI_API_KEY"),
-            "root help missing GEMINI_API_KEY"
+            help.contains("BRAVE_SEARCH_API_KEY"),
+            "root help missing BRAVE_SEARCH_API_KEY"
         );
         assert!(
             help.contains("GITHUB_TOKEN"),
