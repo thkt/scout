@@ -124,6 +124,10 @@ const OVERVIEW_RELEASES: u8 = 3;
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 /// Slack: up to 3 API calls + N user resolutions; 60s covers large threads.
 const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Research: Brave search (up to 20s + retries) + up to 10 page fetches (15s each).
+/// 45s caps total wall-clock at the orchestration layer; without this cap a degraded
+/// Brave + full-depth fetch could block ~210s.
+const RESEARCH_TOOL_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct Scout {
     http: Client,
@@ -283,13 +287,40 @@ impl Scout {
         info!(query = %query, depth = params.depth, "research");
 
         let brave = self.brave()?;
-
         let req = engine::ResearchRequest {
             query: &query,
             depth: params.depth,
             lang: params.lang,
         };
-        let report = engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver).await?;
+
+        let mut degradation = Degradation::default();
+
+        let report = match timeout(
+            RESEARCH_TOOL_TIMEOUT,
+            engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver),
+        )
+        .await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                warn!(error = %e, "Brave search failed; returning degraded report");
+                degradation.push(
+                    format!("Brave search failed: {e}"),
+                    DegradedReason::BraveSearchFailed,
+                );
+                engine::ResearchReport {
+                    fetched_pages: vec![],
+                    failed_urls: vec![],
+                    sources: vec![],
+                }
+            }
+            Err(_) => {
+                return Err(ScoutError::timeout(format!(
+                    "research timed out after {}s",
+                    RESEARCH_TOOL_TIMEOUT.as_secs()
+                )));
+            }
+        };
 
         info!(
             pages = report.fetched_pages.len(),
@@ -301,9 +332,8 @@ impl Scout {
         let markdown = engine::format_report(&report, &query);
         let mut data = serde_json::to_value(&report).expect("ResearchReport is Serialize");
         if let Some(map) = data.as_object_mut() {
-            map.insert("query".to_owned(), serde_json::Value::String(query.clone()));
+            map.insert("query".to_owned(), serde_json::Value::String(query));
         }
-        let mut degradation = Degradation::default();
         for f in &report.failed_urls {
             degradation.push(
                 format!("Failed to fetch {}: {}", f.url, f.reason),
@@ -868,6 +898,48 @@ mod tests {
         );
     }
 
+    /// [T-028] (unit / FR-019)
+    /// Setup: wiremock always returns HTTP 503 (still fails after retry).
+    /// Action: `Scout::research(...)` is invoked.
+    /// Expected: returns `Ok(CommandOutput)` (no hard-fail);
+    /// `degraded_reasons` contains `BraveSearchFailed`; `data.sources` is empty.
+    /// RC-03 fix: cascade no longer propagates `BraveError`; failure is absorbed
+    /// into the degraded report envelope.
+    #[tokio::test]
+    async fn research_brave_failure_returns_degraded_report() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let result = s
+            .research(ResearchParams {
+                query: Some("foo".into()),
+                depth: 1,
+                lang: Lang::Auto,
+            })
+            .await
+            .expect("research should yield Ok(degraded) on Brave failure, not propagate error");
+
+        assert!(
+            result
+                .degraded_reasons
+                .contains(&DegradedReason::BraveSearchFailed),
+            "degraded_reasons must contain BraveSearchFailed; got: {:?}",
+            result.degraded_reasons
+        );
+        let data = &result.data;
+        assert_eq!(
+            data["sources"].as_array().unwrap().len(),
+            0,
+            "data.sources must be empty when Brave failed"
+        );
+    }
+
     /// [T-11] AC-4.3: zero results yield empty arrays, not null
     #[tokio::test]
     async fn research_json_zero_results_returns_empty_arrays() {
@@ -1135,30 +1207,26 @@ mod tests {
         );
     }
 
-    /// [T-TS012] search command does not initialize the GitHub client.
+    /// [T-TS012] search command does not initialize the GitHub client on the success path.
     #[tokio::test]
     async fn search_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_004").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "answer"}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": []
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://example.com", "title": "Example", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
         let s = scout_lazy(&server.uri());
-        let _result = s
+        let result = s
             .search(SearchParams {
                 query: Some("test".into()),
                 lang: Lang::En,
@@ -1166,8 +1234,13 @@ mod tests {
             .await;
 
         assert!(
+            result.is_ok(),
+            "search should succeed against Brave mock; got: {:?}",
+            result.err()
+        );
+        assert!(
             s.github.get().is_none(),
-            "search should not initialize GitHubClient"
+            "search should not initialize GitHubClient on the success path"
         );
     }
 
@@ -1203,35 +1276,28 @@ mod tests {
         );
     }
 
-    /// [T-TS014] research command does not initialize the GitHub client.
+    /// [T-TS014] research command does not initialize the GitHub client on the success path.
+    /// Brave succeeds; the fetched URL is invalid (DNS failure), driving a degraded
+    /// ResearchReport (Ok) without touching GitHub.
     #[tokio::test]
     async fn research_leaves_github_uninitialized() {
         let Some(server) = try_spawn_mock_server("tools::t_006").await else {
             return;
         };
-        Mock::given(method("POST"))
-            .and(path_regex(r":generateContent$"))
+        Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": "research result"}],
-                        "role": "model"
-                    },
-                    "groundingMetadata": {
-                        "groundingChunks": [{
-                            "web": {
-                                "uri": "https://example.com",
-                                "title": "Example"
-                            }
-                        }]
-                    }
-                }]
+                "web": {
+                    "results": [
+                        {"url": "https://nonexistent.invalid", "title": "Example", "description": "snippet"}
+                    ]
+                }
             })))
             .mount(&server)
             .await;
 
         let s = scout_lazy(&server.uri());
-        let _result = s
+        let result = s
             .research(ResearchParams {
                 query: Some("test".into()),
                 depth: 1,
@@ -1240,8 +1306,13 @@ mod tests {
             .await;
 
         assert!(
+            result.is_ok(),
+            "research should return Ok (degraded report) even when fetch fails; got: {:?}",
+            result.err()
+        );
+        assert!(
             s.github.get().is_none(),
-            "research should not initialize GitHubClient"
+            "research should not initialize GitHubClient on the success path"
         );
     }
 

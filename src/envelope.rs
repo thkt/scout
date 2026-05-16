@@ -21,6 +21,7 @@ pub(crate) enum DegradedReason {
     ReadmeDecodeFailed,
     UrlFetchFailed,
     ReadabilityFallback,
+    BraveSearchFailed,
 }
 
 impl DegradedReason {
@@ -33,6 +34,7 @@ impl DegradedReason {
             Self::IssuesFetchFailed => "issues",
             Self::PullsFetchFailed => "pull requests",
             Self::ReleasesFetchFailed => "releases",
+            Self::BraveSearchFailed => "Brave search",
             Self::ReadmeFetchFailed
             | Self::ReadmeBlobFetchFailed
             | Self::ReadmeDecodeFailed
