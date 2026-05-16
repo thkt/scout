@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use tracing::{debug, warn};
 
-use crate::redacted::{Redacted, assert_https};
+use crate::redacted::{Redacted, validate_https};
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
@@ -40,6 +40,9 @@ pub(crate) enum BraveError {
 
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
+
+    #[error("Insecure base URL: HTTPS required")]
+    InsecureBaseUrl,
 }
 
 impl BraveError {
@@ -51,9 +54,11 @@ impl BraveError {
     /// swallowed.
     pub(crate) fn is_degradable(&self) -> bool {
         match self {
-            Self::ApiKeyNotSet | Self::Unauthorized | Self::ParseJson(_) | Self::ParseUrl(_) => {
-                false
-            }
+            Self::ApiKeyNotSet
+            | Self::Unauthorized
+            | Self::ParseJson(_)
+            | Self::ParseUrl(_)
+            | Self::InsecureBaseUrl => false,
             Self::Api { code, .. } if (400..500).contains(code) => false,
             Self::RateLimited { .. } | Self::Server(_) | Self::Network(_) | Self::Api { .. } => {
                 true
@@ -70,21 +75,34 @@ pub(crate) trait SearchClient {
     ) -> Result<Vec<SearchResult>, BraveError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct BraveClient {
     http: Client,
     api_key: Redacted,
     base_url: String,
+    /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
+    /// Production constructors leave this `false` so `send_request` always
+    /// runs `validate_https`; only `with_base_url` opts in.
+    #[cfg(test)]
+    skip_https_check: bool,
 }
 
 impl BraveClient {
     /// Constructs a `BraveClient` from the `BRAVE_SEARCH_API_KEY` env var.
-    ///
-    /// The env var path is verified end-to-end in the Phase 5a integration test (T-020).
-    /// Unit tests cannot mutate env without `unsafe`, and scout is `unsafe_code = "forbid"`,
-    /// so this constructor is not covered by unit tests.
     pub(crate) fn from_env(http: Client) -> Result<Self, BraveError> {
-        let api_key = env::var("BRAVE_SEARCH_API_KEY").map_err(|_| BraveError::ApiKeyNotSet)?;
+        Self::from_env_with(http, |k| env::var(k))
+    }
+
+    /// Constructs a `BraveClient` using a caller-supplied env reader. The
+    /// production [`Self::from_env`] delegates here with `std::env::var`;
+    /// unit tests pass a closure so the env-not-set / whitespace branches
+    /// can be exercised without `unsafe_code = "forbid"` rejecting
+    /// `set_var`.
+    pub(crate) fn from_env_with<F>(http: Client, get_var: F) -> Result<Self, BraveError>
+    where
+        F: Fn(&str) -> Result<String, env::VarError>,
+    {
+        let api_key = get_var("BRAVE_SEARCH_API_KEY").map_err(|_| BraveError::ApiKeyNotSet)?;
         if api_key.trim().is_empty() {
             return Err(BraveError::ApiKeyNotSet);
         }
@@ -92,6 +110,8 @@ impl BraveClient {
             http,
             api_key: Redacted::new(&api_key),
             base_url: API_BASE.to_owned(),
+            #[cfg(test)]
+            skip_https_check: false,
         })
     }
 
@@ -101,6 +121,23 @@ impl BraveClient {
             http,
             api_key: Redacted::new("test-key"),
             base_url: base_url.to_owned(),
+            skip_https_check: true,
+        }
+    }
+
+    /// Returns `true` when `send_request` should run [`validate_https`]
+    /// against `self.base_url`. Production builds always check; test
+    /// builds honor the per-client `skip_https_check` flag so wiremock
+    /// servers on `http://127.0.0.1` keep working without re-introducing
+    /// a global `cfg!(test)` bypass on the production codepath.
+    fn should_check_https(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.skip_https_check
+        }
+        #[cfg(not(test))]
+        {
+            true
         }
     }
 
@@ -109,7 +146,9 @@ impl BraveClient {
         query: &str,
         search_lang: Option<&str>,
     ) -> Result<WebSearchResponse, BraveError> {
-        assert_https(&self.base_url);
+        if self.should_check_https() {
+            validate_https(&self.base_url)?;
+        }
         let url = build_url(&self.base_url, query, search_lang)?;
 
         let response = self
@@ -457,5 +496,57 @@ mod http_tests {
             }
             other => panic!("expected ParseJson, got: {other:?}"),
         }
+    }
+
+    // T-RC001: from_env_with_returns_api_key_not_set_when_closure_errs
+    /// FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
+    /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
+    /// env path that `from_env` delegates to.
+    #[test]
+    fn from_env_with_returns_api_key_not_set_when_closure_errs() {
+        let result = BraveClient::from_env_with(Client::new(), |_| Err(env::VarError::NotPresent));
+        assert!(
+            matches!(result, Err(BraveError::ApiKeyNotSet)),
+            "expected ApiKeyNotSet, got: {result:?}"
+        );
+    }
+
+    // T-RC002: from_env_with_rejects_whitespace_only_key
+    /// FR-003: closure returning a whitespace-only string must be trimmed and rejected
+    /// as `ApiKeyNotSet` (parity with the previous `trim().is_empty()` check in
+    /// `from_env`).
+    #[test]
+    fn from_env_with_rejects_whitespace_only_key() {
+        let result = BraveClient::from_env_with(Client::new(), |_| Ok("   ".to_owned()));
+        assert!(
+            matches!(result, Err(BraveError::ApiKeyNotSet)),
+            "expected ApiKeyNotSet for whitespace-only key, got: {result:?}"
+        );
+    }
+
+    // T-RC003: from_env_with_constructs_client_with_api_base_and_exposed_key
+    /// FR-001 / FR-003: closure returning a real key must yield `Ok(client)` whose
+    /// `api_key` round-trips through `Redacted::expose()` and whose `base_url` equals
+    /// the constant `API_BASE`.
+    #[test]
+    fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
+        let result = BraveClient::from_env_with(Client::new(), |_| Ok("real-key".to_owned()));
+        let client = result.expect("expected Ok(client) from valid key");
+        assert_eq!(client.api_key.expose(), "real-key");
+        assert_eq!(client.base_url, API_BASE);
+    }
+
+    // T-RC006: from_env_with_does_not_set_skip_https_check
+    /// FR-010: production constructor path must not enable the test-only HTTPS bypass.
+    /// `skip_https_check` is a `#[cfg(test)]` field; under `cargo test` it exists and
+    /// must be `false` when the client comes from `from_env_with`.
+    #[test]
+    fn from_env_with_does_not_set_skip_https_check() {
+        let client = BraveClient::from_env_with(Client::new(), |_| Ok("k".to_owned()))
+            .expect("expected Ok(client) from valid key");
+        assert!(
+            !client.skip_https_check,
+            "production constructor must not skip HTTPS check"
+        );
     }
 }

@@ -318,8 +318,10 @@ impl From<BraveError> for ScoutError {
             BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body or response parse failure)
-            BraveError::ParseJson(_) | BraveError::ParseUrl(_) => Self::data_error(e.to_string()),
+            // Priority 2: DATA_ERROR (4xx body, response parse failure, or insecure base URL)
+            BraveError::ParseJson(_) | BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
+                Self::data_error(e.to_string())
+            }
             BraveError::Api { code, .. } if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
