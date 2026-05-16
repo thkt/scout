@@ -6,8 +6,7 @@ use tracing::{debug, warn};
 
 use crate::redacted::{Redacted, assert_https};
 use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_or_backoff, retry_after_within_cap,
-    retry_with,
+    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
 
 use super::types::{SearchResult, WebSearchResponse};
@@ -197,10 +196,13 @@ impl SearchClient for BraveClient {
         query: &str,
         search_lang: Option<&str>,
     ) -> Result<Vec<SearchResult>, BraveError> {
-        let response = retry_with(
+        let response = retry_with_rate_limit(
             || self.send_request(query, search_lang),
             is_retriable,
-            brave_delay,
+            |e| match e {
+                BraveError::RateLimited { retry_after } => *retry_after,
+                _ => None,
+            },
             || BraveError::RateLimited { retry_after: None },
         )
         .await?;
@@ -215,14 +217,6 @@ fn is_retriable(e: &BraveError) -> bool {
         BraveError::Network(e) => is_transient_network(e),
         _ => false,
     }
-}
-
-fn brave_delay(e: &BraveError, attempt: u32) -> Duration {
-    let retry_after = match e {
-        BraveError::RateLimited { retry_after } => *retry_after,
-        _ => None,
-    };
-    retry_after_or_backoff(retry_after, attempt)
 }
 
 #[cfg(test)]

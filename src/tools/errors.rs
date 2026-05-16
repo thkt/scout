@@ -13,6 +13,24 @@ use crate::slack::SlackError;
 const HINT_RETRY_DELAY: &str = "Retry after a short delay";
 const HINT_CHECK_NETWORK: &str = "Check your network connection";
 
+/// Builds a transient `ScoutError` with the "retry after a short delay" hint.
+/// Used for rate-limit, 5xx, and other timing-recoverable failures.
+fn transient_with_retry_hint(e: &impl fmt::Display) -> ScoutError {
+    ScoutError::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+}
+
+/// Builds a transient `ScoutError` with the "check your network" hint.
+/// Used for connect-level network failures where retry alone will not help.
+fn transient_with_network_hint(e: &impl fmt::Display) -> ScoutError {
+    ScoutError::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
+}
+
+/// Builds a timeout `ScoutError` with the "retry after a short delay" hint.
+/// Used for transport-timeout failures distinct from generic transients.
+fn timeout_with_retry_hint(e: &impl fmt::Display) -> ScoutError {
+    ScoutError::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+}
+
 #[derive(Debug)]
 pub struct ScoutError {
     message: String,
@@ -185,9 +203,7 @@ impl From<github::GitHubError> for ScoutError {
                 "Check that the repository or path exists, and that you have access",
             ),
             // Priority 4: TIMEOUT (request timeout via reqwest builder)
-            github::GitHubError::Network(re) if re.is_timeout() => {
-                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            github::GitHubError::Network(re) if re.is_timeout() => timeout_with_retry_hint(&e),
             // Priority 4: TEMP_FAILURE
             github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
                 .with_next_step(match retry_after {
@@ -196,11 +212,9 @@ impl From<github::GitHubError> for ScoutError {
                     ),
                     None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
                 }),
-            github::GitHubError::Network(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            github::GitHubError::Network(_) => transient_with_network_hint(&e),
             github::GitHubError::Api { code, .. } if (500..=599).contains(code) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                transient_with_retry_hint(&e)
             }
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             github::GitHubError::Decode(_) => Self::internal_bug(e.to_string()),
@@ -240,30 +254,22 @@ impl From<FetchError> for ScoutError {
             FetchError::Status(404) => Self::not_found(e.to_string())
                 .with_next_step("Check that the URL is correct and the resource exists"),
             // Priority 4: TEMP_FAILURE
-            FetchError::Status(408 | 429) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            FetchError::Status(408 | 429) => transient_with_retry_hint(&e),
             // Priority 2: DATA_ERROR (4xx body)
             FetchError::Status(code) if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
             // Priority 4: TEMP_FAILURE (5xx and other unmatched)
-            FetchError::Status(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            FetchError::Status(_) => transient_with_retry_hint(&e),
             // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
-            FetchError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
+            FetchError::Timeout(_) => timeout_with_retry_hint(&e),
             // Priority 4: TEMP_FAILURE (non-Status variants)
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
             // `is_transient_network` covers both connect and timeout, but
             // ADR-0065 splits timeout into 124. Check `is_timeout()` first.
-            FetchError::Http(re) if re.is_timeout() => {
-                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            FetchError::Http(re) if is_transient_network(re) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            FetchError::Http(re) if re.is_timeout() => timeout_with_retry_hint(&e),
+            FetchError::Http(re) if is_transient_network(re) => transient_with_network_hint(&e),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             FetchError::BrowserFailed(_) => Self::io_error(e.to_string()),
             // Unknown — reqwest errors that do not match transient network patterns
@@ -287,20 +293,16 @@ impl From<SlackError> for ScoutError {
                 }
                 // Priority 4: TEMP_FAILURE
                 "internal_error" | "service_unavailable" | "fatal_error" => {
-                    Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                    transient_with_retry_hint(&e)
                 }
                 // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
                 _ => Self::user_error(e.to_string()),
             },
             // Priority 4: TEMP_FAILURE
-            SlackError::RateLimited { .. } => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            SlackError::Network(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            SlackError::RateLimited { .. } => transient_with_retry_hint(&e),
+            SlackError::Network(_) => transient_with_network_hint(&e),
             // Priority 4: TIMEOUT
-            SlackError::Timeout(_) => Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY),
+            SlackError::Timeout(_) => timeout_with_retry_hint(&e),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }
@@ -322,21 +324,13 @@ impl From<BraveError> for ScoutError {
                 Self::data_error(e.to_string())
             }
             // Priority 4: TIMEOUT
-            BraveError::Network(re) if re.is_timeout() => {
-                Self::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
+            BraveError::Network(re) if re.is_timeout() => timeout_with_retry_hint(&e),
             // Priority 4: TEMP_FAILURE
-            BraveError::RateLimited { .. } => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            BraveError::Server(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
-            }
-            BraveError::Network(_) => {
-                Self::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-            }
+            BraveError::RateLimited { .. } => transient_with_retry_hint(&e),
+            BraveError::Server(_) => transient_with_retry_hint(&e),
+            BraveError::Network(_) => transient_with_network_hint(&e),
             BraveError::Api { code, .. } if (500..=599).contains(code) => {
-                Self::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+                transient_with_retry_hint(&e)
             }
             // Unknown — Api codes that did not match 4xx or 5xx
             BraveError::Api { .. } => Self::unknown(e.to_string()),
