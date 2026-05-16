@@ -14,6 +14,7 @@ use super::types::{SearchResult, WebSearchResponse};
 
 const API_BASE: &str = "https://api.search.brave.com/res/v1/web/search";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const BODY_SNIPPET_BYTES: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BraveError {
@@ -30,7 +31,10 @@ pub(crate) enum BraveError {
     Server(u16),
 
     #[error("Failed to parse Brave API response: {0}")]
-    Parse(String),
+    ParseJson(#[from] serde_json::Error),
+
+    #[error("Invalid Brave API URL: {0}")]
+    ParseUrl(#[from] url::ParseError),
 
     #[error("API error ({code}): {message}")]
     Api { code: u16, message: String },
@@ -100,11 +104,14 @@ impl BraveClient {
             .await?;
 
         let response = classify_response(response).await?;
-        let text = response.text().await?;
-        let parsed: WebSearchResponse =
-            serde_json::from_str(&text).map_err(|e| BraveError::Parse(e.to_string()))?;
+        let bytes = response.bytes().await?;
+        let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
-        debug!("Brave search complete");
+        debug!(
+            query_len = query.len(),
+            result_count = parsed.web.as_ref().map_or(0, |w| w.results.len()),
+            "Brave search complete"
+        );
         Ok(parsed)
     }
 }
@@ -118,8 +125,7 @@ fn build_url(
     if let Some(lang) = search_lang {
         params.push(("search_lang", lang));
     }
-    reqwest::Url::parse_with_params(base_url, &params)
-        .map_err(|e| BraveError::Parse(format!("invalid base URL: {e}")))
+    Ok(reqwest::Url::parse_with_params(base_url, &params)?)
 }
 
 async fn classify_response(response: reqwest::Response) -> Result<reqwest::Response, BraveError> {
@@ -138,15 +144,24 @@ async fn classify_response(response: reqwest::Response) -> Result<reqwest::Respo
         return Err(BraveError::Server(status.as_u16()));
     }
     if !status.is_success() {
-        let text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "(body unreadable)".into());
-        let snippet: String = text.chars().take(200).collect();
+        let mut text = match response.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(status = %status, error = %e, "Brave API error; body unreadable");
+                "(body unreadable)".to_owned()
+            }
+        };
+        if text.len() > BODY_SNIPPET_BYTES {
+            let mut end = BODY_SNIPPET_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
         warn!(status = %status, "Brave API error");
         return Err(BraveError::Api {
             code: status.as_u16(),
-            message: format!("HTTP {status}: {snippet}"),
+            message: format!("HTTP {status}: {text}"),
         });
     }
     Ok(response)
@@ -357,6 +372,30 @@ mod http_tests {
         );
     }
 
+    /// [T-026] (unit / FR-019)
+    /// Setup: wiremock always returns HTTP 403.
+    /// Action: `client.search("foo", None)` is invoked.
+    /// Expected: returns `BraveError::Unauthorized`; no retry (mock call count = 1)
+    /// because 403/401 are auth-class failures and not retriable.
+    #[tokio::test]
+    async fn search_403_returns_unauthorized() {
+        let Some(server) = try_spawn_mock_server("brave::http").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1) // exactly one call, no retries
+            .mount(&server)
+            .await;
+
+        let client = BraveClient::with_base_url(Client::new(), &server.uri());
+        let result = client.search("foo", None).await;
+        assert!(
+            matches!(result, Err(BraveError::Unauthorized)),
+            "expected Unauthorized for 403, got: {result:?}"
+        );
+    }
+
     /// [T-023] search returns ServerError(503) after retries on persistent 503
     #[tokio::test]
     async fn search_503_persistent_returns_server_error() {
@@ -376,7 +415,7 @@ mod http_tests {
         );
     }
 
-    /// [T-024] search returns ParseError when response body is malformed JSON
+    /// [T-024] search returns ParseJson error when response body is malformed JSON
     #[tokio::test]
     async fn search_malformed_json_returns_parse_error() {
         let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -390,10 +429,15 @@ mod http_tests {
         let client = BraveClient::with_base_url(Client::new(), &server.uri());
         let result = client.search("foo", None).await;
         match result {
-            Err(BraveError::Parse(msg)) => {
+            Err(BraveError::ParseJson(e)) => {
+                let msg = e.to_string();
                 assert!(!msg.is_empty(), "parse error message should not be empty");
+                assert!(
+                    msg.contains("EOF") || msg.contains("expected"),
+                    "serde diagnostic expected (EOF/expected token), got: {msg}"
+                );
             }
-            other => panic!("expected ParseError, got: {other:?}"),
+            other => panic!("expected ParseJson, got: {other:?}"),
         }
     }
 }

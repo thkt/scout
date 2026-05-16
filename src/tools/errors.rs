@@ -317,7 +317,7 @@ impl From<BraveError> for ScoutError {
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
             // Priority 2: DATA_ERROR (4xx body or response parse failure)
-            BraveError::Parse(_) => Self::data_error(e.to_string()),
+            BraveError::ParseJson(_) | BraveError::ParseUrl(_) => Self::data_error(e.to_string()),
             BraveError::Api { code, .. } if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
