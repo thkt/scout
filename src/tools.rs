@@ -302,7 +302,7 @@ impl Scout {
         .await
         {
             Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
+            Ok(Err(e)) if e.is_degradable() => {
                 warn!(error = %e, "Brave search failed; returning degraded report");
                 degradation.push(
                     format!("Brave search failed: {e}"),
@@ -314,6 +314,7 @@ impl Scout {
                     sources: vec![],
                 }
             }
+            Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
                 return Err(ScoutError::timeout(format!(
                     "research timed out after {}s",
@@ -937,6 +938,38 @@ mod tests {
             data["sources"].as_array().unwrap().len(),
             0,
             "data.sources must be empty when Brave failed"
+        );
+    }
+
+    /// [T-029] (unit / FR-019)
+    /// Setup: wiremock always returns HTTP 401.
+    /// Action: `Scout::research(...)` is invoked.
+    /// Expected: returns `Err(ScoutError)` (not a degraded `Ok`), because
+    /// `BraveError::Unauthorized` is a configuration error and must surface to
+    /// the user instead of being silently absorbed into the degraded envelope.
+    /// Companion to T-028 which covers the transient (503) degradable path.
+    #[tokio::test]
+    async fn research_unauthorized_propagates_as_error() {
+        let Some(server) = try_spawn_mock_server("tools::integration").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_brave(&server.uri());
+        let result = s
+            .research(ResearchParams {
+                query: Some("foo".into()),
+                depth: 1,
+                lang: Lang::Auto,
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Unauthorized must propagate as Err, not be degraded; got: {result:?}"
         );
     }
 

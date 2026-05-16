@@ -43,6 +43,26 @@ pub(crate) enum BraveError {
     Network(#[from] reqwest::Error),
 }
 
+impl BraveError {
+    /// Returns `true` when the error is a transient infrastructure failure that callers
+    /// may legitimately surface as a degraded result instead of propagating.
+    ///
+    /// Configuration errors (`ApiKeyNotSet`, `Unauthorized`, `ParseUrl`) and data
+    /// errors (`ParseJson`, `Api` 4xx) require user action and must not be silently
+    /// swallowed.
+    pub(crate) fn is_degradable(&self) -> bool {
+        match self {
+            Self::ApiKeyNotSet | Self::Unauthorized | Self::ParseJson(_) | Self::ParseUrl(_) => {
+                false
+            }
+            Self::Api { code, .. } if (400..500).contains(code) => false,
+            Self::RateLimited { .. } | Self::Server(_) | Self::Network(_) | Self::Api { .. } => {
+                true
+            }
+        }
+    }
+}
+
 pub(crate) trait SearchClient {
     async fn search(
         &self,
