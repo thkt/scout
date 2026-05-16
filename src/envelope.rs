@@ -434,6 +434,10 @@ mod tests {
                 DegradedReason::ReadabilityFallback,
                 r#""READABILITY_FALLBACK""#,
             ),
+            (
+                DegradedReason::BraveSearchFailed,
+                r#""BRAVE_SEARCH_FAILED""#,
+            ),
         ];
         for (reason, expected) in pairs {
             let actual = serde_json::to_string(&reason).unwrap();
