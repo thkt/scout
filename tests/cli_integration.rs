@@ -70,6 +70,31 @@ fn search_without_api_key_exits_64() {
     );
 }
 
+// [T-027] (integration / FR-018)
+// Setup: env `BRAVE_SEARCH_API_KEY="   "` (whitespace only).
+// Action: run `scout search "test query"`.
+// Expected: stderr contains `BRAVE_SEARCH_API_KEY`, exit code 64 (EX_USAGE);
+// whitespace-only key is treated as missing because
+// brave/client.rs::from_env applies `trim().is_empty()`.
+#[test]
+fn search_with_whitespace_only_api_key_exits_64() {
+    let output = scout()
+        .args(["search", "test query"])
+        .env("BRAVE_SEARCH_API_KEY", "   ")
+        .output()
+        .expect("scout search failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "whitespace-only API key should be treated as missing (exit 64)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("BRAVE_SEARCH_API_KEY"),
+        "stderr should mention BRAVE_SEARCH_API_KEY, got:\n{stderr}"
+    );
+}
+
 // T-C004: fetch_invalid_url_exits_65
 #[test]
 fn fetch_invalid_url_exits_65() {
