@@ -37,11 +37,16 @@ jobs:
       - name: Check (js-rendering)
         run: cargo check --features js-rendering
 
+      - name: Install nextest
+        uses: taiki-e/install-action@184183c2401be73c3bf42c2e61268aa5855379c1 # v2.78.1
+        with:
+          tool: cargo-nextest
+
       - name: Test
-        run: cargo test
+        run: cargo nextest run --profile ci
 
       - name: Test (js-rendering)
-        run: cargo test --features js-rendering
+        run: cargo nextest run --features js-rendering --profile ci
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings

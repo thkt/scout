@@ -1,0 +1,10 @@
+[profile.default]
+fail-fast = false
+
+[profile.ci]
+fail-fast = false
+# js-rendering tests have observed runs ~30s; 120s gives ample headroom and the
+# terminate-after cap bounds total wait to 4 min even on a hang.
+slow-timeout = { period = "120s", terminate-after = 2 }
+# Surface flaky tests in CI logs; default "pass" hides them on retry success.
+final-status-level = "flaky"
