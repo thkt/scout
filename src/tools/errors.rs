@@ -307,6 +307,8 @@ impl From<SlackError> for ScoutError {
             SlackError::Network(_) => transient_with_network_hint(&e),
             // Priority 4: TIMEOUT
             SlackError::Timeout(_) => timeout_with_retry_hint(&e),
+            // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
+            SlackError::InsecureUrl => Self::data_error(e.to_string()),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }
