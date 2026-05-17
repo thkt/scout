@@ -177,9 +177,7 @@ impl From<github::GitHubError> for ScoutError {
             // Priority 1: USAGE_ERROR
             github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
                 .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
-            // 401 must be checked before the generic 4xx arm below; otherwise it
-            // would fall through to DataError(65). Auth failure is a misconfigured
-            // credential, not a malformed payload (issue #101).
+            // 401 must precede the 4xx arm below to avoid falling into DataError.
             github::GitHubError::Api { code: 401, .. } => Self::user_error(e.to_string())
                 .with_next_step("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
             // Priority 2: DATA_ERROR
@@ -339,10 +337,8 @@ impl From<BraveError> for ScoutError {
             BraveError::Api { code, .. } if (500..=599).contains(code) => {
                 transient_with_retry_hint(&e)
             }
-            // Priority 5: INTERNAL — scout-side bug (unexpected response schema).
-            // Peer to `GitHubError::Decode` / `SlackError::Decode`; retry cannot
-            // resolve schema drift, so `internal_bug` (Internal/70/non-retryable)
-            // is the correct landing per ADR-0065 (issue #101).
+            // Priority 5: INTERNAL — schema drift is a scout-side invariant;
+            // peer to `GitHubError::Decode` / `SlackError::Decode`.
             BraveError::ParseJson(_) => Self::internal_bug(e.to_string()),
             // Unknown — Api codes that did not match 4xx or 5xx
             BraveError::Api { .. } => Self::unknown(e.to_string()),
@@ -602,14 +598,17 @@ mod tests {
     }
 
     /// [T-ER025] INTERNAL (70) reserved for scout-side schema bugs.
-    /// `Decode` variants from GitHub and Slack APIs indicate an unexpected
-    /// response shape — by ADR-0065 priority 5 these are scout's invariant
-    /// violation, not external IO failure (which maps to IoError 74).
+    /// `Decode` / `ParseJson` variants from GitHub, Slack, and Brave APIs signal
+    /// an unexpected response shape — by ADR-0065 priority 5 these are scout's
+    /// invariant violation, not external IO failure (which maps to IoError 74).
     #[test]
     fn schema_decode_classifies_as_internal_exit_70() {
+        let serde_err =
+            serde_json::from_str::<serde_json::Value>("{not valid").expect_err("malformed json");
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::Decode("decode error".into()).into(),
             SlackError::Decode("err".into()).into(),
+            BraveError::ParseJson(serde_err).into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::Internal, "{err}");
@@ -639,23 +638,6 @@ mod tests {
             "expected auth hint mentioning GITHUB_TOKEN, got: {:?}",
             err.next_step()
         );
-    }
-
-    /// [T-ER029] BraveError::ParseJson classifies as Internal(70) (issue #101).
-    ///
-    /// 2xx body schema mismatch is a scout-side invariant violation (the Brave API
-    /// returned an unexpected payload shape), not a user-fixable data error. Prior
-    /// to this fix the variant routed through the `DataError(65)` arm alongside
-    /// `ParseUrl` and `InsecureBaseUrl`. ADR-0065 priority 5 places it under
-    /// Internal, peer to `GitHubError::Decode` and `SlackError::Decode`.
-    #[test]
-    fn brave_parse_json_classifies_as_internal_exit_70() {
-        let serde_err =
-            serde_json::from_str::<serde_json::Value>("{not valid").expect_err("malformed json");
-        let err = ScoutError::from(BraveError::ParseJson(serde_err));
-        assert_eq!(err.error_kind(), ErrorCode::Internal);
-        assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
-        assert!(!err.retryable(), "ParseJson must not be retryable");
     }
 
     /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
