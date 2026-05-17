@@ -177,6 +177,9 @@ impl From<github::GitHubError> for ScoutError {
             // Priority 1: USAGE_ERROR
             github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
                 .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
+            // 401 must precede the 4xx arm below to avoid falling into DataError.
+            github::GitHubError::Api { code: 401, .. } => Self::user_error(e.to_string())
+                .with_next_step("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
             // Priority 2: DATA_ERROR
             github::GitHubError::InvalidRepo(_) => Self::data_error(e.to_string())
                 .with_next_step("Use 'owner/repo' format, e.g., 'facebook/react'"),
@@ -318,8 +321,8 @@ impl From<BraveError> for ScoutError {
             BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body, response parse failure, or insecure base URL)
-            BraveError::ParseJson(_) | BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
+            // Priority 2: DATA_ERROR (4xx body, URL parse failure, or insecure base URL)
+            BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
                 Self::data_error(e.to_string())
             }
             BraveError::Api { code, .. } if (400..500).contains(code) => {
@@ -334,6 +337,9 @@ impl From<BraveError> for ScoutError {
             BraveError::Api { code, .. } if (500..=599).contains(code) => {
                 transient_with_retry_hint(&e)
             }
+            // Priority 5: INTERNAL — schema drift is a scout-side invariant;
+            // peer to `GitHubError::Decode` / `SlackError::Decode`.
+            BraveError::ParseJson(_) => Self::internal_bug(e.to_string()),
             // Unknown — Api codes that did not match 4xx or 5xx
             BraveError::Api { .. } => Self::unknown(e.to_string()),
         }
@@ -592,20 +598,46 @@ mod tests {
     }
 
     /// [T-ER025] INTERNAL (70) reserved for scout-side schema bugs.
-    /// `Decode` variants from GitHub and Slack APIs indicate an unexpected
-    /// response shape — by ADR-0065 priority 5 these are scout's invariant
-    /// violation, not external IO failure (which maps to IoError 74).
+    /// `Decode` / `ParseJson` variants from GitHub, Slack, and Brave APIs signal
+    /// an unexpected response shape — by ADR-0065 priority 5 these are scout's
+    /// invariant violation, not external IO failure (which maps to IoError 74).
     #[test]
     fn schema_decode_classifies_as_internal_exit_70() {
+        let serde_err =
+            serde_json::from_str::<serde_json::Value>("{not valid").expect_err("malformed json");
         let cases: Vec<ScoutError> = vec![
             github::GitHubError::Decode("decode error".into()).into(),
             SlackError::Decode("err".into()).into(),
+            BraveError::ParseJson(serde_err).into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::Internal, "{err}");
             assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70): {err}");
             assert!(!err.retryable(), "Internal must not be retryable: {err}");
         }
+    }
+
+    /// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint
+    /// (issue #101).
+    ///
+    /// Prior to this fix, 401 fell through the generic `(400..500)` DataError arm
+    /// (exit 65) because the GitHubClient surfaces every non-special 4xx as
+    /// `GitHubError::Api`. 401 is an auth-class failure — the user must set
+    /// `GITHUB_TOKEN` or run `gh auth login` — so ADR-0065 priority 1 (USAGE_ERROR)
+    /// is the correct landing, peer to `GitHubError::Forbidden`.
+    #[test]
+    fn github_401_classifies_as_usage_error_with_auth_hint() {
+        let err = ScoutError::from(github::GitHubError::Api {
+            code: 401,
+            message: "Bad credentials".into(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::UsageError);
+        assert_eq!(err.exit_code(), 64, "expected EX_USAGE (64)");
+        assert!(
+            err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")),
+            "expected auth hint mentioning GITHUB_TOKEN, got: {:?}",
+            err.next_step()
+        );
     }
 
     /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
