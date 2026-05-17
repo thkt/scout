@@ -177,6 +177,11 @@ impl From<github::GitHubError> for ScoutError {
             // Priority 1: USAGE_ERROR
             github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
                 .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
+            // 401 must be checked before the generic 4xx arm below; otherwise it
+            // would fall through to DataError(65). Auth failure is a misconfigured
+            // credential, not a malformed payload (issue #101).
+            github::GitHubError::Api { code: 401, .. } => Self::user_error(e.to_string())
+                .with_next_step("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
             // Priority 2: DATA_ERROR
             github::GitHubError::InvalidRepo(_) => Self::data_error(e.to_string())
                 .with_next_step("Use 'owner/repo' format, e.g., 'facebook/react'"),
@@ -611,6 +616,29 @@ mod tests {
             assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70): {err}");
             assert!(!err.retryable(), "Internal must not be retryable: {err}");
         }
+    }
+
+    /// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint
+    /// (issue #101).
+    ///
+    /// Prior to this fix, 401 fell through the generic `(400..500)` DataError arm
+    /// (exit 65) because the GitHubClient surfaces every non-special 4xx as
+    /// `GitHubError::Api`. 401 is an auth-class failure — the user must set
+    /// `GITHUB_TOKEN` or run `gh auth login` — so ADR-0065 priority 1 (USAGE_ERROR)
+    /// is the correct landing, peer to `GitHubError::Forbidden`.
+    #[test]
+    fn github_401_classifies_as_usage_error_with_auth_hint() {
+        let err = ScoutError::from(github::GitHubError::Api {
+            code: 401,
+            message: "Bad credentials".into(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::UsageError);
+        assert_eq!(err.exit_code(), 64, "expected EX_USAGE (64)");
+        assert!(
+            err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")),
+            "expected auth hint mentioning GITHUB_TOKEN, got: {:?}",
+            err.next_step()
+        );
     }
 
     /// [T-ER029] BraveError::ParseJson classifies as Internal(70) (issue #101).
