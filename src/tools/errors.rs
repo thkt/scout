@@ -293,10 +293,11 @@ impl From<SlackError> for ScoutError {
             // Slack API surfaces failures as error code strings (not HTTP status),
             // so per-string classification replaces the priority-2 HTTP arm.
             SlackError::Api { error } => match error.as_str() {
-                // Priority 3: NOT_FOUND
-                "channel_not_found" | "message_not_found" | "thread_not_found" => {
-                    Self::not_found(e.to_string())
-                }
+                // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
+                // codes; "message not found" (space) is scout's own string from
+                // `fetch_message` when the resolved messages list is empty.
+                "channel_not_found" | "message_not_found" | "thread_not_found"
+                | "message not found" => Self::not_found(e.to_string()),
                 // Priority 4: TEMP_FAILURE
                 "internal_error" | "service_unavailable" | "fatal_error" => {
                     transient_with_retry_hint(&e)
@@ -553,6 +554,20 @@ mod tests {
             error: "invalid_auth".to_owned(),
         });
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    }
+
+    /// [T-ER031] scout-internal "message not found" (space form) classifies as NotFound
+    /// (issue #114 condition 4). scout returns this string from `fetch_message`
+    /// when the resolved messages list is empty; it must classify as the same
+    /// NotFound(66) class as Slack's native `message_not_found` (underscore form).
+    #[test]
+    fn slack_space_message_not_found_classifies_as_not_found() {
+        use crate::slack::SlackError;
+        let err = ScoutError::from(SlackError::Api {
+            error: "message not found".to_owned(),
+        });
+        assert_eq!(err.error_kind(), ErrorCode::NotFound);
+        assert_eq!(err.exit_code(), 66, "expected EX_NOINPUT (66)");
     }
 
     /// [T-ER023] ADR-0065 priority 2 wins over priority 5 for Api 4xx codes.

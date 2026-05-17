@@ -245,10 +245,14 @@ impl SlackClient {
         })?;
 
         if body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            let error = body
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
+            // ok:false with a missing `error` field is a Slack API contract
+            // violation, not a user-fixable failure — route through Decode so
+            // it classifies as Internal(70) rather than UsageError.
+            let Some(error) = body.get("error").and_then(|v| v.as_str()) else {
+                return Err(SlackError::Decode(
+                    "Slack response had `ok: false` without an `error` field".into(),
+                ));
+            };
             if error == "ratelimited" {
                 warn!(retry_after_secs = retry_after, "Slack API rate limited");
                 return Err(SlackError::RateLimited { retry_after });
@@ -555,7 +559,7 @@ mod tests {
     use super::*;
 
     #[allow(dead_code)]
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Deserialize)]
     struct DummyBody {
         ok: bool,
     }
@@ -651,6 +655,31 @@ mod tests {
                 result,
                 Err(SlackError::Api { error }) if error == "channel_not_found"
             ));
+        }
+
+        /// [T-SK031] ok:false without an `error` field surfaces as SlackError::Decode
+        /// (issue #114 condition 5). The previous code substituted the literal
+        /// "unknown" string and mapped to UsageError; a missing `error` is a
+        /// Slack API contract violation, not a user-fixable failure.
+        #[tokio::test]
+        async fn api_get_once_ok_false_without_error_field_returns_decode() {
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false})),
+                )
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+            assert!(
+                matches!(result, Err(SlackError::Decode(_))),
+                "expected SlackError::Decode for ok:false without error field, got: {result:?}"
+            );
         }
     }
 
