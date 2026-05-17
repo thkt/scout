@@ -148,14 +148,16 @@ impl GitHubClient {
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
-            // 2xx body decode failure is a scout-side invariant violation (the API
-            // returned an unexpected schema). Route through `Decode` so it maps to
-            // Internal(70) retryable=false instead of Network → TempFailure(75)
-            // retryable=true (per issue #101).
-            200..=299 => Ok(response
-                .json()
-                .await
-                .map_err(|e| GitHubError::Decode(e.to_string()))?),
+            // Schema mismatch is a scout-side invariant — non-retryable.
+            // Transport errors (timeout, connect) fall through to Network so
+            // the retry loop can recover.
+            200..=299 => response.json().await.map_err(|e| {
+                if e.is_decode() {
+                    GitHubError::Decode(e.to_string())
+                } else {
+                    e.into()
+                }
+            }),
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
                 let retry_after = parse_retry_after(response.headers());
