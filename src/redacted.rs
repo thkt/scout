@@ -1,7 +1,5 @@
 use std::fmt;
 
-use crate::brave::client::BraveError;
-
 #[derive(Clone)]
 pub(crate) struct Redacted(String);
 
@@ -21,39 +19,22 @@ impl fmt::Debug for Redacted {
     }
 }
 
-/// Returns `Ok(())` when `url` begins with `https://`; otherwise yields
-/// `BraveError::InsecureBaseUrl`. Used as a defense-in-depth check before
-/// sending an API key over HTTP.
-///
-/// Unlike [`assert_https`], this function returns a `Result` and is never
-/// bypassed in test builds, so callers can exercise the rejection path
-/// directly.
-pub(crate) fn validate_https(url: &str) -> Result<(), BraveError> {
+/// Returns `Ok(())` when `url` begins with `https://`; otherwise yields the
+/// error produced by `err`. Each backend supplies its own error variant so
+/// the helper stays decoupled from any single client's error enum. Callers
+/// gate the call with a per-client `should_check_https` so wiremock servers
+/// on `http://127.0.0.1` keep working in tests.
+pub(crate) fn validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E> {
     if url.starts_with("https://") {
         Ok(())
     } else {
-        Err(BraveError::InsecureBaseUrl)
+        Err(err())
     }
-}
-
-/// Panicking HTTPS check retained for backends that have not migrated to
-/// the [`validate_https`] `Result` form. Bypassed under `cfg!(test)` so
-/// wiremock servers on `http://127.0.0.1` keep working.
-// FIXME: callers `github.rs::request` and `slack.rs::api_get_once` still
-//        use this panic form; migrate both to validate_https + a per-client
-//        skip flag (parallel to BraveClient::skip_https_check) and delete
-//        this function.
-pub(crate) fn assert_https(url: &str) {
-    assert!(
-        url.starts_with("https://") || cfg!(test),
-        "credentials must only be sent over HTTPS"
-    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brave::client::BraveError;
 
     /// [T-RD001] Redacted value hides contents in Debug output
     #[test]
@@ -62,31 +43,24 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "[REDACTED]");
     }
 
-    // T-RC004: validate_https_rejects_non_https_and_empty
-    /// FR-004 / FR-005: `validate_https` must reject any input that does not begin with
-    /// `https://`, including plain `http://` URLs and the empty string. Both surface as
-    /// `BraveError::InsecureBaseUrl`.
+    // T-RC007: validate_https_is_generic_over_caller_error_type
+    /// FR-004 / FR-005: `validate_https` rejects any input that does not begin
+    /// with `https://` (plain `http://`, empty string) and accepts a real
+    /// `https://` URL. The error variant is whatever the closure constructs,
+    /// so each backend plugs in its own type. The closure runs only on
+    /// failure; a passing URL never instantiates the error.
     #[test]
-    fn validate_https_rejects_non_https_and_empty() {
-        let http_result = validate_https("http://insecure.example");
-        assert!(
-            matches!(http_result, Err(BraveError::InsecureBaseUrl)),
-            "expected InsecureBaseUrl for http URL, got: {http_result:?}"
-        );
+    fn validate_https_is_generic_over_caller_error_type() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct CallerError;
 
-        let empty_result = validate_https("");
-        assert!(
-            matches!(empty_result, Err(BraveError::InsecureBaseUrl)),
-            "expected InsecureBaseUrl for empty URL, got: {empty_result:?}"
-        );
-    }
+        let http: Result<(), CallerError> = validate_https("http://insecure", || CallerError);
+        assert_eq!(http, Err(CallerError));
 
-    // T-RC005: validate_https_accepts_https_url
-    /// FR-004 / FR-005: a real `https://` URL (production `API_BASE`) must pass
-    /// validation and return `Ok(())`.
-    #[test]
-    fn validate_https_accepts_https_url() {
-        let result = validate_https("https://api.search.brave.com/res/v1/web/search");
-        assert!(matches!(result, Ok(())), "expected Ok, got: {result:?}");
+        let empty: Result<(), CallerError> = validate_https("", || CallerError);
+        assert_eq!(empty, Err(CallerError));
+
+        let https: Result<(), CallerError> = validate_https("https://ok.example", || CallerError);
+        assert_eq!(https, Ok(()));
     }
 }

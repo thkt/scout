@@ -19,7 +19,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use crate::redacted::{Redacted, assert_https};
+use crate::redacted::{Redacted, validate_https};
 
 use types::{
     BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
@@ -74,6 +74,9 @@ pub(crate) enum GitHubError {
 
     #[error("{0}")]
     NonUtf8(String),
+
+    #[error("Insecure URL: HTTPS required for token-bearing request")]
+    InsecureUrl,
 }
 
 /// HTTP client for the GitHub REST API v3.
@@ -86,6 +89,11 @@ pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
     base_url: String,
+    /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
+    /// Production constructors leave this `false` so `request` always runs
+    /// `validate_https`; only `with_base_url` opts in.
+    #[cfg(test)]
+    skip_https_check: bool,
 }
 
 impl GitHubClient {
@@ -102,6 +110,8 @@ impl GitHubClient {
             http,
             token,
             base_url: API_BASE.to_owned(),
+            #[cfg(test)]
+            skip_https_check: false,
         }
     }
 
@@ -111,11 +121,27 @@ impl GitHubClient {
             http,
             token: None,
             base_url: base_url.to_owned(),
+            skip_https_check: true,
         }
     }
 
-    fn request(&self, path: &str) -> reqwest::RequestBuilder {
+    /// Test-only override of the production HTTPS gate. See [`validate_https`].
+    fn should_check_https(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.skip_https_check
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    fn request(&self, path: &str) -> Result<reqwest::RequestBuilder, GitHubError> {
         let url = format!("{}{path}", self.base_url);
+        if self.should_check_https() {
+            validate_https(&url, || GitHubError::InsecureUrl)?;
+        }
         let mut req = self
             .http
             .get(&url)
@@ -123,10 +149,9 @@ impl GitHubClient {
             .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
-            assert_https(&url);
             req = req.header("Authorization", format!("Bearer {}", token.expose()));
         }
-        req
+        Ok(req)
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
@@ -144,7 +169,7 @@ impl GitHubClient {
 
     async fn get_json_once<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         debug!(path, "github API request");
-        let response = self.request(path).send().await?;
+        let response = self.request(path)?.send().await?;
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {

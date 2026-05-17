@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
 use crate::fetch::converter::escape_yaml;
-use crate::redacted::{Redacted, assert_https};
+use crate::redacted::{Redacted, validate_https};
 use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +30,9 @@ pub(crate) enum SlackError {
 
     #[error("Slack response decode error: {0}")]
     Decode(String),
+
+    #[error("Insecure URL: HTTPS required for token-bearing request")]
+    InsecureUrl,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +139,11 @@ pub(crate) struct SlackClient {
     http: Client,
     token: Redacted,
     base_url: String,
+    /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
+    /// Production constructors leave this `false` so `api_get_once` always
+    /// runs `validate_https`; only `with_base_url` opts in.
+    #[cfg(test)]
+    skip_https_check: bool,
 }
 
 const API_BASE: &str = "https://slack.com/api";
@@ -146,6 +154,8 @@ impl SlackClient {
             http,
             token,
             base_url: API_BASE.to_owned(),
+            #[cfg(test)]
+            skip_https_check: false,
         }
     }
 
@@ -163,6 +173,19 @@ impl SlackClient {
             http,
             token: Redacted::new("xoxp-test"),
             base_url: base_url.to_owned(),
+            skip_https_check: true,
+        }
+    }
+
+    /// Test-only override of the production HTTPS gate. See [`validate_https`].
+    fn should_check_https(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.skip_https_check
+        }
+        #[cfg(not(test))]
+        {
+            true
         }
     }
 
@@ -194,7 +217,9 @@ impl SlackClient {
             url.query_pairs_mut().append_pair(k, v);
         }
 
-        assert_https(url.as_str());
+        if self.should_check_https() {
+            validate_https(url.as_str(), || SlackError::InsecureUrl)?;
+        }
 
         let resp = self
             .http
@@ -877,9 +902,9 @@ parent body
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
 
-        /// [T-SK025] SlackClient::new constructs a client that reaches the API
+        /// [T-SK025] SlackClient::with_base_url constructs a client that reaches a wiremock server
         #[tokio::test]
-        async fn t010_new_constructs_usable_client() {
+        async fn t010_with_base_url_constructs_usable_client() {
             let Some(server) = try_spawn_mock_server("slack::http").await else {
                 return;
             };
@@ -891,9 +916,7 @@ parent body
                 .mount(&server)
                 .await;
 
-            let token = Redacted::new("xoxp-test-token");
-            let mut client = SlackClient::new(Client::new(), token);
-            client.base_url = server.uri();
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
 
             let result: Result<DummyBody, _> = client.api_get_once("auth.test", &[]).await;
             assert!(result.is_ok());
