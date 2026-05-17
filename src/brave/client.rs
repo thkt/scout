@@ -49,9 +49,9 @@ impl BraveError {
     /// Returns `true` when the error is a transient infrastructure failure that callers
     /// may legitimately surface as a degraded result instead of propagating.
     ///
-    /// Configuration errors (`ApiKeyNotSet`, `Unauthorized`, `ParseUrl`) and data
-    /// errors (`ParseJson`, `Api` 4xx) require user action and must not be silently
-    /// swallowed.
+    /// Configuration errors (`ApiKeyNotSet`, `Unauthorized`, `ParseUrl`,
+    /// `InsecureBaseUrl`), the scout-side invariant `ParseJson`, and 4xx `Api`
+    /// codes stay propagated — they require user action or signal a scout bug.
     pub(crate) fn is_degradable(&self) -> bool {
         match self {
             Self::ApiKeyNotSet
