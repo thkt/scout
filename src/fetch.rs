@@ -6,8 +6,8 @@ pub(crate) mod converter;
 mod extractor;
 mod ssrf;
 
-pub(crate) use ssrf::{DnsResolver, TokioDnsResolver};
-use ssrf::{redact_url_credentials, ssrf_check};
+pub(crate) use ssrf::{DnsResolver, RedactedLogUrl, TokioDnsResolver};
+use ssrf::{ValidatedUrl, ssrf_check};
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -25,6 +25,10 @@ use extractor::{extract_article, extract_raw};
 use reqwest::Client;
 use reqwest::header::LOCATION;
 
+#[cfg(feature = "js-rendering")]
+use chromiumoxide::error::CdpError;
+#[cfg(feature = "js-rendering")]
+use tracing::error;
 use tracing::{debug, info, warn};
 
 /// Options for [`fetch_page`] that control rendering and output.
@@ -100,15 +104,15 @@ pub(crate) async fn fetch_page(
     // SECURITY: Local CLI only. TOCTOU gap between DNS check and reqwest connect
     // is acceptable here; a network service would need a custom resolver that
     // enforces the allowlist at connect time.
-    ssrf_check(url, resolver).await?;
+    //
+    // The returned `ValidatedUrl` is the only constructor for SSRF-checked URLs;
+    // `download` requires `&ValidatedUrl` so the redirect loop cannot bypass it.
+    let validated = ssrf_check(url, resolver).await?;
 
     #[cfg(feature = "js-rendering")]
-    let (final_url, mut html) = download(client, url, MAX_REDIRECTS, resolver).await?;
+    let (final_url, mut html) = download(client, &validated, MAX_REDIRECTS, resolver).await?;
     #[cfg(not(feature = "js-rendering"))]
-    let (final_url, html) = download(client, url, MAX_REDIRECTS, resolver).await?;
-
-    // Defense-in-depth: catch bugs in the manual redirect loop.
-    ssrf_check(&final_url, resolver).await?;
+    let (final_url, html) = download(client, &validated, MAX_REDIRECTS, resolver).await?;
 
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
@@ -147,25 +151,25 @@ pub(crate) async fn fetch_page(
     let article = if opts.raw {
         extract_raw(&html)
     } else {
-        extract_article(&html, Some(&final_url))
+        extract_article(&html, Some(final_url.as_str()))
     };
 
     let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
-        warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content, trying JS rendering fallback");
+        warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");
         match fetch_with_cdp(&final_url, Clone::clone(resolver)).await {
             Ok(js_html) => {
-                let re_extracted = extract_article(&js_html, Some(&final_url));
+                let re_extracted = extract_article(&js_html, Some(final_url.as_str()));
                 if is_thin_extract(&re_extracted) {
-                    debug!(url = %redact_url_credentials(&final_url), "JS re-extraction still thin, returning best-effort result");
+                    debug!(url = %RedactedLogUrl(final_url.as_str()), "JS re-extraction still thin, returning best-effort result");
                 } else {
-                    debug!(url = %redact_url_credentials(&final_url), "JS rendering fallback succeeded (post-extraction)");
+                    debug!(url = %RedactedLogUrl(final_url.as_str()), "JS rendering fallback succeeded (post-extraction)");
                 }
                 re_extracted
             }
             Err(e) => {
-                warn!(url = %redact_url_credentials(&final_url), error = %e, "JS rendering fallback failed, using original extraction");
+                warn!(url = %RedactedLogUrl(final_url.as_str()), error = %e, "JS rendering fallback failed, using original extraction");
                 article
             }
         }
@@ -174,11 +178,11 @@ pub(crate) async fn fetch_page(
     };
     #[cfg(not(feature = "js-rendering"))]
     if need_thin_fallback {
-        warn!(url = %redact_url_credentials(&final_url), "extraction yielded too little content but JS rendering unavailable");
+        warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content but JS rendering unavailable");
     }
 
-    debug!(url = %redact_url_credentials(&final_url), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(&article, final_url))
+    debug!(url = %RedactedLogUrl(final_url.as_str()), bytes = html.len(), "page fetched");
+    Ok(to_fetch_result(&article, final_url.as_str().to_owned()))
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates
@@ -323,6 +327,26 @@ impl From<BrowserError> for FetchError {
     }
 }
 
+/// Reasons the CDP request-pause interceptor aborts.
+///
+/// Surfaces a failure inside the spawned interceptor task to the navigation
+/// task via a `oneshot` channel — without this, an `execute()` failure on the
+/// Continue/Fail command would be silently dropped and the subrequest would
+/// hang until the CDP timeout fires.
+#[cfg(feature = "js-rendering")]
+#[derive(Debug, thiserror::Error)]
+enum CdpInterceptError {
+    #[error("CDP intercept execute failed: {0}")]
+    Execute(CdpError),
+}
+
+#[cfg(feature = "js-rendering")]
+impl From<CdpInterceptError> for BrowserError {
+    fn from(e: CdpInterceptError) -> Self {
+        BrowserError::ProcessFailed(e.to_string())
+    }
+}
+
 #[cfg(feature = "js-rendering")]
 fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
     static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
@@ -392,7 +416,7 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsRe
     {
         return true;
     } else {
-        warn!(url = %url, "SSRF: blocked browser subrequest with unrecognized scheme");
+        warn!(url = %RedactedLogUrl(url), "SSRF: blocked browser subrequest with unrecognized scheme");
         return false;
     };
     ssrf::ssrf_check(&check_url, resolver).await.is_ok()
@@ -403,7 +427,7 @@ const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(
-    url: &str,
+    url: &ValidatedUrl,
     resolver: impl ssrf::DnsResolver,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
@@ -440,6 +464,11 @@ async fn fetch_with_cdp(
 
     let _ = timeout(Duration::from_secs(5), browser.close()).await;
     handler_task.abort();
+    match handler_task.await {
+        Ok(()) => {}
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => error!(error = ?e, "CDP handler task panicked"),
+    }
 
     result
 }
@@ -448,7 +477,7 @@ async fn fetch_with_cdp(
 #[cfg(feature = "js-rendering")]
 async fn cdp_navigate(
     browser: &mut chromiumoxide::Browser,
-    url: &str,
+    url: &ValidatedUrl,
     resolver: impl ssrf::DnsResolver,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::cdp::browser_protocol::fetch::{
@@ -456,6 +485,7 @@ async fn cdp_navigate(
     };
     use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
     use futures::StreamExt;
+    use tokio::sync::oneshot;
 
     let page = browser
         .new_page("about:blank")
@@ -471,43 +501,66 @@ async fn cdp_navigate(
         .await
         .map_err(|e| BrowserError::ProcessFailed(format!("event listener: {e}")))?;
 
+    let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
     let intercept_page = page.clone();
     let interceptor = tokio::spawn(async move {
+        let mut intercept_err_tx = Some(intercept_err_tx);
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, &resolver).await;
-            if allowed {
-                if let Ok(cmd) = ContinueRequestParams::builder()
-                    .request_id(event.request_id.clone())
-                    .build()
-                {
-                    let _ = intercept_page.execute(cmd).await;
-                }
+            let exec_result: Result<(), CdpError> = if allowed {
+                intercept_page
+                    .execute(ContinueRequestParams::new(event.request_id.clone()))
+                    .await
+                    .map(|_| ())
             } else {
-                warn!(blocked_url = %req_url, "SSRF: blocked browser subrequest");
-                if let Ok(cmd) = FailRequestParams::builder()
-                    .request_id(event.request_id.clone())
-                    .error_reason(ErrorReason::BlockedByClient)
-                    .build()
-                {
-                    let _ = intercept_page.execute(cmd).await;
-                }
+                warn!(blocked_url = %RedactedLogUrl(req_url), "SSRF: blocked browser subrequest");
+                intercept_page
+                    .execute(FailRequestParams::new(
+                        event.request_id.clone(),
+                        ErrorReason::BlockedByClient,
+                    ))
+                    .await
+                    .map(|_| ())
+            };
+            if let Err(e) = exec_result
+                && let Some(tx) = intercept_err_tx.take()
+            {
+                // Receiver dropped (= navigation already completed) is harmless; ignore.
+                let _ = tx.send(CdpInterceptError::Execute(e));
+                break;
             }
         }
     });
 
-    let result = async {
-        page.goto(url)
+    let navigation = async {
+        page.goto(url.as_str())
             .await
             .map_err(|e| BrowserError::ProcessFailed(format!("navigation: {e}")))?;
-
         page.content()
             .await
             .map_err(|e| BrowserError::ProcessFailed(format!("content: {e}")))
-    }
-    .await;
+    };
+    tokio::pin!(navigation);
+    let mut intercept_err_rx = intercept_err_rx;
+    // `biased;` so a fast-completing navigation cannot race past an
+    // already-sent intercept error.
+    let result = tokio::select! {
+        biased;
+        intercept_err = &mut intercept_err_rx => Err(intercept_err
+            .map(BrowserError::from)
+            .unwrap_or_else(|_| BrowserError::ProcessFailed(
+                "CDP intercept task dropped without status".into(),
+            ))),
+        nav_result = &mut navigation => nav_result,
+    };
 
     interceptor.abort();
+    match interceptor.await {
+        Ok(()) => {}
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => error!(error = ?e, "CDP intercept task panicked"),
+    }
     result
 }
 
@@ -540,17 +593,20 @@ fn resolve_browser_binary_from(
 /// redirects before the application can re-check the resolved URL against
 /// the SSRF allowlist. Manual per-hop validation is the only way to enforce
 /// the SSRF contract. See ADR-0001 for the contract details.
+///
+/// `&ValidatedUrl` here closes that gap at the type level — the manual
+/// redirect loop cannot accept an unchecked URL.
 async fn download(
     client: &Client,
-    url: &str,
+    url: &ValidatedUrl,
     max_redirects: usize,
     resolver: &impl DnsResolver,
-) -> Result<(String, String), FetchError> {
-    let mut current_url = url.to_owned();
+) -> Result<(ValidatedUrl, String), FetchError> {
+    let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
         let response = client
-            .get(&current_url)
+            .get(current_url.as_str())
             .header("User-Agent", crate::USER_AGENT)
             .send()
             .await?;
@@ -562,17 +618,17 @@ async fn download(
                 .and_then(|v| v.to_str().ok())
                 .ok_or(FetchError::RedirectMissingLocation)?;
 
-            let base = url::Url::parse(&current_url)?;
+            let base = url::Url::parse(current_url.as_str())?;
             let next_url = base.join(location)?.to_string();
 
-            ssrf_check(&next_url, resolver).await?;
+            let next_validated = ssrf_check(&next_url, resolver).await?;
 
             debug!(
-                from = %redact_url_credentials(&current_url),
-                to = %redact_url_credentials(&next_url),
+                from = %RedactedLogUrl(current_url.as_str()),
+                to = %RedactedLogUrl(next_validated.as_str()),
                 "following redirect"
             );
-            current_url = next_url;
+            current_url = next_validated;
             continue;
         }
 
@@ -584,7 +640,7 @@ async fn download(
         let mut charset = None;
         match response.headers().get("content-type") {
             None => {
-                debug!(url = %redact_url_credentials(&current_url), "no Content-Type header, proceeding as text")
+                debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
             }
             Some(ct) => match ct.to_str() {
                 Ok(ct_str) => {
@@ -592,7 +648,7 @@ async fn download(
                     charset = extract_charset(ct_str);
                 }
                 Err(_) => {
-                    debug!(url = %redact_url_credentials(&current_url), "Content-Type header is not valid ASCII, proceeding as text")
+                    debug!(url = %RedactedLogUrl(current_url.as_str()), "Content-Type header is not valid ASCII, proceeding as text")
                 }
             },
         }
@@ -774,6 +830,10 @@ mod download_tests {
         Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
+    fn validated(url: &str) -> ValidatedUrl {
+        ValidatedUrl::for_test(url)
+    }
+
     #[derive(Clone, Copy)]
     struct PublicResolver;
     impl DnsResolver for PublicResolver {
@@ -800,14 +860,14 @@ mod download_tests {
         let client = no_redirect_client();
         let (final_url, html) = download(
             &client,
-            &format!("{}/page", server.uri()),
+            &validated(&format!("{}/page", server.uri())),
             MAX_REDIRECTS,
             &PublicResolver,
         )
         .await
         .unwrap();
 
-        assert!(final_url.contains("/page"));
+        assert!(final_url.as_str().contains("/page"));
         assert!(html.contains("hello"));
     }
 
@@ -832,7 +892,7 @@ mod download_tests {
         assert!(matches!(
             download(
                 &client,
-                &format!("{}/404", server.uri()),
+                &validated(&format!("{}/404", server.uri())),
                 MAX_REDIRECTS,
                 &PublicResolver
             )
@@ -842,7 +902,7 @@ mod download_tests {
         assert!(matches!(
             download(
                 &client,
-                &format!("{}/500", server.uri()),
+                &validated(&format!("{}/500", server.uri())),
                 MAX_REDIRECTS,
                 &PublicResolver
             )
@@ -867,7 +927,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/huge", server.uri()),
+            &validated(&format!("{}/huge", server.uri())),
             MAX_REDIRECTS,
             &PublicResolver,
         )
@@ -894,7 +954,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/binary", server.uri()),
+            &validated(&format!("{}/binary", server.uri())),
             MAX_REDIRECTS,
             &PublicResolver,
         )
@@ -922,7 +982,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/redir", server.uri()),
+            &validated(&format!("{}/redir", server.uri())),
             MAX_REDIRECTS,
             &PublicResolver,
         )
@@ -958,7 +1018,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/redir", server.uri()),
+            &validated(&format!("{}/redir", server.uri())),
             MAX_REDIRECTS,
             &PrivateResolver,
         )
@@ -986,7 +1046,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/redir", server.uri()),
+            &validated(&format!("{}/redir", server.uri())),
             0, // max_redirects = 0
             &PublicResolver,
         )
@@ -1012,7 +1072,7 @@ mod download_tests {
         let client = no_redirect_client();
         let result = download(
             &client,
-            &format!("{}/bad-redir", server.uri()),
+            &validated(&format!("{}/bad-redir", server.uri())),
             MAX_REDIRECTS,
             &PublicResolver,
         )
@@ -1048,6 +1108,42 @@ mod fetch_page_tests {
         )
         .await;
         assert!(matches!(result, Err(FetchError::InternalHost)));
+    }
+
+    /// [T-F052] fetch_does_not_log_userinfo_credentials_on_blocked_url
+    ///
+    /// Adversarial: even when SSRF blocks the fetch, the `warn!` line emitted
+    /// by `ssrf_check` MUST flow through `redact_url_credentials` so no
+    /// password fragment ever appears in stderr / `tracing` output.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
+        let client = no_redirect_client();
+        let result = fetch_page(
+            &client,
+            "http://user:supersecret@127.0.0.1/private",
+            FetchOptions::default(),
+            &TokioDnsResolver,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FetchError::InternalHost)),
+            "should be blocked as InternalHost, got: {result:?}"
+        );
+        // Positive anchor: a future refactor that drops the warn! line
+        // entirely would silently make the userinfo asserts vacuous.
+        assert!(
+            logs_contain("blocked fetch to internal/private host"),
+            "expected the SSRF block warning to fire",
+        );
+        assert!(
+            !logs_contain("supersecret"),
+            "password fragment must not appear in logs",
+        );
+        assert!(
+            !logs_contain("user:"),
+            "userinfo must be stripped from logs",
+        );
     }
 
     /// [T-F018] js_flag_attempts_rendering_on_rich_body
@@ -1458,9 +1554,12 @@ mod cdp_integration_tests {
             eprintln!("SKIP: Chrome not found");
             return;
         }
-        let html = fetch_with_cdp("https://example.com", TokioDnsResolver)
-            .await
-            .expect("fetch_with_cdp should succeed for public URL");
+        let html = fetch_with_cdp(
+            &ValidatedUrl::for_test("https://example.com"),
+            TokioDnsResolver,
+        )
+        .await
+        .expect("fetch_with_cdp should succeed for public URL");
         assert!(
             html.contains("Example Domain") || html.contains("example"),
             "rendered HTML should contain page content, got {} bytes",

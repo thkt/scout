@@ -1,6 +1,7 @@
 //! SSRF defense-in-depth: URL validation and DNS pre-check.
 
 use std::borrow::Cow;
+use std::fmt;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
@@ -35,7 +36,7 @@ impl DnsResolver for TokioDnsResolver {
 }
 
 /// SEC-003: strip userinfo before logging.
-pub(super) fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
+fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     if !raw.contains('@') {
         return Cow::Borrowed(raw);
     }
@@ -49,7 +50,50 @@ pub(super) fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     Cow::Borrowed(raw)
 }
 
-pub(crate) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result<(), FetchError> {
+/// Display wrapper that redacts URL credentials on each format.
+///
+/// Centralizes redaction so every `info!`/`warn!` that logs a URL flows through
+/// the same code path. Constructed at the log call site to keep the bare `&str`
+/// out of the `tracing` field unless redacted.
+pub(crate) struct RedactedLogUrl<'a>(pub &'a str);
+
+impl fmt::Display for RedactedLogUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&redact_url_credentials(self.0))
+    }
+}
+
+/// A URL that has passed SSRF validation (scheme allowlist + private-IP block).
+///
+/// Constructed only by [`ssrf_check`]; downstream consumers (`download`,
+/// `reqwest::Client::get`) accept `&ValidatedUrl` so the type system forces
+/// every fetch path through the SSRF check.
+#[derive(Debug, Clone)]
+pub(crate) struct ValidatedUrl(url::Url);
+
+impl ValidatedUrl {
+    pub(crate) fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Bypasses SSRF validation. Test-only — production code must go through
+    /// [`ssrf_check`] so the type system enforces the SSRF contract.
+    #[cfg(test)]
+    pub(crate) fn for_test(raw: &str) -> Self {
+        Self(url::Url::parse(raw).expect("test URL must parse"))
+    }
+}
+
+impl fmt::Display for ValidatedUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+pub(crate) async fn ssrf_check(
+    raw: &str,
+    resolver: &impl DnsResolver,
+) -> Result<ValidatedUrl, FetchError> {
     let parsed = validate_url_sync(raw).map_err(|e| {
         if matches!(e, FetchError::InternalHost) {
             warn!(url = %redact_url_credentials(raw), "blocked fetch to internal/private host");
@@ -71,7 +115,7 @@ pub(crate) async fn ssrf_check(raw: &str, resolver: &impl DnsResolver) -> Result
         }
     }
 
-    Ok(())
+    Ok(ValidatedUrl(parsed))
 }
 
 pub(crate) fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
@@ -275,5 +319,17 @@ mod dns_tests {
         let safe = redact_url_credentials(url);
         assert!(!safe.contains("admin"));
         assert!(safe.contains("example.com"));
+    }
+
+    /// [T-FS011] redacted_log_url_display_strips_userinfo
+    ///
+    /// Guards the `Display` impl directly so a future divergence between
+    /// `RedactedLogUrl::fmt` and `redact_url_credentials` would be caught.
+    #[test]
+    fn redacted_log_url_display_strips_userinfo() {
+        let formatted = format!("{}", RedactedLogUrl("https://user:secret@example.com/path"));
+        assert!(!formatted.contains("secret"));
+        assert!(!formatted.contains("user:"));
+        assert!(formatted.contains("example.com/path"));
     }
 }

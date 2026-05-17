@@ -24,7 +24,7 @@ use params::{
 use crate::brave::client::{BraveClient, BraveError, SearchClient as _};
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
-use crate::fetch::{FetchError, FetchOptions, TokioDnsResolver, fetch_page};
+use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, TokioDnsResolver, fetch_page};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient};
 use crate::markdown::{shift_headings, truncate_with_note};
@@ -221,7 +221,7 @@ impl Scout {
             return self.fetch_slack(slack_url).await;
         }
 
-        info!(url = %url, js = params.js, raw = params.raw, "fetch");
+        info!(url = %RedactedLogUrl(&url), js = params.js, raw = params.raw, "fetch");
 
         let opts = FetchOptions {
             js: params.js,
@@ -240,10 +240,10 @@ impl Scout {
         })?;
 
         if result.used_raw_fallback {
-            warn!(url = %url, "readability extraction failed, using raw fallback");
+            warn!(url = %RedactedLogUrl(&url), "readability extraction failed, using raw fallback");
         }
 
-        info!(url = %url, "fetch complete");
+        info!(url = %RedactedLogUrl(&url), "fetch complete");
         let markdown = format_fetch_output(&result);
         let data = serde_json::to_value(&result).expect("FetchResult is Serialize");
         let mut degradation = Degradation::default();
