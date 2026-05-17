@@ -1,7 +1,9 @@
 use std::env;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread::{self, JoinHandle};
 
 use wiremock::MockServer;
 
@@ -34,6 +36,37 @@ pub async fn try_spawn_with_bind(
             None
         }
     }
+}
+
+/// One-shot server that accepts up to `accept_count` connections and replies
+/// with an HTTP/1.1 response declaring `Content-Length: 1000` but writing
+/// only `hello` before dropping the socket. reqwest surfaces the resulting
+/// mid-stream close as `is_decode() == true` with an `io::Error` of kind
+/// `UnexpectedEof` in the source chain (issue #113).
+///
+/// Returns `None` when loopback bind is unavailable so callers can early-return
+/// in restricted environments, matching the `try_spawn_mock_server` pattern.
+/// The returned `AtomicUsize` counts how many connections were accepted so
+/// callers can confirm the retry loop kicked in.
+pub fn spawn_mid_stream_drop_server(
+    accept_count: usize,
+) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let addr = listener.local_addr().ok()?;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = Arc::clone(&counter);
+    let handle = thread::spawn(move || {
+        for _ in 0..accept_count {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhello");
+        }
+    });
+    Some((format!("http://{addr}"), counter, handle))
 }
 
 #[cfg(test)]

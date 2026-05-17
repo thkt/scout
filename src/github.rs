@@ -29,7 +29,8 @@ const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+    is_transient_decode, is_transient_network, parse_retry_after, retry_after_within_cap,
+    retry_with_rate_limit,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -174,10 +175,10 @@ impl GitHubClient {
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
             // Schema mismatch is a scout-side invariant — non-retryable.
-            // Transport errors (timeout, connect) fall through to Network so
-            // the retry loop can recover.
+            // Transport errors (timeout, connect, mid-stream body drop — issue
+            // #113) fall through to Network so the retry loop can recover.
             200..=299 => response.json().await.map_err(|e| {
-                if e.is_decode() {
+                if e.is_decode() && !is_transient_decode(&e) {
                     GitHubError::Decode(e.to_string())
                 } else {
                     e.into()
@@ -413,8 +414,11 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
 
 #[cfg(test)]
 mod http_tests {
+    use std::sync::atomic::Ordering;
+
     use super::*;
-    use crate::test_support::try_spawn_mock_server;
+    use crate::retry::MAX_RETRIES;
+    use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
@@ -643,5 +647,36 @@ mod http_tests {
             matches!(result, Err(GitHubError::Decode(_))),
             "expected GitHubError::Decode for 2xx malformed JSON, got: {result:?}"
         );
+    }
+
+    /// [T-GH013] 2xx mid-stream body drop is treated as transient and the
+    /// retry loop exhausts MAX_RETRIES attempts before failing (issue #113).
+    ///
+    /// reqwest 0.13 surfaces a mid-stream drop as `is_decode() == true` with
+    /// an io::Error in the source chain. Without `is_transient_decode`,
+    /// every attempt would route to `GitHubError::Decode` → Internal(70)
+    /// retryable=false. With it, attempts route to `GitHubError::Network` →
+    /// TempFailure(75) and the retry loop kicks in.
+    #[tokio::test]
+    async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
+        let expected_attempts = usize::try_from(MAX_RETRIES).expect("MAX_RETRIES fits usize");
+        let Some((url, counter, handle)) = spawn_mid_stream_drop_server(expected_attempts) else {
+            return;
+        };
+
+        let client = GitHubClient::with_base_url(Client::new(), &url);
+        let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
+
+        assert!(
+            matches!(result, Err(GitHubError::Network(_))),
+            "expected GitHubError::Network for exhausted mid-stream drop, got: {result:?}"
+        );
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            expected_attempts,
+            "retry loop must consume MAX_RETRIES connections"
+        );
+
+        let _ = handle.join();
     }
 }
