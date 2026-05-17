@@ -147,7 +147,7 @@ impl BraveClient {
         search_lang: Option<&str>,
     ) -> Result<WebSearchResponse, BraveError> {
         if self.should_check_https() {
-            validate_https(&self.base_url)?;
+            validate_https(&self.base_url, || BraveError::InsecureBaseUrl)?;
         }
         let url = build_url(&self.base_url, query, search_lang)?;
 

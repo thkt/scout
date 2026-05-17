@@ -1,7 +1,5 @@
 use std::fmt;
 
-use crate::brave::client::BraveError;
-
 #[derive(Clone)]
 pub(crate) struct Redacted(String);
 
@@ -21,18 +19,18 @@ impl fmt::Debug for Redacted {
     }
 }
 
-/// Returns `Ok(())` when `url` begins with `https://`; otherwise yields
-/// `BraveError::InsecureBaseUrl`. Used as a defense-in-depth check before
-/// sending an API key over HTTP.
+/// Returns `Ok(())` when `url` begins with `https://`; otherwise yields the
+/// error produced by `err`. Each backend supplies its own error variant so
+/// the helper stays decoupled from any single client's error enum.
 ///
 /// Unlike [`assert_https`], this function returns a `Result` and is never
 /// bypassed in test builds, so callers can exercise the rejection path
 /// directly.
-pub(crate) fn validate_https(url: &str) -> Result<(), BraveError> {
+pub(crate) fn validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E> {
     if url.starts_with("https://") {
         Ok(())
     } else {
-        Err(BraveError::InsecureBaseUrl)
+        Err(err())
     }
 }
 
@@ -65,16 +63,16 @@ mod tests {
     // T-RC004: validate_https_rejects_non_https_and_empty
     /// FR-004 / FR-005: `validate_https` must reject any input that does not begin with
     /// `https://`, including plain `http://` URLs and the empty string. Both surface as
-    /// `BraveError::InsecureBaseUrl`.
+    /// the caller-supplied error variant.
     #[test]
     fn validate_https_rejects_non_https_and_empty() {
-        let http_result = validate_https("http://insecure.example");
+        let http_result = validate_https("http://insecure.example", || BraveError::InsecureBaseUrl);
         assert!(
             matches!(http_result, Err(BraveError::InsecureBaseUrl)),
             "expected InsecureBaseUrl for http URL, got: {http_result:?}"
         );
 
-        let empty_result = validate_https("");
+        let empty_result = validate_https("", || BraveError::InsecureBaseUrl);
         assert!(
             matches!(empty_result, Err(BraveError::InsecureBaseUrl)),
             "expected InsecureBaseUrl for empty URL, got: {empty_result:?}"
@@ -86,7 +84,25 @@ mod tests {
     /// validation and return `Ok(())`.
     #[test]
     fn validate_https_accepts_https_url() {
-        let result = validate_https("https://api.search.brave.com/res/v1/web/search");
+        let result = validate_https("https://api.search.brave.com/res/v1/web/search", || {
+            BraveError::InsecureBaseUrl
+        });
         assert!(matches!(result, Ok(())), "expected Ok, got: {result:?}");
+    }
+
+    /// [T-RC007] `validate_https` is generic over the error type so each backend
+    /// can plug its own variant. The closure runs only on failure; a passing
+    /// URL never instantiates the error.
+    #[test]
+    fn validate_https_propagates_caller_supplied_error_type() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct CallerError;
+
+        let rejected: Result<(), CallerError> = validate_https("http://insecure", || CallerError);
+        assert_eq!(rejected, Err(CallerError));
+
+        let accepted: Result<(), CallerError> =
+            validate_https("https://ok.example", || CallerError);
+        assert_eq!(accepted, Ok(()));
     }
 }
