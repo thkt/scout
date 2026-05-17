@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 
+use tokio::sync::Notify;
 #[cfg(feature = "js-rendering")]
 use tokio::time::timeout;
 
@@ -93,7 +94,14 @@ pub(crate) async fn fetch_page(
     url: &str,
     opts: FetchOptions,
     resolver: &impl DnsResolver,
+    cancel: &Notify,
 ) -> Result<FetchResult, FetchError> {
+    // `cancel` is only consumed on the CDP path. Silence the unused-arg
+    // warning in builds without `js-rendering` instead of duplicating the
+    // function signature behind cfg.
+    #[cfg(not(feature = "js-rendering"))]
+    let _ = cancel;
+
     #[cfg(not(feature = "js-rendering"))]
     if opts.js {
         return Err(FetchError::BrowserNotFound(
@@ -127,7 +135,7 @@ pub(crate) async fn fetch_page(
     if need_js {
         #[cfg(feature = "js-rendering")]
         {
-            match fetch_with_cdp(&final_url, Clone::clone(resolver)).await {
+            match fetch_with_cdp(&final_url, Clone::clone(resolver), cancel).await {
                 Ok(js_html) => {
                     debug!("JS rendering succeeded via CDP");
                     html = js_html;
@@ -158,7 +166,7 @@ pub(crate) async fn fetch_page(
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");
-        match fetch_with_cdp(&final_url, Clone::clone(resolver)).await {
+        match fetch_with_cdp(&final_url, Clone::clone(resolver), cancel).await {
             Ok(js_html) => {
                 let re_extracted = extract_article(&js_html, Some(final_url.as_str()));
                 if is_thin_extract(&re_extracted) {
@@ -314,6 +322,8 @@ enum BrowserError {
     ProcessFailed(String),
     #[error("browser rendering timed out")]
     TimedOut,
+    #[error("browser cancelled by signal")]
+    Cancelled,
 }
 
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
@@ -322,7 +332,7 @@ impl From<BrowserError> for FetchError {
         match e {
             BrowserError::NotFound => Self::BrowserNotFound(e.to_string()),
             BrowserError::ProcessFailed(msg) => Self::BrowserFailed(msg),
-            BrowserError::TimedOut => Self::Timeout(e.to_string()),
+            BrowserError::TimedOut | BrowserError::Cancelled => Self::Timeout(e.to_string()),
         }
     }
 }
@@ -429,6 +439,7 @@ const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 async fn fetch_with_cdp(
     url: &ValidatedUrl,
     resolver: impl ssrf::DnsResolver,
+    cancel: &Notify,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
     use chromiumoxide::browser::BrowserConfig;
@@ -457,11 +468,21 @@ async fn fetch_with_cdp(
         }
     });
 
-    // unwrap_or (not ?) so cleanup below runs even on timeout.
-    let result = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver))
-        .await
-        .unwrap_or(Err(BrowserError::TimedOut));
+    // Race navigate against cancellation so SIGINT/SIGTERM still reaches the
+    // graceful close path below. Without this branch the future would be
+    // dropped by the outer select! in lib::run and chromium subprocesses
+    // would orphan to ppid=1 (issue #121).
+    let result = tokio::select! {
+        biased;
+        () = cancel.notified() => Err(BrowserError::Cancelled),
+        r = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver)) => {
+            r.unwrap_or(Err(BrowserError::TimedOut))
+        }
+    };
 
+    // Always issue browser.close() so chromium can wind down its own subprocess
+    // tree (renderer, crashpad, GPU). 5s covers the slow-path graceful close;
+    // if it overruns, the Drop chain falls back to SIGKILL on the parent.
     let _ = timeout(Duration::from_secs(5), browser.close()).await;
     handler_task.abort();
     match handler_task.await {
@@ -1100,11 +1121,13 @@ mod fetch_page_tests {
     #[tokio::test]
     async fn blocks_ssrf_to_localhost() {
         let client = no_redirect_client();
+        let cancel = Notify::new();
         let result = fetch_page(
             &client,
             "http://127.0.0.1/secret",
             FetchOptions::default(),
             &TokioDnsResolver,
+            &cancel,
         )
         .await;
         assert!(matches!(result, Err(FetchError::InternalHost)));
@@ -1119,11 +1142,13 @@ mod fetch_page_tests {
     #[tracing_test::traced_test]
     async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
         let client = no_redirect_client();
+        let cancel = Notify::new();
         let result = fetch_page(
             &client,
             "http://user:supersecret@127.0.0.1/private",
             FetchOptions::default(),
             &TokioDnsResolver,
+            &cancel,
         )
         .await;
         assert!(
@@ -1167,11 +1192,13 @@ mod fetch_page_tests {
             js: true,
             ..Default::default()
         };
+        let cancel = Notify::new();
         let result = fetch_page(
             &client,
             &format!("{}/rich", server.uri()),
             opts,
             &TokioDnsResolver,
+            &cancel,
         )
         .await;
 
@@ -1190,7 +1217,15 @@ mod fetch_page_tests {
             js: true,
             ..Default::default()
         };
-        let result = fetch_page(&client, "https://example.com/page", opts, &TokioDnsResolver).await;
+        let cancel = Notify::new();
+        let result = fetch_page(
+            &client,
+            "https://example.com/page",
+            opts,
+            &TokioDnsResolver,
+            &cancel,
+        )
+        .await;
 
         assert!(
             matches!(&result, Err(FetchError::BrowserNotFound(msg)) if msg.contains("js-rendering")),

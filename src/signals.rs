@@ -1,5 +1,4 @@
 use std::fmt;
-use std::future::Future;
 
 /// Interrupt signal observed by `wait_for_signal`. Maps to a POSIX exit
 /// convention so shell pipeline callers can distinguish user-initiated
@@ -30,27 +29,6 @@ impl fmt::Display for InterruptSignal {
             #[cfg(unix)]
             Self::Sigterm => "SIGTERM",
         })
-    }
-}
-
-pub(crate) enum Outcome<T> {
-    Completed(T),
-    Interrupted(InterruptSignal),
-}
-
-/// Race a command future against a signal source. Whichever future
-/// resolves first determines the outcome. The unresolved future is
-/// dropped — for the command path this triggers the CDP browser's
-/// Drop chain (chromiumoxide uses `kill_on_drop`) to terminate any
-/// child chromium process before scout exits.
-pub(crate) async fn select_outcome<F, S>(cmd: F, sig: S) -> Outcome<F::Output>
-where
-    F: Future,
-    S: Future<Output = InterruptSignal>,
-{
-    tokio::select! {
-        out = cmd => Outcome::Completed(out),
-        s = sig => Outcome::Interrupted(s),
     }
 }
 
@@ -110,39 +88,6 @@ mod tests {
     #[test]
     fn sigterm_exit_code_is_143() {
         assert_eq!(InterruptSignal::Sigterm.exit_code(), 143);
-    }
-
-    // T-S003: completes_when_command_finishes_first
-    // When the command future resolves before the signal future,
-    // `select_outcome` must return Completed and drop the signal listener.
-    #[tokio::test(start_paused = true)]
-    async fn completes_when_command_finishes_first() {
-        let cmd = async { 42_i32 };
-        let sig = async {
-            sleep(Duration::from_secs(60)).await;
-            InterruptSignal::Sigint
-        };
-        match select_outcome(cmd, sig).await {
-            Outcome::Completed(v) => assert_eq!(v, 42),
-            Outcome::Interrupted(_) => panic!("expected Completed, got Interrupted"),
-        }
-    }
-
-    // T-S004: interrupted_when_signal_fires_first
-    // When the signal future resolves before the command future,
-    // `select_outcome` must return Interrupted and drop the command future,
-    // triggering the CDP browser's `kill_on_drop` chain.
-    #[tokio::test(start_paused = true)]
-    async fn interrupted_when_signal_fires_first() {
-        let cmd = async {
-            sleep(Duration::from_secs(60)).await;
-            42_i32
-        };
-        let sig = async { InterruptSignal::Sigint };
-        match select_outcome(cmd, sig).await {
-            Outcome::Completed(_) => panic!("expected Interrupted, got Completed"),
-            Outcome::Interrupted(s) => assert_eq!(s, InterruptSignal::Sigint),
-        }
     }
 
     // T-S005: sigint_display_is_sigint

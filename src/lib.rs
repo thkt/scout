@@ -17,11 +17,24 @@ pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"))
 use std::env;
 use std::io::{self, ErrorKind, Write, stderr, stdout};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Parser;
 use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, SuccessEnvelope};
-use signals::{Outcome, select_outcome, wait_for_signal};
+use signals::{InterruptSignal, wait_for_signal};
+use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
+
+/// Maximum time the runtime waits for the in-flight command to wind down
+/// after a SIGINT/SIGTERM. Long enough for CDP `browser.close()` (5s) plus
+/// chromium's own subprocess cleanup margin; short enough not to feel like
+/// a hang to the caller. Issue #121.
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7);
+
+enum Outcome<T> {
+    Completed(T),
+    Interrupted(InterruptSignal),
+}
 
 fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     if output.is_empty() {
@@ -96,8 +109,24 @@ pub async fn run() -> ExitCode {
         Ok(s) => s,
         Err(e) => return emit_error(&e, json_mode),
     };
+    let cancel = scout.cancel_handle();
 
-    let outcome = select_outcome(scout.run(cli.command), wait_for_signal()).await;
+    let cmd_fut = scout.run(cli.command);
+    tokio::pin!(cmd_fut);
+
+    // Race the in-flight command against signal arrival. On interrupt,
+    // notify the cancel handle so fetch_with_cdp can run `browser.close()`
+    // (issue #121) and then await the command for a bounded window before
+    // returning the interrupt exit code.
+    let outcome: Outcome<Result<CommandOutput, ScoutError>> = tokio::select! {
+        res = &mut cmd_fut => Outcome::Completed(res),
+        sig = wait_for_signal() => {
+            tracing::info!(signal = %sig, "interrupted, draining for graceful close");
+            cancel.notify_waiters();
+            let _ = timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await;
+            Outcome::Interrupted(sig)
+        }
+    };
     match outcome {
         Outcome::Completed(Ok(output)) => {
             let rendered = if json_mode {

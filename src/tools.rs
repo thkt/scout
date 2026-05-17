@@ -6,12 +6,13 @@ pub use errors::ScoutError;
 pub use params::Command;
 
 use std::io::{IsTerminal, stdin};
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use tokio::io::{AsyncReadExt, stdin as tokio_stdin};
-use tokio::sync::OnceCell;
+use tokio::sync::{Notify, OnceCell};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -138,6 +139,11 @@ pub struct Scout {
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
+    /// Broadcast handle for graceful shutdown. `lib::run` fires
+    /// `notify_waiters()` on SIGINT/SIGTERM so in-flight CDP fetches can
+    /// invoke `browser.close().await` before the runtime drops the task,
+    /// preventing chromium subprocess orphans (issue #121).
+    cancel: Arc<Notify>,
 }
 
 impl Scout {
@@ -162,7 +168,15 @@ impl Scout {
             fetch_http,
             brave,
             github: OnceCell::new(),
+            cancel: Arc::new(Notify::new()),
         })
+    }
+
+    /// Hand back the shared cancel handle so `lib::run` can fire it
+    /// when a termination signal arrives. Cloning an `Arc<Notify>` is
+    /// cheap and lets the signal handler outlive the borrow of `Scout`.
+    pub fn cancel_handle(&self) -> Arc<Notify> {
+        self.cancel.clone()
     }
 
     async fn github(&self) -> &GitHubClient {
@@ -229,7 +243,13 @@ impl Scout {
         };
         let result = timeout(
             FETCH_TOOL_TIMEOUT,
-            fetch_page(&self.fetch_http, &url, opts, &TokioDnsResolver),
+            fetch_page(
+                &self.fetch_http,
+                &url,
+                opts,
+                &TokioDnsResolver,
+                &self.cancel,
+            ),
         )
         .await
         .unwrap_or_else(|_| {
@@ -297,7 +317,13 @@ impl Scout {
 
         let report = match timeout(
             RESEARCH_TOOL_TIMEOUT,
-            engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver),
+            engine::research(
+                brave,
+                &self.fetch_http,
+                &req,
+                &TokioDnsResolver,
+                &self.cancel,
+            ),
         )
         .await
         {
@@ -1082,6 +1108,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
+            cancel: Arc::new(Notify::new()),
         }
     }
 
@@ -1092,6 +1119,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
+            cancel: Arc::new(Notify::new()),
         }
     }
 
