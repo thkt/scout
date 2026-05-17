@@ -29,7 +29,7 @@ const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::retry::{
-    is_transient_decode, is_transient_network, parse_retry_after, retry_after_within_cap,
+    is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
     retry_with_rate_limit,
 };
 
@@ -174,11 +174,11 @@ impl GitHubClient {
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
-            // Schema mismatch is a scout-side invariant — non-retryable.
-            // Transport errors (timeout, connect, mid-stream body drop — issue
-            // #113) fall through to Network so the retry loop can recover.
+            // Schema fail → Decode (terminal). Transport drop / connect /
+            // timeout → Network → retry loop. See `is_schema_decode_fail`
+            // for the source-chain discrimination (issue #113).
             200..=299 => response.json().await.map_err(|e| {
-                if e.is_decode() && !is_transient_decode(&e) {
+                if is_schema_decode_fail(&e) {
                     GitHubError::Decode(e.to_string())
                 } else {
                     e.into()
@@ -657,7 +657,11 @@ mod http_tests {
     /// every attempt would route to `GitHubError::Decode` → Internal(70)
     /// retryable=false. With it, attempts route to `GitHubError::Network` →
     /// TempFailure(75) and the retry loop kicks in.
-    #[tokio::test]
+    ///
+    /// `start_paused = true` advances the tokio runtime past `retry_with`'s
+    /// `sleep` calls as soon as the task parks; the std::thread-driven
+    /// TcpListener is unaffected. Total wall time stays under 100 ms.
+    #[tokio::test(start_paused = true)]
     async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
         let expected_attempts = usize::try_from(MAX_RETRIES).expect("MAX_RETRIES fits usize");
         let Some((url, counter, handle)) = spawn_mid_stream_drop_server(expected_attempts) else {

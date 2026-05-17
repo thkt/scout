@@ -1,4 +1,4 @@
-use std::error::Error as StdError;
+use std::error::Error as _;
 use std::future::Future;
 use std::io;
 use std::time::Duration;
@@ -22,17 +22,26 @@ pub(crate) fn is_transient_network(e: &Error) -> bool {
     e.is_connect() || e.is_timeout() || is_transient_decode(e)
 }
 
+/// True only when a `Decode`-classified reqwest error originates in a
+/// schema mismatch (serde failure), not a transport-level IO failure.
+/// Body-decode call sites use this to route schema fails to terminal
+/// `Decode` while letting transport drops fall through to `Network` for
+/// the retry loop (issue #113).
+pub(crate) fn is_schema_decode_fail(e: &Error) -> bool {
+    e.is_decode() && !is_transient_decode(e)
+}
+
 /// True when a `Decode`-classified reqwest error originates in a transport
 /// IO failure (mid-stream body drop, connection reset). Issue #113: reqwest
 /// 0.13 surfaces an `UnexpectedEof` from hyper as `is_decode() == true`,
 /// indistinguishable from a serde schema mismatch by boolean alone. Walking
 /// the source chain for any `io::Error` separates transport (retryable) from
 /// schema (terminal).
-pub(crate) fn is_transient_decode(e: &Error) -> bool {
+fn is_transient_decode(e: &Error) -> bool {
     if !e.is_decode() {
         return false;
     }
-    let mut src: Option<&dyn StdError> = e.source();
+    let mut src = e.source();
     while let Some(cur) = src {
         if cur.downcast_ref::<io::Error>().is_some() {
             return true;

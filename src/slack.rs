@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
 use crate::retry::{
-    is_transient_decode, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+    is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -239,12 +239,9 @@ impl SlackClient {
         }
 
         let body: serde_json::Value = resp.json().await.map_err(|e| {
-            // Issue #113: reqwest 0.13 reports mid-stream body drop as
-            // `is_decode() == true` with an io::Error in the source chain.
-            // Schema-fail Decode is terminal; transport-drop Decode is
-            // transient and must route through Network so the retry loop
-            // catches it.
-            if e.is_decode() && !is_transient_decode(&e) {
+            // Schema fail → Decode (terminal). Transport drop → Network →
+            // retry loop. See `is_schema_decode_fail` (issue #113).
+            if is_schema_decode_fail(&e) {
                 SlackError::Decode(e.to_string())
             } else {
                 SlackError::Network(e.to_string())

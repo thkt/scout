@@ -48,6 +48,10 @@ pub async fn try_spawn_with_bind(
 /// in restricted environments, matching the `try_spawn_mock_server` pattern.
 /// The returned `AtomicUsize` counts how many connections were accepted so
 /// callers can confirm the retry loop kicked in.
+///
+/// `accept_count` must equal the number of connections the client will make;
+/// passing a larger value blocks the spawned thread on `listener.accept()`
+/// and makes `handle.join()` hang.
 pub fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
@@ -61,6 +65,9 @@ pub fn spawn_mid_stream_drop_server(
                 return;
             };
             counter_clone.fetch_add(1, Ordering::SeqCst);
+            // Drain the request before replying so reqwest observes the
+            // close as a mid-stream body drop on `json().await`, not as a
+            // write error during `send().await`.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhello");
