@@ -288,6 +288,8 @@ impl From<SlackError> for ScoutError {
             // Priority 1: USAGE_ERROR
             SlackError::TokenNotSet => Self::user_error(e.to_string())
                 .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
+            // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
+            SlackError::InsecureUrl => Self::data_error(e.to_string()),
             // Slack API surfaces failures as error code strings (not HTTP status),
             // so per-string classification replaces the priority-2 HTTP arm.
             SlackError::Api { error } => match error.as_str() {
@@ -307,8 +309,6 @@ impl From<SlackError> for ScoutError {
             SlackError::Network(_) => transient_with_network_hint(&e),
             // Priority 4: TIMEOUT
             SlackError::Timeout(_) => timeout_with_retry_hint(&e),
-            // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
-            SlackError::InsecureUrl => Self::data_error(e.to_string()),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema)
             SlackError::Decode(_) => Self::internal_bug(e.to_string()),
         }

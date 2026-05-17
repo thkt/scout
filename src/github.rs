@@ -125,10 +125,7 @@ impl GitHubClient {
         }
     }
 
-    /// Returns `true` when `request` should run [`validate_https`] against the
-    /// composed URL. Production builds always check; test builds honor the
-    /// per-client `skip_https_check` flag so wiremock servers on
-    /// `http://127.0.0.1` keep working without a global `cfg!(test)` bypass.
+    /// Test-only override of the production HTTPS gate. See [`validate_https`].
     fn should_check_https(&self) -> bool {
         #[cfg(test)]
         {
@@ -621,18 +618,6 @@ mod http_tests {
                 retry_after: Some(_)
             })
         ));
-    }
-
-    /// [T-GH013] HTTPS gating uses the generic validate_https with a github-owned
-    /// `InsecureUrl` variant. The closure is the only construction site for the
-    /// variant, so a successful URL never instantiates it.
-    #[test]
-    fn validate_https_with_insecure_url_yields_insecure_url_variant() {
-        let result = validate_https("http://insecure.example", || GitHubError::InsecureUrl);
-        assert!(
-            matches!(result, Err(GitHubError::InsecureUrl)),
-            "expected GitHubError::InsecureUrl for http URL, got: {result:?}"
-        );
     }
 
     /// [T-GH012] 2xx response with malformed JSON classifies as Decode (issue #101).

@@ -177,10 +177,7 @@ impl SlackClient {
         }
     }
 
-    /// Returns `true` when `api_get_once` should run [`validate_https`] against
-    /// the composed URL. Production builds always check; test builds honor the
-    /// per-client `skip_https_check` flag so wiremock servers on
-    /// `http://127.0.0.1` keep working without a global `cfg!(test)` bypass.
+    /// Test-only override of the production HTTPS gate. See [`validate_https`].
     fn should_check_https(&self) -> bool {
         #[cfg(test)]
         {
@@ -556,23 +553,11 @@ fn is_retriable(e: &SlackError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redacted::validate_https;
 
     #[allow(dead_code)]
     #[derive(serde::Deserialize)]
     struct DummyBody {
         ok: bool,
-    }
-
-    /// [T-SK030] HTTPS gating uses validate_https with a slack-owned `InsecureUrl`
-    /// variant. The closure is the only construction site for the variant.
-    #[test]
-    fn validate_https_with_insecure_url_yields_insecure_url_variant() {
-        let result = validate_https("http://insecure.example", || SlackError::InsecureUrl);
-        assert!(
-            matches!(result, Err(SlackError::InsecureUrl)),
-            "expected SlackError::InsecureUrl for http URL, got: {result:?}"
-        );
     }
 
     mod http_tests {

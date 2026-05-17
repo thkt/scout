@@ -125,11 +125,7 @@ impl BraveClient {
         }
     }
 
-    /// Returns `true` when `send_request` should run [`validate_https`]
-    /// against `self.base_url`. Production builds always check; test
-    /// builds honor the per-client `skip_https_check` flag so wiremock
-    /// servers on `http://127.0.0.1` keep working without re-introducing
-    /// a global `cfg!(test)` bypass on the production codepath.
+    /// Test-only override of the production HTTPS gate. See [`validate_https`].
     fn should_check_https(&self) -> bool {
         #[cfg(test)]
         {
