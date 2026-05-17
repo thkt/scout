@@ -1,4 +1,6 @@
+use std::error::Error as _;
 use std::future::Future;
+use std::io;
 use std::time::Duration;
 
 use reqwest::Error;
@@ -17,7 +19,36 @@ pub(crate) fn jittered_backoff(attempt: u32) -> u64 {
 }
 
 pub(crate) fn is_transient_network(e: &Error) -> bool {
-    e.is_connect() || e.is_timeout()
+    e.is_connect() || e.is_timeout() || is_transient_decode(e)
+}
+
+/// True only when a `Decode`-classified reqwest error originates in a
+/// schema mismatch (serde failure), not a transport-level IO failure.
+/// Body-decode call sites use this to route schema fails to terminal
+/// `Decode` while letting transport drops fall through to `Network` for
+/// the retry loop (issue #113).
+pub(crate) fn is_schema_decode_fail(e: &Error) -> bool {
+    e.is_decode() && !is_transient_decode(e)
+}
+
+/// True when a `Decode`-classified reqwest error originates in a transport
+/// IO failure (mid-stream body drop, connection reset). Issue #113: reqwest
+/// 0.13 surfaces an `UnexpectedEof` from hyper as `is_decode() == true`,
+/// indistinguishable from a serde schema mismatch by boolean alone. Walking
+/// the source chain for any `io::Error` separates transport (retryable) from
+/// schema (terminal).
+fn is_transient_decode(e: &Error) -> bool {
+    if !e.is_decode() {
+        return false;
+    }
+    let mut src = e.source();
+    while let Some(cur) = src {
+        if cur.downcast_ref::<io::Error>().is_some() {
+            return true;
+        }
+        src = cur.source();
+    }
+    false
 }
 
 async fn retry_with<T, E, F, Fut>(
@@ -107,8 +138,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::time::Instant;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
+    use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 
     /// Test-only error type. `RateLimited` carries the server-supplied
     /// `Retry-After` (seconds); `Other` represents a non-rate-limit transient
@@ -245,6 +279,61 @@ mod tests {
             attempts.load(Ordering::SeqCst),
             1,
             "expected no retry when retry_after exceeds MAX_RETRY_AFTER_SECS"
+        );
+    }
+
+    // T-R004: is_transient_network_recognizes_mid_stream_body_drop
+    // Issue #113: reqwest 0.13 surfaces a mid-stream body drop as
+    // `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
+    // source chain. is_transient_network must classify this as transient
+    // so the retry loop attempts recovery; left untreated it falls into
+    // GitHubError::Decode → Internal(70), retryable=false.
+    #[tokio::test]
+    async fn is_transient_network_recognizes_mid_stream_body_drop() {
+        let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
+            return; // loopback bind unavailable — skip
+        };
+        let client = reqwest::Client::new();
+        let resp = client.get(&url).send().await.expect("send");
+        let result: Result<serde_json::Value, _> = resp.json().await;
+        let err = result.expect_err("mid-stream drop must fail body decode");
+
+        assert!(
+            is_transient_network(&err),
+            "mid-stream drop must classify as transient (is_body={}, is_decode={}, is_connect={}, is_timeout={}): {err}",
+            err.is_body(),
+            err.is_decode(),
+            err.is_connect(),
+            err.is_timeout()
+        );
+
+        let _ = handle.join();
+    }
+
+    // T-R005: is_transient_network_rejects_schema_fail
+    // Counterpart to T-R004. A 2xx with malformed JSON also returns
+    // `is_decode() == true` but the source chain is a serde_json::Error,
+    // not an io::Error. is_transient_network must keep returning false
+    // so the error stays on the Decode → Internal(70) non-retry path.
+    #[tokio::test]
+    async fn is_transient_network_rejects_schema_fail() {
+        let Some(server) = try_spawn_mock_server("retry::is_transient_network_schema").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{not valid json"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let resp = client.get(server.uri()).send().await.expect("send");
+        let result: Result<serde_json::Value, _> = resp.json().await;
+        let err = result.expect_err("malformed JSON must fail body decode");
+
+        assert!(
+            !is_transient_network(&err),
+            "schema fail must not classify as transient (is_decode={}): {err}",
+            err.is_decode()
         );
     }
 }

@@ -270,8 +270,9 @@ impl From<FetchError> for ScoutError {
             // Priority 4: TEMP_FAILURE (non-Status variants)
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
-            // `is_transient_network` covers both connect and timeout, but
-            // ADR-0065 splits timeout into 124. Check `is_timeout()` first.
+            // `is_transient_network` covers connect, timeout, and mid-stream
+            // body drop (issue #113), but ADR-0065 splits timeout into 124.
+            // Check `is_timeout()` first.
             FetchError::Http(re) if re.is_timeout() => timeout_with_retry_hint(&e),
             FetchError::Http(re) if is_transient_network(re) => transient_with_network_hint(&e),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)

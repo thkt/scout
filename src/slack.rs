@@ -9,7 +9,9 @@ use tracing::{debug, info, warn};
 
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
-use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
+use crate::retry::{
+    is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SlackError {
@@ -237,7 +239,9 @@ impl SlackClient {
         }
 
         let body: serde_json::Value = resp.json().await.map_err(|e| {
-            if e.is_decode() {
+            // Schema fail → Decode (terminal). Transport drop → Network →
+            // retry loop. See `is_schema_decode_fail` (issue #113).
+            if is_schema_decode_fail(&e) {
                 SlackError::Decode(e.to_string())
             } else {
                 SlackError::Network(e.to_string())
@@ -566,7 +570,7 @@ mod tests {
 
     mod http_tests {
         use super::*;
-        use crate::test_support::try_spawn_mock_server;
+        use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
         use reqwest::Client;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
@@ -680,6 +684,24 @@ mod tests {
                 matches!(result, Err(SlackError::Decode(_))),
                 "expected SlackError::Decode for ok:false without error field, got: {result:?}"
             );
+        }
+
+        /// [T-SK030] Mid-stream body drop on 2xx routes through SlackError::Network
+        /// (transient, retry path) rather than SlackError::Decode (terminal). reqwest
+        /// 0.13 reports the drop as `is_decode() == true`; `is_transient_decode`
+        /// distinguishes it from a schema fail via the io::Error source chain (issue #113).
+        #[tokio::test]
+        async fn api_get_once_2xx_mid_stream_drop_returns_network() {
+            let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
+                return;
+            };
+            let client = SlackClient::with_base_url(Client::new(), &url);
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+            assert!(
+                matches!(result, Err(SlackError::Network(_))),
+                "expected SlackError::Network for mid-stream drop, got: {result:?}"
+            );
+            let _ = handle.join();
         }
     }
 
