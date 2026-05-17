@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tracing::warn;
 
@@ -45,12 +46,13 @@ pub(crate) async fn research(
     http: &Client,
     req: &ResearchRequest<'_>,
     resolver: &impl DnsResolver,
+    cancel: &watch::Sender<bool>,
 ) -> Result<ResearchReport, BraveError> {
     let search_lang = req.lang.to_brave_param();
     let sources = brave.search(req.query, search_lang).await?;
 
     let (fetched_pages, failed_urls) =
-        fetch_sources(http, &sources, req.depth as usize, resolver).await;
+        fetch_sources(http, &sources, req.depth as usize, resolver, cancel).await;
 
     Ok(ResearchReport {
         fetched_pages,
@@ -64,13 +66,14 @@ async fn fetch_sources(
     sources: &[SearchResult],
     depth: usize,
     resolver: &impl DnsResolver,
+    cancel: &watch::Sender<bool>,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
         .map(|(idx, source)| async move {
             let url = source.url.as_str();
             let result = timeout(
                 FETCH_TIMEOUT,
-                fetch::fetch_page(http, url, fetch::FetchOptions::default(), resolver),
+                fetch::fetch_page(http, url, fetch::FetchOptions::default(), resolver, cancel),
             )
             .await;
             let result = match result {
@@ -341,7 +344,10 @@ mod tests {
             depth: 3,
             lang: Lang::En,
         };
-        let report = research(&mock, &http, &req, &resolver).await.unwrap();
+        let (cancel, _) = watch::channel(false);
+        let report = research(&mock, &http, &req, &resolver, &cancel)
+            .await
+            .unwrap();
 
         assert_eq!(report.sources.len(), 1);
 
@@ -371,7 +377,10 @@ mod tests {
             depth: 3,
             lang: Lang::Auto,
         };
-        let _ = research(&mock, &http, &req, &resolver).await.unwrap();
+        let (cancel, _) = watch::channel(false);
+        let _ = research(&mock, &http, &req, &resolver, &cancel)
+            .await
+            .unwrap();
 
         let captured = mock.captured();
         assert_eq!(
@@ -398,7 +407,10 @@ mod tests {
             depth: 3,
             lang: Lang::En,
         };
-        let err = research(&mock, &http, &req, &resolver).await.unwrap_err();
+        let (cancel, _) = watch::channel(false);
+        let err = research(&mock, &http, &req, &resolver, &cancel)
+            .await
+            .unwrap_err();
         assert!(matches!(err, BraveError::RateLimited { .. }));
     }
 

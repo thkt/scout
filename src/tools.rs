@@ -11,7 +11,7 @@ use std::time::Duration;
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use tokio::io::{AsyncReadExt, stdin as tokio_stdin};
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, watch};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -138,6 +138,13 @@ pub struct Scout {
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
+    /// Sticky shutdown flag. `lib::run` flips this to `true` on SIGINT or
+    /// SIGTERM. Each `fetch_with_cdp` invocation subscribes a fresh receiver
+    /// so the cancellation is delivered to fetches that start after the
+    /// signal arrives (e.g. queued slots in `research --depth N` once an
+    /// earlier slot finishes). `Notify` was tried first but loses wakeups
+    /// when no waiter is registered at signal time (issue #121).
+    cancel: watch::Sender<bool>,
 }
 
 impl Scout {
@@ -157,12 +164,22 @@ impl Scout {
         let brave = BraveClient::from_env(http.clone())
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
+        let (cancel, _) = watch::channel(false);
         Ok(Self {
             http,
             fetch_http,
             brave,
             github: OnceCell::new(),
+            cancel,
         })
+    }
+
+    /// Hand back a cloned `watch::Sender` so `lib::run` can flip the
+    /// cancellation flag without keeping a reference to `Scout`. The clone
+    /// shares state with every receiver subscribed from the underlying
+    /// fetch paths.
+    pub fn cancel_handle(&self) -> watch::Sender<bool> {
+        self.cancel.clone()
     }
 
     async fn github(&self) -> &GitHubClient {
@@ -229,7 +246,13 @@ impl Scout {
         };
         let result = timeout(
             FETCH_TOOL_TIMEOUT,
-            fetch_page(&self.fetch_http, &url, opts, &TokioDnsResolver),
+            fetch_page(
+                &self.fetch_http,
+                &url,
+                opts,
+                &TokioDnsResolver,
+                &self.cancel,
+            ),
         )
         .await
         .unwrap_or_else(|_| {
@@ -297,7 +320,13 @@ impl Scout {
 
         let report = match timeout(
             RESEARCH_TOOL_TIMEOUT,
-            engine::research(brave, &self.fetch_http, &req, &TokioDnsResolver),
+            engine::research(
+                brave,
+                &self.fetch_http,
+                &req,
+                &TokioDnsResolver,
+                &self.cancel,
+            ),
         )
         .await
         {
@@ -1082,6 +1111,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
+            cancel: watch::channel(false).0,
         }
     }
 
@@ -1092,6 +1122,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
+            cancel: watch::channel(false).0,
         }
     }
 
