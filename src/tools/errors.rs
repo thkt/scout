@@ -318,8 +318,8 @@ impl From<BraveError> for ScoutError {
             BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body, response parse failure, or insecure base URL)
-            BraveError::ParseJson(_) | BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
+            // Priority 2: DATA_ERROR (4xx body, URL parse failure, or insecure base URL)
+            BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
                 Self::data_error(e.to_string())
             }
             BraveError::Api { code, .. } if (400..500).contains(code) => {
@@ -334,6 +334,11 @@ impl From<BraveError> for ScoutError {
             BraveError::Api { code, .. } if (500..=599).contains(code) => {
                 transient_with_retry_hint(&e)
             }
+            // Priority 5: INTERNAL — scout-side bug (unexpected response schema).
+            // Peer to `GitHubError::Decode` / `SlackError::Decode`; retry cannot
+            // resolve schema drift, so `internal_bug` (Internal/70/non-retryable)
+            // is the correct landing per ADR-0065 (issue #101).
+            BraveError::ParseJson(_) => Self::internal_bug(e.to_string()),
             // Unknown — Api codes that did not match 4xx or 5xx
             BraveError::Api { .. } => Self::unknown(e.to_string()),
         }
@@ -606,6 +611,23 @@ mod tests {
             assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70): {err}");
             assert!(!err.retryable(), "Internal must not be retryable: {err}");
         }
+    }
+
+    /// [T-ER029] BraveError::ParseJson classifies as Internal(70) (issue #101).
+    ///
+    /// 2xx body schema mismatch is a scout-side invariant violation (the Brave API
+    /// returned an unexpected payload shape), not a user-fixable data error. Prior
+    /// to this fix the variant routed through the `DataError(65)` arm alongside
+    /// `ParseUrl` and `InsecureBaseUrl`. ADR-0065 priority 5 places it under
+    /// Internal, peer to `GitHubError::Decode` and `SlackError::Decode`.
+    #[test]
+    fn brave_parse_json_classifies_as_internal_exit_70() {
+        let serde_err =
+            serde_json::from_str::<serde_json::Value>("{not valid").expect_err("malformed json");
+        let err = ScoutError::from(BraveError::ParseJson(serde_err));
+        assert_eq!(err.error_kind(), ErrorCode::Internal);
+        assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
+        assert!(!err.retryable(), "ParseJson must not be retryable");
     }
 
     /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
