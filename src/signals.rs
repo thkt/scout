@@ -69,10 +69,6 @@ pub(crate) async fn wait_for_signal() -> InterruptSignal {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use tokio::time::sleep;
-
     use super::*;
 
     // T-S001: sigint_exit_code_is_130

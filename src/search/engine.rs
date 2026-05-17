@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tracing::warn;
 
@@ -46,7 +46,7 @@ pub(crate) async fn research(
     http: &Client,
     req: &ResearchRequest<'_>,
     resolver: &impl DnsResolver,
-    cancel: &Notify,
+    cancel: &watch::Sender<bool>,
 ) -> Result<ResearchReport, BraveError> {
     let search_lang = req.lang.to_brave_param();
     let sources = brave.search(req.query, search_lang).await?;
@@ -66,7 +66,7 @@ async fn fetch_sources(
     sources: &[SearchResult],
     depth: usize,
     resolver: &impl DnsResolver,
-    cancel: &Notify,
+    cancel: &watch::Sender<bool>,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
         .map(|(idx, source)| async move {
@@ -344,7 +344,7 @@ mod tests {
             depth: 3,
             lang: Lang::En,
         };
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let report = research(&mock, &http, &req, &resolver, &cancel)
             .await
             .unwrap();
@@ -377,7 +377,7 @@ mod tests {
             depth: 3,
             lang: Lang::Auto,
         };
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let _ = research(&mock, &http, &req, &resolver, &cancel)
             .await
             .unwrap();
@@ -407,7 +407,7 @@ mod tests {
             depth: 3,
             lang: Lang::En,
         };
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let err = research(&mock, &http, &req, &resolver, &cancel)
             .await
             .unwrap_err();

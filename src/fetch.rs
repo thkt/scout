@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 
-use tokio::sync::Notify;
+use tokio::sync::watch;
 #[cfg(feature = "js-rendering")]
 use tokio::time::timeout;
 
@@ -94,7 +94,7 @@ pub(crate) async fn fetch_page(
     url: &str,
     opts: FetchOptions,
     resolver: &impl DnsResolver,
-    cancel: &Notify,
+    cancel: &watch::Sender<bool>,
 ) -> Result<FetchResult, FetchError> {
     // `cancel` is only consumed on the CDP path. Silence the unused-arg
     // warning in builds without `js-rendering` instead of duplicating the
@@ -439,7 +439,7 @@ const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 async fn fetch_with_cdp(
     url: &ValidatedUrl,
     resolver: impl ssrf::DnsResolver,
-    cancel: &Notify,
+    cancel: &watch::Sender<bool>,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
     use chromiumoxide::browser::BrowserConfig;
@@ -472,9 +472,15 @@ async fn fetch_with_cdp(
     // graceful close path below. Without this branch the future would be
     // dropped by the outer select! in lib::run and chromium subprocesses
     // would orphan to ppid=1 (issue #121).
+    //
+    // `wait_for` is sticky: if the flag was already `true` at subscribe time
+    // (e.g. SIGINT arrived while reqwest was still downloading the initial
+    // HTML), the closure runs against the current value and returns
+    // immediately. `Notify` would have silently dropped that wakeup.
+    let mut rx = cancel.subscribe();
     let result = tokio::select! {
         biased;
-        () = cancel.notified() => Err(BrowserError::Cancelled),
+        _ = rx.wait_for(|&cancelled| cancelled) => Err(BrowserError::Cancelled),
         r = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver)) => {
             r.unwrap_or(Err(BrowserError::TimedOut))
         }
@@ -1121,7 +1127,7 @@ mod fetch_page_tests {
     #[tokio::test]
     async fn blocks_ssrf_to_localhost() {
         let client = no_redirect_client();
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let result = fetch_page(
             &client,
             "http://127.0.0.1/secret",
@@ -1142,7 +1148,7 @@ mod fetch_page_tests {
     #[tracing_test::traced_test]
     async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
         let client = no_redirect_client();
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let result = fetch_page(
             &client,
             "http://user:supersecret@127.0.0.1/private",
@@ -1192,7 +1198,7 @@ mod fetch_page_tests {
             js: true,
             ..Default::default()
         };
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let result = fetch_page(
             &client,
             &format!("{}/rich", server.uri()),
@@ -1217,7 +1223,7 @@ mod fetch_page_tests {
             js: true,
             ..Default::default()
         };
-        let cancel = Notify::new();
+        let (cancel, _) = watch::channel(false);
         let result = fetch_page(
             &client,
             "https://example.com/page",
@@ -1589,9 +1595,11 @@ mod cdp_integration_tests {
             eprintln!("SKIP: Chrome not found");
             return;
         }
+        let (cancel, _) = watch::channel(false);
         let html = fetch_with_cdp(
             &ValidatedUrl::for_test("https://example.com"),
             TokioDnsResolver,
+            &cancel,
         )
         .await
         .expect("fetch_with_cdp should succeed for public URL");

@@ -122,7 +122,7 @@ pub async fn run() -> ExitCode {
         res = &mut cmd_fut => Outcome::Completed(res),
         sig = wait_for_signal() => {
             tracing::info!(signal = %sig, "interrupted, draining for graceful close");
-            cancel.notify_waiters();
+            let _ = cancel.send(true);
             let _ = timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await;
             Outcome::Interrupted(sig)
         }
@@ -146,7 +146,6 @@ pub async fn run() -> ExitCode {
         }
         Outcome::Completed(Err(e)) => emit_error(&e, json_mode),
         Outcome::Interrupted(sig) => {
-            tracing::info!(signal = %sig, "interrupted");
             eprintln!("error: interrupted ({sig})");
             ExitCode::from(sig.exit_code())
         }

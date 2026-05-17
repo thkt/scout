@@ -6,13 +6,12 @@ pub use errors::ScoutError;
 pub use params::Command;
 
 use std::io::{IsTerminal, stdin};
-use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use tokio::io::{AsyncReadExt, stdin as tokio_stdin};
-use tokio::sync::{Notify, OnceCell};
+use tokio::sync::{OnceCell, watch};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -139,11 +138,13 @@ pub struct Scout {
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
-    /// Broadcast handle for graceful shutdown. `lib::run` fires
-    /// `notify_waiters()` on SIGINT/SIGTERM so in-flight CDP fetches can
-    /// invoke `browser.close().await` before the runtime drops the task,
-    /// preventing chromium subprocess orphans (issue #121).
-    cancel: Arc<Notify>,
+    /// Sticky shutdown flag. `lib::run` flips this to `true` on SIGINT or
+    /// SIGTERM. Each `fetch_with_cdp` invocation subscribes a fresh receiver
+    /// so the cancellation is delivered to fetches that start after the
+    /// signal arrives (e.g. queued slots in `research --depth N` once an
+    /// earlier slot finishes). `Notify` was tried first but loses wakeups
+    /// when no waiter is registered at signal time (issue #121).
+    cancel: watch::Sender<bool>,
 }
 
 impl Scout {
@@ -163,19 +164,21 @@ impl Scout {
         let brave = BraveClient::from_env(http.clone())
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
+        let (cancel, _) = watch::channel(false);
         Ok(Self {
             http,
             fetch_http,
             brave,
             github: OnceCell::new(),
-            cancel: Arc::new(Notify::new()),
+            cancel,
         })
     }
 
-    /// Hand back the shared cancel handle so `lib::run` can fire it
-    /// when a termination signal arrives. Cloning an `Arc<Notify>` is
-    /// cheap and lets the signal handler outlive the borrow of `Scout`.
-    pub fn cancel_handle(&self) -> Arc<Notify> {
+    /// Hand back a cloned `watch::Sender` so `lib::run` can flip the
+    /// cancellation flag without keeping a reference to `Scout`. The clone
+    /// shares state with every receiver subscribed from the underlying
+    /// fetch paths.
+    pub fn cancel_handle(&self) -> watch::Sender<bool> {
         self.cancel.clone()
     }
 
@@ -1108,7 +1111,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
-            cancel: Arc::new(Notify::new()),
+            cancel: watch::channel(false).0,
         }
     }
 
@@ -1119,7 +1122,7 @@ mod tests {
             fetch_http,
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
-            cancel: Arc::new(Notify::new()),
+            cancel: watch::channel(false).0,
         }
     }
 
