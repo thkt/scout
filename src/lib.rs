@@ -6,6 +6,7 @@ mod markdown;
 mod redacted;
 mod retry;
 mod search;
+mod signals;
 mod slack;
 #[cfg(test)]
 mod test_support;
@@ -19,6 +20,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, SuccessEnvelope};
+use signals::{Outcome, select_outcome, wait_for_signal};
 use tools::{Command, Scout, ScoutError};
 
 fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
@@ -40,7 +42,7 @@ fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     version,
     about = "Web search, page fetching, and GitHub repository exploration",
     after_help = "\
-Exit codes (sysexits.h + GNU coreutils + PJ extension):
+Exit codes (sysexits.h + GNU coreutils + POSIX signal convention):
   0    Success
   64   Usage error (clap parse, missing API key, conflicts_with violation)
   65   Data error (invalid input, malformed format, encoding error, 4xx body)
@@ -48,8 +50,10 @@ Exit codes (sysexits.h + GNU coreutils + PJ extension):
   70   Internal (scout-side invariant violation, unexpected response schema)
   74   IO error (external tool failure such as headless browser)
   75   Temporary failure (rate limit, 5xx, retryable — short backoff)
-  124  Timeout (request/transport timeout, retryable — longer backoff advised)
   104  Unknown (unclassifiable failure; rising rate signals classification gap)
+  124  Timeout (request/transport timeout, retryable — longer backoff advised)
+  130  Interrupted by SIGINT (128 + 2; e.g. Ctrl-C)
+  143  Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default)
 
 Environment:
   BRAVE_SEARCH_API_KEY  Required for search and research commands
@@ -93,8 +97,9 @@ pub async fn run() -> ExitCode {
         Err(e) => return emit_error(&e, json_mode),
     };
 
-    match scout.run(cli.command).await {
-        Ok(output) => {
+    let outcome = select_outcome(scout.run(cli.command), wait_for_signal()).await;
+    match outcome {
+        Outcome::Completed(Ok(output)) => {
             let rendered = if json_mode {
                 render_json_success(output)
             } else {
@@ -110,7 +115,12 @@ pub async fn run() -> ExitCode {
                 }
             }
         }
-        Err(e) => emit_error(&e, json_mode),
+        Outcome::Completed(Err(e)) => emit_error(&e, json_mode),
+        Outcome::Interrupted(sig) => {
+            tracing::info!(signal = %sig, "interrupted");
+            eprintln!("error: interrupted ({sig})");
+            ExitCode::from(sig.exit_code())
+        }
     }
 }
 
@@ -246,10 +256,12 @@ mod tests {
             help.contains("GITHUB_TOKEN"),
             "root help missing GITHUB_TOKEN"
         );
-        for code in ["64", "65", "66", "70", "74", "75", "104", "124"] {
+        for code in [
+            "64", "65", "66", "70", "74", "75", "104", "124", "130", "143",
+        ] {
             assert!(
                 help.contains(code),
-                "root help should document sysexits/PJ/GNU code {code}"
+                "root help should document sysexits/POSIX/GNU code {code}"
             );
         }
         assert!(
@@ -270,7 +282,15 @@ mod tests {
         );
         assert!(
             help.contains("Unknown"),
-            "root help missing PJ extension (104) description"
+            "root help missing extension (104) description"
+        );
+        assert!(
+            help.contains("SIGINT"),
+            "root help missing SIGINT (130) description"
+        );
+        assert!(
+            help.contains("SIGTERM"),
+            "root help missing SIGTERM (143) description"
         );
     }
 }
