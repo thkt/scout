@@ -21,31 +21,17 @@ impl fmt::Debug for Redacted {
 
 /// Returns `Ok(())` when `url` begins with `https://`; otherwise yields the
 /// error produced by `err`. Each backend supplies its own error variant so
-/// the helper stays decoupled from any single client's error enum.
-///
-/// Unlike [`assert_https`], this function returns a `Result` and is never
-/// bypassed in test builds, so callers can exercise the rejection path
-/// directly.
+/// the helper stays decoupled from any single client's error enum. Callers
+/// gate the call with a per-client `skip_https_check` flag (see
+/// `BraveClient::should_check_https` / `GitHubClient::should_check_https` /
+/// `SlackClient::should_check_https`) when targeting wiremock servers on
+/// `http://127.0.0.1`.
 pub(crate) fn validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E> {
     if url.starts_with("https://") {
         Ok(())
     } else {
         Err(err())
     }
-}
-
-/// Panicking HTTPS check retained for backends that have not migrated to
-/// the [`validate_https`] `Result` form. Bypassed under `cfg!(test)` so
-/// wiremock servers on `http://127.0.0.1` keep working.
-// FIXME: callers `github.rs::request` and `slack.rs::api_get_once` still
-//        use this panic form; migrate both to validate_https + a per-client
-//        skip flag (parallel to BraveClient::skip_https_check) and delete
-//        this function.
-pub(crate) fn assert_https(url: &str) {
-    assert!(
-        url.starts_with("https://") || cfg!(test),
-        "credentials must only be sent over HTTPS"
-    );
 }
 
 #[cfg(test)]
