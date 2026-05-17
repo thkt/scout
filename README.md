@@ -257,7 +257,7 @@ Single binary, zero runtime dependencies.
 
 ## Exit codes
 
-Following [`sysexits.h`](https://man.openbsd.org/sysexits), with a GNU coreutils `timeout` code (124) and a PJ extension code (104) for unclassifiable failures:
+Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `timeout` (124), an extension code (104) for unclassifiable failures, and the POSIX signal convention (128 + signal number) for interruption:
 
 | Code | Meaning                                                             |
 | ---- | ------------------------------------------------------------------- |
@@ -268,8 +268,10 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with a GNU coreutils
 | 70   | Internal (scout-side invariant violation, unexpected response schema) |
 | 74   | IO error (external tool failure such as headless browser)           |
 | 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)      |
-| 124  | Timeout (request/transport timeout, retryable — longer backoff advised) |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
+| 124  | Timeout (request/transport timeout, retryable — longer backoff advised) |
+| 130  | Interrupted by SIGINT (128 + 2; e.g. Ctrl-C)                        |
+| 143  | Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default) |
 
 ## Migration to v2
 
