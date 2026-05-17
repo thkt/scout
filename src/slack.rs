@@ -247,8 +247,7 @@ impl SlackClient {
         if body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             // ok:false with a missing `error` field is a Slack API contract
             // violation, not a user-fixable failure — route through Decode so
-            // it classifies as Internal(70) instead of the "unknown" UsageError
-            // path that the previous `unwrap_or("unknown")` produced (issue #114).
+            // it classifies as Internal(70) rather than UsageError.
             let Some(error) = body.get("error").and_then(|v| v.as_str()) else {
                 return Err(SlackError::Decode(
                     "Slack response had `ok: false` without an `error` field".into(),

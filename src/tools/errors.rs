@@ -293,10 +293,9 @@ impl From<SlackError> for ScoutError {
             // Slack API surfaces failures as error code strings (not HTTP status),
             // so per-string classification replaces the priority-2 HTTP arm.
             SlackError::Api { error } => match error.as_str() {
-                // Priority 3: NOT_FOUND. The underscore forms come from Slack's
-                // API; "message not found" (with a space) is scout's own string
-                // emitted from `fetch_message` when the resolved messages list
-                // is empty — same NotFound class as the API-native variants.
+                // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
+                // codes; "message not found" (space) is scout's own string from
+                // `fetch_message` when the resolved messages list is empty.
                 "channel_not_found" | "message_not_found" | "thread_not_found"
                 | "message not found" => Self::not_found(e.to_string()),
                 // Priority 4: TEMP_FAILURE
