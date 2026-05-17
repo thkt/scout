@@ -692,7 +692,9 @@ mod tests {
 
     /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002).
     /// Per ADR-0065 priority 2, `*Error::Api { code }` 4xx (other than 401/403/404) now
-    /// routes to DataError instead of folding onto IoError via `internal()`.
+    /// routes to DataError instead of folding onto IoError via `internal()`. The three
+    /// `Insecure*` variants (one per backend) belong here because a plain-HTTP URL is a
+    /// caller-supplied config defect, not a transient runtime failure.
     #[test]
     fn data_errors_have_exit_code_65() {
         let cases: Vec<ScoutError> = vec![
@@ -707,6 +709,7 @@ mod tests {
                 message: "unprocessable entity".into(),
             }
             .into(),
+            github::GitHubError::InsecureUrl.into(),
             FetchError::InvalidScheme.into(),
             FetchError::InternalHost.into(),
             FetchError::UnsupportedContentType("image/png".into()).into(),
@@ -720,6 +723,8 @@ mod tests {
                 message: "err".into(),
             }
             .into(),
+            BraveError::InsecureBaseUrl.into(),
+            SlackError::InsecureUrl.into(),
         ];
         for err in &cases {
             assert_eq!(err.error_kind(), ErrorCode::DataError, "{err}");
