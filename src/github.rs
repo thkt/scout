@@ -148,7 +148,14 @@ impl GitHubClient {
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
-            200..=299 => Ok(response.json().await?),
+            // 2xx body decode failure is a scout-side invariant violation (the API
+            // returned an unexpected schema). Route through `Decode` so it maps to
+            // Internal(70) retryable=false instead of Network → TempFailure(75)
+            // retryable=true (per issue #101).
+            200..=299 => Ok(response
+                .json()
+                .await
+                .map_err(|e| GitHubError::Decode(e.to_string()))?),
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
                 let retry_after = parse_retry_after(response.headers());
@@ -584,5 +591,30 @@ mod http_tests {
                 retry_after: Some(_)
             })
         ));
+    }
+
+    /// [T-GH012] 2xx response with malformed JSON classifies as Decode (issue #101).
+    ///
+    /// Before this fix, `Ok(response.json().await?)` routed schema failures through
+    /// `#[from] reqwest::Error` to `GitHubError::Network`, surfacing as TempFailure(75)
+    /// retryable=true. Schema fail is a scout-side invariant violation that retry
+    /// cannot resolve — must classify as Decode → Internal(70) retryable=false.
+    #[tokio::test]
+    async fn get_json_2xx_malformed_body_returns_decode() {
+        let Some(server) = try_spawn_mock_server("github::http").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{not valid json"))
+            .mount(&server)
+            .await;
+
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+        let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
+        assert!(
+            matches!(result, Err(GitHubError::Decode(_))),
+            "expected GitHubError::Decode for 2xx malformed JSON, got: {result:?}"
+        );
     }
 }
