@@ -198,6 +198,7 @@ impl From<github::GitHubError> for ScoutError {
                 ),
             github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
                 .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
+            github::GitHubError::InsecureUrl => Self::data_error(e.to_string()),
             github::GitHubError::Api { code, .. } if (400..500).contains(code) => {
                 Self::data_error(e.to_string())
             }
