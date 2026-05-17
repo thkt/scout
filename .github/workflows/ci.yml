@@ -38,7 +38,7 @@ jobs:
         run: cargo check --features js-rendering
 
       - name: Install nextest
-        uses: taiki-e/install-action@184183c2401be73c3bf42c2e61268aa5855379c1 # v2
+        uses: taiki-e/install-action@184183c2401be73c3bf42c2e61268aa5855379c1 # v2.78.1
         with:
           tool: cargo-nextest
 
