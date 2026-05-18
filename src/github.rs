@@ -93,10 +93,8 @@ pub(crate) struct GitHubClient {
     token: Option<Redacted>,
     base_url: String,
     max_retries: u32,
-    /// Wall-clock source for `secs_until_ratelimit_reset` arithmetic. Default
-    /// `SystemClock`; tests inject `FixedClock` via `with_clock` to verify
-    /// the `x-ratelimit-reset - now` calculation without real-time flakiness
-    /// (issue #103 / H-12).
+    /// Wall-clock source for `secs_until_ratelimit_reset`. Defaults to
+    /// `SystemClock`; tests inject `FixedClock` via `with_clock`.
     clock: Arc<dyn Clock>,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `request` always runs
@@ -138,8 +136,6 @@ impl GitHubClient {
         }
     }
 
-    /// Inject an alternate `Clock` (for `FixedClock` in tests). Production
-    /// callers use the `SystemClock` installed by the constructors above.
     #[cfg(test)]
     pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
@@ -436,7 +432,6 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
 #[cfg(test)]
 mod http_tests {
     use std::sync::atomic::Ordering;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::clock::FixedClock;
@@ -614,36 +609,36 @@ mod http_tests {
         ));
     }
 
-    /// [T-GH008] get_json_once uses x-ratelimit-reset to compute delay on 403 rate limit
+    /// [T-GH008] get_json_once uses x-ratelimit-reset to compute delay on 403 rate limit.
+    /// Pinned clock + reset 60s later asserts the exact subtraction result.
     #[tokio::test]
     async fn get_json_403_with_ratelimit_reset_carries_delay() {
         let Some(server) = try_spawn_mock_server("github::http").await else {
             return;
         };
-        let future_reset = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 60;
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
             .respond_with(
                 ResponseTemplate::new(403)
                     .append_header("x-ratelimit-remaining", "0")
-                    .append_header("x-ratelimit-reset", future_reset.to_string().as_str())
+                    .append_header("x-ratelimit-reset", "1060")
                     .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
             )
             .mount(&server)
             .await;
 
-        let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri())
+            .with_clock(Arc::new(FixedClock(1000)));
         let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
-        assert!(matches!(
-            result,
-            Err(GitHubError::RateLimited {
-                retry_after: Some(_)
-            })
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(GitHubError::RateLimited {
+                    retry_after: Some(60)
+                })
+            ),
+            "expected retry_after = 60 (reset 1060 - clock 1000), got: {result:?}"
+        );
     }
 
     /// [T-GH012] 2xx response with malformed JSON classifies as Decode (issue #101).
@@ -711,8 +706,8 @@ mod http_tests {
     }
 
     /// [T-GH014] secs_until_ratelimit_reset subtracts the injected clock
-    /// from the x-ratelimit-reset header (issue #103 / H-12). Pinning the
-    /// clock removes wall-clock flakiness from the arithmetic test.
+    /// from the x-ratelimit-reset header. Pinning the clock removes wall-clock
+    /// flakiness from the arithmetic test.
     #[test]
     fn secs_until_ratelimit_reset_uses_injected_clock() {
         use reqwest::header::HeaderValue;
@@ -723,8 +718,8 @@ mod http_tests {
     }
 
     /// [T-GH015] secs_until_ratelimit_reset saturates to 0 when the injected
-    /// clock has already passed the reset timestamp — `Duration::saturating_sub`
-    /// prevents a u64 underflow that would otherwise wrap to a huge delay.
+    /// clock has already passed the reset timestamp — `u64::saturating_sub`
+    /// prevents an underflow that would otherwise wrap to a huge delay.
     #[test]
     fn secs_until_ratelimit_reset_saturates_when_clock_past_reset() {
         use reqwest::header::HeaderValue;

@@ -1,8 +1,5 @@
-//! Time abstraction for testability.
-//!
-//! Issue #103 / H-12: `secs_until_ratelimit_reset` previously called
-//! `SystemTime::now()` directly, making it impossible to verify the
-//! `x-ratelimit-reset - now` arithmetic without time-of-day flakiness.
+//! Wall-clock abstraction. `SystemClock` for production, `FixedClock` for tests
+//! that need deterministic `now`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,9 +9,7 @@ pub(crate) trait Clock: Send + Sync {
     fn now_secs(&self) -> u64;
 }
 
-/// Production clock. Returns 0 if the system clock is set before 1970-01-01,
-/// which is treated as "unknown now" — the only callers that read this value
-/// (rate-limit reset arithmetic) saturate to 0 anyway.
+/// Returns 0 when the wall clock is pre-epoch (treat as unknown).
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
