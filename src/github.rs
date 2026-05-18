@@ -3,15 +3,11 @@ pub(crate) mod format;
 mod helpers;
 pub(crate) mod types;
 
-use std::env;
 use std::sync::Arc;
-use std::time::Duration;
 
 use reqwest::Client;
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
-use tokio::process::Command;
-use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::clock::{Clock, SystemClock};
@@ -23,6 +19,7 @@ use crate::retry::{
     retry_with_rate_limit,
 };
 use crate::rng::FastrandRng;
+use crate::token_source::{GhCliSource, TokenSource};
 
 use helpers::encode_path;
 pub(crate) use helpers::{
@@ -34,7 +31,6 @@ use types::{
 };
 
 const API_BASE: &str = "https://api.github.com";
-const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GitHubError {
@@ -106,7 +102,18 @@ pub(crate) struct GitHubClient {
 
 impl GitHubClient {
     pub async fn from_env(http: Client, max_retries: u32) -> Self {
-        let token = resolve_token().await;
+        Self::from_env_with_source(http, max_retries, &GhCliSource).await
+    }
+
+    /// Production constructor parameterized by the `TokenSource`. `from_env`
+    /// is the thin wrapper that picks `GhCliSource`; tests pick
+    /// `StaticTokenSource(...)` to avoid spawning `gh auth token`.
+    pub(crate) async fn from_env_with_source(
+        http: Client,
+        max_retries: u32,
+        source: &dyn TokenSource,
+    ) -> Self {
+        let token = source.fetch().await;
         if token.is_some() {
             debug!("GitHub token configured");
         } else {
@@ -382,55 +389,6 @@ fn secs_until_ratelimit_reset(headers: &HeaderMap, clock: &dyn Clock) -> Option<
     Some(reset_ts.saturating_sub(clock.now_secs()))
 }
 
-async fn resolve_token() -> Option<Redacted> {
-    resolve_token_with(|var| env::var(var).ok()).await
-}
-
-async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Option<Redacted> {
-    let from_env = ["GITHUB_TOKEN", "GH_TOKEN"]
-        .iter()
-        .filter_map(|var| env_reader(var))
-        .map(|t| t.trim().to_owned())
-        .find(|t| !t.is_empty());
-
-    if let Some(token) = from_env {
-        return Some(Redacted::new(&token));
-    }
-
-    let output = timeout(
-        TOKEN_RESOLVE_TIMEOUT,
-        Command::new("gh")
-            .args(["auth", "token"])
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .inspect_err(|_| {
-        info!(
-            "gh auth token timed out after {}s",
-            TOKEN_RESOLVE_TIMEOUT.as_secs()
-        )
-    })
-    .ok()?
-    .inspect_err(|e| info!("gh auth token command failed: {e}"))
-    .ok()?;
-
-    if !output.status.success() {
-        info!(
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "gh auth token failed"
-        );
-        return None;
-    }
-
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if token.is_empty() {
-        None
-    } else {
-        Some(Redacted::new(&token))
-    }
-}
-
 #[cfg(test)]
 mod http_tests {
     use std::sync::atomic::Ordering;
@@ -552,21 +510,31 @@ mod http_tests {
         assert!(super::validate_per_page(1).is_ok());
     }
 
-    /// [T-GH005] resolve_token_with reads token from GITHUB_TOKEN env var
+    // T-GH005 (resolve_token_with env-var lookup) moved to `token_source` module
+    // as T-TS001 / T-TS002 — env-resolution logic now lives there.
+
+    /// [T-GH018] from_env_with_source threads the injected TokenSource through
+    /// to the constructed client's token field. Proves the seam reaches the
+    /// constructor without spawning `gh auth token`.
     #[tokio::test]
-    async fn resolve_token_reads_env_var() {
-        let token = resolve_token_with(|key| {
-            if key == "GITHUB_TOKEN" {
-                Some("test-token-from-env".into())
-            } else {
-                None
-            }
-        })
-        .await;
+    async fn from_env_with_static_source_installs_token() {
+        use crate::token_source::StaticTokenSource;
+        let source = StaticTokenSource(Some(Redacted::new("injected-token")));
+        let client = GitHubClient::from_env_with_source(Client::new(), 0, &source).await;
         assert_eq!(
-            token.as_ref().map(super::super::redacted::Redacted::expose),
-            Some("test-token-from-env")
+            client.token.as_ref().map(Redacted::expose),
+            Some("injected-token")
         );
+    }
+
+    /// [T-GH019] from_env_with_source propagates a None source so callers can
+    /// simulate the unauthenticated path without env-var manipulation.
+    #[tokio::test]
+    async fn from_env_with_none_source_leaves_token_empty() {
+        use crate::token_source::StaticTokenSource;
+        let client =
+            GitHubClient::from_env_with_source(Client::new(), 0, &StaticTokenSource(None)).await;
+        assert!(client.token.is_none());
     }
 
     /// [T-GH006] get_json maps 500 responses to generic Api error
