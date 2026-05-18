@@ -1,4 +1,5 @@
 mod brave;
+mod clock;
 mod envelope;
 mod fetch;
 mod github;
