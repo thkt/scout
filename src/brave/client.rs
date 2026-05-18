@@ -10,6 +10,7 @@ use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
+use crate::rng::FastrandRng;
 
 use super::types::{SearchResult, WebSearchResponse};
 
@@ -246,6 +247,7 @@ impl SearchClient for BraveClient {
                 _ => None,
             },
             || BraveError::RateLimited { retry_after: None },
+            &FastrandRng,
         )
         .await?;
         Ok(response.into_results())

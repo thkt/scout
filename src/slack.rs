@@ -14,6 +14,7 @@ use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
+use crate::rng::FastrandRng;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SlackError {
@@ -210,6 +211,7 @@ impl SlackClient {
                 _ => None,
             },
             || SlackError::RateLimited { retry_after: None },
+            &FastrandRng,
         )
         .await
     }
