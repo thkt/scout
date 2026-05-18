@@ -4,7 +4,8 @@ mod helpers;
 pub(crate) mod types;
 
 use std::env;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::Client;
 use reqwest::header::HeaderMap;
@@ -13,6 +14,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+use crate::clock::{Clock, SystemClock};
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
@@ -91,6 +93,11 @@ pub(crate) struct GitHubClient {
     token: Option<Redacted>,
     base_url: String,
     max_retries: u32,
+    /// Wall-clock source for `secs_until_ratelimit_reset` arithmetic. Default
+    /// `SystemClock`; tests inject `FixedClock` via `with_clock` to verify
+    /// the `x-ratelimit-reset - now` calculation without real-time flakiness
+    /// (issue #103 / H-12).
+    clock: Arc<dyn Clock>,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `request` always runs
     /// `validate_https`; only `with_base_url` opts in.
@@ -113,6 +120,7 @@ impl GitHubClient {
             token,
             base_url: API_BASE.to_owned(),
             max_retries,
+            clock: Arc::new(SystemClock),
             #[cfg(test)]
             skip_https_check: false,
         }
@@ -125,8 +133,17 @@ impl GitHubClient {
             token: None,
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
+            clock: Arc::new(SystemClock),
             skip_https_check: true,
         }
+    }
+
+    /// Inject an alternate `Clock` (for `FixedClock` in tests). Production
+    /// callers use the `SystemClock` installed by the constructors above.
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Test-only override of the production HTTPS gate. See [`validate_https`].
@@ -205,7 +222,8 @@ impl GitHubClient {
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let retry_after = secs_until_ratelimit_reset(response.headers());
+                let retry_after =
+                    secs_until_ratelimit_reset(response.headers(), self.clock.as_ref());
                 match remaining {
                     Some(r) if r > 0 => {
                         let message =
@@ -358,13 +376,12 @@ fn is_retriable(e: &GitHubError) -> bool {
     }
 }
 
-fn secs_until_ratelimit_reset(headers: &HeaderMap) -> Option<u64> {
+fn secs_until_ratelimit_reset(headers: &HeaderMap, clock: &dyn Clock) -> Option<u64> {
     let reset_ts = headers
         .get("x-ratelimit-reset")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    Some(reset_ts.saturating_sub(now))
+    Some(reset_ts.saturating_sub(clock.now_secs()))
 }
 
 async fn resolve_token() -> Option<Redacted> {
@@ -419,8 +436,10 @@ async fn resolve_token_with(env_reader: impl Fn(&str) -> Option<String>) -> Opti
 #[cfg(test)]
 mod http_tests {
     use std::sync::atomic::Ordering;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use crate::clock::FixedClock;
     use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
@@ -689,5 +708,72 @@ mod http_tests {
         );
 
         let _ = handle.join();
+    }
+
+    /// [T-GH014] secs_until_ratelimit_reset subtracts the injected clock
+    /// from the x-ratelimit-reset header (issue #103 / H-12). Pinning the
+    /// clock removes wall-clock flakiness from the arithmetic test.
+    #[test]
+    fn secs_until_ratelimit_reset_uses_injected_clock() {
+        use reqwest::header::HeaderValue;
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1300"));
+        let clock = FixedClock(1000);
+        assert_eq!(secs_until_ratelimit_reset(&headers, &clock), Some(300));
+    }
+
+    /// [T-GH015] secs_until_ratelimit_reset saturates to 0 when the injected
+    /// clock has already passed the reset timestamp — `Duration::saturating_sub`
+    /// prevents a u64 underflow that would otherwise wrap to a huge delay.
+    #[test]
+    fn secs_until_ratelimit_reset_saturates_when_clock_past_reset() {
+        use reqwest::header::HeaderValue;
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("100"));
+        let clock = FixedClock(200);
+        assert_eq!(secs_until_ratelimit_reset(&headers, &clock), Some(0));
+    }
+
+    /// [T-GH016] secs_until_ratelimit_reset returns None when the
+    /// x-ratelimit-reset header is absent; production callers then fall back
+    /// to jittered backoff.
+    #[test]
+    fn secs_until_ratelimit_reset_returns_none_when_header_missing() {
+        let headers = HeaderMap::new();
+        let clock = FixedClock(1000);
+        assert_eq!(secs_until_ratelimit_reset(&headers, &clock), None);
+    }
+
+    /// [T-GH017] with_clock injection threads through to the 403 retry_after
+    /// calculation. End-to-end proof that the seam works for callers (the
+    /// pure-function tests above only cover the helper in isolation).
+    #[tokio::test]
+    async fn get_json_403_uses_injected_clock_for_retry_after() {
+        let Some(server) = try_spawn_mock_server("github::http_clock_inject").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .append_header("x-ratelimit-remaining", "0")
+                    .append_header("x-ratelimit-reset", "1300")
+                    .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitHubClient::with_base_url(Client::new(), &server.uri())
+            .with_clock(Arc::new(FixedClock(1000)));
+        let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+        assert!(
+            matches!(
+                result,
+                Err(GitHubError::RateLimited {
+                    retry_after: Some(300)
+                })
+            ),
+            "expected retry_after = 300 (reset 1300 - clock 1000), got: {result:?}"
+        );
     }
 }
