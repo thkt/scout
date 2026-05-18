@@ -510,9 +510,6 @@ mod http_tests {
         assert!(super::validate_per_page(1).is_ok());
     }
 
-    // T-GH005 (resolve_token_with env-var lookup) moved to `token_source` module
-    // as T-TS001 / T-TS002 — env-resolution logic now lives there.
-
     /// [T-GH018] from_env_with_source threads the injected TokenSource through
     /// to the constructed client's token field. Proves the seam reaches the
     /// constructor without spawning `gh auth token`.
