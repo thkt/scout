@@ -93,9 +93,12 @@ pub(crate) struct Cli {
     command: Command,
 }
 
-pub async fn run() -> ExitCode {
+/// Install the tracing subscriber. `try_init` tolerates a second invocation
+/// (e.g., integration tests that exercise `lib::run` more than once) — the
+/// installed subscriber from the first call is reused.
+fn init_tracing() {
     use tracing_subscriber::filter::Directive;
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
@@ -104,7 +107,11 @@ pub async fn run() -> ExitCode {
                     .unwrap_or_else(|_| Directive::from(tracing::Level::INFO)),
             ),
         )
-        .init();
+        .try_init();
+}
+
+pub async fn run() -> ExitCode {
+    init_tracing();
 
     // Pre-scan argv so a clap parse error (which exits before `cli.json` is
     // populated) still routes through the JSON envelope path when requested.
@@ -240,7 +247,17 @@ mod tests {
 
     use clap::CommandFactory;
 
-    use super::write_output;
+    use super::{init_tracing, write_output};
+
+    /// [T-INIT001] init_tracing tolerates a second invocation (issue #103).
+    /// `.init()` would panic on the duplicate; `.try_init()` returns Err which
+    /// init_tracing silently ignores so callers (integration tests reusing
+    /// `lib::run`) survive.
+    #[test]
+    fn init_tracing_is_idempotent() {
+        init_tracing();
+        init_tracing();
+    }
 
     /// [T-W001] write_output appends newline when output lacks trailing newline
     #[test]
