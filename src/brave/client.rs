@@ -5,6 +5,8 @@ use reqwest::Client;
 use tracing::{debug, warn};
 
 use crate::redacted::{Redacted, validate_https};
+#[cfg(test)]
+use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
@@ -80,6 +82,7 @@ pub(crate) struct BraveClient {
     http: Client,
     api_key: Redacted,
     base_url: String,
+    max_retries: u32,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `send_request` always
     /// runs `validate_https`; only `with_base_url` opts in.
@@ -88,17 +91,18 @@ pub(crate) struct BraveClient {
 }
 
 impl BraveClient {
-    /// Constructs a `BraveClient` from the `BRAVE_SEARCH_API_KEY` env var.
-    pub(crate) fn from_env(http: Client) -> Result<Self, BraveError> {
-        Self::from_env_with(http, |k| env::var(k))
+    pub(crate) fn from_env(http: Client, max_retries: u32) -> Result<Self, BraveError> {
+        Self::from_env_with(http, max_retries, |k| env::var(k))
     }
 
-    /// Constructs a `BraveClient` using a caller-supplied env reader. The
-    /// production [`Self::from_env`] delegates here with `std::env::var`;
-    /// unit tests pass a closure so the env-not-set / whitespace branches
-    /// can be exercised without `unsafe_code = "forbid"` rejecting
-    /// `set_var`.
-    pub(crate) fn from_env_with<F>(http: Client, get_var: F) -> Result<Self, BraveError>
+    /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
+    /// tests can exercise the env-not-set / whitespace branches without
+    /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
+    pub(crate) fn from_env_with<F>(
+        http: Client,
+        max_retries: u32,
+        get_var: F,
+    ) -> Result<Self, BraveError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
@@ -110,6 +114,7 @@ impl BraveClient {
             http,
             api_key: Redacted::new(&api_key),
             base_url: API_BASE.to_owned(),
+            max_retries,
             #[cfg(test)]
             skip_https_check: false,
         })
@@ -121,6 +126,7 @@ impl BraveClient {
             http,
             api_key: Redacted::new("test-key"),
             base_url: base_url.to_owned(),
+            max_retries: DEFAULT_MAX_RETRIES,
             skip_https_check: true,
         }
     }
@@ -233,6 +239,7 @@ impl SearchClient for BraveClient {
     ) -> Result<Vec<SearchResult>, BraveError> {
         let response = retry_with_rate_limit(
             || self.send_request(query, search_lang),
+            self.max_retries,
             is_retriable,
             |e| match e {
                 BraveError::RateLimited { retry_after } => *retry_after,
@@ -500,7 +507,9 @@ mod http_tests {
     /// env path that `from_env` delegates to.
     #[test]
     fn from_env_with_returns_api_key_not_set_when_closure_errs() {
-        let result = BraveClient::from_env_with(Client::new(), |_| Err(env::VarError::NotPresent));
+        let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+            Err(env::VarError::NotPresent)
+        });
         assert!(
             matches!(result, Err(BraveError::ApiKeyNotSet)),
             "expected ApiKeyNotSet, got: {result:?}"
@@ -513,7 +522,12 @@ mod http_tests {
     /// `from_env`).
     #[test]
     fn from_env_with_rejects_whitespace_only_key() {
-        let result = BraveClient::from_env_with(Client::new(), |_| Ok("   ".to_owned()));
+        let result =
+            BraveClient::from_env_with(
+                Client::new(),
+                DEFAULT_MAX_RETRIES,
+                |_| Ok("   ".to_owned()),
+            );
         assert!(
             matches!(result, Err(BraveError::ApiKeyNotSet)),
             "expected ApiKeyNotSet for whitespace-only key, got: {result:?}"
@@ -526,7 +540,9 @@ mod http_tests {
     /// the constant `API_BASE`.
     #[test]
     fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
-        let result = BraveClient::from_env_with(Client::new(), |_| Ok("real-key".to_owned()));
+        let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+            Ok("real-key".to_owned())
+        });
         let client = result.expect("expected Ok(client) from valid key");
         assert_eq!(client.api_key.expose(), "real-key");
         assert_eq!(client.base_url, API_BASE);
@@ -538,8 +554,9 @@ mod http_tests {
     /// must be `false` when the client comes from `from_env_with`.
     #[test]
     fn from_env_with_does_not_set_skip_https_check() {
-        let client = BraveClient::from_env_with(Client::new(), |_| Ok("k".to_owned()))
-            .expect("expected Ok(client) from valid key");
+        let client =
+            BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("k".to_owned()))
+                .expect("expected Ok(client) from valid key");
         assert!(
             !client.skip_https_check,
             "production constructor must not skip HTTPS check"

@@ -69,8 +69,19 @@ Exit codes (sysexits.h + GNU coreutils + POSIX signal convention):
   143  Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default)
 
 Environment:
-  BRAVE_SEARCH_API_KEY  Required for search and research commands
-  GITHUB_TOKEN          Optional for GitHub commands (higher rate limits)"
+  BRAVE_SEARCH_API_KEY          Required for search and research commands
+  GITHUB_TOKEN                  Optional for GitHub commands (higher rate limits)
+  SLACK_TOKEN                   Optional. User OAuth token (xoxp-…) required for Slack URLs
+
+Tuning (override built-in timeouts and retry budget):
+  SCOUT_FETCH_TIMEOUT_SECS      fetch wall-clock budget per URL (default 95, range 1-600)
+  SCOUT_RESEARCH_TIMEOUT_SECS   research wall-clock budget (default 45, range 1-600)
+  SCOUT_SLACK_TIMEOUT_SECS      slack fetch wall-clock budget (default 60, range 1-600)
+  SCOUT_MAX_RETRIES             retries on transient API failures, on top of the
+                                initial attempt (default 2 → 3 total attempts,
+                                range 0-10; set to 0 to disable retry)
+
+Invalid tuning values fail with exit 64 (usage error) before any request is made."
 )]
 pub(crate) struct Cli {
     /// Emit output as a JSON envelope (one line) on stdout
@@ -319,6 +330,29 @@ mod tests {
         assert!(
             help.contains("SIGTERM"),
             "root help missing SIGTERM (143) description"
+        );
+    }
+
+    /// [T-H001] root --help exposes SCOUT_* tuning env vars (issue #120).
+    /// AI agents discover override knobs by reading --help; missing entries
+    /// would force agents to read the source.
+    #[test]
+    fn root_help_lists_scout_tuning_env_vars() {
+        let help = super::Cli::command().render_long_help().to_string();
+        for var in [
+            "SCOUT_FETCH_TIMEOUT_SECS",
+            "SCOUT_RESEARCH_TIMEOUT_SECS",
+            "SCOUT_SLACK_TIMEOUT_SECS",
+            "SCOUT_MAX_RETRIES",
+        ] {
+            assert!(
+                help.contains(var),
+                "root help must list {var} so agents can discover the override"
+            );
+        }
+        assert!(
+            help.contains("SLACK_TOKEN"),
+            "root help should list SLACK_TOKEN alongside other auth env vars"
         );
     }
 }

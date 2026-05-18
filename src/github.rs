@@ -3,12 +3,6 @@ pub(crate) mod format;
 mod helpers;
 pub(crate) mod types;
 
-use helpers::encode_path;
-pub(crate) use helpers::{
-    apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
-    validate_path, validate_ref,
-};
-
 use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,18 +14,24 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::redacted::{Redacted, validate_https};
+#[cfg(test)]
+use crate::retry::DEFAULT_MAX_RETRIES;
+use crate::retry::{
+    is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
+    retry_with_rate_limit,
+};
 
+use helpers::encode_path;
+pub(crate) use helpers::{
+    apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
+    validate_path, validate_ref,
+};
 use types::{
     BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
 };
 
 const API_BASE: &str = "https://api.github.com";
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
-
-use crate::retry::{
-    is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
-    retry_with_rate_limit,
-};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GitHubError {
@@ -90,6 +90,7 @@ pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
     base_url: String,
+    max_retries: u32,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `request` always runs
     /// `validate_https`; only `with_base_url` opts in.
@@ -98,7 +99,7 @@ pub(crate) struct GitHubClient {
 }
 
 impl GitHubClient {
-    pub async fn from_env(http: Client) -> Self {
+    pub async fn from_env(http: Client, max_retries: u32) -> Self {
         let token = resolve_token().await;
         if token.is_some() {
             debug!("GitHub token configured");
@@ -111,6 +112,7 @@ impl GitHubClient {
             http,
             token,
             base_url: API_BASE.to_owned(),
+            max_retries,
             #[cfg(test)]
             skip_https_check: false,
         }
@@ -122,6 +124,7 @@ impl GitHubClient {
             http,
             token: None,
             base_url: base_url.to_owned(),
+            max_retries: DEFAULT_MAX_RETRIES,
             skip_https_check: true,
         }
     }
@@ -158,6 +161,7 @@ impl GitHubClient {
     async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         retry_with_rate_limit(
             || self.get_json_once(path),
+            self.max_retries,
             is_retriable,
             |e| match e {
                 GitHubError::RateLimited { retry_after } => *retry_after,
@@ -417,7 +421,6 @@ mod http_tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::retry::MAX_RETRIES;
     use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
@@ -650,7 +653,9 @@ mod http_tests {
     }
 
     /// [T-GH013] 2xx mid-stream body drop is treated as transient and the
-    /// retry loop exhausts MAX_RETRIES attempts before failing (issue #113).
+    /// retry loop exhausts the configured max_retries attempts before failing
+    /// (issue #113). The test uses the client default (3); issue #120 lets
+    /// production callers override the budget via `SCOUT_MAX_RETRIES`.
     ///
     /// reqwest 0.13 surfaces a mid-stream drop as `is_decode() == true` with
     /// an io::Error in the source chain. Without `is_transient_decode`,
@@ -663,7 +668,9 @@ mod http_tests {
     /// TcpListener is unaffected. Total wall time stays under 100 ms.
     #[tokio::test(start_paused = true)]
     async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
-        let expected_attempts = usize::try_from(MAX_RETRIES).expect("MAX_RETRIES fits usize");
+        // Total attempts = 1 (initial) + DEFAULT_MAX_RETRIES (retries).
+        let expected_attempts =
+            usize::try_from(DEFAULT_MAX_RETRIES + 1).expect("DEFAULT_MAX_RETRIES + 1 fits usize");
         let Some((url, counter, handle)) = spawn_mid_stream_drop_server(expected_attempts) else {
             return;
         };
@@ -678,7 +685,7 @@ mod http_tests {
         assert_eq!(
             counter.load(Ordering::SeqCst),
             expected_attempts,
-            "retry loop must consume MAX_RETRIES connections"
+            "retry loop must consume the full max_retries budget"
         );
 
         let _ = handle.join();

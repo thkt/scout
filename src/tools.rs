@@ -1,9 +1,12 @@
+mod config;
 mod errors;
 mod params;
 mod typo;
 
 pub use errors::ScoutError;
 pub use params::Command;
+
+pub(crate) use config::RuntimeConfig;
 
 use std::io::{IsTerminal, stdin};
 use std::time::Duration;
@@ -116,18 +119,10 @@ async fn resolve_stdin_arg(
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-/// HTTP_TIMEOUT (30s) + CDP_TIMEOUT (60s) + 5s margin.
-const FETCH_TOOL_TIMEOUT: Duration = Duration::from_secs(95);
 const MAX_REDIRECTS: usize = 5;
 const OVERVIEW_ITEMS: u8 = 5;
 const OVERVIEW_RELEASES: u8 = 3;
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
-/// Slack: up to 3 API calls + N user resolutions; 60s covers large threads.
-const SLACK_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
-/// Research: Brave search (up to 20s + retries) + up to 10 page fetches (15s each).
-/// 45s caps total wall-clock at the orchestration layer; without this cap a degraded
-/// Brave + full-depth fetch could block ~210s.
-const RESEARCH_TOOL_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct Scout {
     http: Client,
@@ -145,10 +140,13 @@ pub struct Scout {
     /// earlier slot finishes). `Notify` was tried first but loses wakeups
     /// when no waiter is registered at signal time (issue #121).
     cancel: watch::Sender<bool>,
+    /// Tunables overridable via `SCOUT_*` env vars (issue #120).
+    config: RuntimeConfig,
 }
 
 impl Scout {
     pub async fn new() -> Result<Self, ScoutError> {
+        let config = RuntimeConfig::from_env()?;
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
@@ -161,7 +159,7 @@ impl Scout {
             .redirect(Policy::none())
             .build()
             .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-        let brave = BraveClient::from_env(http.clone())
+        let brave = BraveClient::from_env(http.clone(), config.max_retries)
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
         let (cancel, _) = watch::channel(false);
@@ -171,6 +169,7 @@ impl Scout {
             brave,
             github: OnceCell::new(),
             cancel,
+            config,
         })
     }
 
@@ -184,7 +183,7 @@ impl Scout {
 
     async fn github(&self) -> &GitHubClient {
         self.github
-            .get_or_init(|| GitHubClient::from_env(self.http.clone()))
+            .get_or_init(|| GitHubClient::from_env(self.http.clone(), self.config.max_retries))
             .await
     }
 
@@ -244,8 +243,9 @@ impl Scout {
             js: params.js,
             raw: params.raw,
         };
+        let fetch_timeout = self.config.fetch_timeout;
         let result = timeout(
-            FETCH_TOOL_TIMEOUT,
+            fetch_timeout,
             fetch_page(
                 &self.fetch_http,
                 &url,
@@ -258,7 +258,7 @@ impl Scout {
         .unwrap_or_else(|_| {
             Err(FetchError::Timeout(format!(
                 "fetch timed out after {}s",
-                FETCH_TOOL_TIMEOUT.as_secs()
+                fetch_timeout.as_secs()
             )))
         })?;
 
@@ -283,13 +283,14 @@ impl Scout {
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
         info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack)");
-        let client = SlackClient::from_env(self.http.clone())?;
-        let output = timeout(SLACK_TOOL_TIMEOUT, client.fetch_message(&slack_url))
+        let client = SlackClient::from_env(self.http.clone(), self.config.max_retries)?;
+        let slack_timeout = self.config.slack_timeout;
+        let output = timeout(slack_timeout, client.fetch_message(&slack_url))
             .await
             .unwrap_or_else(|_| {
                 Err(SlackError::Timeout(format!(
                     "slack fetch timed out after {}s",
-                    SLACK_TOOL_TIMEOUT.as_secs()
+                    slack_timeout.as_secs()
                 )))
             })
             .inspect_err(|e| {
@@ -318,8 +319,9 @@ impl Scout {
 
         let mut degradation = Degradation::default();
 
+        let research_timeout = self.config.research_timeout;
         let report = match timeout(
-            RESEARCH_TOOL_TIMEOUT,
+            research_timeout,
             engine::research(
                 brave,
                 &self.fetch_http,
@@ -347,7 +349,7 @@ impl Scout {
             Err(_) => {
                 return Err(ScoutError::timeout(format!(
                     "research timed out after {}s",
-                    RESEARCH_TOOL_TIMEOUT.as_secs()
+                    research_timeout.as_secs()
                 )));
             }
         };
@@ -1112,6 +1114,7 @@ mod tests {
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: cell,
             cancel: watch::channel(false).0,
+            config: RuntimeConfig::default(),
         }
     }
 
@@ -1123,6 +1126,7 @@ mod tests {
             brave: Some(BraveClient::with_base_url(http, brave_uri)),
             github: OnceCell::new(),
             cancel: watch::channel(false).0,
+            config: RuntimeConfig::default(),
         }
     }
 
