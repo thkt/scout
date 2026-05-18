@@ -1,8 +1,11 @@
 //! Random-number abstraction. `FastrandRng` for production, `SeededRng` for
 //! tests that need deterministic backoff arithmetic.
 
-/// Bounded random `u64` source. `Send + Sync` so implementations can sit
-/// behind an `Arc<dyn Rng>` shared across async tasks.
+#[cfg(test)]
+use std::sync::Mutex;
+
+/// Bounded random `u64` source. `Send + Sync` so `&dyn Rng` can cross
+/// `.await` points in the retry loop.
 pub(crate) trait Rng: Send + Sync {
     /// Returns a uniform sample in `[0, upper_exclusive)`. Callers ensure
     /// `upper_exclusive > 0`; passing 0 will panic to match `fastrand`.
@@ -18,22 +21,27 @@ impl Rng for FastrandRng {
     }
 }
 
-/// Test RNG seeded with a fixed value so every backoff calculation is
-/// reproducible across runs.
+/// Test RNG seeded with a fixed value. `Mutex` is required because `Rng` is
+/// `&self` but `fastrand::Rng::u64` mutates internal state; the bare value
+/// would have to be `.clone()`d each call, which discards sequence progress
+/// and produces the same sample every time.
 #[cfg(test)]
-pub(crate) struct SeededRng(pub fastrand::Rng);
+pub(crate) struct SeededRng(Mutex<fastrand::Rng>);
 
 #[cfg(test)]
 impl SeededRng {
     pub fn new(seed: u64) -> Self {
-        Self(fastrand::Rng::with_seed(seed))
+        Self(Mutex::new(fastrand::Rng::with_seed(seed)))
     }
 }
 
 #[cfg(test)]
 impl Rng for SeededRng {
     fn u64_below(&self, upper_exclusive: u64) -> u64 {
-        self.0.clone().u64(..upper_exclusive)
+        self.0
+            .lock()
+            .expect("SeededRng mutex poisoned")
+            .u64(..upper_exclusive)
     }
 }
 
@@ -53,7 +61,7 @@ mod tests {
     }
 
     /// [T-RNG002] Two SeededRng with the same seed produce the same sequence,
-    /// proving the deterministic test seam.
+    /// proving deterministic seam works across calls (not just instances).
     #[test]
     fn seeded_rng_is_reproducible_under_identical_seed() {
         let a = SeededRng::new(42);
@@ -61,5 +69,23 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(a.u64_below(1_000_000), b.u64_below(1_000_000));
         }
+    }
+
+    /// [T-RNG003] Repeated calls on the same SeededRng advance the internal
+    /// state — guards against the earlier `self.0.clone()` bug where every
+    /// call returned the seed's first sample.
+    #[test]
+    fn seeded_rng_advances_state_across_calls() {
+        use std::collections::HashSet;
+        let rng = SeededRng::new(7);
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            samples.push(rng.u64_below(u64::MAX));
+        }
+        let unique: HashSet<_> = samples.iter().collect();
+        assert!(
+            unique.len() > 1,
+            "SeededRng must advance state; got constant sequence: {samples:?}"
+        );
     }
 }

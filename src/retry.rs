@@ -121,15 +121,9 @@ pub(crate) fn retry_after_or_backoff(
     }
 }
 
-/// Retry with the standard rate-limit-aware delay formula.
-///
-/// Caller supplies `extract_retry_after` to pull `Option<u64>` from the
-/// error's `RateLimited` variant. The delay per attempt is then
-/// `retry_after_or_backoff(extract_retry_after(&e), attempt, rng)`.
-///
-/// The cap policy (refuse retry when retry-after exceeds
-/// `MAX_RETRY_AFTER_SECS`) is the caller's `is_retriable` responsibility,
-/// typically via `retry_after_within_cap`.
+/// Retry with the rate-limit-aware delay formula. The cap policy (refuse
+/// retry when retry-after exceeds `MAX_RETRY_AFTER_SECS`) is the caller's
+/// `is_retriable` responsibility, typically via `retry_after_within_cap`.
 pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
     operation: F,
     max_retries: u32,
