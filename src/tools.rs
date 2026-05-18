@@ -569,9 +569,10 @@ impl Scout {
 
 /// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
 /// `ScoutBuilder::from_env()?.build()`); tests use the `with_*` setters to
-/// inject `Clock` / `Rng` / `TokenSource` doubles without reaching into
-/// private fields. `build` is sync + infallible so fallibility stays in
-/// `from_env` (issue #103).
+/// inject `Clock` / `Rng` / `TokenSource` doubles or to point `Brave` /
+/// `GitHub` at wiremock endpoints without reaching into private fields.
+/// `build` is sync + infallible so fallibility stays in `from_env`
+/// (issue #103).
 pub(crate) struct ScoutBuilder {
     http: Client,
     fetch_http: Client,
@@ -581,6 +582,30 @@ pub(crate) struct ScoutBuilder {
     token_source: Arc<dyn TokenSource>,
     cancel: watch::Sender<bool>,
     config: RuntimeConfig,
+    /// Pre-initialize `Scout.github` (`OnceCell`) with a test client pointed at
+    /// this base URL so `Scout::github()` returns it without ever calling
+    /// `from_env_with_source`. `None` (production) preserves lazy init.
+    #[cfg(test)]
+    github_endpoint: Option<String>,
+}
+
+/// Build the two `reqwest::Client`s shared between production and test paths
+/// (redirect-limited + redirect-none). Extracted so `from_env` and `for_test`
+/// stay in sync — drift here would change SSRF / timeout posture asymmetrically.
+fn build_default_clients() -> Result<(Client, Client), ScoutError> {
+    let http = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(HTTP_TIMEOUT)
+        .redirect(Policy::limited(MAX_REDIRECTS))
+        .build()
+        .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
+    let fetch_http = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(HTTP_TIMEOUT)
+        .redirect(Policy::none())
+        .build()
+        .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
+    Ok((http, fetch_http))
 }
 
 impl ScoutBuilder {
@@ -589,18 +614,7 @@ impl ScoutBuilder {
     /// match production behavior; tests override via `with_*`.
     pub(crate) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
-        let http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::limited(MAX_REDIRECTS))
-            .build()
-            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-        let fetch_http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::none())
-            .build()
-            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
+        let (http, fetch_http) = build_default_clients()?;
         let brave = BraveClient::from_env(http.clone(), config.max_retries)
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
@@ -613,7 +627,30 @@ impl ScoutBuilder {
             token_source: Arc::new(GhCliSource),
             cancel: watch::channel(false).0,
             config,
+            #[cfg(test)]
+            github_endpoint: None,
         })
+    }
+
+    /// Test entry point. Uses `RuntimeConfig::default()` and does NOT read
+    /// `SCOUT_*` env vars so a stray `SCOUT_MAX_RETRIES=abc` in the developer
+    /// environment cannot panic unrelated tests. `Client::builder().build()`
+    /// only fails on TLS init, which would be a real bug — `.expect` is
+    /// appropriate.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        let (http, fetch_http) = build_default_clients().expect("test client init");
+        Self {
+            http,
+            fetch_http,
+            brave: None,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
+            token_source: Arc::new(GhCliSource),
+            cancel: watch::channel(false).0,
+            config: RuntimeConfig::default(),
+            github_endpoint: None,
+        }
     }
 
     #[cfg(test)]
@@ -634,12 +671,38 @@ impl ScoutBuilder {
         self
     }
 
+    /// Re-uses the builder's `http` so wiremock servers share the test client
+    /// (avoids spawning a second `reqwest` connection pool per test).
+    #[cfg(test)]
+    pub(crate) fn with_brave_endpoint(mut self, endpoint: &str) -> Self {
+        self.brave = Some(BraveClient::with_base_url(self.http.clone(), endpoint));
+        self
+    }
+
+    /// Stores `endpoint`; `build()` uses the current `clock` / `rng` to
+    /// pre-init the `OnceCell`. Composes with `with_clock` / `with_rng`
+    /// (call those before `build`).
+    #[cfg(test)]
+    pub(crate) fn with_github_endpoint(mut self, endpoint: &str) -> Self {
+        self.github_endpoint = Some(endpoint.to_owned());
+        self
+    }
+
     pub(crate) fn build(self) -> Scout {
+        let github = OnceCell::new();
+        #[cfg(test)]
+        if let Some(endpoint) = self.github_endpoint.as_deref() {
+            let _ = github.set(
+                GitHubClient::with_base_url(self.http.clone(), endpoint)
+                    .with_clock(self.clock.clone())
+                    .with_rng(self.rng.clone()),
+            );
+        }
         Scout {
             http: self.http,
             fetch_http: self.fetch_http,
             brave: self.brave,
-            github: OnceCell::new(),
+            github,
             cancel: self.cancel,
             config: self.config,
             clock: self.clock,
@@ -797,22 +860,6 @@ mod tests {
     use crate::token_source::StaticTokenSource;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
-
-    fn build_test_clients() -> (Client, Client) {
-        let http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::limited(MAX_REDIRECTS))
-            .build()
-            .unwrap();
-        let fetch_http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::none())
-            .build()
-            .unwrap();
-        (http, fetch_http)
-    }
 
     fn scout_with_brave(brave_uri: &str) -> Scout {
         scout_with_github(brave_uri, "http://localhost:0")
@@ -1194,36 +1241,16 @@ mod tests {
     // --- GitHub client efficiency tests (lazy init + repo_overview) ---
 
     fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
-        let (http, fetch_http) = build_test_clients();
-        let cell = OnceCell::new();
-        cell.set(GitHubClient::with_base_url(http.clone(), github_uri))
-            .ok();
-        Scout {
-            http: http.clone(),
-            fetch_http,
-            brave: Some(BraveClient::with_base_url(http, brave_uri)),
-            github: cell,
-            cancel: watch::channel(false).0,
-            config: RuntimeConfig::default(),
-            clock: Arc::new(SystemClock),
-            rng: Arc::new(FastrandRng),
-            token_source: Arc::new(GhCliSource),
-        }
+        ScoutBuilder::for_test()
+            .with_brave_endpoint(brave_uri)
+            .with_github_endpoint(github_uri)
+            .build()
     }
 
     fn scout_lazy(brave_uri: &str) -> Scout {
-        let (http, fetch_http) = build_test_clients();
-        Scout {
-            http: http.clone(),
-            fetch_http,
-            brave: Some(BraveClient::with_base_url(http, brave_uri)),
-            github: OnceCell::new(),
-            cancel: watch::channel(false).0,
-            config: RuntimeConfig::default(),
-            clock: Arc::new(SystemClock),
-            rng: Arc::new(FastrandRng),
-            token_source: Arc::new(GhCliSource),
-        }
+        ScoutBuilder::for_test()
+            .with_brave_endpoint(brave_uri)
+            .build()
     }
 
     /// [T-TS009] repo_overview: get_repo 404 -> readme/issues/pulls/releases
@@ -1704,8 +1731,7 @@ mod tests {
     #[test]
     fn scout_builder_with_clock_routes_arc_into_scout() {
         let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
-        let scout = ScoutBuilder::from_env()
-            .expect("from_env")
+        let scout = ScoutBuilder::for_test()
             .with_clock(injected.clone())
             .build();
         assert!(
@@ -1719,10 +1745,7 @@ mod tests {
     #[test]
     fn scout_builder_with_rng_routes_arc_into_scout() {
         let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
-        let scout = ScoutBuilder::from_env()
-            .expect("from_env")
-            .with_rng(injected.clone())
-            .build();
+        let scout = ScoutBuilder::for_test().with_rng(injected.clone()).build();
         assert!(
             Arc::ptr_eq(&scout.rng, &injected),
             "with_rng must install the supplied Arc into Scout.rng"
@@ -1734,8 +1757,7 @@ mod tests {
     #[test]
     fn scout_builder_with_token_source_routes_arc_into_scout() {
         let injected: Arc<dyn TokenSource> = Arc::new(StaticTokenSource(None));
-        let scout = ScoutBuilder::from_env()
-            .expect("from_env")
+        let scout = ScoutBuilder::for_test()
             .with_token_source(injected.clone())
             .build();
         assert!(
@@ -1770,21 +1792,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let scout = ScoutBuilder::from_env()
-            .expect("from_env")
+        let scout = ScoutBuilder::for_test()
             .with_clock(Arc::new(FixedClock(1000)))
+            .with_github_endpoint(&server.uri())
             .build();
-
-        let cell = OnceCell::new();
-        cell.set(
-            GitHubClient::with_base_url(scout.http.clone(), &server.uri())
-                .with_clock(scout.clock.clone()),
-        )
-        .ok();
-        let scout = Scout {
-            github: cell,
-            ..scout
-        };
 
         let result = scout.github().await.get_repo("owner", "repo").await;
         assert!(
