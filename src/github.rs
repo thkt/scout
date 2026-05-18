@@ -18,8 +18,8 @@ use crate::retry::{
     is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
     retry_with_rate_limit,
 };
-use crate::rng::FastrandRng;
-use crate::token_source::{GhCliSource, TokenSource};
+use crate::rng::{FastrandRng, Rng};
+use crate::token_source::TokenSource;
 
 use helpers::encode_path;
 pub(crate) use helpers::{
@@ -90,9 +90,12 @@ pub(crate) struct GitHubClient {
     token: Option<Redacted>,
     base_url: String,
     max_retries: u32,
-    /// Wall-clock source for `secs_until_ratelimit_reset`. Defaults to
-    /// `SystemClock`; tests inject `FixedClock` via `with_clock`.
+    /// Wall-clock source for `secs_until_ratelimit_reset`. Set at construction
+    /// and read on every retry; defaults to `SystemClock`.
     clock: Arc<dyn Clock>,
+    /// Backoff jitter source handed to `retry_with_rate_limit` per attempt.
+    /// Set at construction; defaults to `FastrandRng`.
+    rng: Arc<dyn Rng>,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `request` always runs
     /// `validate_https`; only `with_base_url` opts in.
@@ -101,13 +104,9 @@ pub(crate) struct GitHubClient {
 }
 
 impl GitHubClient {
-    pub async fn from_env(http: Client, max_retries: u32) -> Self {
-        Self::from_env_with_source(http, max_retries, &GhCliSource).await
-    }
-
-    /// Production constructor parameterized by the `TokenSource`. `from_env`
-    /// is the thin wrapper that picks `GhCliSource`; tests pick
-    /// `StaticTokenSource(...)` to avoid spawning `gh auth token`.
+    /// Production constructor parameterized by the `TokenSource`. `Scout`
+    /// picks `GhCliSource` by default; tests pick `StaticTokenSource(...)` to
+    /// avoid spawning `gh auth token`.
     pub(crate) async fn from_env_with_source(
         http: Client,
         max_retries: u32,
@@ -127,6 +126,7 @@ impl GitHubClient {
             base_url: API_BASE.to_owned(),
             max_retries,
             clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             #[cfg(test)]
             skip_https_check: false,
         }
@@ -140,13 +140,18 @@ impl GitHubClient {
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
             clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             skip_https_check: true,
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    pub(crate) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
+        self.rng = rng;
         self
     }
 
@@ -189,7 +194,7 @@ impl GitHubClient {
                 _ => None,
             },
             || GitHubError::RateLimited { retry_after: None },
-            &FastrandRng,
+            self.rng.as_ref(),
         )
         .await
     }

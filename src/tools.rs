@@ -9,6 +9,7 @@ pub use params::Command;
 pub(crate) use config::RuntimeConfig;
 
 use std::io::{IsTerminal, stdin};
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -25,14 +26,17 @@ use params::{
 };
 
 use crate::brave::client::{BraveClient, BraveError, SearchClient as _};
+use crate::clock::{Clock, SystemClock};
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, TokioDnsResolver, fetch_page};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient};
 use crate::markdown::{shift_headings, truncate_with_note};
+use crate::rng::{FastrandRng, Rng};
 use crate::search::engine;
 use crate::slack::{SlackClient, SlackError, SlackUrl, parse_slack_url};
+use crate::token_source::{GhCliSource, TokenSource};
 
 const MAX_STDIN_BYTES: u64 = 1_048_576;
 
@@ -142,35 +146,24 @@ pub struct Scout {
     cancel: watch::Sender<bool>,
     /// Tunables overridable via `SCOUT_*` env vars (issue #120).
     config: RuntimeConfig,
+    /// Forwarded into `GitHubClient` on first `github()` call. Held on `Scout`
+    /// rather than constructed inside `github()` so tests can inject before
+    /// the `OnceCell` initializes.
+    clock: Arc<dyn Clock>,
+    /// Forwarded into `GitHubClient` on first `github()` call. Same plumbing
+    /// rationale as `clock`.
+    rng: Arc<dyn Rng>,
+    /// GitHub bearer token resolver, awaited inside `github()` lazy init.
+    /// Held on `Scout` so tests can swap in a `StaticTokenSource` before any
+    /// API call spawns the production `gh auth token` subprocess.
+    token_source: Arc<dyn TokenSource>,
 }
 
 impl Scout {
+    /// Production entry point. Sugar for `ScoutBuilder::from_env()?.build()`;
+    /// kept async so existing `Scout::new().await` callsites compile unchanged.
     pub async fn new() -> Result<Self, ScoutError> {
-        let config = RuntimeConfig::from_env()?;
-        let http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::limited(MAX_REDIRECTS))
-            .build()
-            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-        let fetch_http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .redirect(Policy::none())
-            .build()
-            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-        let brave = BraveClient::from_env(http.clone(), config.max_retries)
-            .inspect_err(|e| warn!("Brave client not available: {e}"))
-            .ok();
-        let (cancel, _) = watch::channel(false);
-        Ok(Self {
-            http,
-            fetch_http,
-            brave,
-            github: OnceCell::new(),
-            cancel,
-            config,
-        })
+        Ok(ScoutBuilder::from_env()?.build())
     }
 
     /// Hand back a cloned `watch::Sender` so `lib::run` can flip the
@@ -183,7 +176,19 @@ impl Scout {
 
     async fn github(&self) -> &GitHubClient {
         self.github
-            .get_or_init(|| GitHubClient::from_env(self.http.clone(), self.config.max_retries))
+            .get_or_init(|| {
+                let source = self.token_source.clone();
+                let clock = self.clock.clone();
+                let rng = self.rng.clone();
+                let http = self.http.clone();
+                let max_retries = self.config.max_retries;
+                async move {
+                    GitHubClient::from_env_with_source(http, max_retries, source.as_ref())
+                        .await
+                        .with_clock(clock)
+                        .with_rng(rng)
+                }
+            })
             .await
     }
 
@@ -562,6 +567,88 @@ impl Scout {
     }
 }
 
+/// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
+/// `ScoutBuilder::from_env()?.build()`); tests use the `with_*` setters to
+/// inject `Clock` / `Rng` / `TokenSource` doubles without reaching into
+/// private fields. `build` is sync + infallible so fallibility stays in
+/// `from_env` (issue #103).
+pub(crate) struct ScoutBuilder {
+    http: Client,
+    fetch_http: Client,
+    brave: Option<BraveClient>,
+    clock: Arc<dyn Clock>,
+    rng: Arc<dyn Rng>,
+    token_source: Arc<dyn TokenSource>,
+    cancel: watch::Sender<bool>,
+    config: RuntimeConfig,
+}
+
+impl ScoutBuilder {
+    /// Read `SCOUT_*` env vars, construct the two `reqwest::Client`s, and
+    /// probe Brave (best-effort). Defaults for `clock` / `rng` / `token_source`
+    /// match production behavior; tests override via `with_*`.
+    pub(crate) fn from_env() -> Result<Self, ScoutError> {
+        let config = RuntimeConfig::from_env()?;
+        let http = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(Policy::limited(MAX_REDIRECTS))
+            .build()
+            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
+        let fetch_http = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
+            .redirect(Policy::none())
+            .build()
+            .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
+        let brave = BraveClient::from_env(http.clone(), config.max_retries)
+            .inspect_err(|e| warn!("Brave client not available: {e}"))
+            .ok();
+        Ok(Self {
+            http,
+            fetch_http,
+            brave,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
+            token_source: Arc::new(GhCliSource),
+            cancel: watch::channel(false).0,
+            config,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
+        self.rng = rng;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_token_source(mut self, source: Arc<dyn TokenSource>) -> Self {
+        self.token_source = source;
+        self
+    }
+
+    pub(crate) fn build(self) -> Scout {
+        Scout {
+            http: self.http,
+            fetch_http: self.fetch_http,
+            brave: self.brave,
+            github: OnceCell::new(),
+            cancel: self.cancel,
+            config: self.config,
+            clock: self.clock,
+            rng: self.rng,
+            token_source: self.token_source,
+        }
+    }
+}
+
 /// Maximum time spent on best-effort candidate generation in the NotFound
 /// error path. The user is already waiting on a failure; we'd rather skip
 /// candidates than block them on a slow tree fetch.
@@ -703,8 +790,11 @@ fn format_fetch_output(result: &FetchResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::FixedClock;
+    use crate::rng::SeededRng;
     use crate::search::Lang;
     use crate::test_support::try_spawn_mock_server;
+    use crate::token_source::StaticTokenSource;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
@@ -1115,6 +1205,9 @@ mod tests {
             github: cell,
             cancel: watch::channel(false).0,
             config: RuntimeConfig::default(),
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
+            token_source: Arc::new(GhCliSource),
         }
     }
 
@@ -1127,6 +1220,9 @@ mod tests {
             github: OnceCell::new(),
             cancel: watch::channel(false).0,
             config: RuntimeConfig::default(),
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
+            token_source: Arc::new(GhCliSource),
         }
     }
 
@@ -1599,5 +1695,106 @@ mod tests {
             .unwrap();
         assert_eq!(first, "owner/repo");
         assert_eq!(second, "test.txt");
+    }
+
+    // --- ScoutBuilder seam tests (issue #103) ---
+
+    /// [T-SB001] `ScoutBuilder::with_clock` で渡した `Arc` が `Scout.clock` まで
+    /// 届く injection slot の最小証明。end-to-end な plumbing 確認は T-SB004。
+    #[test]
+    fn scout_builder_with_clock_routes_arc_into_scout() {
+        let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
+        let scout = ScoutBuilder::from_env()
+            .expect("from_env")
+            .with_clock(injected.clone())
+            .build();
+        assert!(
+            Arc::ptr_eq(&scout.clock, &injected),
+            "with_clock must install the supplied Arc into Scout.clock"
+        );
+    }
+
+    /// [T-SB002] `ScoutBuilder::with_rng` で渡した `Arc` が `Scout.rng` まで
+    /// 届く injection slot の最小証明。
+    #[test]
+    fn scout_builder_with_rng_routes_arc_into_scout() {
+        let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
+        let scout = ScoutBuilder::from_env()
+            .expect("from_env")
+            .with_rng(injected.clone())
+            .build();
+        assert!(
+            Arc::ptr_eq(&scout.rng, &injected),
+            "with_rng must install the supplied Arc into Scout.rng"
+        );
+    }
+
+    /// [T-SB003] `ScoutBuilder::with_token_source` で渡した `Arc` が
+    /// `Scout.token_source` まで届く injection slot の最小証明。
+    #[test]
+    fn scout_builder_with_token_source_routes_arc_into_scout() {
+        let injected: Arc<dyn TokenSource> = Arc::new(StaticTokenSource(None));
+        let scout = ScoutBuilder::from_env()
+            .expect("from_env")
+            .with_token_source(injected.clone())
+            .build();
+        assert!(
+            Arc::ptr_eq(&scout.token_source, &injected),
+            "with_token_source must install the supplied Arc into Scout.token_source"
+        );
+    }
+
+    /// [T-SB004] `with_clock` で inject した `FixedClock` が `Scout::github()`
+    /// 経由で初期化される `GitHubClient` まで届くことを end-to-end で確認する。
+    /// `Arc::ptr_eq` 単体テスト (T-SB001) では `github()` の plumbing バグ
+    /// (例: clone 忘れ、async move への束縛漏れ) を catch できないので、
+    /// wiremock 越しに `secs_until_ratelimit_reset` の算出値を assert する。
+    ///
+    /// reset = 1600, clock = 1000 → retry_after = 600 が `MAX_RETRY_AFTER_SECS`
+    /// (300) を超えるため `is_retriable = false` で retry loop はスキップ。
+    /// `start_paused` を併用すると wiremock の TCP listener も止まり connect が
+    /// timeout するので、retry を走らせない算術にする方が安定する。
+    #[tokio::test]
+    async fn scout_builder_clock_reaches_github_client_via_seam() {
+        let Some(server) = try_spawn_mock_server("tools::scout_builder_seam").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .append_header("x-ratelimit-remaining", "0")
+                    .append_header("x-ratelimit-reset", "1600")
+                    .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+            )
+            .mount(&server)
+            .await;
+
+        let scout = ScoutBuilder::from_env()
+            .expect("from_env")
+            .with_clock(Arc::new(FixedClock(1000)))
+            .build();
+
+        let cell = OnceCell::new();
+        cell.set(
+            GitHubClient::with_base_url(scout.http.clone(), &server.uri())
+                .with_clock(scout.clock.clone()),
+        )
+        .ok();
+        let scout = Scout {
+            github: cell,
+            ..scout
+        };
+
+        let result = scout.github().await.get_repo("owner", "repo").await;
+        assert!(
+            matches!(
+                result,
+                Err(github::GitHubError::RateLimited {
+                    retry_after: Some(600)
+                })
+            ),
+            "expected retry_after = 600 (reset 1600 - clock 1000), got: {result:?}"
+        );
     }
 }
