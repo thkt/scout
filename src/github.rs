@@ -22,6 +22,7 @@ use crate::retry::{
     is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
     retry_with_rate_limit,
 };
+use crate::rng::FastrandRng;
 
 use helpers::encode_path;
 pub(crate) use helpers::{
@@ -181,6 +182,7 @@ impl GitHubClient {
                 _ => None,
             },
             || GitHubError::RateLimited { retry_after: None },
+            &FastrandRng,
         )
         .await
     }

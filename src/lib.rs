@@ -6,6 +6,7 @@ mod github;
 mod markdown;
 mod redacted;
 mod retry;
+mod rng;
 mod search;
 mod signals;
 mod slack;

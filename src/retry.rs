@@ -8,6 +8,8 @@ use reqwest::header::{HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 use tracing::debug;
 
+use crate::rng::Rng;
+
 const INITIAL_BACKOFF_MS: u64 = 1000;
 const MAX_RETRY_AFTER_SECS: u64 = 300;
 
@@ -16,10 +18,10 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
-pub(crate) fn jittered_backoff(attempt: u32) -> u64 {
+pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;
-    half + fastrand::u64(..half.max(1))
+    half + rng.u64_below(half.max(1))
 }
 
 pub(crate) fn is_transient_network(e: &Error) -> bool {
@@ -108,10 +110,14 @@ pub(crate) fn retry_after_within_cap(retry_after: Option<u64>) -> bool {
     retry_after.is_none_or(|s| s <= MAX_RETRY_AFTER_SECS)
 }
 
-pub(crate) fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32) -> Duration {
+pub(crate) fn retry_after_or_backoff(
+    retry_after: Option<u64>,
+    attempt: u32,
+    rng: &dyn Rng,
+) -> Duration {
     match retry_after {
         Some(secs) => Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)),
-        None => Duration::from_millis(jittered_backoff(attempt)),
+        None => Duration::from_millis(jittered_backoff(attempt, rng)),
     }
 }
 
@@ -119,7 +125,7 @@ pub(crate) fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32) -> 
 ///
 /// Caller supplies `extract_retry_after` to pull `Option<u64>` from the
 /// error's `RateLimited` variant. The delay per attempt is then
-/// `retry_after_or_backoff(extract_retry_after(&e), attempt)`.
+/// `retry_after_or_backoff(extract_retry_after(&e), attempt, rng)`.
 ///
 /// The cap policy (refuse retry when retry-after exceeds
 /// `MAX_RETRY_AFTER_SECS`) is the caller's `is_retriable` responsibility,
@@ -130,6 +136,7 @@ pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
     is_retriable: impl Fn(&E) -> bool,
     extract_retry_after: impl Fn(&E) -> Option<u64>,
     fallback_err: impl FnOnce() -> E,
+    rng: &dyn Rng,
 ) -> Result<T, E>
 where
     F: Fn() -> Fut,
@@ -139,7 +146,7 @@ where
         operation,
         max_retries,
         is_retriable,
-        |e, attempt| retry_after_or_backoff(extract_retry_after(e), attempt),
+        |e, attempt| retry_after_or_backoff(extract_retry_after(e), attempt, rng),
         fallback_err,
     )
     .await
@@ -154,6 +161,7 @@ mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
+    use crate::rng::{FastrandRng, SeededRng};
     use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 
     /// Test-only error type. `RateLimited` carries the server-supplied
@@ -210,6 +218,7 @@ mod tests {
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
+            &FastrandRng,
         )
         .await;
 
@@ -250,6 +259,7 @@ mod tests {
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
+            &FastrandRng,
         )
         .await;
 
@@ -287,6 +297,7 @@ mod tests {
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
+            &FastrandRng,
         )
         .await;
 
@@ -317,6 +328,7 @@ mod tests {
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
+            &FastrandRng,
         )
         .await;
 
@@ -329,6 +341,21 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_millis(50),
             "no backoff sleep should occur when max_retries=0"
+        );
+    }
+
+    // T-R007: jittered_backoff_is_deterministic_with_seeded_rng
+    // Same seed → identical sample, proving the Rng seam threads through to
+    // jittered_backoff. The envelope check guards the half + jitter formula
+    // (attempt=0 → half=500, jitter ∈ [0,500), result ∈ [500,1000)).
+    #[test]
+    fn jittered_backoff_is_deterministic_with_seeded_rng() {
+        let first = jittered_backoff(0, &SeededRng::new(42));
+        let second = jittered_backoff(0, &SeededRng::new(42));
+        assert_eq!(first, second, "same seed must reproduce identical backoff");
+        assert!(
+            (500..1000).contains(&first),
+            "jittered_backoff(0) should fall in [500, 1000), got {first}"
         );
     }
 
