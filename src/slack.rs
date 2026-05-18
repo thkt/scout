@@ -9,6 +9,8 @@ use tracing::{debug, info, warn};
 
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
+#[cfg(test)]
+use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
@@ -141,6 +143,7 @@ pub(crate) struct SlackClient {
     http: Client,
     token: Redacted,
     base_url: String,
+    max_retries: u32,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `api_get_once` always
     /// runs `validate_https`; only `with_base_url` opts in.
@@ -151,22 +154,23 @@ pub(crate) struct SlackClient {
 const API_BASE: &str = "https://slack.com/api";
 
 impl SlackClient {
-    pub fn new(http: Client, token: Redacted) -> Self {
+    pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
             http,
             token,
             base_url: API_BASE.to_owned(),
+            max_retries,
             #[cfg(test)]
             skip_https_check: false,
         }
     }
 
-    pub fn from_env(http: Client) -> Result<Self, SlackError> {
+    pub fn from_env(http: Client, max_retries: u32) -> Result<Self, SlackError> {
         let raw = env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
         if raw.trim().is_empty() {
             return Err(SlackError::TokenNotSet);
         }
-        Ok(Self::new(http, Redacted::new(&raw)))
+        Ok(Self::new(http, Redacted::new(&raw), max_retries))
     }
 
     #[cfg(test)]
@@ -175,6 +179,7 @@ impl SlackClient {
             http,
             token: Redacted::new("xoxp-test"),
             base_url: base_url.to_owned(),
+            max_retries: DEFAULT_MAX_RETRIES,
             skip_https_check: true,
         }
     }
@@ -198,6 +203,7 @@ impl SlackClient {
     ) -> Result<T, SlackError> {
         retry_with_rate_limit(
             || self.api_get_once(method, params),
+            self.max_retries,
             is_retriable,
             |e| match e {
                 SlackError::RateLimited { retry_after } => *retry_after,

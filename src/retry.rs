@@ -8,9 +8,13 @@ use reqwest::header::{HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
 use tracing::debug;
 
-pub(crate) const MAX_RETRIES: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 1000;
 const MAX_RETRY_AFTER_SECS: u64 = 300;
+
+/// Default retry count used by every backend client when no override is
+/// supplied. The helper performs `1 + DEFAULT_MAX_RETRIES` total attempts,
+/// so `2` yields the 3-attempt budget that backends are tuned against.
+pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
 pub(crate) fn jittered_backoff(attempt: u32) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
@@ -51,8 +55,14 @@ fn is_transient_decode(e: &Error) -> bool {
     false
 }
 
+/// Run `operation` up to `max_retries + 1` times: one initial attempt
+/// plus `max_retries` retries on retriable failures. Names follow the
+/// user-facing contract — `SCOUT_MAX_RETRIES=N` means "N retries on top
+/// of the original attempt", so `=0` runs once (no retry), `=2` runs at
+/// most three times.
 async fn retry_with<T, E, F, Fut>(
     operation: F,
+    max_retries: u32,
     is_retriable: impl Fn(&E) -> bool,
     delay_for: impl Fn(&E, u32) -> Duration,
     fallback_err: impl FnOnce() -> E,
@@ -62,11 +72,11 @@ where
     Fut: Future<Output = Result<T, E>>,
 {
     let mut last_err = None;
-    for attempt in 0..MAX_RETRIES {
+    for attempt in 0..=max_retries {
         match operation().await {
             Ok(v) => return Ok(v),
             Err(e) if is_retriable(&e) => {
-                if attempt + 1 < MAX_RETRIES {
+                if attempt < max_retries {
                     let delay = delay_for(&e, attempt);
                     debug!(
                         attempt = attempt + 1,
@@ -116,6 +126,7 @@ pub(crate) fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32) -> 
 /// typically via `retry_after_within_cap`.
 pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
     operation: F,
+    max_retries: u32,
     is_retriable: impl Fn(&E) -> bool,
     extract_retry_after: impl Fn(&E) -> Option<u64>,
     fallback_err: impl FnOnce() -> E,
@@ -126,6 +137,7 @@ where
 {
     retry_with(
         operation,
+        max_retries,
         is_retriable,
         |e, attempt| retry_after_or_backoff(extract_retry_after(e), attempt),
         fallback_err,
@@ -194,6 +206,7 @@ mod tests {
                     Ok("ok")
                 }
             },
+            2,
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
@@ -219,9 +232,10 @@ mod tests {
 
     // T-R002: applies_jittered_backoff_when_extractor_returns_none
     // FR-002: non-RateLimited transient error always returns None from the
-    // extractor. Helper exhausts MAX_RETRIES (=3 attempts, 2 sleeps) using
-    // jittered exponential backoff. Total elapsed must fall within the
-    // backoff envelope: half + jitter for attempt 0 + attempt 1.
+    // extractor. Helper exhausts 1 + max_retries (=3 attempts when
+    // max_retries=2, 2 sleeps) using jittered exponential backoff. Total
+    // elapsed must fall within the backoff envelope: half + jitter for
+    // attempt 0 + attempt 1.
     #[tokio::test(start_paused = true)]
     async fn applies_jittered_backoff_when_extractor_returns_none() {
         let attempts = AtomicUsize::new(0);
@@ -232,6 +246,7 @@ mod tests {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Err(MockErr::Other)
             },
+            2,
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
@@ -243,8 +258,8 @@ mod tests {
         assert_eq!(result, Err(MockErr::Other));
         assert_eq!(
             attempts.load(Ordering::SeqCst),
-            usize::try_from(MAX_RETRIES).expect("MAX_RETRIES fits usize"),
-            "expected MAX_RETRIES invocations when every attempt fails"
+            3usize,
+            "expected 1 + max_retries (=3) invocations when every attempt fails"
         );
         // jittered_backoff(0) ∈ [500ms, 1000ms), jittered_backoff(1) ∈ [1000ms, 2000ms).
         // Sum of the two sleeps therefore ∈ [1500ms, 3000ms). Upper bound
@@ -268,6 +283,7 @@ mod tests {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Err(MockErr::RateLimited(Some(500)))
             },
+            2,
             mock_is_retriable,
             mock_extract_retry_after,
             || MockErr::Other,
@@ -279,6 +295,40 @@ mod tests {
             attempts.load(Ordering::SeqCst),
             1,
             "expected no retry when retry_after exceeds MAX_RETRY_AFTER_SECS"
+        );
+    }
+
+    // T-R006: max_retries_zero_runs_once_without_retry
+    // Issue #120: `SCOUT_MAX_RETRIES=0` must disable retries entirely.
+    // The contract is "N retries on top of the original attempt", so 0
+    // means a single attempt with no sleep — the user-visible inverse of
+    // the default (=2 → 3 attempts).
+    #[tokio::test(start_paused = true)]
+    async fn max_retries_zero_runs_once_without_retry() {
+        let attempts = AtomicUsize::new(0);
+        let start = Instant::now();
+
+        let result: Result<(), MockErr> = retry_with_rate_limit(
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(MockErr::Other)
+            },
+            0,
+            mock_is_retriable,
+            mock_extract_retry_after,
+            || MockErr::Other,
+        )
+        .await;
+
+        assert_eq!(result, Err(MockErr::Other));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "max_retries=0 must run exactly 1 attempt"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "no backoff sleep should occur when max_retries=0"
         );
     }
 
