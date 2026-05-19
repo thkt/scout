@@ -241,8 +241,15 @@ impl From<FetchError> for ScoutError {
             FetchError::UnsupportedContentType(_) => Self::data_error(e.to_string())
                 .with_next_step("URL must serve HTML or text content"),
             FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
-            FetchError::TooLarge => Self::data_error(e.to_string())
-                .with_next_step("URL response exceeds 10MB; fetch a smaller resource"),
+            FetchError::TooLarge => {
+                Self::data_error(e.to_string()).with_next_step("fetch a smaller resource")
+            }
+            // Classified as DataError (terminal) per priority 2: redirect chain
+            // shape is treated as caller-fixable URL config. CDN A/B test glitches
+            // or eventual-consistency redirects could be transient; pending
+            // empirical retry-success data, keep the terminal classification —
+            // flipping to TempFailure(75) requires measuring real-world retry
+            // success rate first.
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
             // Status arms order specific HTTP codes before the 4xx / _ fallback;

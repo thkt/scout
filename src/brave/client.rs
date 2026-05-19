@@ -181,6 +181,9 @@ fn build_url(
     query: &str,
     search_lang: Option<&str>,
 ) -> Result<reqwest::Url, BraveError> {
+    // Intentionally omit count/offset/safesearch/freshness/country/ui_lang —
+    // accept Brave defaults (safesearch=moderate, count=20). Adding params is
+    // additive; introduce them only when a caller surfaces a concrete need.
     let mut params = vec![("q", query)];
     if let Some(lang) = search_lang {
         params.push(("search_lang", lang));
