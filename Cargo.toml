@@ -27,9 +27,10 @@ encoding_rs = "0.8"
 chardetng = "1"
 fastrand = "2"
 chromiumoxide = { version = "0.9", optional = true }
+nix = { version = "0.31", features = ["signal"], optional = true }
 
 [features]
-js-rendering = ["chromiumoxide"]
+js-rendering = ["chromiumoxide", "nix"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
