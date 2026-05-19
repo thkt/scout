@@ -155,9 +155,9 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 - `ErrorEnvelope` / `SuccessEnvelope` / `ErrorPayload` 構造 (Rule 2-3 field omit policy を含む)
 - `data` 配下 array field の `[]`-never-`null` invariant (Rule 4)
 
-ADR-0065 の **sysexits portion** (8 non-zero exit codes 64/65/66/70/74/75/104/124) は依然 ADR-0002 (scout-local) で governed (2026-05-13 supersede 済)。
+ADR-0065 の **sysexits portion** (8 non-zero exit codes 64/65/66/70/74/75/104/124) は ADR-0002 (scout-local) で governed (2026-05-13 supersede 済)。**Classification Priority portion** (priority 1–5 + Unknown 退避 ranking) は ADR-0011 (scout-local) で governed (2026-05-19 supersede 済)。これで ADR-0065 全 portion が scout-local 化された。
 
-code-side migration (`per ADR-0065` → `per ADR-0010` ref 更新) は follow-up PR で実施する。
+code-side migration (`per ADR-0065` → 各 scout-local ADR ref 更新) は follow-up PR で実施する。
 
 ### Reassessment Triggers
 
@@ -173,6 +173,7 @@ code-side migration (`per ADR-0065` → `per ADR-0010` ref 更新) は follow-up
 
 - `docs/decisions/0002-adopt-sysexitsh-exit-code-convention-for-cli.md` §"More Information" (本 ADR の supersede 伏線元)
 - `docs/decisions/0003-error-classification-contract-for-sysexits-and-json-output.md` (error mapping は本 ADR Rule 1 `is_retryable` の前提)
+- `docs/decisions/0011-scout-local-classification-priority-policy.md` (本 ADR と並ぶ ADR-0065 supersede portion: Classification Priority)
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (本 ADR が JSON schema portion を supersede する meta ADR)
 - `docs/audit/2026-05-19-undocumented-decisions.md` (本 ADR の根拠 audit、Candidate A = envelope E-03/E-04/E-05 + README P-A/P-D)
 - `src/envelope.rs:201-236` (実装 site)

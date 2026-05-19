@@ -173,14 +173,14 @@ pub async fn run() -> ExitCode {
     }
 }
 
-/// Serialize a successful `CommandOutput` as a one-line JSON envelope per ADR-0065.
+/// Serialize a successful `CommandOutput` as a one-line JSON envelope per ADR-0010.
 /// Takes `CommandOutput` by value so `data` and `notes` move into the envelope
 /// instead of being deep-cloned.
 fn render_json_success(output: CommandOutput) -> String {
     serde_json::to_string(&output.into_envelope()).expect("envelope is Serialize")
 }
 
-/// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0065.
+/// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0010.
 /// Uses `err.message()` (bare) so `next_step` is not duplicated in `message`.
 fn render_json_error(err: &ScoutError) -> String {
     let envelope = ErrorEnvelope {

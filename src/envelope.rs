@@ -1,5 +1,5 @@
-//! Output envelopes per ADR-0065 (scout JSON output schema) and ADR-0003
-//! (degraded_reasons typed enum).
+//! Output envelopes per ADR-0010 (scout-local JSON envelope contract) and
+//! ADR-0003 (degraded_reasons typed enum).
 //!
 //! `CommandOutput` is the internal shape produced by each command handler;
 //! `lib::run` then serializes it as Markdown (default) or as a `SuccessEnvelope`
@@ -158,7 +158,7 @@ impl CommandOutput {
     }
 }
 
-/// JSON-serializable error classification per ADR-0065 (9-code policy).
+/// JSON-serializable error classification per ADR-0010 (9-code policy).
 ///
 /// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
 /// API schema during deserialize). `Timeout` splits from `TempFailure` so
@@ -182,9 +182,9 @@ pub(crate) enum ErrorCode {
 impl ErrorCode {
     /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
     /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
-    /// governed by ADR-0065 (dotclaude) until a scout-local ADR captures it.
-    /// `Timeout` (124) follows GNU coreutils `timeout` and `Unknown` (104) is
-    /// the PJ extension for unclassifiable failures.
+    /// governed by ADR-0010 (scout-local). `Timeout` (124) follows GNU coreutils
+    /// `timeout` and `Unknown` (104) is the PJ extension for unclassifiable
+    /// failures (per ADR-0011 Classification Priority Table 退避 slot).
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE
@@ -194,7 +194,7 @@ impl ErrorCode {
             Self::IoError => 74,     // EX_IOERR
             Self::TempFailure => 75, // EX_TEMPFAIL
             Self::Timeout => 124,    // GNU coreutils `timeout` convention
-            Self::Unknown => 104,    // PJ extension, ADR-0065 §Classification Priority
+            Self::Unknown => 104,    // PJ extension per ADR-0002, retreat slot per ADR-0011
         }
     }
 
@@ -206,7 +206,7 @@ impl ErrorCode {
     }
 }
 
-/// Success envelope wrapping command output per ADR-0065. ADR-0003 added
+/// Success envelope wrapping command output per ADR-0010. ADR-0003 added
 /// `degraded_reasons` as an additive field (omitted from JSON when empty).
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
@@ -217,14 +217,14 @@ pub(crate) struct SuccessEnvelope {
     pub degraded_reasons: Vec<DegradedReason>,
 }
 
-/// Error envelope per ADR-0065. Wraps the payload under an `error` key so
+/// Error envelope per ADR-0010. Wraps the payload under an `error` key so
 /// JSON output matches `{"error": { "code": ..., "message": ..., ... }}`.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorEnvelope {
     pub error: ErrorPayload,
 }
 
-/// Error payload nested under `ErrorEnvelope::error` per ADR-0065.
+/// Error payload nested under `ErrorEnvelope::error` per ADR-0010.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorPayload {
     pub code: ErrorCode,
@@ -295,7 +295,7 @@ mod tests {
         );
     }
 
-    /// [T-EN004] ErrorEnvelope wraps payload under `error` key per ADR-0065
+    /// [T-EN004] ErrorEnvelope wraps payload under `error` key per ADR-0010
     #[test]
     fn error_envelope_wraps_payload_under_error_key() {
         let env = ErrorEnvelope {
@@ -310,7 +310,7 @@ mod tests {
         let json = serde_json::to_string(&env).unwrap();
         assert!(
             json.starts_with(r#"{"error":"#),
-            "envelope should start with `{{\"error\":` per ADR-0065, got: {json}"
+            "envelope should start with `{{\"error\":` per ADR-0010, got: {json}"
         );
         assert!(
             json.contains(r#""code":"USAGE_ERROR""#),
@@ -406,7 +406,7 @@ mod tests {
         assert!(env.degraded_reasons.is_empty());
     }
 
-    /// [T-EN010] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
+    /// [T-EN010] ErrorCode serializes per ADR-0010 SCREAMING_SNAKE_CASE
     #[test]
     fn error_code_serializes_screaming_snake_case() {
         let pairs = [
@@ -428,7 +428,8 @@ mod tests {
         }
     }
 
-    /// [T-EN014] ErrorCode → exit-code mapping per ADR-0065 9-code policy.
+    /// [T-EN014] ErrorCode → exit-code mapping per ADR-0002 (exit values) +
+    /// ADR-0010 (9-code policy).
     /// Locks the full table so adding a new variant without an `exit_code()`
     /// arm fails compile, and drift on any existing variant fails this test.
     #[test]
