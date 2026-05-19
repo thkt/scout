@@ -29,6 +29,14 @@ use reqwest::header::LOCATION;
 #[cfg(feature = "js-rendering")]
 use chromiumoxide::error::CdpError;
 #[cfg(feature = "js-rendering")]
+use nix::unistd::Pid;
+#[cfg(feature = "js-rendering")]
+use tokio::io::{AsyncBufRead, BufReader};
+#[cfg(feature = "js-rendering")]
+use tokio::process::{Child as TokioChild, ChildStderr, Command as TokioCommand};
+#[cfg(feature = "js-rendering")]
+use tokio::time::sleep;
+#[cfg(feature = "js-rendering")]
 use tracing::error;
 use tracing::{debug, info, warn};
 
@@ -435,6 +443,12 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsRe
 #[cfg(feature = "js-rendering")]
 const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Grace period between SIGTERM and SIGKILL when reaping the chromium pgroup.
+/// 50 ms is enough for chromium subprocess (Helper Renderer, GPU, Network) to
+/// observe the signal after `browser.close()` already drove the graceful path.
+#[cfg(feature = "js-rendering")]
+const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
+
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(
     url: &ValidatedUrl,
@@ -442,23 +456,34 @@ async fn fetch_with_cdp(
     cancel: &watch::Sender<bool>,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
-    use chromiumoxide::browser::BrowserConfig;
     use futures::StreamExt;
 
     let browser_path = resolve_browser_binary()?;
 
-    let mut config_builder = BrowserConfig::builder().chrome_executable(browser_path);
-    for arg in build_launch_args() {
-        config_builder = config_builder.arg(arg);
-    }
-    let config = config_builder
-        .build()
-        .map_err(|e| BrowserError::ProcessFailed(format!("browser config: {e}")))?;
+    let (mut child, pgid, reader) = spawn_chromium_pgroup(&browser_path)?;
 
-    let (mut browser, mut handler) = timeout(CDP_TIMEOUT, Browser::launch(config))
+    let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
+        Ok(Ok(url)) => url,
+        Ok(Err(e)) => {
+            reap_pgroup(pgid, &mut child).await;
+            return Err(e);
+        }
+        Err(_) => {
+            reap_pgroup(pgid, &mut child).await;
+            return Err(BrowserError::TimedOut);
+        }
+    };
+
+    let connect_result = Browser::connect(&ws_url)
         .await
-        .map_err(|_| BrowserError::TimedOut)?
-        .map_err(|e| BrowserError::ProcessFailed(format!("browser launch: {e}")))?;
+        .map_err(|e| BrowserError::ProcessFailed(format!("browser connect: {e}")));
+    let (mut browser, mut handler) = match connect_result {
+        Ok(pair) => pair,
+        Err(e) => {
+            reap_pgroup(pgid, &mut child).await;
+            return Err(e);
+        }
+    };
 
     let handler_task = tokio::spawn(async move {
         while let Some(h) = handler.next().await {
@@ -471,7 +496,7 @@ async fn fetch_with_cdp(
     // Race navigate against cancellation so SIGINT/SIGTERM still reaches the
     // graceful close path below. Without this branch the future would be
     // dropped by the outer select! in lib::run and chromium subprocesses
-    // would orphan to ppid=1 (issue #121).
+    // would orphan to ppid=1.
     //
     // `wait_for` is sticky: if the flag was already `true` at subscribe time
     // (e.g. SIGINT arrived while reqwest was still downloading the initial
@@ -486,9 +511,8 @@ async fn fetch_with_cdp(
         }
     };
 
-    // Always issue browser.close() so chromium can wind down its own subprocess
-    // tree (renderer, crashpad, GPU). 5s covers the slow-path graceful close;
-    // if it overruns, the Drop chain falls back to SIGKILL on the parent.
+    // Drive the CDP graceful close first so chromium runs its own teardown
+    // sequence (flush IPC, write profile state, etc).
     let _ = timeout(Duration::from_secs(5), browser.close()).await;
     handler_task.abort();
     match handler_task.await {
@@ -497,7 +521,122 @@ async fn fetch_with_cdp(
         Err(e) => error!(error = ?e, "CDP handler task panicked"),
     }
 
+    // macOS has no PR_SET_PDEATHSIG, so Helper Renderer / GPU / Network service
+    // would otherwise reparent to ppid=1 after browser.close() returns.
+    // chrome_crashpad_handler may also outlive its parent by design.
+    reap_pgroup(pgid, &mut child).await;
+
     result
+}
+
+/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
+///
+/// Synchronous so the caller captures `pgid` before any timeout can drop the
+/// future and orphan the group. The pgid equals the chromium child's pid (the
+/// call uses `process_group(0)`, which means "make the child the leader of a
+/// new group whose id is its pid"). scout retains the `Child` so the kernel
+/// can reap the parent after we kill the group.
+///
+/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
+/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
+/// hand the resulting WebSocket URL to `Browser::connect` instead.
+#[cfg(feature = "js-rendering")]
+fn spawn_chromium_pgroup(
+    browser_path: &Path,
+) -> Result<(TokioChild, Pid, BufReader<ChildStderr>), BrowserError> {
+    use std::env::temp_dir;
+    use std::process::{Stdio, id};
+
+    // PID suffix prevents `SingletonLock` failure when two scout processes
+    // run --js concurrently (chromium refuses to share a profile dir).
+    let user_data_dir = temp_dir().join(format!("scout-chromium-{}", id()));
+    let mut cmd = TokioCommand::new(browser_path);
+    cmd.arg("--remote-debugging-port=0")
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .args(build_launch_args())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| BrowserError::ProcessFailed(format!("spawn chromium: {e}")))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| BrowserError::ProcessFailed("chromium pid unavailable".into()))?;
+    let pgid = Pid::from_raw(
+        i32::try_from(pid)
+            .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
+    );
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BrowserError::ProcessFailed("chromium stderr missing".into()))?;
+    Ok((child, pgid, BufReader::new(stderr)))
+}
+
+/// Read chromium stderr line-by-line until `DevTools listening on ws://...`.
+///
+/// Mirrors chromiumoxide 0.9's `ws_url_from_output` — the marker has been
+/// stable in Chrome/Chromium for years. Generic over `AsyncBufRead` so unit
+/// tests can drive it with an in-memory cursor.
+#[cfg(feature = "js-rendering")]
+async fn parse_ws_url_from_lines<R>(reader: R) -> Result<String, BrowserError>
+where
+    R: AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+
+    let mut lines = reader.lines();
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|e| BrowserError::ProcessFailed(format!("stderr read: {e}")))?;
+        let Some(line) = line else {
+            return Err(BrowserError::ProcessFailed(
+                "chromium exited before announcing DevTools URL".into(),
+            ));
+        };
+        if let Some((_, ws)) = line.rsplit_once("listening on ")
+            && ws.starts_with("ws")
+            && ws.contains("devtools/browser")
+        {
+            return Ok(ws.trim().to_owned());
+        }
+    }
+}
+
+/// Send SIGTERM to the pgroup, wait a short grace, then SIGKILL.
+///
+/// `ESRCH` from the first killpg means the group already exited (the common
+/// case after a successful `browser.close()`); skip the grace + SIGKILL in
+/// that branch to avoid a 50 ms cleanup penalty on every `--js` fetch. The
+/// `Child` is awaited unconditionally so the kernel can reap the parent and
+/// we don't leave a zombie pid behind.
+#[cfg(feature = "js-rendering")]
+async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, killpg};
+
+    let term = killpg(pgid, Signal::SIGTERM);
+    let already_gone = matches!(term, Err(Errno::ESRCH));
+    if let Err(e) = term
+        && e != Errno::ESRCH
+    {
+        warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
+    }
+    if !already_gone {
+        sleep(PGROUP_SIGTERM_GRACE).await;
+        if let Err(e) = killpg(pgid, Signal::SIGKILL)
+            && e != Errno::ESRCH
+        {
+            warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
+        }
+    }
+    let _ = timeout(Duration::from_secs(2), child.wait()).await;
 }
 
 /// Borrows browser so the caller retains ownership for cleanup on timeout.
@@ -1575,6 +1714,67 @@ mod browser_request_tests {
         assert!(
             !check_browser_request("ws://evil.example/ws", &resolver).await,
             "must block ws:// when DNS resolves to private IP"
+        );
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "js-rendering")]
+mod ws_url_parse_tests {
+    use super::*;
+
+    /// [T-F052] parse_ws_url_extracts_first_matching_line
+    #[tokio::test]
+    async fn parse_ws_url_extracts_first_matching_line() {
+        let stderr = b"[chromium] starting up\n\
+                       DevTools listening on ws://127.0.0.1:54321/devtools/browser/abc-123\n\
+                       DevTools listening on ws://127.0.0.1:54321/devtools/browser/def-456\n";
+        let url = parse_ws_url_from_lines(BufReader::new(&stderr[..]))
+            .await
+            .expect("first match should win");
+        assert_eq!(url, "ws://127.0.0.1:54321/devtools/browser/abc-123");
+    }
+
+    /// [T-F053] parse_ws_url_skips_unrelated_lines_until_match
+    #[tokio::test]
+    async fn parse_ws_url_skips_unrelated_lines_until_match() {
+        let stderr = b"[8765:0x110000000] preference manifest unparseable\n\
+                       [warn] hardware acceleration unavailable\n\
+                       random listening on something else\n\
+                       DevTools listening on ws://localhost:1234/devtools/browser/xyz\n";
+        let url = parse_ws_url_from_lines(BufReader::new(&stderr[..]))
+            .await
+            .expect("should match after unrelated prefix");
+        assert_eq!(url, "ws://localhost:1234/devtools/browser/xyz");
+    }
+
+    /// [T-F054] parse_ws_url_eof_before_match_errors
+    #[tokio::test]
+    async fn parse_ws_url_eof_before_match_errors() {
+        let stderr = b"chromium crashed before opening port\n";
+        let err = parse_ws_url_from_lines(BufReader::new(&stderr[..]))
+            .await
+            .expect_err("EOF without match must surface as error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("chromium exited before announcing DevTools URL"),
+            "expected EOF message, got: {msg}"
+        );
+    }
+
+    /// [T-F055] parse_ws_url_rejects_non_browser_devtools_url
+    ///
+    /// chromium also prints `DevTools listening on ws://.../page/<id>` for
+    /// per-page debuggers — we must only accept the browser-level URL.
+    #[tokio::test]
+    async fn parse_ws_url_rejects_non_browser_devtools_url() {
+        let stderr = b"DevTools listening on ws://127.0.0.1:9999/devtools/page/something\n";
+        let err = parse_ws_url_from_lines(BufReader::new(&stderr[..]))
+            .await
+            .expect_err("page-level URL must not match");
+        assert!(
+            err.to_string()
+                .contains("chromium exited before announcing DevTools URL")
         );
     }
 }
