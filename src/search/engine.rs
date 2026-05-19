@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::stream::{self, StreamExt};
@@ -45,7 +46,7 @@ pub(crate) async fn research(
     brave: &impl SearchClient,
     http: &Client,
     req: &ResearchRequest<'_>,
-    resolver: &impl DnsResolver,
+    resolver: Arc<dyn DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<ResearchReport, BraveError> {
     let search_lang = req.lang.to_brave_param();
@@ -65,25 +66,28 @@ async fn fetch_sources(
     http: &Client,
     sources: &[SearchResult],
     depth: usize,
-    resolver: &impl DnsResolver,
+    resolver: Arc<dyn DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
-        .map(|(idx, source)| async move {
-            let url = source.url.as_str();
-            let result = timeout(
-                FETCH_TIMEOUT,
-                fetch::fetch_page(http, url, fetch::FetchOptions::default(), resolver, cancel),
-            )
-            .await;
-            let result = match result {
-                Ok(inner) => inner,
-                Err(_) => Err(fetch::FetchError::Timeout(format!(
-                    "page fetch timed out after {}s",
-                    FETCH_TIMEOUT.as_secs()
-                ))),
-            };
-            (idx, url, result)
+        .map(|(idx, source)| {
+            let resolver = Arc::clone(&resolver);
+            async move {
+                let url = source.url.as_str();
+                let result = timeout(
+                    FETCH_TIMEOUT,
+                    fetch::fetch_page(http, url, fetch::FetchOptions::default(), resolver, cancel),
+                )
+                .await;
+                let result = match result {
+                    Ok(inner) => inner,
+                    Err(_) => Err(fetch::FetchError::Timeout(format!(
+                        "page fetch timed out after {}s",
+                        FETCH_TIMEOUT.as_secs()
+                    ))),
+                };
+                (idx, url, result)
+            }
         })
         // Concurrency cap = 5: balances fetch parallelism (faster overall research)
         // against per-host rate limits (multiple URLs in one query may share an origin).
@@ -179,6 +183,10 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    fn real_resolver() -> Arc<dyn DnsResolver> {
+        Arc::new(fetch::TokioDnsResolver)
+    }
 
     struct MockSearch {
         responses: Mutex<VecDeque<Result<Vec<SearchResult>, BraveError>>>,
@@ -337,7 +345,7 @@ mod tests {
     async fn research_with_mock_returns_report() {
         let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
         let http = Client::new();
-        let resolver = fetch::TokioDnsResolver;
+        let resolver = real_resolver();
 
         let req = ResearchRequest {
             query: "test",
@@ -345,7 +353,7 @@ mod tests {
             lang: Lang::En,
         };
         let (cancel, _) = watch::channel(false);
-        let report = research(&mock, &http, &req, &resolver, &cancel)
+        let report = research(&mock, &http, &req, resolver, &cancel)
             .await
             .unwrap();
 
@@ -370,7 +378,7 @@ mod tests {
     async fn research_auto_lang_issues_single_call() {
         let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
         let http = Client::new();
-        let resolver = fetch::TokioDnsResolver;
+        let resolver = real_resolver();
 
         let req = ResearchRequest {
             query: "型安全 TypeScript",
@@ -378,7 +386,7 @@ mod tests {
             lang: Lang::Auto,
         };
         let (cancel, _) = watch::channel(false);
-        let _ = research(&mock, &http, &req, &resolver, &cancel)
+        let _ = research(&mock, &http, &req, resolver, &cancel)
             .await
             .unwrap();
 
@@ -400,7 +408,7 @@ mod tests {
     async fn research_search_failure_returns_error() {
         let mock = MockSearch::all_fail(BraveError::RateLimited { retry_after: None });
         let http = Client::new();
-        let resolver = fetch::TokioDnsResolver;
+        let resolver = real_resolver();
 
         let req = ResearchRequest {
             query: "test",
@@ -408,7 +416,7 @@ mod tests {
             lang: Lang::En,
         };
         let (cancel, _) = watch::channel(false);
-        let err = research(&mock, &http, &req, &resolver, &cancel)
+        let err = research(&mock, &http, &req, resolver, &cancel)
             .await
             .unwrap_err();
         assert!(matches!(err, BraveError::RateLimited { .. }));

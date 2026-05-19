@@ -7,11 +7,14 @@ mod extractor;
 mod ssrf;
 
 pub(crate) use ssrf::{DnsResolver, RedactedLogUrl, TokioDnsResolver};
+#[cfg(test)]
+pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 use ssrf::{ValidatedUrl, ssrf_check};
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 #[cfg(feature = "js-rendering")]
 use std::sync::OnceLock;
 #[cfg(feature = "js-rendering")]
@@ -101,7 +104,7 @@ pub(crate) async fn fetch_page(
     client: &Client,
     url: &str,
     opts: FetchOptions,
-    resolver: &impl DnsResolver,
+    resolver: Arc<dyn DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<FetchResult, FetchError> {
     // `cancel` is only consumed on the CDP path. Silence the unused-arg
@@ -123,12 +126,13 @@ pub(crate) async fn fetch_page(
     //
     // The returned `ValidatedUrl` is the only constructor for SSRF-checked URLs;
     // `download` requires `&ValidatedUrl` so the redirect loop cannot bypass it.
-    let validated = ssrf_check(url, resolver).await?;
+    let validated = ssrf_check(url, resolver.as_ref()).await?;
 
     #[cfg(feature = "js-rendering")]
-    let (final_url, mut html) = download(client, &validated, MAX_REDIRECTS, resolver).await?;
+    let (final_url, mut html) =
+        download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
     #[cfg(not(feature = "js-rendering"))]
-    let (final_url, html) = download(client, &validated, MAX_REDIRECTS, resolver).await?;
+    let (final_url, html) = download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
 
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
@@ -143,7 +147,7 @@ pub(crate) async fn fetch_page(
     if need_js {
         #[cfg(feature = "js-rendering")]
         {
-            match fetch_with_cdp(&final_url, Clone::clone(resolver), cancel).await {
+            match fetch_with_cdp(&final_url, Arc::clone(&resolver), cancel).await {
                 Ok(js_html) => {
                     debug!("JS rendering succeeded via CDP");
                     html = js_html;
@@ -174,7 +178,7 @@ pub(crate) async fn fetch_page(
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");
-        match fetch_with_cdp(&final_url, Clone::clone(resolver), cancel).await {
+        match fetch_with_cdp(&final_url, Arc::clone(&resolver), cancel).await {
             Ok(js_html) => {
                 let re_extracted = extract_article(&js_html, Some(final_url.as_str()));
                 if is_thin_extract(&re_extracted) {
@@ -420,7 +424,7 @@ fn build_launch_args() -> Vec<&'static str> {
 ///
 /// See ADR-0001 for the SSRF defense architecture.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
-pub(crate) async fn check_browser_request(url: &str, resolver: &impl ssrf::DnsResolver) -> bool {
+pub(crate) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
         Cow::Borrowed(url)
     } else if let Some(rest) = url.strip_prefix("ws://") {
@@ -452,7 +456,7 @@ const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 #[cfg(feature = "js-rendering")]
 async fn fetch_with_cdp(
     url: &ValidatedUrl,
-    resolver: impl ssrf::DnsResolver,
+    resolver: Arc<dyn ssrf::DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
@@ -644,7 +648,7 @@ async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
 async fn cdp_navigate(
     browser: &mut chromiumoxide::Browser,
     url: &ValidatedUrl,
-    resolver: impl ssrf::DnsResolver,
+    resolver: Arc<dyn ssrf::DnsResolver>,
 ) -> Result<String, BrowserError> {
     use chromiumoxide::cdp::browser_protocol::fetch::{
         ContinueRequestParams, EnableParams, EventRequestPaused, FailRequestParams,
@@ -673,7 +677,7 @@ async fn cdp_navigate(
         let mut intercept_err_tx = Some(intercept_err_tx);
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
-            let allowed = check_browser_request(req_url, &resolver).await;
+            let allowed = check_browser_request(req_url, resolver.as_ref()).await;
             let exec_result: Result<(), CdpError> = if allowed {
                 intercept_page
                     .execute(ContinueRequestParams::new(event.request_id.clone()))
@@ -766,7 +770,7 @@ async fn download(
     client: &Client,
     url: &ValidatedUrl,
     max_redirects: usize,
-    resolver: &impl DnsResolver,
+    resolver: &dyn DnsResolver,
 ) -> Result<(ValidatedUrl, String), FetchError> {
     let mut current_url = url.clone();
 
@@ -988,7 +992,6 @@ mod download_tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
     use reqwest::redirect::Policy;
-    use std::net::IpAddr;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
@@ -1000,12 +1003,8 @@ mod download_tests {
         ValidatedUrl::for_test(url)
     }
 
-    #[derive(Clone, Copy)]
-    struct PublicResolver;
-    impl DnsResolver for PublicResolver {
-        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-            Ok(vec!["8.8.8.8".parse().unwrap()])
-        }
+    fn public_resolver() -> ssrf::StaticDnsResolver {
+        ssrf::StaticDnsResolver::single("8.8.8.8")
     }
 
     /// [T-F009] download_success_returns_html
@@ -1028,7 +1027,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/page", server.uri())),
             MAX_REDIRECTS,
-            &PublicResolver,
+            &public_resolver(),
         )
         .await
         .unwrap();
@@ -1060,7 +1059,7 @@ mod download_tests {
                 &client,
                 &validated(&format!("{}/404", server.uri())),
                 MAX_REDIRECTS,
-                &PublicResolver
+                &public_resolver()
             )
             .await,
             Err(FetchError::Status(404))
@@ -1070,7 +1069,7 @@ mod download_tests {
                 &client,
                 &validated(&format!("{}/500", server.uri())),
                 MAX_REDIRECTS,
-                &PublicResolver
+                &public_resolver()
             )
             .await,
             Err(FetchError::Status(500))
@@ -1095,7 +1094,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/huge", server.uri())),
             MAX_REDIRECTS,
-            &PublicResolver,
+            &public_resolver(),
         )
         .await;
         assert!(matches!(result, Err(FetchError::TooLarge)));
@@ -1122,7 +1121,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/binary", server.uri())),
             MAX_REDIRECTS,
-            &PublicResolver,
+            &public_resolver(),
         )
         .await;
         assert!(
@@ -1150,7 +1149,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/redir", server.uri())),
             MAX_REDIRECTS,
-            &PublicResolver,
+            &public_resolver(),
         )
         .await;
         assert!(
@@ -1162,13 +1161,7 @@ mod download_tests {
     /// [T-F014] redirect_to_dns_private_ip_blocked
     #[tokio::test]
     async fn redirect_to_dns_private_ip_blocked() {
-        #[derive(Clone, Copy)]
-        struct PrivateResolver;
-        impl DnsResolver for PrivateResolver {
-            async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-                Ok(vec!["10.0.0.1".parse().unwrap()])
-            }
-        }
+        let private_resolver = ssrf::StaticDnsResolver::single("10.0.0.1");
 
         let Some(server) = try_spawn_mock_server("fetch::download").await else {
             return;
@@ -1186,7 +1179,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/redir", server.uri())),
             MAX_REDIRECTS,
-            &PrivateResolver,
+            &private_resolver,
         )
         .await;
         assert!(
@@ -1214,7 +1207,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/redir", server.uri())),
             0, // max_redirects = 0
-            &PublicResolver,
+            &public_resolver(),
         )
         .await;
         assert!(
@@ -1240,7 +1233,7 @@ mod download_tests {
             &client,
             &validated(&format!("{}/bad-redir", server.uri())),
             MAX_REDIRECTS,
-            &PublicResolver,
+            &public_resolver(),
         )
         .await;
         assert!(
@@ -1262,6 +1255,10 @@ mod fetch_page_tests {
         Client::builder().redirect(Policy::none()).build().unwrap()
     }
 
+    fn real_resolver() -> Arc<dyn DnsResolver> {
+        Arc::new(TokioDnsResolver)
+    }
+
     /// [T-F017] blocks_ssrf_to_localhost
     #[tokio::test]
     async fn blocks_ssrf_to_localhost() {
@@ -1271,7 +1268,7 @@ mod fetch_page_tests {
             &client,
             "http://127.0.0.1/secret",
             FetchOptions::default(),
-            &TokioDnsResolver,
+            real_resolver(),
             &cancel,
         )
         .await;
@@ -1292,7 +1289,7 @@ mod fetch_page_tests {
             &client,
             "http://user:supersecret@127.0.0.1/private",
             FetchOptions::default(),
-            &TokioDnsResolver,
+            real_resolver(),
             &cancel,
         )
         .await;
@@ -1342,7 +1339,7 @@ mod fetch_page_tests {
             &client,
             &format!("{}/rich", server.uri()),
             opts,
-            &TokioDnsResolver,
+            real_resolver(),
             &cancel,
         )
         .await;
@@ -1367,7 +1364,7 @@ mod fetch_page_tests {
             &client,
             "https://example.com/page",
             opts,
-            &TokioDnsResolver,
+            real_resolver(),
             &cancel,
         )
         .await;
@@ -1614,30 +1611,21 @@ mod cdp_launch_tests {
 
 #[cfg(test)]
 mod browser_request_tests {
-    use super::ssrf::DnsResolver;
+    use super::ssrf::StaticDnsResolver;
     use super::*;
-    use std::net::IpAddr;
 
-    #[derive(Clone, Copy)]
-    struct MockPrivateDns;
-    impl DnsResolver for MockPrivateDns {
-        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-            Ok(vec!["10.0.0.1".parse().unwrap()])
-        }
+    fn private_dns() -> StaticDnsResolver {
+        StaticDnsResolver::single("10.0.0.1")
     }
 
-    #[derive(Clone, Copy)]
-    struct MockPublicDns;
-    impl DnsResolver for MockPublicDns {
-        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-            Ok(vec!["93.184.216.34".parse().unwrap()])
-        }
+    fn public_dns() -> StaticDnsResolver {
+        StaticDnsResolver::single("93.184.216.34")
     }
 
     /// [T-F044] t004_blocks_dns_resolving_to_private_ip
     #[tokio::test]
     async fn t004_blocks_dns_resolving_to_private_ip() {
-        let resolver = MockPrivateDns;
+        let resolver = private_dns();
         assert!(
             !check_browser_request("https://evil.example/secret", &resolver).await,
             "must block when DNS resolves to private IP"
@@ -1647,7 +1635,7 @@ mod browser_request_tests {
     /// [T-F045] t004_blocks_internal_ip_literal
     #[tokio::test]
     async fn t004_blocks_internal_ip_literal() {
-        let resolver = MockPublicDns;
+        let resolver = public_dns();
         assert!(
             !check_browser_request("http://127.0.0.1/secret", &resolver).await,
             "must block loopback IP"
@@ -1657,7 +1645,7 @@ mod browser_request_tests {
     /// [T-F046] t004_allows_public_url
     #[tokio::test]
     async fn t004_allows_public_url() {
-        let resolver = MockPublicDns;
+        let resolver = public_dns();
         assert!(
             check_browser_request("https://example.com/page", &resolver).await,
             "must allow public URL"
@@ -1667,7 +1655,7 @@ mod browser_request_tests {
     /// [T-F047] t004_allows_non_network_urls
     #[tokio::test]
     async fn t004_allows_non_network_urls() {
-        let resolver = MockPublicDns;
+        let resolver = public_dns();
         for url in [
             "data:text/html,<p>test</p>",
             "about:blank",
@@ -1684,7 +1672,7 @@ mod browser_request_tests {
     /// [T-F048] t004_blocks_unknown_schemes
     #[tokio::test]
     async fn t004_blocks_unknown_schemes() {
-        let resolver = MockPublicDns;
+        let resolver = public_dns();
         for url in ["file:///etc/passwd", "ftp://internal/data", "gopher://x"] {
             assert!(
                 !check_browser_request(url, &resolver).await,
@@ -1696,7 +1684,7 @@ mod browser_request_tests {
     /// [T-F049] t004_blocks_websocket_to_internal
     #[tokio::test]
     async fn t004_blocks_websocket_to_internal() {
-        let resolver = MockPublicDns;
+        let resolver = public_dns();
         assert!(
             !check_browser_request("ws://127.0.0.1:8080/ws", &resolver).await,
             "must block ws:// to loopback"
@@ -1710,7 +1698,7 @@ mod browser_request_tests {
     /// [T-F050] t004_blocks_websocket_dns_to_private
     #[tokio::test]
     async fn t004_blocks_websocket_dns_to_private() {
-        let resolver = MockPrivateDns;
+        let resolver = private_dns();
         assert!(
             !check_browser_request("ws://evil.example/ws", &resolver).await,
             "must block ws:// when DNS resolves to private IP"
@@ -1798,7 +1786,7 @@ mod cdp_integration_tests {
         let (cancel, _) = watch::channel(false);
         let html = fetch_with_cdp(
             &ValidatedUrl::for_test("https://example.com"),
-            TokioDnsResolver,
+            Arc::new(TokioDnsResolver),
             &cancel,
         )
         .await

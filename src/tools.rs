@@ -29,7 +29,9 @@ use crate::brave::client::{BraveClient, BraveError, SearchClient as _};
 use crate::clock::{Clock, SystemClock};
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
-use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, TokioDnsResolver, fetch_page};
+use crate::fetch::{
+    DnsResolver, FetchError, FetchOptions, RedactedLogUrl, TokioDnsResolver, fetch_page,
+};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient, PerPage};
 use crate::markdown::{shift_headings, truncate_with_note};
@@ -164,6 +166,10 @@ pub struct Scout {
     /// Held on `Scout` so tests can swap in a `StaticTokenSource` before any
     /// API call spawns the production `gh auth token` subprocess.
     token_source: Arc<dyn TokenSource>,
+    /// DNS resolver consulted by the SSRF pre-check on every fetch. Held on
+    /// `Scout` so tests can swap a scripted resolver before any real DNS
+    /// lookup runs.
+    dns: Arc<dyn DnsResolver>,
 }
 
 impl Scout {
@@ -258,13 +264,7 @@ impl Scout {
         let fetch_timeout = self.config.fetch_timeout;
         let result = timeout(
             fetch_timeout,
-            fetch_page(
-                &self.fetch_http,
-                &url,
-                opts,
-                &TokioDnsResolver,
-                &self.cancel,
-            ),
+            fetch_page(&self.fetch_http, &url, opts, self.dns.clone(), &self.cancel),
         )
         .await
         .unwrap_or_else(|_| {
@@ -338,7 +338,7 @@ impl Scout {
                 brave,
                 &self.fetch_http,
                 &req,
-                &TokioDnsResolver,
+                self.dns.clone(),
                 &self.cancel,
             ),
         )
@@ -589,6 +589,7 @@ pub(crate) struct ScoutBuilder {
     clock: Arc<dyn Clock>,
     rng: Arc<dyn Rng>,
     token_source: Arc<dyn TokenSource>,
+    dns: Arc<dyn DnsResolver>,
     cancel: watch::Sender<bool>,
     config: RuntimeConfig,
     /// Pre-initialize `Scout.github` (`OnceCell`) with a test client pointed at
@@ -634,6 +635,7 @@ impl ScoutBuilder {
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(GhCliSource),
+            dns: Arc::new(TokioDnsResolver),
             cancel: watch::channel(false).0,
             config,
             #[cfg(test)]
@@ -656,6 +658,7 @@ impl ScoutBuilder {
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(GhCliSource),
+            dns: Arc::new(TokioDnsResolver),
             cancel: watch::channel(false).0,
             config: RuntimeConfig::default(),
             github_endpoint: None,
@@ -677,6 +680,12 @@ impl ScoutBuilder {
     #[cfg(test)]
     pub(crate) fn with_token_source(mut self, source: Arc<dyn TokenSource>) -> Self {
         self.token_source = source;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
+        self.dns = dns;
         self
     }
 
@@ -717,6 +726,7 @@ impl ScoutBuilder {
             clock: self.clock,
             rng: self.rng,
             token_source: self.token_source,
+            dns: self.dns,
         }
     }
 }
@@ -863,6 +873,8 @@ fn format_fetch_output(result: &FetchResult) -> String {
 mod tests {
     use super::*;
     use crate::clock::FixedClock;
+    use crate::envelope::ErrorCode;
+    use crate::fetch::{FailingDnsResolver, StaticDnsResolver};
     use crate::rng::SeededRng;
     use crate::search::Lang;
     use crate::test_support::try_spawn_mock_server;
@@ -1775,6 +1787,69 @@ mod tests {
         assert!(
             Arc::ptr_eq(&scout.token_source, &injected),
             "with_token_source must install the supplied Arc into Scout.token_source"
+        );
+    }
+
+    /// [T-DNS001] `ScoutBuilder::with_dns` で渡した `Arc<dyn DnsResolver>` が
+    /// `Scout.dns` slot に届き、かつ `Scout::fetch` の SSRF 経路で実際に
+    /// consult されることを end-to-end で確認する。
+    ///
+    /// 注入した `StaticDnsResolver(10.0.0.1)` が `https://example.com` の
+    /// DNS lookup を override すれば、`ssrf_check` の private-IP 判定が
+    /// `FetchError::InternalHost` を即座に返す。default の `TokioDnsResolver`
+    /// なら `example.com` は public IP を返すため、この assert は
+    /// injection が wire できていない場合に必ず落ちる。
+    #[tokio::test]
+    async fn scout_builder_with_dns_blocks_fetch_via_injected_private_ip() {
+        let injected: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("10.0.0.1"));
+        let scout = ScoutBuilder::for_test().with_dns(injected.clone()).build();
+
+        assert!(
+            Arc::ptr_eq(&scout.dns, &injected),
+            "with_dns must install the supplied Arc into Scout.dns"
+        );
+
+        let result = scout
+            .fetch(FetchParams {
+                url: Some("https://example.com/page".into()),
+                js: false,
+                raw: false,
+            })
+            .await;
+        let err = result.expect_err("injected private IP must trip SSRF check");
+        assert_eq!(
+            err.error_kind(),
+            ErrorCode::DataError,
+            "SSRF InternalHost maps to DataError (sysexits EX_DATAERR)"
+        );
+        assert!(
+            err.message().contains("internal/private"),
+            "error message must surface the SSRF cause, got: {}",
+            err.message()
+        );
+    }
+
+    /// [T-DNS002] `FailingDnsResolver` を inject すると `Scout::fetch` が
+    /// `FetchError::DnsResolution` 由来の `ScoutError` を返すことを確認する。
+    /// resolver の失敗パスが SSRF 経路に正しく伝播することを保証する。
+    #[tokio::test]
+    async fn scout_builder_with_dns_propagates_resolver_failure() {
+        let injected: Arc<dyn DnsResolver> =
+            Arc::new(FailingDnsResolver("simulated DNS failure".into()));
+        let scout = ScoutBuilder::for_test().with_dns(injected).build();
+
+        let result = scout
+            .fetch(FetchParams {
+                url: Some("https://example.com/page".into()),
+                js: false,
+                raw: false,
+            })
+            .await;
+        let err = result.expect_err("injected resolver failure must surface as error");
+        assert!(
+            err.message().contains("DNS resolution failed"),
+            "error message must surface the DNS failure cause, got: {}",
+            err.message()
         );
     }
 

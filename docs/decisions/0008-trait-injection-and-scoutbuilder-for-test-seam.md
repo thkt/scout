@@ -97,7 +97,7 @@ Skip `ScoutBuilder` entirely; add `#[cfg(test)] fn for_test()` and `#[cfg(test)]
 
 ### Deferred concerns
 
-- **`DnsResolver` `Arc<dyn ...>`-ification**: Issue #103 listed `dns: Arc<dyn DnsResolver>` as a proposed action, but the existing `DnsResolver` trait in `fetch/ssrf.rs` is generic-style (`fn lookup(&self, host: &str, port: u16) -> impl Future<Output = Result<Vec<IpAddr>, FetchError>> + Send`) with a `Clone + Send + Sync + 'static` bound. Object-safety requires changing the return type to `Pin<Box<...>>` and dropping `Clone`; the SSRF path's `Arc<TokioDnsResolver>` clone semantics need re-analysis. Captured as a separate issue rather than expanded into PR 4. The ScoutBuilder slot for it is already shaped by precedent.
+- **`DnsResolver` `Arc<dyn ...>`-ification**: Resolved by ADR-0009 (issue #134). The trait now returns `Pin<Box<dyn Future + Send + '_>>`, the `Clone` bound is dropped, and `Scout.dns: Arc<dyn DnsResolver>` is injected via `ScoutBuilder::with_dns`. See `docs/decisions/0009-object-safe-dns-resolver-and-arc-injection.md` for the full rationale.
 - **`with_brave` / `with_github`** that inject pre-built `BraveClient` / `GitHubClient` instances: not added. The `with_*_endpoint(&str)` setters cover every existing test case by re-using the builder's `http` client to construct the test double. If a future test needs a fully custom client (e.g. a recording proxy), the precedent is to add the setter then, not now.
 
 ### Reassessment Triggers
