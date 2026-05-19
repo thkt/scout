@@ -78,6 +78,17 @@ export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch`
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` の順で認証されます。
 
+### チューニング
+
+ビルトインのタイムアウトとリトライ予算を上書きできます。不正な値はリクエストを送る前に終了コード64（使い方エラー）で失敗します。
+
+| 環境変数                      | デフォルト | 範囲   | 効果                                                                       |
+| ----------------------------- | ---------- | ------ | -------------------------------------------------------------------------- |
+| `SCOUT_FETCH_TIMEOUT_SECS`    | 95         | 1〜600 | `fetch` のURLごとの実時間予算                                              |
+| `SCOUT_RESEARCH_TIMEOUT_SECS` | 45         | 1〜600 | `research` の実時間予算                                                    |
+| `SCOUT_SLACK_TIMEOUT_SECS`    | 60         | 1〜600 | Slackパーマリンク `fetch` の実時間予算                                     |
+| `SCOUT_MAX_RETRIES`           | 2          | 0〜10  | 一時的なAPIエラー時のリトライ回数（初回試行に加算、`0` でリトライ無効）    |
+
 ### オプション: JSレンダリング（SPA対応）
 
 `fetch` はJS依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレスChrome（CDP）でレンダリングします。Chrome/Chromiumのローカルインストールと `js-rendering` featureが必要です。
@@ -177,6 +188,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
   ...
 ```
 
+```sh
+# タグ・ブランチ・コミットSHAを指定
+scout repo-tree denoland/deno --ref v2.0.0 --path cli/
+```
+
 | フラグ       | 説明                              |
 | ------------ | --------------------------------- |
 | `--ref`      | ブランチ、タグ、またはコミットSHA |
@@ -187,6 +203,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 
 ```sh
 scout repo-read facebook/react src/ReactElement.js --lines 1-50
+```
+
+```sh
+# UTF-8以外のファイルをエンコーディング指定で読む
+scout repo-read owner/repo legacy.txt --encoding shift_jis
 ```
 
 | フラグ        | 説明                                                                                                                                                                                                           |

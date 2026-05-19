@@ -88,6 +88,17 @@ export SLACK_TOKEN="..."            # Optional: required for `fetch` on Slack pe
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` are all supported, in that order.
 
+### Tuning
+
+Override the built-in timeouts and retry budget. Invalid values fail with exit 64 (usage error) before any request is made.
+
+| Env var                       | Default | Range | Effect                                                                                |
+| ----------------------------- | ------- | ----- | ------------------------------------------------------------------------------------- |
+| `SCOUT_FETCH_TIMEOUT_SECS`    | 95      | 1–600 | Per-URL wall-clock budget for `fetch`                                                 |
+| `SCOUT_RESEARCH_TIMEOUT_SECS` | 45      | 1–600 | Wall-clock budget for `research`                                                      |
+| `SCOUT_SLACK_TIMEOUT_SECS`    | 60      | 1–600 | Wall-clock budget for Slack permalink `fetch`                                         |
+| `SCOUT_MAX_RETRIES`           | 2       | 0–10  | Retries on transient API failures, on top of the initial attempt (`0` disables retry) |
+
 ### Optional: JS rendering (for SPAs)
 
 `fetch` auto-detects JS-dependent pages (React, Next.js, Vue, Nuxt) and falls back to headless Chrome via CDP. Requires Chrome or Chromium installed locally and the `js-rendering` feature:
@@ -187,6 +198,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
   ...
 ```
 
+```sh
+# Pin to a tag, branch, or commit SHA
+scout repo-tree denoland/deno --ref v2.0.0 --path cli/
+```
+
 | Flag         | Description                |
 | ------------ | -------------------------- |
 | `--ref`      | Branch, tag, or commit SHA |
@@ -197,6 +213,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 
 ```sh
 scout repo-read facebook/react src/ReactElement.js --lines 1-50
+```
+
+```sh
+# Read a non-UTF-8 file by explicit encoding
+scout repo-read owner/repo legacy.txt --encoding shift_jis
 ```
 
 | Flag          | Description                                                                                                                                                                                                                                      |
