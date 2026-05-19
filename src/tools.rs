@@ -58,14 +58,22 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
     })
 }
 
+/// Lifecycle of the once-readable stdin buffer. Variants are mutually
+/// exclusive so `Available` and `Consumed` cannot coexist.
+enum StdinState {
+    /// stdin was a TTY, or read_stdin returned empty after trim.
+    NotPiped,
+    /// stdin content was buffered and no `resolve()` has taken it yet.
+    Available(String),
+    /// A previous `resolve()` took the buffered content.
+    Consumed,
+}
+
 /// Resolves CLI positional args with stdin fallback.
 /// Stdin is read once; the first arg that needs it consumes it.
 struct StdinResolver {
     is_terminal: bool,
-    /// `None` = not piped, empty, or already consumed — check `stdin_consumed` to distinguish.
-    content: Option<String>,
-    /// `true` after any `resolve()` consumed stdin content; `content: None` alone cannot express this.
-    stdin_consumed: bool,
+    state: StdinState,
 }
 
 impl StdinResolver {
@@ -76,7 +84,7 @@ impl StdinResolver {
         placeholder: &str,
     ) -> Result<String, ScoutError> {
         let needs_stdin = value.is_none() || value.as_deref() == Some("-");
-        if needs_stdin && self.stdin_consumed {
+        if needs_stdin && matches!(self.state, StdinState::Consumed) {
             let msg = if value.as_deref() == Some("-") {
                 format!("stdin already read — cannot use `-` for {label}")
             } else {
@@ -86,16 +94,13 @@ impl StdinResolver {
             };
             return Err(ScoutError::user_error(msg));
         }
-        let result = resolve_input(
-            value,
-            self.content.as_deref(),
-            self.is_terminal,
-            label,
-            placeholder,
-        )?;
+        let content = match &self.state {
+            StdinState::Available(s) => Some(s.as_str()),
+            StdinState::NotPiped | StdinState::Consumed => None,
+        };
+        let result = resolve_input(value, content, self.is_terminal, label, placeholder)?;
         if needs_stdin {
-            self.content = None;
-            self.stdin_consumed = true;
+            self.state = StdinState::Consumed;
         }
         Ok(result)
     }
@@ -104,8 +109,10 @@ impl StdinResolver {
     fn with_content(is_terminal: bool, content: Option<String>) -> Self {
         Self {
             is_terminal,
-            content,
-            stdin_consumed: false,
+            state: match content {
+                Some(s) => StdinState::Available(s),
+                None => StdinState::NotPiped,
+            },
         }
     }
 }
@@ -427,8 +434,10 @@ impl Scout {
         .await?;
         let mut resolver = StdinResolver {
             is_terminal,
-            content,
-            stdin_consumed: false,
+            state: match content {
+                Some(s) => StdinState::Available(s),
+                None => StdinState::NotPiped,
+            },
         };
         let repository = resolver.resolve(params.repository, "repository", "<OWNER/REPO>")?;
         let path = resolver.resolve(params.path, "path", "<FILE_PATH>")?;
