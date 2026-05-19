@@ -850,11 +850,15 @@ async fn download(
         return Ok((current_url, html));
     }
 
+    // CALIBRATION (issue #145 / #148 follow-up): structured fields below let
+    // callers sample empirical retry-success rate via `RUST_LOG=scout=warn`.
+    // Flip from DataError(65) to TempFailure(75) once rate > 10%.
+    let chain_length = max_redirects + 1;
     warn!(
-        redirect_chain_length = max_redirects + 1,
+        redirect_chain_length = chain_length,
         max_redirects,
         final_url = %RedactedLogUrl(current_url.as_str()),
-        "redirect cap exceeded (per ADR-0011 priority 2 classified as DataError; pending calibration via empirical retry-success data, see issue #145 follow-up)"
+        "redirect cap exceeded"
     );
     Err(FetchError::TooManyRedirects(max_redirects))
 }
@@ -1251,7 +1255,7 @@ mod download_tests {
         let result = download(
             &client,
             &validated(&format!("{}/redir", server.uri())),
-            0,
+            0, // max_redirects = 0
             &public_resolver(),
         )
         .await;
