@@ -81,15 +81,15 @@ impl ScoutError {
 
     /// scout-side invariant violation (e.g., unexpected API schema during
     /// deserialize). Maps to `ErrorCode::Internal` (exit 70 EX_SOFTWARE) per
-    /// ADR-0065 priority 5.
+    /// ADR-0011 priority 5.
     pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, msg)
     }
 
     /// Unclassifiable failure — the priority rules (1-5) did not match.
-    /// Maps to `ErrorCode::Unknown` (exit 104, PJ extension) per ADR-0065
-    /// §Classification Priority. A rising Unknown rate signals the
-    /// classification design needs revisiting.
+    /// Maps to `ErrorCode::Unknown` (exit 104, PJ extension per ADR-0002) per
+    /// ADR-0011 §Classification Priority Table 退避 slot. A rising Unknown rate
+    /// signals the classification design needs revisiting.
     pub(super) fn unknown(msg: impl Into<String>) -> Self {
         Self::new(ErrorCode::Unknown, msg)
     }
@@ -99,7 +99,7 @@ impl ScoutError {
     }
 
     /// Timeout (request-level or transport-level). Maps to `ErrorCode::Timeout`
-    /// (exit 124, GNU coreutils `timeout`) per ADR-0065. Retryable like
+    /// (exit 124, GNU coreutils `timeout`) per ADR-0002. Retryable like
     /// `transient`, but separated so caller scripts/agents can apply a longer
     /// backoff than for rate-limit / 5xx temp failures.
     pub(super) fn timeout(msg: impl Into<String>) -> Self {
@@ -162,7 +162,7 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
 }
 
 // Match arms in each `From<...>` impl below evaluate in classification-priority
-// order per ADR-0065 §Classification Priority:
+// order per ADR-0011 §Classification Priority Table:
 //   1. USAGE_ERROR  — env/config/argument misuse
 //   2. DATA_ERROR   — format violations (URL, owner/repo, encoding, 4xx body)
 //   3. NOT_FOUND    — resource absence (404, search 0 hits)
@@ -253,7 +253,7 @@ impl From<FetchError> for ScoutError {
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
             // Status arms order specific HTTP codes before the 4xx / _ fallback;
-            // the per-arm priority label restores ADR-0065 ranking for review.
+            // the per-arm priority label restores ADR-0011 ranking for review.
             // Priority 1: USAGE_ERROR
             FetchError::Status(401 | 403) => Self::user_error(e.to_string())
                 .with_next_step("URL requires authentication that scout does not support"),
@@ -274,7 +274,7 @@ impl From<FetchError> for ScoutError {
             FetchError::DnsResolution(_) => Self::transient(e.to_string())
                 .with_next_step("Check the URL's domain name and your DNS resolver"),
             // `is_transient_network` covers connect, timeout, and mid-stream
-            // body drop (issue #113), but ADR-0065 splits timeout into 124.
+            // body drop (issue #113), but ADR-0002 splits timeout into 124.
             // Check `is_timeout()` first.
             FetchError::Http(re) if re.is_timeout() => timeout_with_retry_hint(&e),
             FetchError::Http(re) if is_transient_network(re) => transient_with_network_hint(&e),
@@ -574,10 +574,10 @@ mod tests {
         assert_eq!(err.exit_code(), 66, "expected EX_NOINPUT (66)");
     }
 
-    /// [T-ER023] ADR-0065 priority 2 wins over priority 5 for Api 4xx codes.
+    /// [T-ER023] ADR-0011 priority 2 wins over priority 5 for Api 4xx codes.
     /// Prior to the priority rule reflection, `GitHubError::Api { code: 4xx }` and
     /// `BraveError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).
-    /// Per ADR-0065 they must classify as DataError (exit 65).
+    /// Per ADR-0011 priority 2 they must classify as DataError (exit 65 per ADR-0002).
     #[test]
     fn api_4xx_classifies_as_data_error_per_priority_2() {
         let github_400 = ScoutError::from(github::GitHubError::Api {
@@ -599,7 +599,7 @@ mod tests {
         }
     }
 
-    /// [T-ER024] ADR-0065 priority 4 (TEMP_FAILURE) takes precedence for `Api { 5xx }`
+    /// [T-ER024] ADR-0011 priority 4 (TEMP_FAILURE) takes precedence for `Api { 5xx }`
     /// even though priority 5 (INTERNAL) could match the bare `Api { .. }` arm.
     /// Match-arm ordering enforces the priority ranking.
     #[test]
@@ -621,7 +621,7 @@ mod tests {
 
     /// [T-ER025] INTERNAL (70) reserved for scout-side schema bugs.
     /// `Decode` / `ParseJson` variants from GitHub, Slack, and Brave APIs signal
-    /// an unexpected response shape — by ADR-0065 priority 5 these are scout's
+    /// an unexpected response shape — by ADR-0011 priority 5 these are scout's
     /// invariant violation, not external IO failure (which maps to IoError 74).
     #[test]
     fn schema_decode_classifies_as_internal_exit_70() {
@@ -645,7 +645,7 @@ mod tests {
     /// Prior to this fix, 401 fell through the generic `(400..500)` DataError arm
     /// (exit 65) because the GitHubClient surfaces every non-special 4xx as
     /// `GitHubError::Api`. 401 is an auth-class failure — the user must set
-    /// `GITHUB_TOKEN` or run `gh auth login` — so ADR-0065 priority 1 (USAGE_ERROR)
+    /// `GITHUB_TOKEN` or run `gh auth login` — so ADR-0011 priority 1 (USAGE_ERROR)
     /// is the correct landing, peer to `GitHubError::Forbidden`.
     #[test]
     fn github_401_classifies_as_usage_error_with_auth_hint() {
@@ -664,8 +664,9 @@ mod tests {
 
     /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
     /// neither 4xx (priority 2) nor 5xx (priority 4). Exit 104 is the PJ
-    /// extension reserved by ADR-0065 §Classification Priority. A rising rate
-    /// of Unknown signals the classification design needs revisiting.
+    /// extension reserved per ADR-0002, populated via ADR-0011 §Classification
+    /// Priority Table 退避 slot. A rising rate of Unknown signals the
+    /// classification design needs revisiting.
     #[test]
     fn unclassified_api_classifies_as_unknown_exit_104() {
         let cases: Vec<ScoutError> = vec![
@@ -710,7 +711,7 @@ mod tests {
     }
 
     /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002).
-    /// Per ADR-0065 priority 2, `*Error::Api { code }` 4xx (other than 401/403/404) now
+    /// Per ADR-0011 priority 2, `*Error::Api { code }` 4xx (other than 401/403/404) now
     /// routes to DataError instead of folding onto IoError via `internal()`. The three
     /// `Insecure*` variants (one per backend) belong here because a plain-HTTP URL is a
     /// caller-supplied config defect, not a transient runtime failure.
@@ -780,7 +781,7 @@ mod tests {
     }
 
     /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
-    /// Timeout cases moved to T-ER027 with exit 124 per ADR-0065.
+    /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
     #[test]
     fn temp_failure_errors_have_exit_code_75() {
         let cases: Vec<ScoutError> = vec![

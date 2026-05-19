@@ -101,7 +101,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 * 各 `ErrorCode` バリアントの construction site で本 ADR の mapping table を参照
 * `unwrap_or_note` を `unwrap_or_degraded` に rename 済み (`src/tools/errors.rs` `unwrap_or_degraded`)。`DegradedReason` を受け取り、`Degradation::push` 経由で `(notes[i], reasons[i])` の pair invariant を保ったまま統一的に蓄積する形に refactor 済み
 * `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 9 variants、上記 Note 2026-05-19 post-ADR-0005 update を参照)
-* ADR-0065 §Classification Priority の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 `From<...>` 実装の match arm 順序と `// Priority N` コメントで明示する。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool / IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script / agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
+* ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 `From<...>` 実装の match arm 順序と `// Priority N` コメントで明示する。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool / IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script / agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
 
 ### Reassessment Triggers
 
@@ -114,7 +114,9 @@ Chosen option: Option A, because public CLI contract として一貫した class
 ### 参照
 
 * `docs/decisions/0002-adopt-sysexitsh-exit-code-convention-for-cli.md` (exit code 値の source)
-* `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (JSON schema 部分は依然 ADR-0065 active)
+* `docs/decisions/0010-scout-local-json-envelope-contract.md` (JSON schema portion を scout-local 化、本 ADR の Degradation field omit policy も Rule 2-3 で governed)
+* `docs/decisions/0011-scout-local-classification-priority-policy.md` (Classification Priority portion を scout-local 化、本 ADR が参照する 5 段 ranking の現行 source of truth)
+* `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (全 portion supersede 済 meta ADR、historical reference)
 * `docs/audit/2026-05-13-undocumented-decisions-part2.md` (本 ADR の根拠 audit、Candidate #7 + #8)
 * `src/tools/errors.rs` (`From<SlackError>` priority-2 集約 + `unwrap_or_degraded` 実装), `src/envelope.rs` (`Degradation` / `DegradedReason` typed enum) — implementation sites (audit 時点の違反は resolved 済み、historical record は `docs/audit/2026-05-13-undocumented-decisions-part2.md` を参照)
 * `docs/audit/2026-05-14-adr-drift.md` (PR #94 後の追従 audit)

@@ -16,6 +16,7 @@ This directory contains important decisions about the project's architecture.
 | [0008](0008-trait-injection-and-scoutbuilder-for-test-seam.md) | Test seam architecture via `Arc<dyn Trait>` fields and `ScoutBuilder` | accepted | 2026-05-19 |
 | [0009](0009-object-safe-dns-resolver-and-arc-injection.md) | Object-safe `DnsResolver` and `Arc<dyn DnsResolver>` injection | accepted | 2026-05-19 |
 | [0010](0010-scout-local-json-envelope-contract.md) | Scout-local JSON envelope contract | accepted | 2026-05-19 |
+| [0011](0011-scout-local-classification-priority-policy.md) | Scout-local Classification Priority Policy | accepted | 2026-05-19 |
 
 ## By Status
 
@@ -31,6 +32,7 @@ This directory contains important decisions about the project's architecture.
 - **0008**: Test seam architecture via `Arc<dyn Trait>` fields and `ScoutBuilder`
 - **0009**: Object-safe `DnsResolver` and `Arc<dyn DnsResolver>` injection
 - **0010**: Scout-local JSON envelope contract
+- **0011**: Scout-local Classification Priority Policy
 
 ## About MADR Format
 

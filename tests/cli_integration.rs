@@ -22,7 +22,7 @@ fn help_exits_zero_and_contains_app_name() {
         stdout.contains("sysexits.h"),
         "help should reference sysexits.h, got:\n{stdout}"
     );
-    // ADR-0065 — every documented non-zero exit code must surface in --help so
+    // ADR-0002 — every documented non-zero exit code must surface in --help so
     // agent/script callers can discover the contract without reading source.
     // Match the `  CODE  ` table layout to avoid substring collisions (e.g.,
     // "75" inside a future "175 RPM" mention).
@@ -30,7 +30,7 @@ fn help_exits_zero_and_contains_app_name() {
         let needle = format!("  {code}  ");
         assert!(
             stdout.contains(&needle),
-            "help should advertise exit code {code} as `{needle}` per ADR-0065, got:\n{stdout}"
+            "help should advertise exit code {code} as `{needle}` per ADR-0002, got:\n{stdout}"
         );
     }
 }
@@ -61,7 +61,7 @@ fn search_without_api_key_exits_64() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "missing API key should be exit 64 (EX_USAGE per ADR-0065)"
+        "missing API key should be exit 64 (EX_USAGE per ADR-0002)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -105,7 +105,7 @@ fn fetch_invalid_url_exits_65() {
     assert_eq!(
         output.status.code(),
         Some(65),
-        "invalid URL should be exit 65 (EX_DATAERR per ADR-0065)"
+        "invalid URL should be exit 65 (EX_DATAERR per ADR-0002)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -124,7 +124,7 @@ fn repo_tree_bad_format_exits_65() {
     assert_eq!(
         output.status.code(),
         Some(65),
-        "malformed owner/repo should be exit 65 (EX_DATAERR per ADR-0065)"
+        "malformed owner/repo should be exit 65 (EX_DATAERR per ADR-0002)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -164,7 +164,7 @@ fn json_emits_envelope_on_error() {
     let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
     assert_eq!(
         value["error"]["code"], "DATA_ERROR",
-        "code should be DATA_ERROR per ADR-0065, got: {value}"
+        "code should be DATA_ERROR per ADR-0010, got: {value}"
     );
     assert_eq!(
         value["error"]["retryable"], false,
@@ -209,7 +209,7 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
     let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
-        "missing API key is a usage problem per ADR-0065, got: {value}"
+        "missing API key is a usage problem per ADR-0011 priority 1, got: {value}"
     );
     assert!(
         value["error"]["next_step"]
@@ -229,7 +229,7 @@ fn json_clap_parse_error_emits_envelope() {
     assert_eq!(
         output.status.code(),
         Some(64),
-        "clap parse error should exit 64 (EX_USAGE per ADR-0065)"
+        "clap parse error should exit 64 (EX_USAGE per ADR-0002)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
@@ -239,7 +239,7 @@ fn json_clap_parse_error_emits_envelope() {
     let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
-        "clap parse error should be USAGE_ERROR per ADR-0065, got: {value}"
+        "clap parse error should be USAGE_ERROR per ADR-0011 priority 1, got: {value}"
     );
 }
 
