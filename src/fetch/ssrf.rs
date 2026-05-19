@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::pin::Pin;
 use std::time::Duration;
 
 use tokio::net::lookup_host;
@@ -14,24 +15,29 @@ use super::FetchError;
 
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) trait DnsResolver: Clone + Send + Sync + 'static {
-    fn lookup(
-        &self,
-        host: &str,
-        port: u16,
-    ) -> impl Future<Output = Result<Vec<IpAddr>, FetchError>> + Send;
+/// Object-safe boxed future returned by [`DnsResolver::lookup`].
+pub(crate) type DnsLookupFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, FetchError>> + Send + 'a>>;
+
+/// Resolves a host to one or more IP addresses. `Send + Sync` so implementations
+/// can sit behind an `Arc<dyn DnsResolver>` shared across async tasks.
+pub(crate) trait DnsResolver: Send + Sync {
+    fn lookup(&self, host: &str, port: u16) -> DnsLookupFuture<'_>;
 }
 
-#[derive(Clone, Copy)]
+/// Production resolver: `tokio::net::lookup_host` with a 5s timeout.
 pub(crate) struct TokioDnsResolver;
 
 impl DnsResolver for TokioDnsResolver {
-    async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, FetchError> {
-        let addrs = timeout(DNS_LOOKUP_TIMEOUT, lookup_host(format!("{host}:{port}")))
-            .await
-            .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_owned()))?
-            .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
-        Ok(addrs.map(|a| a.ip()).collect())
+    fn lookup(&self, host: &str, port: u16) -> DnsLookupFuture<'_> {
+        let target = format!("{host}:{port}");
+        Box::pin(async move {
+            let addrs = timeout(DNS_LOOKUP_TIMEOUT, lookup_host(target))
+                .await
+                .map_err(|_| FetchError::DnsResolution("DNS lookup timed out".to_owned()))?
+                .map_err(|e| FetchError::DnsResolution(e.to_string()))?;
+            Ok(addrs.map(|a| a.ip()).collect())
+        })
     }
 }
 
@@ -92,7 +98,7 @@ impl fmt::Display for ValidatedUrl {
 
 pub(crate) async fn ssrf_check(
     raw: &str,
-    resolver: &impl DnsResolver,
+    resolver: &dyn DnsResolver,
 ) -> Result<ValidatedUrl, FetchError> {
     let parsed = validate_url_sync(raw).map_err(|e| {
         if matches!(e, FetchError::InternalHost) {
@@ -241,32 +247,46 @@ mod tests {
     }
 }
 
+/// Resolver test double returning a fixed IP list.
+#[cfg(test)]
+pub(crate) struct StaticDnsResolver(pub Vec<IpAddr>);
+
+#[cfg(test)]
+impl StaticDnsResolver {
+    /// Construct from a single IP literal. Panics if `ip` is not a valid `IpAddr`.
+    pub(crate) fn single(ip: &str) -> Self {
+        Self(vec![ip.parse().expect("test IP must parse")])
+    }
+}
+
+#[cfg(test)]
+impl DnsResolver for StaticDnsResolver {
+    fn lookup(&self, _host: &str, _port: u16) -> DnsLookupFuture<'_> {
+        let addrs = self.0.clone();
+        Box::pin(async move { Ok(addrs) })
+    }
+}
+
+/// Resolver test double that always fails with the given message.
+#[cfg(test)]
+pub(crate) struct FailingDnsResolver(pub String);
+
+#[cfg(test)]
+impl DnsResolver for FailingDnsResolver {
+    fn lookup(&self, _host: &str, _port: u16) -> DnsLookupFuture<'_> {
+        let message = self.0.clone();
+        Box::pin(async move { Err(FetchError::DnsResolution(message)) })
+    }
+}
+
 #[cfg(test)]
 mod dns_tests {
     use super::*;
 
-    #[derive(Clone)]
-    struct AllowDns(Vec<IpAddr>);
-
-    impl DnsResolver for AllowDns {
-        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-            Ok(self.0.clone())
-        }
-    }
-
-    #[derive(Clone)]
-    struct FailDns(String);
-
-    impl DnsResolver for FailDns {
-        async fn lookup(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, FetchError> {
-            Err(FetchError::DnsResolution(self.0.clone()))
-        }
-    }
-
     /// [T-FS004] ssrf_blocks_dns_resolving_to_private_ip
     #[tokio::test]
     async fn ssrf_blocks_dns_resolving_to_private_ip() {
-        let resolver = AllowDns(vec!["127.0.0.1".parse().unwrap()]);
+        let resolver = StaticDnsResolver::single("127.0.0.1");
         let result = ssrf_check("https://evil.com/secret", &resolver).await;
         assert!(matches!(result, Err(FetchError::InternalHost)));
     }
@@ -274,7 +294,7 @@ mod dns_tests {
     /// [T-FS005] ssrf_allows_dns_resolving_to_public_ip
     #[tokio::test]
     async fn ssrf_allows_dns_resolving_to_public_ip() {
-        let resolver = AllowDns(vec!["8.8.8.8".parse().unwrap()]);
+        let resolver = StaticDnsResolver::single("8.8.8.8");
         let result = ssrf_check("https://example.com/page", &resolver).await;
         assert!(result.is_ok());
     }
@@ -282,7 +302,7 @@ mod dns_tests {
     /// [T-FS006] ssrf_returns_error_on_dns_failure
     #[tokio::test]
     async fn ssrf_returns_error_on_dns_failure() {
-        let resolver = FailDns("lookup failed".into());
+        let resolver = FailingDnsResolver("lookup failed".into());
         let result = ssrf_check("https://example.com/page", &resolver).await;
         assert!(matches!(result, Err(FetchError::DnsResolution(_))));
     }
@@ -290,7 +310,7 @@ mod dns_tests {
     /// [T-FS007] ssrf_skips_dns_for_ip_literals
     #[tokio::test]
     async fn ssrf_skips_dns_for_ip_literals() {
-        let resolver = AllowDns(vec![]);
+        let resolver = StaticDnsResolver(vec![]);
         let result = ssrf_check("https://8.8.8.8/page", &resolver).await;
         assert!(result.is_ok());
     }
