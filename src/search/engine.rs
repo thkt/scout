@@ -131,13 +131,13 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     }
     out.push_str("---\n\n## Fetched Pages\n\n");
     for page in pages {
-        let _ = writeln!(out, "### {}\n", sanitize_heading(&page.url));
-        if page.used_raw_fallback {
+        let _ = writeln!(out, "### {}\n", sanitize_heading(page.url()));
+        if page.used_raw_fallback() {
             out.push_str(fetch::converter::RAW_FALLBACK_NOTE);
         }
         // Shift headings by 3 levels so page content (h1->h4, h2->h5, ...)
         // does not collide with the report's own heading hierarchy.
-        let content = shift_headings(&page.markdown, 3);
+        let content = shift_headings(page.markdown(), 3);
         out.push_str(&truncate_with_note(&content, MAX_PAGE_BYTES));
         out.push_str("\n\n");
     }
@@ -271,11 +271,11 @@ mod tests {
     #[test]
     fn format_report_includes_fetched_pages() {
         let report = ResearchReport {
-            fetched_pages: vec![FetchResult {
-                url: "https://example.com".into(),
-                markdown: "# Example Page\n\n## Section\n\nSome content here.".into(),
-                used_raw_fallback: false,
-            }],
+            fetched_pages: vec![FetchResult::for_test(
+                "https://example.com".into(),
+                "# Example Page\n\n## Section\n\nSome content here.".into(),
+                false,
+            )],
             failed_urls: vec![],
             sources: vec![],
         };
@@ -300,11 +300,11 @@ mod tests {
         let total = MAX_PAGE_BYTES + 2_000;
         let long_content = "x".repeat(total);
         let report = ResearchReport {
-            fetched_pages: vec![FetchResult {
-                url: "https://long.com".into(),
-                markdown: long_content,
-                used_raw_fallback: false,
-            }],
+            fetched_pages: vec![FetchResult::for_test(
+                "https://long.com".into(),
+                long_content,
+                false,
+            )],
             failed_urls: vec![],
             sources: vec![],
         };
@@ -420,35 +420,23 @@ mod tests {
         let mut indexed_pages: Vec<(usize, FetchResult)> = vec![
             (
                 2,
-                FetchResult {
-                    url: "https://c.com".into(),
-                    markdown: String::new(),
-                    used_raw_fallback: false,
-                },
+                FetchResult::for_test("https://c.com".into(), String::new(), false),
             ),
             (
                 0,
-                FetchResult {
-                    url: "https://a.com".into(),
-                    markdown: String::new(),
-                    used_raw_fallback: false,
-                },
+                FetchResult::for_test("https://a.com".into(), String::new(), false),
             ),
             (
                 1,
-                FetchResult {
-                    url: "https://b.com".into(),
-                    markdown: String::new(),
-                    used_raw_fallback: false,
-                },
+                FetchResult::for_test("https://b.com".into(), String::new(), false),
             ),
         ];
 
         indexed_pages.sort_by_key(|(idx, _)| *idx);
         let pages: Vec<_> = indexed_pages.into_iter().map(|(_, page)| page).collect();
 
-        assert_eq!(pages[0].url, "https://a.com");
-        assert_eq!(pages[1].url, "https://b.com");
-        assert_eq!(pages[2].url, "https://c.com");
+        assert_eq!(pages[0].url(), "https://a.com");
+        assert_eq!(pages[1].url(), "https://b.com");
+        assert_eq!(pages[2].url(), "https://c.com");
     }
 }

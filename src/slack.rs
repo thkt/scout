@@ -40,13 +40,30 @@ pub(crate) enum SlackError {
     InsecureUrl,
 }
 
+/// Parsed Slack message URL. Fields are private so the only construction path
+/// is [`parse_slack_url`]; this guarantees `workspace`/`channel`/`ts` carry the
+/// shape that path established (non-empty workspace, `<secs>.<micros>` ts).
 #[derive(Debug, Clone)]
 pub(crate) struct SlackUrl {
-    pub workspace: String,
-    pub channel: String,
-    pub ts: String,
-    pub thread_ts: Option<String>,
-    pub raw_url: String,
+    workspace: String,
+    channel: String,
+    ts: String,
+    thread_ts: Option<String>,
+    raw_url: String,
+}
+
+impl SlackUrl {
+    pub(crate) fn workspace(&self) -> &str {
+        &self.workspace
+    }
+
+    pub(crate) fn channel(&self) -> &str {
+        &self.channel
+    }
+
+    pub(crate) fn raw_url(&self) -> &str {
+        &self.raw_url
+    }
 }
 
 /// Parse a Slack message URL into its components.
@@ -746,15 +763,10 @@ mod tests {
     /// [T-SK008] format_slack_output uses targeted reply as primary message
     #[test]
     fn format_output_uses_reply_as_primary_when_targeted() {
-        let slack_url = SlackUrl {
-            workspace: "team".into(),
-            channel: "C123".into(),
-            ts: "1111111111.222222".into(),
-            thread_ts: Some("1234567890.123456".into()),
-            raw_url:
-                "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456"
-                    .into(),
-        };
+        let slack_url = parse_slack_url(
+            "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456",
+        )
+        .expect("URL fixture should parse");
         let reply = ResolvedMessage {
             author: "reply-author".into(),
             text: "reply body".into(),

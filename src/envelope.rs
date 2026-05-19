@@ -79,13 +79,17 @@ impl Degradation {
 /// Internal command output: holds both the Markdown rendering and the
 /// structured `data` payload, plus degradation signals. Each handler builds
 /// one of these; `lib::run` picks the path (Markdown or JSON) at the boundary.
+///
+/// Fields are private to enforce the `(degraded, notes, degraded_reasons)`
+/// invariant: a literal `degraded: false` paired with non-empty `notes`
+/// cannot be constructed. Use [`Self::ok`] or [`Self::with_degradation`].
 #[derive(Debug)]
 pub(crate) struct CommandOutput {
-    pub markdown: String,
-    pub data: serde_json::Value,
-    pub notes: Vec<String>,
-    pub degraded_reasons: Vec<DegradedReason>,
-    pub degraded: bool,
+    markdown: String,
+    data: serde_json::Value,
+    notes: Vec<String>,
+    degraded_reasons: Vec<DegradedReason>,
+    degraded: bool,
 }
 
 impl CommandOutput {
@@ -116,6 +120,40 @@ impl CommandOutput {
             degraded_reasons,
             degraded,
         }
+    }
+
+    /// Consume self and return the rendered Markdown body.
+    pub(crate) fn into_markdown(self) -> String {
+        self.markdown
+    }
+
+    /// Consume self into a [`SuccessEnvelope`]. Moves `data`, `notes`, and
+    /// `degraded_reasons` without cloning.
+    pub(crate) fn into_envelope(self) -> SuccessEnvelope {
+        SuccessEnvelope {
+            data: self.data,
+            degraded: self.degraded,
+            notes: self.notes,
+            degraded_reasons: self.degraded_reasons,
+        }
+    }
+}
+
+/// Test-only accessors. Production paths consume via [`CommandOutput::into_markdown`]
+/// or [`CommandOutput::into_envelope`]; tests need to assert multiple fields
+/// without consuming the value.
+#[cfg(test)]
+impl CommandOutput {
+    pub(crate) fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    pub(crate) fn data(&self) -> &serde_json::Value {
+        &self.data
+    }
+
+    pub(crate) fn degraded_reasons(&self) -> &[DegradedReason] {
+        &self.degraded_reasons
     }
 }
 
@@ -321,12 +359,19 @@ mod tests {
     /// [T-EN007] CommandOutput::ok produces non-degraded with empty notes
     #[test]
     fn command_output_ok_is_not_degraded() {
-        let out = CommandOutput::ok(String::from("md"), serde_json::json!({"a": 1}));
-        assert_eq!(out.markdown, "md");
-        assert_eq!(out.data, serde_json::json!({"a": 1}));
-        assert!(out.notes.is_empty());
-        assert!(out.degraded_reasons.is_empty());
-        assert!(!out.degraded);
+        let env =
+            CommandOutput::ok(String::from("md"), serde_json::json!({"a": 1})).into_envelope();
+        assert_eq!(env.data, serde_json::json!({"a": 1}));
+        assert!(env.notes.is_empty());
+        assert!(env.degraded_reasons.is_empty());
+        assert!(!env.degraded);
+    }
+
+    /// [T-EN015] CommandOutput preserves the markdown body across into_markdown
+    #[test]
+    fn command_output_into_markdown_returns_body() {
+        let out = CommandOutput::ok(String::from("md body"), serde_json::Value::Null);
+        assert_eq!(out.into_markdown(), "md body");
     }
 
     /// [T-EN008] CommandOutput::with_degradation sets degraded=true when degradation non-empty
@@ -338,10 +383,11 @@ mod tests {
             DegradedReason::IssuesFetchFailed,
         );
         let out = CommandOutput::with_degradation(String::from("md"), serde_json::Value::Null, deg);
-        assert!(out.degraded);
-        assert_eq!(out.notes, vec!["partial fetch"]);
+        let env = out.into_envelope();
+        assert!(env.degraded);
+        assert_eq!(env.notes, vec!["partial fetch"]);
         assert_eq!(
-            out.degraded_reasons,
+            env.degraded_reasons,
             vec![DegradedReason::IssuesFetchFailed]
         );
     }
@@ -354,8 +400,9 @@ mod tests {
             serde_json::Value::Null,
             Degradation::default(),
         );
-        assert!(!out.degraded);
-        assert!(out.degraded_reasons.is_empty());
+        let env = out.into_envelope();
+        assert!(!env.degraded);
+        assert!(env.degraded_reasons.is_empty());
     }
 
     /// [T-EN010] ErrorCode serializes per ADR-0065 SCREAMING_SNAKE_CASE
