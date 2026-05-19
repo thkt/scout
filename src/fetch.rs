@@ -850,6 +850,16 @@ async fn download(
         return Ok((current_url, html));
     }
 
+    // CALIBRATION (issue #145 / #148 follow-up): structured fields below let
+    // callers sample empirical retry-success rate via `RUST_LOG=scout=warn`.
+    // Flip from DataError(65) to TempFailure(75) once rate > 10%.
+    let chain_length = max_redirects + 1;
+    warn!(
+        redirect_chain_length = chain_length,
+        max_redirects,
+        final_url = %RedactedLogUrl(current_url.as_str()),
+        "redirect cap exceeded"
+    );
     Err(FetchError::TooManyRedirects(max_redirects))
 }
 
@@ -1221,6 +1231,39 @@ mod download_tests {
             matches!(result, Err(FetchError::TooManyRedirects(0))),
             "should error on too many redirects, got: {result:?}"
         );
+    }
+
+    /// [T-F056] redirect_cap_exceeded_emits_calibration_warn — `redirect cap
+    /// exceeded` warn must carry structured fields (`redirect_chain_length`,
+    /// `max_redirects`, `final_url`) so caller logs can sample retry-success
+    /// rate for the DataError vs TempFailure flip decision (issue #145).
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn redirect_cap_exceeded_emits_calibration_warn() {
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/redir"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "https://example.com/next"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = no_redirect_client();
+        let result = download(
+            &client,
+            &validated(&format!("{}/redir", server.uri())),
+            0, // max_redirects = 0
+            &public_resolver(),
+        )
+        .await;
+        assert!(matches!(result, Err(FetchError::TooManyRedirects(0))));
+        assert!(logs_contain("redirect cap exceeded"));
+        assert!(logs_contain("redirect_chain_length"));
+        assert!(logs_contain("max_redirects"));
+        assert!(logs_contain("final_url"));
     }
 
     /// [T-F016] redirect_missing_location_header_returns_error
