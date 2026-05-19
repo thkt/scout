@@ -44,15 +44,15 @@ Chosen option: Option A, because silent behavior は CLI / agent 利用で debug
 
 GitHub docs は 403 で header を必ず付けるとは保証していないため、unknown は retry に倒す。
 
-### Rule 2: per_page > 100 → explicit error, no silent clamp
+### Rule 2: per_page must be 1..=100 (type-enforced, compile-time validated)
 
-`per_page` 受領値が 100 を超える場合:
+`per_page` 値は `PerPage` newtype で encapsulate される (`src/github.rs`):
 
-* explicit な `DataError` を返却 (exit 65 EX_DATAERR)
-* error message に "GitHub API limits per_page to 100" を含める
+* `pub const fn PerPage::new(n: u8)` で構築。`assert!` が `n` が 1..=100 範囲外なら panic
+* `const` context (例: `OVERVIEW_ITEMS = PerPage::new(5)`) では panic は compile-time に発火
 * silent clamp は廃止
-
-caller が GitHub API spec を知らない場合でも error で確実に通知される。
+* 0 は GitHub API の implementation-defined behavior (空配列 or デフォルト) を避けるため明示拒否
+* production caller は全て `const` 評価される literal のみ。runtime 入力経路を新設する際は fallible constructor (`TryFrom<u8>` 等) を別途追加する。
 
 ### Rule 3: filter_tree_entries glob is path-scoped
 
@@ -64,16 +64,16 @@ caller が GitHub API spec を知らない場合でも error で確実に通知�
 
 ### Consequences
 
-* Good, because CLI script が silent data truncation を検出可能 (per_page 違反は error)
+* Good, because invalid per_page 値が compile-time panic として検出される (silent data truncation 不可能)
 * Good, because rate limit retry が header 不在でも確実に発動
 * Good, because glob semantics が intuitive、`src/*.rs` 等が動作
-* Bad, because behavior 変更で既存 caller (per_page > 100 や filename-only glob 依存) が break する可能性 (semver bump 検討)
+* Bad, because behavior 変更で既存 caller (per_page > 100、per_page == 0、filename-only glob 依存) が break する可能性 (semver bump 検討)
 * Bad, because header 不在を retry に倒す decision は false-positive retry を増やす (secondary rate limit が稀に出る場合)
 
 ### Confirmation
 
 * `src/github.rs:153` 周辺で 403 + header 不在の unit test (mock response)、`RateLimited` に分類されることを確認
-* `src/github.rs:239` 周辺で per_page=200 受領 → `DataError` returned の test
+* `src/github.rs` の `PerPage::new` boundary test: `per_page=1` / `per_page=100` accept (T-GH011a)、`per_page=0` / `per_page=101` で panic 検証 (T-GH011b/c、`#[should_panic]`)
 * `src/github/helpers.rs:161` で `filter_tree_entries(entries, None, Some("src/*.rs"))` が `src/foo.rs` を含むことの test
 
 ## Pros and Cons of the Options
