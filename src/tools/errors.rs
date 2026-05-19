@@ -244,12 +244,14 @@ impl From<FetchError> for ScoutError {
             FetchError::TooLarge => {
                 Self::data_error(e.to_string()).with_next_step("fetch a smaller resource")
             }
-            // Classified as DataError (terminal) per priority 2: redirect chain
-            // shape is treated as caller-fixable URL config. CDN A/B test glitches
-            // or eventual-consistency redirects could be transient; pending
-            // empirical retry-success data, keep the terminal classification —
-            // flipping to TempFailure(75) requires measuring real-world retry
-            // success rate first.
+            // Classified as DataError (terminal) per priority 2. cap=5 absorbs
+            // canonical chains (HTTPS upgrade → trailing slash → final URL);
+            // breach dominantly indicates a server-side redirect loop or caller
+            // URL config mistake, both caller-fixable. Retry success rate is
+            // unobservable from inside scout (single-shot CLI with no
+            // caller-side telemetry seam), so the empirical calibration scoped
+            // in issue #148 cannot be run — terminal classification confirmed
+            // by first principles, not deferred.
             FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
                 .with_next_step("URL has too many redirects; check for a redirect loop"),
             // Status arms order specific HTTP codes before the 4xx / _ fallback;
