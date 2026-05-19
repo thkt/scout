@@ -26,9 +26,10 @@ pub(crate) enum DegradedReason {
 
 impl DegradedReason {
     /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
-    /// to build the `"Could not fetch {label} ({e})"` message. Only the three
-    /// `*FetchFailed` variants that flow through that helper get a meaningful
-    /// label; other variants build bespoke messages at their callsite.
+    /// to build the `"Could not fetch {label} ({e})"` message. The four
+    /// fetch-style variants (three `*FetchFailed` plus `BraveSearchFailed`)
+    /// that flow through that helper get a meaningful label; other variants
+    /// build bespoke messages at their callsite.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::IssuesFetchFailed => "issues",

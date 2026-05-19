@@ -14,6 +14,8 @@ This directory contains important decisions about the project's architecture.
 | [0006](0006-centralize-retry-after-delay-in-retry-helper.md) | Centralize retry-after delay in retry helper | accepted | 2026-05-16 |
 | [0007](0007-unify-brave-client-init-via-factory-and-result-based-https-check.md) | Unify Brave client init via factory and Result-based https check | accepted | 2026-05-17 |
 | [0008](0008-trait-injection-and-scoutbuilder-for-test-seam.md) | Test seam architecture via `Arc<dyn Trait>` fields and `ScoutBuilder` | accepted | 2026-05-19 |
+| [0009](0009-object-safe-dns-resolver-and-arc-injection.md) | Object-safe `DnsResolver` and `Arc<dyn DnsResolver>` injection | accepted | 2026-05-19 |
+| [0010](0010-scout-local-json-envelope-contract.md) | Scout-local JSON envelope contract | accepted | 2026-05-19 |
 
 ## By Status
 
@@ -27,6 +29,8 @@ This directory contains important decisions about the project's architecture.
 - **0006**: Centralize retry-after delay in retry helper
 - **0007**: Unify Brave client init via factory and Result-based https check
 - **0008**: Test seam architecture via `Arc<dyn Trait>` fields and `ScoutBuilder`
+- **0009**: Object-safe `DnsResolver` and `Arc<dyn DnsResolver>` injection
+- **0010**: Scout-local JSON envelope contract
 
 ## About MADR Format
 

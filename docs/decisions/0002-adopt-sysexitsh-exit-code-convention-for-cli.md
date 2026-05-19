@@ -92,7 +92,7 @@ scout 独自の意味づけ (例: 10 = network, 20 = parse, 30 = auth)。
 
 This ADR supersedes the **sysexits portion** of `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta ADR). The exit-code mapping table (64/65/66/74/75) was originally defined there as part of the agent-friendly CLI policy (ADR-0060 → ADR-0065 chain). It is now scout-local under this ADR. PR #94 で ADR-0065 9-code policy 採用に伴って追加された `70 EX_SOFTWARE` / `104 PJ extension` / `124 GNU coreutils` も本 ADR の scout-local 管理対象に含まれる (詳細は本 ADR 末尾の Note 2026-05-14 を参照)。
 
-The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mode, error envelope structure) is **not** included in this ADR and remains active in ADR-0065 until a scout-local ADR is promoted to capture it. Until then, code that maps `ErrorCode` → exit code is governed by this ADR; code that maps domain errors → `ErrorCode` JSON tags is governed by ADR-0065.
+The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mode, error envelope structure) is **not** included in this ADR. As of 2026-05-19, the JSON schema portion is captured by **ADR-0010 (scout-local)** which supersedes ADR-0065 for the `error.code` JSON tag, `ErrorEnvelope` / `SuccessEnvelope` / `ErrorPayload` structure, field omit policy, and `data` array `[]`-never-`null` invariant. Code that maps `ErrorCode` → exit code is governed by this ADR; code that maps domain errors → `ErrorCode` JSON tags and the envelope serialization rules are governed by ADR-0010.
 
 ### 採用 code 詳細
 

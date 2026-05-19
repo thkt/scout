@@ -12,6 +12,9 @@ use crate::clock::Clock;
 use crate::rng::Rng;
 
 const INITIAL_BACKOFF_MS: u64 = 1000;
+/// 5-min cap matches interactive CLI patience (a user waiting at a terminal
+/// stops trusting the tool past this point). Server hints beyond the cap
+/// fail fast rather than block.
 const MAX_RETRY_AFTER_SECS: u64 = 300;
 
 /// Default retry count used by every backend client when no override is
