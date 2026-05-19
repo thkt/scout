@@ -1,11 +1,21 @@
 use std::fmt;
 
+/// A secret value that hides its contents from `Debug` formatting.
+/// Construction returns `None` for empty/whitespace input so callers
+/// cannot store an effectively missing credential.
 #[derive(Clone)]
 pub(crate) struct Redacted(String);
 
 impl Redacted {
-    pub fn new(s: &str) -> Self {
-        Self(s.trim().to_owned())
+    /// Construct a redacted secret. Returns `None` when `s` is empty or
+    /// contains only whitespace; otherwise stores the trimmed value.
+    pub fn new(s: &str) -> Option<Self> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(Self(trimmed.to_owned()))
+        }
     }
 
     pub fn expose(&self) -> &str {
@@ -39,8 +49,28 @@ mod tests {
     /// [T-RD001] Redacted value hides contents in Debug output
     #[test]
     fn debug_is_redacted() {
-        let secret = Redacted::new("super-secret");
+        let secret = Redacted::new("super-secret").expect("static literal is non-empty");
         assert_eq!(format!("{secret:?}"), "[REDACTED]");
+    }
+
+    /// [T-RD002] Redacted::new rejects empty input
+    #[test]
+    fn new_rejects_empty_input() {
+        assert!(Redacted::new("").is_none());
+    }
+
+    /// [T-RD003] Redacted::new rejects whitespace-only input
+    #[test]
+    fn new_rejects_whitespace_only_input() {
+        assert!(Redacted::new("   ").is_none());
+        assert!(Redacted::new("\t\n").is_none());
+    }
+
+    /// [T-RD004] Redacted::new trims surrounding whitespace from accepted input
+    #[test]
+    fn new_trims_surrounding_whitespace() {
+        let secret = Redacted::new("  abc  ").expect("non-empty after trim");
+        assert_eq!(secret.expose(), "abc");
     }
 
     // T-RC007: validate_https_is_generic_over_caller_error_type

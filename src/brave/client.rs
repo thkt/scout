@@ -108,12 +108,10 @@ impl BraveClient {
         F: Fn(&str) -> Result<String, env::VarError>,
     {
         let api_key = get_var("BRAVE_SEARCH_API_KEY").map_err(|_| BraveError::ApiKeyNotSet)?;
-        if api_key.trim().is_empty() {
-            return Err(BraveError::ApiKeyNotSet);
-        }
+        let api_key = Redacted::new(&api_key).ok_or(BraveError::ApiKeyNotSet)?;
         Ok(Self {
             http,
-            api_key: Redacted::new(&api_key),
+            api_key,
             base_url: API_BASE.to_owned(),
             max_retries,
             #[cfg(test)]
@@ -125,7 +123,7 @@ impl BraveClient {
     pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            api_key: Redacted::new("test-key"),
+            api_key: Redacted::new("test-key").expect("static literal is non-empty"),
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
             skip_https_check: true,

@@ -48,14 +48,12 @@ async fn resolve_from_env_or_gh<F>(env_reader: F) -> Option<Redacted>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let from_env = ["GITHUB_TOKEN", "GH_TOKEN"]
+    if let Some(token) = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
         .filter_map(|var| env_reader(var))
-        .map(|t| t.trim().to_owned())
-        .find(|t| !t.is_empty());
-
-    if let Some(token) = from_env {
-        return Some(Redacted::new(&token));
+        .find_map(|t| Redacted::new(&t))
+    {
+        return Some(token);
     }
 
     let output = timeout(
@@ -84,8 +82,7 @@ where
         return None;
     }
 
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!token.is_empty()).then(|| Redacted::new(&token))
+    Redacted::new(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(test)]
@@ -124,7 +121,9 @@ mod tests {
     /// to fetch() callers without ever spawning the gh subprocess.
     #[tokio::test]
     async fn static_token_source_returns_constructor_value() {
-        let source = StaticTokenSource(Some(Redacted::new("fixed")));
+        let source = StaticTokenSource(Some(
+            Redacted::new("fixed").expect("static literal is non-empty"),
+        ));
         let token = source.fetch().await;
         assert_eq!(token.as_ref().map(Redacted::expose), Some("fixed"));
     }
