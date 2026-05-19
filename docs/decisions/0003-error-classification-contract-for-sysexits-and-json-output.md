@@ -56,6 +56,8 @@ Chosen option: Option A, because public CLI contract として一貫した class
 >
 > **Note (2026-05-13, follow-up implementation)**: 残り scope を additive route で実装完了。実装した variants は callsite から逆算した 8 種類 (`IssuesFetchFailed`, `PullsFetchFailed`, `ReleasesFetchFailed`, `ReadmeFetchFailed`, `ReadmeBlobFetchFailed`, `ReadmeDecodeFailed`, `UrlFetchFailed`, `ReadabilityFallback`)。当初挙げた `ReadmeMissing` は `resolve_readme` 実装が 404 を silent 扱い (notes 追加なし) としていたため variant 化せず、README 系は failure mode で 3 種に分割。JSON schema 変更は additive (`degraded_reasons` field を `skip_serializing_if = "Vec::is_empty"` で追加) なので Cargo `version = "1.0.0"` → `"1.1.0"` の minor bump。既存 caller (`notes` の `Vec<String>` 構造を見る) は無影響。
 >
+> **Note (2026-05-19, post-ADR-0005 update)**: ADR-0005 (Brave Search switch, 2026-05-15) に伴い `BraveSearchFailed` variant 追加で **計 9 variants**。`unwrap_or_degraded` 経由で meaningful label を持つのは `*FetchFailed` の 3 つに加えて `BraveSearchFailed` の合計 4 variants。命名規約 (`*FetchFailed`) の例外として `BraveSearchFailed` は Brave API endpoint 機能名 (search) に倣う。発見元 audit: `docs/audit/2026-05-19-undocumented-decisions.md` E-06。
+>
 > **README 404 silent の意図的選択**: 「README が存在しない repo」は scout として degraded ではない (overview は他フィールドだけで成立)。404 を silent にすることで `degraded` flag を「abnormal なときだけ立てる」契約に保つ。代わりに JSON consumer は `data.readme` が null か否かで「README の有無」を直接判別可能 (404 と fetch error の区別は `degraded_reasons` の `ReadmeFetchFailed` の有無で行う)。403 等の non-404 4xx は `ReadmeFetchFailed` で集約しており、status code 別の細分は当面 scope 外。
 
 ### Consequences
@@ -98,7 +100,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 
 * 各 `ErrorCode` バリアントの construction site で本 ADR の mapping table を参照
 * `unwrap_or_note` を `unwrap_or_degraded` に rename 済み (`src/tools/errors.rs` `unwrap_or_degraded`)。`DegradedReason` を受け取り、`Degradation::push` 経由で `(notes[i], reasons[i])` の pair invariant を保ったまま統一的に蓄積する形に refactor 済み
-* `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 8 variants、上記 Note 2026-05-13 follow-up implementation を参照)
+* `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 9 variants、上記 Note 2026-05-19 post-ADR-0005 update を参照)
 * ADR-0065 §Classification Priority の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 `From<...>` 実装の match arm 順序と `// Priority N` コメントで明示する。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool / IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script / agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
 
 ### Reassessment Triggers
