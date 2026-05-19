@@ -185,17 +185,15 @@ impl SlackClient {
 
     pub fn from_env(http: Client, max_retries: u32) -> Result<Self, SlackError> {
         let raw = env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
-        if raw.trim().is_empty() {
-            return Err(SlackError::TokenNotSet);
-        }
-        Ok(Self::new(http, Redacted::new(&raw), max_retries))
+        let token = Redacted::new(&raw).ok_or(SlackError::TokenNotSet)?;
+        Ok(Self::new(http, token, max_retries))
     }
 
     #[cfg(test)]
     fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
-            token: Redacted::new("xoxp-test"),
+            token: Redacted::new("xoxp-test").expect("static literal is non-empty"),
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
             skip_https_check: true,

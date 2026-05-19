@@ -536,7 +536,9 @@ mod http_tests {
     #[tokio::test]
     async fn from_env_with_static_source_installs_token() {
         use crate::token_source::StaticTokenSource;
-        let source = StaticTokenSource(Some(Redacted::new("injected-token")));
+        let source = StaticTokenSource(Some(
+            Redacted::new("injected-token").expect("static literal is non-empty"),
+        ));
         let client = GitHubClient::from_env_with_source(Client::new(), 0, &source).await;
         assert_eq!(
             client.token.as_ref().map(Redacted::expose),
