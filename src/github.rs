@@ -215,7 +215,7 @@ impl GitHubClient {
             }),
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
-                let retry_after = parse_retry_after(response.headers());
+                let retry_after = parse_retry_after(response.headers(), self.clock.as_ref());
                 warn!(retry_after_secs = retry_after, "GitHub API rate limited");
                 Err(GitHubError::RateLimited { retry_after })
             }
@@ -378,6 +378,9 @@ impl fmt::Display for PerPage {
 
 fn extract_error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
+        .inspect_err(
+            |e| debug!(error = %e, "GitHub error body is not JSON, falling back to truncated text"),
+        )
         .ok()
         .and_then(|v| v["message"].as_str().map(String::from))
         .unwrap_or_else(|| body.chars().take(200).collect())

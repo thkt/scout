@@ -1,13 +1,14 @@
 use std::error::Error as _;
 use std::future::Future;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use reqwest::Error;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
-use tracing::debug;
+use tracing::{debug, warn};
 
+use crate::clock::Clock;
 use crate::rng::Rng;
 
 const INITIAL_BACKOFF_MS: u64 = 1000;
@@ -95,11 +96,27 @@ where
     Err(last_err.unwrap_or_else(fallback_err))
 }
 
-pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get(RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
+/// Parse `Retry-After`. RFC 9110 §10.2.4 allows two forms: an integer delay
+/// in seconds, or an HTTP-date. The HTTP-date branch converts to "seconds
+/// from now" via `clock` so retry scheduling stays in the same units.
+pub(crate) fn parse_retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<u64> {
+    let raw = headers.get(RETRY_AFTER).and_then(|v| v.to_str().ok())?;
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(secs);
+    }
+    match httpdate::parse_http_date(raw) {
+        Ok(target) => match target.duration_since(UNIX_EPOCH) {
+            Ok(d) => Some(d.as_secs().saturating_sub(clock.now_secs())),
+            Err(e) => {
+                warn!(value = %raw, error = %e, "Retry-After HTTP-date is before Unix epoch");
+                None
+            }
+        },
+        Err(e) => {
+            warn!(value = %raw, error = %e, "unparseable Retry-After header");
+            None
+        }
+    }
 }
 
 /// Returns true when it makes sense to retry: the server-supplied delay fits
@@ -155,6 +172,7 @@ mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
+    use crate::clock::FixedClock;
     use crate::rng::{FastrandRng, SeededRng};
     use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 
@@ -406,5 +424,61 @@ mod tests {
             "schema fail must not classify as transient (is_decode={}): {err}",
             err.is_decode()
         );
+    }
+
+    fn headers_with_retry_after(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(RETRY_AFTER, value.parse().expect("static literal is valid"));
+        h
+    }
+
+    // T-R008: parse_retry_after_accepts_integer_seconds
+    // RFC 9110 §10.2.4 form 1: delay-seconds. Clock is irrelevant here;
+    // FixedClock(0) proves no clock arithmetic sneaks into the integer branch.
+    #[test]
+    fn parse_retry_after_accepts_integer_seconds() {
+        let headers = headers_with_retry_after("120");
+        assert_eq!(parse_retry_after(&headers, &FixedClock(0)), Some(120));
+    }
+
+    // T-R009: parse_retry_after_accepts_http_date
+    // RFC 9110 §10.2.4 form 2: HTTP-date. "Wed, 21 Oct 2015 07:28:00 GMT" =
+    // 1_445_412_480 unix seconds. FixedClock(1_445_412_180) is 300s earlier,
+    // so the returned delay must be 300 (target_secs - clock.now_secs()).
+    #[test]
+    fn parse_retry_after_accepts_http_date() {
+        let headers = headers_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT");
+        assert_eq!(
+            parse_retry_after(&headers, &FixedClock(1_445_412_180)),
+            Some(300)
+        );
+    }
+
+    // T-R010: parse_retry_after_clamps_past_http_date_to_zero
+    // If the HTTP-date is already in the past, saturating_sub clamps to 0
+    // (caller will treat as "retry now") rather than returning None.
+    #[test]
+    fn parse_retry_after_clamps_past_http_date_to_zero() {
+        let headers = headers_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT");
+        assert_eq!(
+            parse_retry_after(&headers, &FixedClock(2_000_000_000)),
+            Some(0)
+        );
+    }
+
+    // T-R011: parse_retry_after_returns_none_for_garbage
+    // Neither integer nor RFC-822/850/asctime date: drop and let caller fall
+    // back to jittered backoff.
+    #[test]
+    fn parse_retry_after_returns_none_for_garbage() {
+        let headers = headers_with_retry_after("definitely not a date");
+        assert_eq!(parse_retry_after(&headers, &FixedClock(0)), None);
+    }
+
+    // T-R012: parse_retry_after_returns_none_when_header_absent
+    #[test]
+    fn parse_retry_after_returns_none_when_header_absent() {
+        let headers = HeaderMap::new();
+        assert_eq!(parse_retry_after(&headers, &FixedClock(0)), None);
     }
 }
