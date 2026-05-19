@@ -491,7 +491,8 @@ async fn fetch_with_cdp(
 
     let handler_task = tokio::spawn(async move {
         while let Some(h) = handler.next().await {
-            if h.is_err() {
+            if let Err(e) = h {
+                debug!(error = ?e, "CDP handler stream ended with error");
                 break;
             }
         }
@@ -818,7 +819,7 @@ async fn download(
                     charset = extract_charset(ct_str);
                 }
                 Err(_) => {
-                    debug!(url = %RedactedLogUrl(current_url.as_str()), "Content-Type header is not valid ASCII, proceeding as text")
+                    warn!(url = %RedactedLogUrl(current_url.as_str()), "Content-Type header is not valid ASCII, proceeding as text")
                 }
             },
         }
@@ -868,7 +869,13 @@ fn extract_charset(content_type: &str) -> Option<String> {
 
 fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
     let label = charset.unwrap_or("utf-8");
-    let encoding = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or(encoding_rs::UTF_8);
+    let encoding = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or_else(|| {
+        warn!(
+            charset = label,
+            "unknown charset label, falling back to UTF-8"
+        );
+        encoding_rs::UTF_8
+    });
     if encoding == encoding_rs::UTF_8 {
         return String::from_utf8_lossy(bytes).into_owned();
     }

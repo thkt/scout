@@ -4,6 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use tracing::{debug, warn};
 
+use crate::clock::SystemClock;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
@@ -190,7 +191,7 @@ fn build_url(
 async fn classify_response(response: reqwest::Response) -> Result<reqwest::Response, BraveError> {
     let status = response.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        let retry_after = parse_retry_after(response.headers());
+        let retry_after = parse_retry_after(response.headers(), &SystemClock);
         warn!(retry_after_secs = retry_after, "Brave API rate limited");
         return Err(BraveError::RateLimited { retry_after });
     }

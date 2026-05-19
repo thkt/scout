@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
+use crate::clock::SystemClock;
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
@@ -254,7 +255,7 @@ impl SlackClient {
             .await
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
-        let retry_after = parse_retry_after(resp.headers());
+        let retry_after = parse_retry_after(resp.headers(), &SystemClock);
 
         if resp.status() == 429 {
             warn!(retry_after_secs = retry_after, "Slack API rate limited");

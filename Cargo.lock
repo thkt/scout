@@ -1840,6 +1840,7 @@ dependencies = [
  "fastrand",
  "futures",
  "globset",
+ "httpdate",
  "nix",
  "percent-encoding",
  "reqwest",
