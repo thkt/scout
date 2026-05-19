@@ -31,7 +31,7 @@ use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, TokioDnsResolver, fetch_page};
 use crate::github::types::ContentsResponse;
-use crate::github::{self, GitHubClient};
+use crate::github::{self, GitHubClient, PerPage};
 use crate::markdown::{shift_headings, truncate_with_note};
 use crate::rng::{FastrandRng, Rng};
 use crate::search::engine;
@@ -124,8 +124,8 @@ async fn resolve_stdin_arg(
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
-const OVERVIEW_ITEMS: u8 = 5;
-const OVERVIEW_RELEASES: u8 = 3;
+const OVERVIEW_ITEMS: PerPage = PerPage::new(5);
+const OVERVIEW_RELEASES: PerPage = PerPage::new(3);
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 
 pub struct Scout {

@@ -3,6 +3,7 @@ pub(crate) mod format;
 mod helpers;
 pub(crate) mod types;
 
+use std::fmt;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -65,9 +66,6 @@ pub(crate) enum GitHubError {
 
     #[error("Invalid glob pattern: {0}")]
     InvalidPattern(String),
-
-    #[error("per_page must be <= 100 (GitHub API limit), got {0}")]
-    InvalidPerPage(u8),
 
     #[error("Content decode error: {0}")]
     Decode(String),
@@ -319,9 +317,8 @@ impl GitHubClient {
         &self,
         owner: &str,
         repo: &str,
-        per_page: u8,
+        per_page: PerPage,
     ) -> Result<Vec<IssueInfo>, GitHubError> {
-        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -332,9 +329,8 @@ impl GitHubClient {
         &self,
         owner: &str,
         repo: &str,
-        per_page: u8,
+        per_page: PerPage,
     ) -> Result<Vec<PullInfo>, GitHubError> {
-        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
@@ -345,9 +341,8 @@ impl GitHubClient {
         &self,
         owner: &str,
         repo: &str,
-        per_page: u8,
+        per_page: PerPage,
     ) -> Result<Vec<ReleaseInfo>, GitHubError> {
-        validate_per_page(per_page)?;
         self.get_json(&format!(
             "/repos/{owner}/{repo}/releases?per_page={per_page}"
         ))
@@ -355,16 +350,29 @@ impl GitHubClient {
     }
 }
 
-/// ADR-0004 Rule 2: per_page > 100 returns explicit error rather than silent
-/// clamp. GitHub API caps per_page at 100; previously the code did
-/// `per_page.min(100)` silently, returning fewer results than requested with
-/// no diagnostic. Now callers receive `GitHubError::InvalidPerPage` (mapped
-/// to `data_error`, exit 65) and can correct the input.
-fn validate_per_page(per_page: u8) -> Result<(), GitHubError> {
-    if per_page > 100 {
-        Err(GitHubError::InvalidPerPage(per_page))
-    } else {
-        Ok(())
+/// ADR-0004 Rule 2: per_page is constrained to 1..=100 at the type level rather
+/// than silently clamped (originally `per_page.min(100)`). 0 — which the GitHub
+/// API treats as implementation-defined — is rejected for the same reason as
+/// values over 100.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PerPage(u8);
+
+impl PerPage {
+    /// Compile-time validated constructor. The `assert!` panics at compile
+    /// time when called from a `const` context with an out-of-range literal,
+    /// and at runtime for non-`const` callers.
+    pub const fn new(value: u8) -> Self {
+        assert!(
+            value >= 1 && value <= 100,
+            "PerPage must be 1..=100 (GitHub API limit)"
+        );
+        Self(value)
+    }
+}
+
+impl fmt::Display for PerPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -500,19 +508,26 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
-    /// [T-GH011] validate_per_page rejects values over 100 (ADR-0004 Rule 2)
+    /// [T-GH011a] PerPage::new accepts boundary values 1 and 100
     #[test]
-    fn validate_per_page_rejects_over_100() {
-        assert!(matches!(
-            super::validate_per_page(101),
-            Err(GitHubError::InvalidPerPage(101))
-        ));
-        assert!(matches!(
-            super::validate_per_page(255),
-            Err(GitHubError::InvalidPerPage(255))
-        ));
-        assert!(super::validate_per_page(100).is_ok());
-        assert!(super::validate_per_page(1).is_ok());
+    fn per_page_new_accepts_boundary_values() {
+        let _low = super::PerPage::new(1);
+        let _high = super::PerPage::new(100);
+    }
+
+    /// [T-GH011b] PerPage::new panics on 0 (ADR-0004 Rule 2; 0 is
+    /// implementation-defined behavior in GitHub API)
+    #[test]
+    #[should_panic(expected = "PerPage must be 1..=100")]
+    fn per_page_new_panics_on_zero() {
+        let _ = super::PerPage::new(0);
+    }
+
+    /// [T-GH011c] PerPage::new panics on values over 100 (ADR-0004 Rule 2)
+    #[test]
+    #[should_panic(expected = "PerPage must be 1..=100")]
+    fn per_page_new_panics_on_over_100() {
+        let _ = super::PerPage::new(101);
     }
 
     /// [T-GH018] from_env_with_source threads the injected TokenSource through
