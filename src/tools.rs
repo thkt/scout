@@ -267,7 +267,7 @@ impl Scout {
             )))
         })?;
 
-        if result.used_raw_fallback {
+        if result.used_raw_fallback() {
             warn!(url = %RedactedLogUrl(&url), "readability extraction failed, using raw fallback");
         }
 
@@ -275,7 +275,7 @@ impl Scout {
         let markdown = format_fetch_output(&result);
         let data = serde_json::to_value(&result).expect("FetchResult is Serialize");
         let mut degradation = Degradation::default();
-        if result.used_raw_fallback {
+        if result.used_raw_fallback() {
             degradation.push(
                 String::from(
                     "Readability extraction failed; raw page conversion was used instead.",
@@ -287,7 +287,7 @@ impl Scout {
     }
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
-        info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack)");
+        info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack)");
         let client = SlackClient::from_env(self.http.clone(), self.config.max_retries)?;
         let slack_timeout = self.config.slack_timeout;
         let output = timeout(slack_timeout, client.fetch_message(&slack_url))
@@ -299,12 +299,12 @@ impl Scout {
                 )))
             })
             .inspect_err(|e| {
-                warn!(workspace = %slack_url.workspace, channel = %slack_url.channel, error = %e, "slack fetch failed");
+                warn!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), error = %e, "slack fetch failed");
             })?;
-        info!(workspace = %slack_url.workspace, channel = %slack_url.channel, "fetch (slack) complete");
+        info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
         let markdown = truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned();
         let data = serde_json::json!({
-            "url": slack_url.raw_url,
+            "url": slack_url.raw_url(),
             "markdown": markdown,
         });
         Ok(CommandOutput::ok(markdown, data))
@@ -825,8 +825,8 @@ fn collect_research_degradations(report: &engine::ResearchReport, degradation: &
     let raw_fallback_pages: Vec<&str> = report
         .fetched_pages
         .iter()
-        .filter(|p| p.used_raw_fallback)
-        .map(|p| p.url.as_str())
+        .filter(|p| p.used_raw_fallback())
+        .map(FetchResult::url)
         .collect();
     if !raw_fallback_pages.is_empty() {
         degradation.push(
@@ -840,8 +840,8 @@ fn collect_research_degradations(report: &engine::ResearchReport, degradation: &
 }
 
 fn format_fetch_output(result: &FetchResult) -> String {
-    let shifted = shift_headings(&result.markdown, 2);
-    let output = if result.used_raw_fallback {
+    let shifted = shift_headings(result.markdown(), 2);
+    let output = if result.used_raw_fallback() {
         format!("{RAW_FALLBACK_NOTE}{shifted}")
     } else {
         shifted
@@ -892,7 +892,8 @@ mod tests {
 
         let result = s.search(params).await.unwrap();
         assert_eq!(
-            result.markdown, "https://rust-lang.org\nhttps://doc.rust-lang.org",
+            result.markdown(),
+            "https://rust-lang.org\nhttps://doc.rust-lang.org",
             "stdout should be one URL per line, no markdown decoration"
         );
     }
@@ -922,7 +923,7 @@ mod tests {
         };
 
         let result = s.search(params).await.unwrap();
-        let data = &result.data;
+        let data = result.data();
         assert!(data.get("answer").is_none(), "answer field must be absent");
         assert_eq!(data["query"], "foo");
         assert!(data["sources"].is_array());
@@ -975,8 +976,8 @@ mod tests {
             lang: Lang::Auto,
         };
         let result = s.search(params).await.unwrap();
-        assert_eq!(result.markdown, "", "empty stdout for zero results");
-        assert_eq!(result.data["sources"].as_array().unwrap().len(), 0);
+        assert_eq!(result.markdown(), "", "empty stdout for zero results");
+        assert_eq!(result.data()["sources"].as_array().unwrap().len(), 0);
     }
 
     /// [T-TS002] research returns report with Brave sources and no obsolete Search Result header
@@ -1008,15 +1009,17 @@ mod tests {
 
         let result = s.research(params).await.unwrap();
         assert!(
-            result.markdown.contains("rust-lang.test"),
+            result.markdown().contains("rust-lang.test"),
             "report should reference Brave source URL, got: {result:?}"
         );
         assert!(
-            !result.markdown.contains("## Search Result"),
+            !result.markdown().contains("## Search Result"),
             "AC-3.1: report must not contain the obsolete Search Result header"
         );
         assert!(
-            !result.markdown.contains("vertexaisearch.cloud.google.com"),
+            !result
+                .markdown()
+                .contains("vertexaisearch.cloud.google.com"),
             "AC-3.2: Sources must not contain Google redirect URLs"
         );
     }
@@ -1046,7 +1049,7 @@ mod tests {
             lang: Lang::Auto,
         };
         let result = s.research(params).await.unwrap();
-        let data = &result.data;
+        let data = result.data();
 
         assert_eq!(data["query"], "foo", "data.query must echo the request");
         assert!(data["sources"].is_array(), "data.sources must be an array");
@@ -1100,12 +1103,12 @@ mod tests {
 
         assert!(
             result
-                .degraded_reasons
+                .degraded_reasons()
                 .contains(&DegradedReason::BraveSearchFailed),
             "degraded_reasons must contain BraveSearchFailed; got: {:?}",
-            result.degraded_reasons
+            result.degraded_reasons()
         );
-        let data = &result.data;
+        let data = result.data();
         assert_eq!(
             data["sources"].as_array().unwrap().len(),
             0,
@@ -1166,7 +1169,7 @@ mod tests {
             lang: Lang::Auto,
         };
         let result = s.research(params).await.unwrap();
-        let data = &result.data;
+        let data = result.data();
 
         assert_eq!(
             data["sources"].as_array().unwrap().len(),
@@ -1188,11 +1191,11 @@ mod tests {
     /// [T-TS003] fetch_output_shifts_headings
     #[test]
     fn fetch_output_shifts_headings() {
-        let result = FetchResult {
-            url: "https://example.com".into(),
-            markdown: "# Title\n## Section\nContent".into(),
-            used_raw_fallback: false,
-        };
+        let result = FetchResult::for_test(
+            "https://example.com".into(),
+            "# Title\n## Section\nContent".into(),
+            false,
+        );
         let output = format_fetch_output(&result);
         assert!(output.contains("### Title"), "h1 should shift to h3");
         assert!(output.contains("#### Section"), "h2 should shift to h4");
@@ -1201,11 +1204,11 @@ mod tests {
     /// [T-TS004] fetch_output_shifts_headings_with_raw_fallback
     #[test]
     fn fetch_output_shifts_headings_with_raw_fallback() {
-        let result = FetchResult {
-            url: "https://example.com".into(),
-            markdown: "# Raw Title\nBody".into(),
-            used_raw_fallback: true,
-        };
+        let result = FetchResult::for_test(
+            "https://example.com".into(),
+            "# Raw Title\nBody".into(),
+            true,
+        );
         let output = format_fetch_output(&result);
         assert!(
             output.starts_with(RAW_FALLBACK_NOTE.trim_end()),
@@ -1217,11 +1220,11 @@ mod tests {
     /// [T-TS005] fetch_output_truncates_long_content
     #[test]
     fn fetch_output_truncates_long_content() {
-        let result = FetchResult {
-            url: "https://example.com".into(),
-            markdown: format!("# Title\n{}", "x".repeat(150_000)),
-            used_raw_fallback: false,
-        };
+        let result = FetchResult::for_test(
+            "https://example.com".into(),
+            format!("# Title\n{}", "x".repeat(150_000)),
+            false,
+        );
         let output = format_fetch_output(&result);
         assert!(
             output.len() < 150_000,
@@ -1584,11 +1587,11 @@ mod tests {
 
         let result = s.repo_read(params).await.unwrap();
         assert!(
-            result.markdown.contains("テスト"),
+            result.markdown().contains("テスト"),
             "output should contain decoded Shift_JIS text, got: {result:?}"
         );
         assert!(
-            result.markdown.contains("[encoding: shift_jis]"),
+            result.markdown().contains("[encoding: shift_jis]"),
             "header should include encoding label, got: {result:?}"
         );
     }
@@ -1642,15 +1645,15 @@ mod tests {
 
         let result = s.repo_tree(params).await.unwrap();
         assert!(
-            result.markdown.contains("src/main.rs"),
+            result.markdown().contains("src/main.rs"),
             "path filter should include src/main.rs, got:\n{result:?}"
         );
         assert!(
-            !result.markdown.contains("README.md"),
+            !result.markdown().contains("README.md"),
             "path filter should exclude README.md, got:\n{result:?}"
         );
         assert!(
-            !result.markdown.contains("Cargo.toml"),
+            !result.markdown().contains("Cargo.toml"),
             "path filter should exclude Cargo.toml, got:\n{result:?}"
         );
     }

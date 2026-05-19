@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
-use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, SuccessEnvelope};
+use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload};
 use signals::{InterruptSignal, wait_for_signal};
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
@@ -153,7 +153,7 @@ pub async fn run() -> ExitCode {
             let rendered = if json_mode {
                 render_json_success(output)
             } else {
-                output.markdown
+                output.into_markdown()
             };
             let mut handle = stdout().lock();
             match write_output(&mut handle, &rendered) {
@@ -177,13 +177,7 @@ pub async fn run() -> ExitCode {
 /// Takes `CommandOutput` by value so `data` and `notes` move into the envelope
 /// instead of being deep-cloned.
 fn render_json_success(output: CommandOutput) -> String {
-    let envelope = SuccessEnvelope {
-        data: output.data,
-        degraded: output.degraded,
-        notes: output.notes,
-        degraded_reasons: output.degraded_reasons,
-    };
-    serde_json::to_string(&envelope).expect("envelope is Serialize")
+    serde_json::to_string(&output.into_envelope()).expect("envelope is Serialize")
 }
 
 /// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0065.

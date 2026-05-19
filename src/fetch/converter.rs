@@ -4,14 +4,41 @@ use serde::Serialize;
 
 use super::extractor::ExtractedArticle;
 
-/// Fetched page content converted to Markdown.
+/// Fetched page content converted to Markdown. Fields are private so the only
+/// construction paths are [`to_fetch_result`] (production) and
+/// [`FetchResult::for_test`] (test fixtures); callers cannot build a result
+/// that bypasses Readability extraction or skips frontmatter rendering.
 #[derive(Debug, Serialize)]
 pub(crate) struct FetchResult {
-    pub url: String,
-    pub markdown: String,
+    url: String,
+    markdown: String,
     /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
     #[serde(skip_serializing)]
-    pub used_raw_fallback: bool,
+    used_raw_fallback: bool,
+}
+
+impl FetchResult {
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub(crate) fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    pub(crate) fn used_raw_fallback(&self) -> bool {
+        self.used_raw_fallback
+    }
+
+    /// Test-only constructor. Production code goes through [`to_fetch_result`].
+    #[cfg(test)]
+    pub(crate) fn for_test(url: String, markdown: String, used_raw_fallback: bool) -> Self {
+        Self {
+            url,
+            markdown,
+            used_raw_fallback,
+        }
+    }
 }
 
 pub(crate) const RAW_FALLBACK_NOTE: &str =
@@ -73,12 +100,12 @@ mod tests {
 
         let result = to_fetch_result(&article, "https://example.com".into());
 
-        assert!(result.markdown.starts_with("---\n"));
-        assert!(result.markdown.contains("\n---\n\n"));
-        assert!(result.markdown.contains("title: \"My Title\""));
-        assert!(result.markdown.contains("author: \"Jane Doe\""));
-        assert!(result.markdown.contains("date: \"2026-01-15\""));
-        assert!(result.markdown.contains("Body text"));
+        assert!(result.markdown().starts_with("---\n"));
+        assert!(result.markdown().contains("\n---\n\n"));
+        assert!(result.markdown().contains("title: \"My Title\""));
+        assert!(result.markdown().contains("author: \"Jane Doe\""));
+        assert!(result.markdown().contains("date: \"2026-01-15\""));
+        assert!(result.markdown().contains("Body text"));
     }
 
     /// [T-FC002] frontmatter_omits_missing_fields
@@ -94,9 +121,9 @@ mod tests {
 
         let result = to_fetch_result(&article, "https://example.com".into());
 
-        assert!(result.markdown.contains("title: \"Only Title\""));
-        assert!(!result.markdown.contains("author:"));
-        assert!(!result.markdown.contains("date:"));
+        assert!(result.markdown().contains("title: \"Only Title\""));
+        assert!(!result.markdown().contains("author:"));
+        assert!(!result.markdown().contains("date:"));
     }
 
     /// [T-FC003] escapes_yaml_special_chars
