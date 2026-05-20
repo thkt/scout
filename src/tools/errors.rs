@@ -348,8 +348,13 @@ impl From<BraveError> for ScoutError {
                 transient_with_retry_hint(&e)
             }
             // Priority 5: INTERNAL — schema drift is a scout-side invariant;
-            // peer to `GitHubError::Decode` / `SlackError::Decode`.
-            BraveError::ParseJson(_) => Self::internal_bug(e.to_string()),
+            // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
+            // body is an upstream invariant violation (Brave returning >1 MiB
+            // on `web/search`), classified the same as schema drift because
+            // it signals the API surface drifted and retry will not recover.
+            BraveError::ParseJson(_) | BraveError::ResponseTooLarge => {
+                Self::internal_bug(e.to_string())
+            }
             // Unknown — Api codes that did not match 4xx or 5xx
             BraveError::Api { .. } => Self::unknown(e.to_string()),
         }

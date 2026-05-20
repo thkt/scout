@@ -23,6 +23,16 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
+/// Upper bound on JSON response body bytes accepted from Brave and Slack
+/// (issue #165 / CHX-008 / CHX-009). 1 MiB comfortably covers a
+/// `web/search` payload at Brave's `count=20` default and a Slack thread
+/// at `SLACK_REPLIES_LIMIT=200`; an oversized response cannot consume
+/// unbounded memory while the JSON parser allocates. `fetch.rs` keeps a
+/// separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the JSON cap is an
+/// order of magnitude smaller because API payloads are structured data,
+/// not human pages.
+pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
+
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;
