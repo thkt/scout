@@ -14,7 +14,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, parse_retry_after, read_body_capped, retry_after_within_cap,
+    retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -297,15 +298,20 @@ impl SlackClient {
             return Err(SlackError::RateLimited { retry_after });
         }
 
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            // Schema fail → Decode (terminal). Transport drop → Network →
-            // retry loop. See `is_schema_decode_fail` (issue #113).
-            if is_schema_decode_fail(&e) {
-                SlackError::Decode(e.to_string())
-            } else {
-                SlackError::Network(e.to_string())
-            }
-        })?;
+        let bytes = read_body_capped(
+            resp,
+            || {
+                SlackError::Decode(format!(
+                    "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
+                ))
+            },
+            |e| SlackError::Network(e.to_string()),
+        )
+        .await?;
+        // Schema fail → Decode (terminal); transport drop already mapped to
+        // Network by the closure above (issue #113).
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| SlackError::Decode(e.to_string()))?;
 
         if body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             // ok:false with a missing `error` field is a Slack API contract
@@ -755,6 +761,38 @@ mod tests {
                 matches!(result, Err(SlackError::Decode(_))),
                 "expected SlackError::Decode for ok:false without error field, got: {result:?}"
             );
+        }
+
+        /// [T-SK032] (issue #165 / CHX-009)
+        /// Setup: wiremock returns a 2xx whose body exceeds
+        /// `MAX_API_RESPONSE_BYTES` (1 MiB), simulating a runaway Slack
+        /// thread/channel response.
+        /// Action: `api_get_once::<DummyBody>("test.method", &[])` is invoked.
+        /// Expected: returns `SlackError::Decode` (terminal — Slack contract
+        /// violation, retry will not recover). Body message contains
+        /// "too large" to surface the cap in the user-facing error.
+        #[tokio::test]
+        async fn api_get_once_oversized_body_returns_decode() {
+            let Some(server) = try_spawn_mock_server("slack::http").await else {
+                return;
+            };
+            let body = vec![b'x'; (1024 * 1024) + 1];
+            Mock::given(method("GET"))
+                .and(path("/test.method"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let client = SlackClient::with_base_url(Client::new(), &server.uri());
+            let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+            match result {
+                Err(SlackError::Decode(msg)) => assert!(
+                    msg.contains("too large"),
+                    "expected size-cap message, got: {msg}"
+                ),
+                other => panic!("expected SlackError::Decode for oversized body, got: {other:?}"),
+            }
         }
 
         /// [T-SK030] Mid-stream body drop on 2xx routes through SlackError::Network

@@ -23,6 +23,50 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
+/// Upper bound on JSON response body bytes accepted from Brave and Slack
+/// (issue #165 / CHX-008 / CHX-009). 1 MiB comfortably covers a
+/// `web/search` payload at Brave's `count=20` default and a Slack thread
+/// at `SLACK_REPLIES_LIMIT=200`; an oversized response cannot consume
+/// unbounded memory while the JSON parser allocates. `fetch.rs` keeps a
+/// separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the JSON cap is an
+/// order of magnitude smaller because API payloads are structured data,
+/// not human pages.
+pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Drain `response` into a `Vec<u8>` while enforcing `MAX_API_RESPONSE_BYTES`.
+/// Content-Length is pre-checked before any allocation; the chunk loop also
+/// rejects bodies that exceed the cap when the header is absent or lies.
+/// `fetch.rs` keeps its own copy because it interleaves charset and redirect
+/// handling around the same loop.
+pub(crate) async fn read_body_capped<E>(
+    response: reqwest::Response,
+    too_large: impl Fn() -> E,
+    network: impl Fn(reqwest::Error) -> E,
+) -> Result<Vec<u8>, E> {
+    let content_length = response.content_length();
+    if let Some(len) = content_length
+        && usize::try_from(len).unwrap_or(usize::MAX) > MAX_API_RESPONSE_BYTES
+    {
+        return Err(too_large());
+    }
+    let capacity = content_length
+        .map(|len| {
+            usize::try_from(len)
+                .unwrap_or(usize::MAX)
+                .min(MAX_API_RESPONSE_BYTES)
+        })
+        .unwrap_or(8192);
+    let mut body = Vec::with_capacity(capacity);
+    let mut stream = response;
+    while let Some(chunk) = stream.chunk().await.map_err(&network)? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_API_RESPONSE_BYTES {
+            return Err(too_large());
+        }
+    }
+    Ok(body)
+}
+
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;

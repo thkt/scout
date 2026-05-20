@@ -11,7 +11,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
+    retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -38,6 +39,9 @@ pub(crate) enum BraveError {
     #[error("Failed to parse Brave API response: {0}")]
     ParseJson(#[from] serde_json::Error),
 
+    #[error("Brave API response too large (>{} bytes)", MAX_API_RESPONSE_BYTES)]
+    ResponseTooLarge,
+
     #[error("Invalid Brave API URL: {0}")]
     ParseUrl(#[from] url::ParseError),
 
@@ -56,13 +60,15 @@ impl BraveError {
     /// may legitimately surface as a degraded result instead of propagating.
     ///
     /// Configuration errors (`ApiKeyNotSet`, `Unauthorized`, `ParseUrl`,
-    /// `InsecureBaseUrl`), the scout-side invariant `ParseJson`, and 4xx `Api`
-    /// codes stay propagated — they require user action or signal a scout bug.
+    /// `InsecureBaseUrl`), the scout-side invariants `ParseJson` and
+    /// `ResponseTooLarge`, and 4xx `Api` codes stay propagated — they require
+    /// user action or signal a scout/upstream invariant violation.
     pub(crate) fn is_degradable(&self) -> bool {
         match self {
             Self::ApiKeyNotSet
             | Self::Unauthorized
             | Self::ParseJson(_)
+            | Self::ResponseTooLarge
             | Self::ParseUrl(_)
             | Self::InsecureBaseUrl => false,
             Self::Api { code, .. } if (400..500).contains(code) => false,
@@ -200,7 +206,8 @@ impl BraveClient {
             .await?;
 
         let response = classify_response(response, self.clock.as_ref()).await?;
-        let bytes = response.bytes().await?;
+        let bytes =
+            read_body_capped(response, || BraveError::ResponseTooLarge, BraveError::from).await?;
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
         debug!(
@@ -300,6 +307,9 @@ fn is_retriable(e: &BraveError) -> bool {
         BraveError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
         BraveError::Server(_) => true,
         BraveError::Network(e) => is_transient_network(e),
+        // Oversized body is an upstream invariant violation (issue #165 /
+        // CHX-008), not transient — retry cannot shrink the response.
+        BraveError::ResponseTooLarge => false,
         _ => false,
     }
 }
@@ -515,6 +525,34 @@ mod http_tests {
         assert!(
             matches!(result, Err(BraveError::Server(503))),
             "expected ServerError(503), got: {result:?}"
+        );
+    }
+
+    /// [T-BC-CAP001] (issue #165 / CHX-008)
+    /// Setup: wiremock returns a 2xx whose body exceeds `MAX_API_RESPONSE_BYTES`
+    /// (1 MiB), simulating an upstream Brave deployment returning unbounded
+    /// JSON.
+    /// Action: `client.search("foo", None)` is invoked.
+    /// Expected: returns `BraveError::ResponseTooLarge`; no retry (mock call
+    /// count = 1) because the variant is not retriable.
+    #[tokio::test]
+    async fn search_oversized_body_returns_too_large() {
+        let Some(server) = try_spawn_mock_server("brave::http").await else {
+            return;
+        };
+        // 1 MiB + 1 byte trips the cap regardless of pre-check vs chunk path.
+        let body = vec![b'x'; (1024 * 1024) + 1];
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = BraveClient::with_base_url(Client::new(), &server.uri());
+        let result = client.search("foo", None).await;
+        assert!(
+            matches!(result, Err(BraveError::ResponseTooLarge)),
+            "expected ResponseTooLarge, got: {result:?}"
         );
     }
 
