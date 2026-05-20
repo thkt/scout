@@ -1,17 +1,19 @@
 use std::env;
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
 use tracing::{debug, warn};
 
-use crate::clock::SystemClock;
+use crate::clock::{Clock, SystemClock};
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
-use crate::rng::FastrandRng;
+use crate::rng::{FastrandRng, Rng};
 
 use super::types::{SearchResult, WebSearchResponse};
 
@@ -79,17 +81,37 @@ pub(crate) trait SearchClient {
     ) -> Result<Vec<SearchResult>, BraveError>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct BraveClient {
     http: Client,
     api_key: Redacted,
     base_url: String,
     max_retries: u32,
+    /// Wall-clock source for `secs_until_ratelimit_reset` / Retry-After
+    /// arithmetic. Set at construction and read on every retry; defaults to
+    /// `SystemClock`. Mirrors `GitHubClient`'s injection seam.
+    clock: Arc<dyn Clock>,
+    /// Backoff jitter source handed to `retry_with_rate_limit` per attempt.
+    /// Set at construction; defaults to `FastrandRng`.
+    rng: Arc<dyn Rng>,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `send_request` always
     /// runs `validate_https`; only `with_base_url` opts in.
     #[cfg(test)]
     skip_https_check: bool,
+}
+
+// Manual Debug because `clock` and `rng` are `dyn Trait` without Debug
+// bounds. `api_key` is intentionally not exposed so accidental `{client:?}`
+// in logs cannot leak the Brave secret.
+impl fmt::Debug for BraveClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BraveClient")
+            .field("base_url", &self.base_url)
+            .field("max_retries", &self.max_retries)
+            .field("api_key", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl BraveClient {
@@ -115,6 +137,8 @@ impl BraveClient {
             api_key,
             base_url: API_BASE.to_owned(),
             max_retries,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             #[cfg(test)]
             skip_https_check: false,
         })
@@ -127,8 +151,20 @@ impl BraveClient {
             api_key: Redacted::new("test-key").expect("static literal is non-empty"),
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             skip_https_check: true,
         }
+    }
+
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    pub(crate) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
+        self.rng = rng;
+        self
     }
 
     /// Test-only override of the production HTTPS gate. See [`validate_https`].
@@ -163,7 +199,7 @@ impl BraveClient {
             .send()
             .await?;
 
-        let response = classify_response(response).await?;
+        let response = classify_response(response, self.clock.as_ref()).await?;
         let bytes = response.bytes().await?;
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
@@ -191,10 +227,13 @@ fn build_url(
     Ok(reqwest::Url::parse_with_params(base_url, &params)?)
 }
 
-async fn classify_response(response: reqwest::Response) -> Result<reqwest::Response, BraveError> {
+async fn classify_response(
+    response: reqwest::Response,
+    clock: &dyn Clock,
+) -> Result<reqwest::Response, BraveError> {
     let status = response.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        let retry_after = parse_retry_after(response.headers(), &SystemClock);
+        let retry_after = parse_retry_after(response.headers(), clock);
         warn!(retry_after_secs = retry_after, "Brave API rate limited");
         return Err(BraveError::RateLimited { retry_after });
     }
@@ -249,7 +288,7 @@ impl SearchClient for BraveClient {
                 _ => None,
             },
             || BraveError::RateLimited { retry_after: None },
-            &FastrandRng,
+            self.rng.as_ref(),
         )
         .await?;
         Ok(response.into_results())
@@ -564,6 +603,35 @@ mod http_tests {
         assert!(
             !client.skip_https_check,
             "production constructor must not skip HTTPS check"
+        );
+    }
+
+    /// [T-BC-CLK001] `BraveClient::with_clock` installs the supplied Arc into
+    /// `BraveClient.clock`. Mirrors `T-SB001` for ScoutBuilder. Guards against
+    /// silent drop of the injected clock in a future refactor.
+    #[test]
+    fn with_clock_installs_supplied_arc() {
+        use crate::clock::FixedClock;
+        let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
+        let client = BraveClient::with_base_url(Client::new(), "http://test.local")
+            .with_clock(injected.clone());
+        assert!(
+            Arc::ptr_eq(&client.clock, &injected),
+            "with_clock must install the supplied Arc into BraveClient.clock"
+        );
+    }
+
+    /// [T-BC-RNG001] `BraveClient::with_rng` installs the supplied Arc into
+    /// `BraveClient.rng`.
+    #[test]
+    fn with_rng_installs_supplied_arc() {
+        use crate::rng::SeededRng;
+        let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
+        let client = BraveClient::with_base_url(Client::new(), "http://test.local")
+            .with_rng(injected.clone());
+        assert!(
+            Arc::ptr_eq(&client.rng, &injected),
+            "with_rng must install the supplied Arc into BraveClient.rng"
         );
     }
 }

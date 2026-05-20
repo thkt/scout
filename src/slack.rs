@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
@@ -7,7 +8,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
-use crate::clock::SystemClock;
+use crate::clock::{Clock, SystemClock};
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
@@ -15,7 +16,7 @@ use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
     is_schema_decode_fail, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
-use crate::rng::FastrandRng;
+use crate::rng::{FastrandRng, Rng};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SlackError {
@@ -163,6 +164,13 @@ pub(crate) struct SlackClient {
     token: Redacted,
     base_url: String,
     max_retries: u32,
+    /// Wall-clock source for `parse_retry_after`. Set at construction and
+    /// read on every Slack 429; defaults to `SystemClock`. Mirrors
+    /// `GitHubClient`'s injection seam.
+    clock: Arc<dyn Clock>,
+    /// Backoff jitter source handed to `retry_with_rate_limit` per attempt.
+    /// Set at construction; defaults to `FastrandRng`.
+    rng: Arc<dyn Rng>,
     /// Test-only escape hatch for wiremock servers on `http://127.0.0.1`.
     /// Production constructors leave this `false` so `api_get_once` always
     /// runs `validate_https`; only `with_base_url` opts in.
@@ -192,6 +200,8 @@ impl SlackClient {
             token,
             base_url: API_BASE.to_owned(),
             max_retries,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             #[cfg(test)]
             skip_https_check: false,
         }
@@ -210,8 +220,20 @@ impl SlackClient {
             token: Redacted::new("xoxp-test").expect("static literal is non-empty"),
             base_url: base_url.to_owned(),
             max_retries: DEFAULT_MAX_RETRIES,
+            clock: Arc::new(SystemClock),
+            rng: Arc::new(FastrandRng),
             skip_https_check: true,
         }
+    }
+
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    pub(crate) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
+        self.rng = rng;
+        self
     }
 
     /// Test-only override of the production HTTPS gate. See [`validate_https`].
@@ -240,7 +262,7 @@ impl SlackClient {
                 _ => None,
             },
             || SlackError::RateLimited { retry_after: None },
-            &FastrandRng,
+            self.rng.as_ref(),
         )
         .await
     }
@@ -268,7 +290,7 @@ impl SlackClient {
             .await
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
-        let retry_after = parse_retry_after(resp.headers(), &SystemClock);
+        let retry_after = parse_retry_after(resp.headers(), self.clock.as_ref());
 
         if resp.status() == 429 {
             warn!(retry_after_secs = retry_after, "Slack API rate limited");
@@ -1083,6 +1105,41 @@ parent body
             let resolved = resolve_messages(&messages, &users);
 
             assert_eq!(resolved[0].author, "UXXX");
+        }
+    }
+
+    mod injection_tests {
+        use super::*;
+        use reqwest::Client;
+
+        /// [T-SK-CLK001] `SlackClient::with_clock` installs the supplied Arc
+        /// into `SlackClient.clock`. Mirrors `T-SB001` for ScoutBuilder.
+        /// Guards against silent drop of the injected clock in a future
+        /// refactor of `api_get_once`.
+        #[test]
+        fn with_clock_installs_supplied_arc() {
+            use crate::clock::FixedClock;
+            let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
+            let client = SlackClient::with_base_url(Client::new(), "http://test.local")
+                .with_clock(injected.clone());
+            assert!(
+                Arc::ptr_eq(&client.clock, &injected),
+                "with_clock must install the supplied Arc into SlackClient.clock"
+            );
+        }
+
+        /// [T-SK-RNG001] `SlackClient::with_rng` installs the supplied Arc
+        /// into `SlackClient.rng`.
+        #[test]
+        fn with_rng_installs_supplied_arc() {
+            use crate::rng::SeededRng;
+            let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
+            let client = SlackClient::with_base_url(Client::new(), "http://test.local")
+                .with_rng(injected.clone());
+            assert!(
+                Arc::ptr_eq(&client.rng, &injected),
+                "with_rng must install the supplied Arc into SlackClient.rng"
+            );
         }
     }
 }

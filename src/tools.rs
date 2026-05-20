@@ -315,7 +315,9 @@ impl Scout {
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack)");
-        let client = SlackClient::from_env(self.http.clone(), self.config.max_retries)?;
+        let client = SlackClient::from_env(self.http.clone(), self.config.max_retries)?
+            .with_clock(self.clock.clone())
+            .with_rng(self.rng.clone());
         let slack_timeout = self.config.slack_timeout;
         let output = timeout(slack_timeout, client.fetch_message(&slack_url))
             .await
@@ -748,10 +750,13 @@ impl ScoutBuilder {
                     .with_rng(self.rng.clone()),
             );
         }
+        let brave = self
+            .brave
+            .map(|c| c.with_clock(self.clock.clone()).with_rng(self.rng.clone()));
         Scout {
             http: self.http,
             fetch_http: self.fetch_http,
-            brave: self.brave,
+            brave,
             github,
             cancel: self.cancel,
             config: self.config,
