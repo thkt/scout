@@ -1,6 +1,8 @@
 use std::env;
 use std::time::Duration;
 
+use tracing::info;
+
 use crate::retry::DEFAULT_MAX_RETRIES;
 
 use super::errors::ScoutError;
@@ -56,7 +58,7 @@ impl RuntimeConfig {
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
-        Ok(Self {
+        let config = Self {
             fetch_timeout: parse_timeout(&get_var, ENV_FETCH_TIMEOUT, DEFAULT_FETCH_TIMEOUT_SECS)?,
             research_timeout: parse_timeout(
                 &get_var,
@@ -65,7 +67,40 @@ impl RuntimeConfig {
             )?,
             slack_timeout: parse_timeout(&get_var, ENV_SLACK_TIMEOUT, DEFAULT_SLACK_TIMEOUT_SECS)?,
             max_retries: parse_max_retries(&get_var)?,
-        })
+        };
+        config.surface_overrides();
+        Ok(config)
+    }
+
+    /// Emit one `info!` per `SCOUT_*` field whose value differs from the
+    /// hard-coded default. Lets an operator inspect "which tuning is active"
+    /// at the default log level without scanning the env for `SCOUT_*`.
+    /// Silent when every field is on its default (no-op events are noise).
+    fn surface_overrides(&self) {
+        if self.fetch_timeout.as_secs() != DEFAULT_FETCH_TIMEOUT_SECS {
+            info!(
+                fetch_timeout_secs = self.fetch_timeout.as_secs(),
+                "{ENV_FETCH_TIMEOUT} override applied"
+            );
+        }
+        if self.research_timeout.as_secs() != DEFAULT_RESEARCH_TIMEOUT_SECS {
+            info!(
+                research_timeout_secs = self.research_timeout.as_secs(),
+                "{ENV_RESEARCH_TIMEOUT} override applied"
+            );
+        }
+        if self.slack_timeout.as_secs() != DEFAULT_SLACK_TIMEOUT_SECS {
+            info!(
+                slack_timeout_secs = self.slack_timeout.as_secs(),
+                "{ENV_SLACK_TIMEOUT} override applied"
+            );
+        }
+        if self.max_retries != DEFAULT_MAX_RETRIES {
+            info!(
+                max_retries = self.max_retries,
+                "{ENV_MAX_RETRIES} override applied"
+            );
+        }
     }
 }
 
@@ -264,6 +299,44 @@ mod tests {
         let err =
             RuntimeConfig::from_env_with(single_env("SCOUT_SLACK_TIMEOUT_SECS", "-5")).unwrap_err();
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    }
+
+    /// [T-CFG-LOG001] (issue #167 / OPS-005)
+    /// Setup: env reader returns a non-default `SCOUT_FETCH_TIMEOUT_SECS`.
+    /// Action: `RuntimeConfig::from_env_with(...)` runs under `traced_test`.
+    /// Expected: an INFO event `SCOUT_FETCH_TIMEOUT_SECS override applied`
+    /// fires with the structured `fetch_timeout_secs` field. The remaining
+    /// `SCOUT_*` events stay silent because their fields are still on default.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fetch_timeout_override_surfaces_info_event() {
+        let _ =
+            RuntimeConfig::from_env_with(single_env("SCOUT_FETCH_TIMEOUT_SECS", "120")).unwrap();
+        assert!(
+            logs_contain("SCOUT_FETCH_TIMEOUT_SECS override applied"),
+            "expected INFO event for the overridden field"
+        );
+        assert!(
+            logs_contain("fetch_timeout_secs=120"),
+            "expected structured field carrying the active value"
+        );
+        assert!(
+            !logs_contain("SCOUT_RESEARCH_TIMEOUT_SECS override applied"),
+            "unset fields must stay silent"
+        );
+    }
+
+    /// [T-CFG-LOG002] All fields on default → no override events fire.
+    /// Silent path; protects against a future regression that emits noise
+    /// when nothing was overridden.
+    #[tracing_test::traced_test]
+    #[test]
+    fn default_run_emits_no_override_events() {
+        let _ = RuntimeConfig::from_env_with(empty_env).unwrap();
+        assert!(
+            !logs_contain("override applied"),
+            "no-op runs must not emit override events"
+        );
     }
 
     /// [T-CFG020] Default impl は from_env_with(empty) と同値
