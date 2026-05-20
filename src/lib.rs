@@ -144,7 +144,12 @@ pub async fn run() -> ExitCode {
         sig = wait_for_signal() => {
             tracing::info!(signal = %sig, "interrupted, draining for graceful close");
             let _ = cancel.send(true);
-            let _ = timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await;
+            if timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await.is_err() {
+                tracing::warn!(
+                    timeout_secs = SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
+                    "drain timed out; in-flight command was dropped before completion"
+                );
+            }
             Outcome::Interrupted(sig)
         }
     };

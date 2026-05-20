@@ -149,7 +149,7 @@ pub(crate) async fn fetch_page(
         {
             match fetch_with_cdp(&final_url, Arc::clone(&resolver), cancel).await {
                 Ok(js_html) => {
-                    debug!("JS rendering succeeded via CDP");
+                    info!("JS rendering succeeded via CDP");
                     html = js_html;
                 }
                 Err(e) if opts.js => {

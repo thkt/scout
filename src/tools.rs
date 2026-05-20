@@ -268,6 +268,11 @@ impl Scout {
         )
         .await
         .unwrap_or_else(|_| {
+            warn!(
+                url = %RedactedLogUrl(&url),
+                timeout_secs = fetch_timeout.as_secs(),
+                "fetch timed out"
+            );
             Err(FetchError::Timeout(format!(
                 "fetch timed out after {}s",
                 fetch_timeout.as_secs()
@@ -300,6 +305,12 @@ impl Scout {
         let output = timeout(slack_timeout, client.fetch_message(&slack_url))
             .await
             .unwrap_or_else(|_| {
+                warn!(
+                    workspace = %slack_url.workspace(),
+                    channel = %slack_url.channel(),
+                    timeout_secs = slack_timeout.as_secs(),
+                    "slack fetch timed out"
+                );
                 Err(SlackError::Timeout(format!(
                     "slack fetch timed out after {}s",
                     slack_timeout.as_secs()
@@ -359,6 +370,12 @@ impl Scout {
             }
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
+                warn!(
+                    query = %query,
+                    depth = params.depth,
+                    timeout_secs = research_timeout.as_secs(),
+                    "research timed out"
+                );
                 return Err(ScoutError::timeout(format!(
                     "research timed out after {}s",
                     research_timeout.as_secs()

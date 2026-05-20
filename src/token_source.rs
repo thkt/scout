@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::info;
+use tracing::warn;
 
 use crate::redacted::Redacted;
 
@@ -65,19 +65,21 @@ where
     )
     .await
     .inspect_err(|_| {
-        info!(
-            "gh auth token timed out after {}s",
+        warn!(
+            "gh auth token timed out after {}s; falling back to unauthenticated",
             TOKEN_RESOLVE_TIMEOUT.as_secs()
         )
     })
     .ok()?
-    .inspect_err(|e| info!("gh auth token command failed: {e}"))
+    .inspect_err(
+        |e| warn!(error = %e, "gh auth token command failed; falling back to unauthenticated"),
+    )
     .ok()?;
 
     if !output.status.success() {
-        info!(
+        warn!(
             stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "gh auth token failed"
+            "gh auth token failed; falling back to unauthenticated"
         );
         return None;
     }
