@@ -41,17 +41,32 @@ use crate::slack::{SlackClient, SlackError, SlackUrl, parse_slack_url};
 use crate::token_source::{GhCliSource, TokenSource};
 
 const MAX_STDIN_BYTES: u64 = 1_048_576;
+/// Upper bound for waiting on piped input. Without this, a stalled or
+/// half-closed pipe (upstream writer hung mid-stream) would block scout
+/// indefinitely with no log output (issue #155 / CHX-006).
+const STDIN_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
     if !needs_stdin {
         return Ok(None);
     }
     let mut buf = String::new();
-    tokio_stdin()
-        .take(MAX_STDIN_BYTES)
-        .read_to_string(&mut buf)
-        .await
-        .map_err(|e| ScoutError::user_error(format!("Failed to read stdin: {e}")))?;
+    timeout(
+        STDIN_READ_TIMEOUT,
+        tokio_stdin().take(MAX_STDIN_BYTES).read_to_string(&mut buf),
+    )
+    .await
+    .map_err(|_| {
+        warn!(
+            timeout_secs = STDIN_READ_TIMEOUT.as_secs(),
+            "stdin read timed out"
+        );
+        ScoutError::user_error(format!(
+            "stdin read timed out after {}s; upstream writer may be stalled",
+            STDIN_READ_TIMEOUT.as_secs()
+        ))
+    })?
+    .map_err(|e| ScoutError::user_error(format!("Failed to read stdin: {e}")))?;
     let trimmed = buf.trim();
     Ok(if trimmed.is_empty() {
         None
