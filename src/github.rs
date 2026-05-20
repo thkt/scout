@@ -511,11 +511,11 @@ mod http_tests {
         assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
     }
 
-    /// [T-GH011a] PerPage::new accepts boundary values 1 and 100
+    /// [T-GH011a] PerPage::new preserves boundary values 1 and 100 through Display.
     #[test]
-    fn per_page_new_accepts_boundary_values() {
-        let _low = super::PerPage::new(1);
-        let _high = super::PerPage::new(100);
+    fn per_page_new_preserves_boundary_values() {
+        assert_eq!(super::PerPage::new(1).to_string(), "1");
+        assert_eq!(super::PerPage::new(100).to_string(), "100");
     }
 
     /// [T-GH011b] PerPage::new panics on 0 (ADR-0004 Rule 2; 0 is
