@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -172,6 +172,19 @@ pub(crate) struct SlackClient {
 
 const API_BASE: &str = "https://slack.com/api";
 
+/// Cap for `conversations.replies` page size. Slack's default is undocumented
+/// and threads can grow into the thousands on incident channels; making the
+/// limit explicit bounds the JSON payload that `api_get_once` buffers in
+/// memory (issue #155 / CHX-005).
+const SLACK_REPLIES_LIMIT: &str = "200";
+
+/// Concurrent in-flight `users.info` requests during `prefetch_users`.
+/// Slack Tier-4 allows ~50 req/min; capping at 5 keeps the burst well below
+/// that even for threads with hundreds of unique participants, instead of
+/// firing every request simultaneously and tripping the per-minute cap
+/// (issue #155 / OPS-009 / CHX-001).
+const SLACK_USERS_CONCURRENCY: usize = 5;
+
 impl SlackClient {
     pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
@@ -330,17 +343,21 @@ impl SlackClient {
         }
     }
 
-    /// Slack `users.info` per-ID fetch via `join_all`.
-    ///
-    /// No concurrency cap because Slack Tier-4 allows 50+ req/min and a single
-    /// thread rarely has more than ~20 unique users. Sustained violation would
-    /// require a thread with hundreds of participants. If that becomes a real
-    /// case, switch to `buffer_unordered` with an explicit cap.
+    /// Slack `users.info` per-ID fetch capped at `SLACK_USERS_CONCURRENCY`
+    /// concurrent requests via `buffer_unordered`. The cap bounds the burst
+    /// rate so a thread with hundreds of participants cannot fire that many
+    /// simultaneous requests and trip Slack's per-minute rate limit. Matches
+    /// the same idiom used in `search/engine.rs::fetch_sources`.
     async fn prefetch_users(&self, ids: &HashSet<String>) -> HashMap<String, String> {
-        let ids: Vec<String> = ids.iter().cloned().collect();
-        let futs = ids.iter().map(|id| self.fetch_user_name(id));
-        let results = join_all(futs).await;
-        ids.into_iter().zip(results).collect()
+        let id_list: Vec<String> = ids.iter().cloned().collect();
+        stream::iter(id_list)
+            .map(|id| async move {
+                let name = self.fetch_user_name(&id).await;
+                (id, name)
+            })
+            .buffer_unordered(SLACK_USERS_CONCURRENCY)
+            .collect()
+            .await
     }
 
     async fn fetch_thread(&self, slack_url: &SlackUrl) -> Result<FetchedThread, SlackError> {
@@ -349,7 +366,11 @@ impl SlackClient {
             let body: MessagesBody = self
                 .api_get(
                     "conversations.replies",
-                    &[("channel", ch), ("ts", thread_ts)],
+                    &[
+                        ("channel", ch),
+                        ("ts", thread_ts),
+                        ("limit", SLACK_REPLIES_LIMIT),
+                    ],
                 )
                 .await?;
             return Ok(FetchedThread {
@@ -377,7 +398,11 @@ impl SlackClient {
             let thread: MessagesBody = self
                 .api_get(
                     "conversations.replies",
-                    &[("channel", ch), ("ts", &slack_url.ts)],
+                    &[
+                        ("channel", ch),
+                        ("ts", &slack_url.ts),
+                        ("limit", SLACK_REPLIES_LIMIT),
+                    ],
                 )
                 .await?;
             Ok(FetchedThread {
