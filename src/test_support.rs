@@ -5,7 +5,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
+use reqwest::Client;
+use reqwest::redirect::Policy;
 use wiremock::MockServer;
+
+/// Build a reqwest `Client` with redirects disabled. No connect or read
+/// timeouts are set; wrap calls in `tokio::time::timeout` if a bounded test
+/// is needed.
+pub(crate) fn no_redirect_client() -> Client {
+    Client::builder().redirect(Policy::none()).build().unwrap()
+}
 
 static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 

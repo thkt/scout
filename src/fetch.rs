@@ -1031,14 +1031,9 @@ mod content_type_tests {
 #[cfg(test)]
 mod download_tests {
     use super::*;
-    use crate::test_support::try_spawn_mock_server;
-    use reqwest::redirect::Policy;
+    use crate::test_support::{no_redirect_client, try_spawn_mock_server};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
-
-    fn no_redirect_client() -> Client {
-        Client::builder().redirect(Policy::none()).build().unwrap()
-    }
 
     fn validated(url: &str) -> ValidatedUrl {
         ValidatedUrl::for_test(url)
@@ -1320,14 +1315,9 @@ mod download_tests {
 #[cfg(test)]
 mod fetch_page_tests {
     use super::*;
-    use crate::test_support::try_spawn_mock_server;
-    use reqwest::redirect::Policy;
+    use crate::test_support::{no_redirect_client, try_spawn_mock_server};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
-
-    fn no_redirect_client() -> Client {
-        Client::builder().redirect(Policy::none()).build().unwrap()
-    }
 
     fn real_resolver() -> Arc<dyn DnsResolver> {
         Arc::new(TokioDnsResolver)
