@@ -517,8 +517,19 @@ async fn fetch_with_cdp(
     };
 
     // Drive the CDP graceful close first so chromium runs its own teardown
-    // sequence (flush IPC, write profile state, etc).
-    let _ = timeout(Duration::from_secs(5), browser.close()).await;
+    // sequence (flush IPC, write profile state, etc). Surface both arms:
+    // an `Err` from close() means CDP refused the teardown, an `Elapsed`
+    // means chromium hung past the budget; either way `reap_pgroup` below
+    // will SIGTERM/SIGKILL but operators need to see why the graceful path
+    // failed (issue #152).
+    match timeout(Duration::from_secs(5), browser.close()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(error = ?e, "CDP browser.close() returned error"),
+        Err(_) => warn!(
+            timeout_secs = 5,
+            "CDP browser.close() exceeded timeout; falling back to reap_pgroup"
+        ),
+    }
     handler_task.abort();
     match handler_task.await {
         Ok(()) => {}
@@ -641,7 +652,20 @@ async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
             warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
         }
     }
-    let _ = timeout(Duration::from_secs(2), child.wait()).await;
+    // Reap so the kernel can release the parent slot. `Ok(Err)` means waitpid
+    // itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
+    // means the 2s budget elapsed before chromium exited, which is the zombie
+    // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
+    // honest (issue #152).
+    match timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
+        Err(_) => warn!(
+            timeout_secs = 2,
+            pgid = %pgid,
+            "chromium child did not exit within timeout after SIGKILL"
+        ),
+    }
 }
 
 /// Borrows browser so the caller retains ownership for cleanup on timeout.
