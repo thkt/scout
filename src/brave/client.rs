@@ -11,8 +11,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, retry_after_within_cap,
-    retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
+    retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -206,7 +206,8 @@ impl BraveClient {
             .await?;
 
         let response = classify_response(response, self.clock.as_ref()).await?;
-        let bytes = read_body_capped(response).await?;
+        let bytes =
+            read_body_capped(response, || BraveError::ResponseTooLarge, BraveError::from).await?;
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
         debug!(
@@ -231,34 +232,6 @@ fn build_url(
         params.push(("search_lang", lang));
     }
     Ok(reqwest::Url::parse_with_params(base_url, &params)?)
-}
-
-/// Drain the response body into a Vec while enforcing `MAX_API_RESPONSE_BYTES`.
-/// Mirrors the `fetch.rs` pattern so a misbehaving Brave deployment cannot
-/// force scout to allocate unbounded memory (issue #165 / CHX-008).
-async fn read_body_capped(response: reqwest::Response) -> Result<Vec<u8>, BraveError> {
-    let content_length = response.content_length();
-    if let Some(len) = content_length
-        && usize::try_from(len).unwrap_or(usize::MAX) > MAX_API_RESPONSE_BYTES
-    {
-        return Err(BraveError::ResponseTooLarge);
-    }
-    let capacity = content_length
-        .map(|len| {
-            usize::try_from(len)
-                .unwrap_or(usize::MAX)
-                .min(MAX_API_RESPONSE_BYTES)
-        })
-        .unwrap_or(8192);
-    let mut body = Vec::with_capacity(capacity);
-    let mut stream = response;
-    while let Some(chunk) = stream.chunk().await? {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_API_RESPONSE_BYTES {
-            return Err(BraveError::ResponseTooLarge);
-        }
-    }
-    Ok(body)
 }
 
 async fn classify_response(
@@ -335,8 +308,7 @@ fn is_retriable(e: &BraveError) -> bool {
         BraveError::Server(_) => true,
         BraveError::Network(e) => is_transient_network(e),
         // Oversized body is an upstream invariant violation (issue #165 /
-        // CHX-008), not transient. Explicit arm so a future variant
-        // addition cannot silently fall through to retriable=true.
+        // CHX-008), not transient — retry cannot shrink the response.
         BraveError::ResponseTooLarge => false,
         _ => false,
     }

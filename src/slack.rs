@@ -14,7 +14,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_API_RESPONSE_BYTES, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, parse_retry_after, read_body_capped, retry_after_within_cap,
+    retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -297,10 +298,18 @@ impl SlackClient {
             return Err(SlackError::RateLimited { retry_after });
         }
 
-        let bytes = read_body_capped(resp).await?;
-        // Schema fail → Decode (terminal). Transport drop happens before
-        // `from_slice` runs — `read_body_capped` surfaces it as Network so
-        // the retry loop sees it. See `is_schema_decode_fail` (issue #113).
+        let bytes = read_body_capped(
+            resp,
+            || {
+                SlackError::Decode(format!(
+                    "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
+                ))
+            },
+            |e| SlackError::Network(e.to_string()),
+        )
+        .await?;
+        // Schema fail → Decode (terminal); transport drop already mapped to
+        // Network by the closure above (issue #113).
         let body: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|e| SlackError::Decode(e.to_string()))?;
 
@@ -624,45 +633,6 @@ fn is_retriable(e: &SlackError) -> bool {
         SlackError::Network(_) | SlackError::Timeout(_) => true,
         _ => false,
     }
-}
-
-/// Drain the response body into a Vec while enforcing `MAX_API_RESPONSE_BYTES`.
-/// Mid-stream drops surface as `SlackError::Network` (transient — retry loop
-/// picks them up); a cap breach surfaces as `SlackError::Decode` (terminal —
-/// Slack contract violation, retry will not recover). Mirrors the `fetch.rs`
-/// pattern so a misbehaving Slack workspace cannot force scout to allocate
-/// unbounded memory (issue #165 / CHX-009).
-async fn read_body_capped(response: reqwest::Response) -> Result<Vec<u8>, SlackError> {
-    let content_length = response.content_length();
-    if let Some(len) = content_length
-        && usize::try_from(len).unwrap_or(usize::MAX) > MAX_API_RESPONSE_BYTES
-    {
-        return Err(SlackError::Decode(format!(
-            "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
-        )));
-    }
-    let capacity = content_length
-        .map(|len| {
-            usize::try_from(len)
-                .unwrap_or(usize::MAX)
-                .min(MAX_API_RESPONSE_BYTES)
-        })
-        .unwrap_or(8192);
-    let mut body = Vec::with_capacity(capacity);
-    let mut stream = response;
-    while let Some(chunk) = stream
-        .chunk()
-        .await
-        .map_err(|e| SlackError::Network(e.to_string()))?
-    {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_API_RESPONSE_BYTES {
-            return Err(SlackError::Decode(format!(
-                "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
-            )));
-        }
-    }
-    Ok(body)
 }
 
 #[cfg(test)]

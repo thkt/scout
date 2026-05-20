@@ -33,6 +33,40 @@ pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 /// not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// Drain `response` into a `Vec<u8>` while enforcing `MAX_API_RESPONSE_BYTES`.
+/// Content-Length is pre-checked before any allocation; the chunk loop also
+/// rejects bodies that exceed the cap when the header is absent or lies.
+/// `fetch.rs` keeps its own copy because it interleaves charset and redirect
+/// handling around the same loop.
+pub(crate) async fn read_body_capped<E>(
+    response: reqwest::Response,
+    too_large: impl Fn() -> E,
+    network: impl Fn(reqwest::Error) -> E,
+) -> Result<Vec<u8>, E> {
+    let content_length = response.content_length();
+    if let Some(len) = content_length
+        && usize::try_from(len).unwrap_or(usize::MAX) > MAX_API_RESPONSE_BYTES
+    {
+        return Err(too_large());
+    }
+    let capacity = content_length
+        .map(|len| {
+            usize::try_from(len)
+                .unwrap_or(usize::MAX)
+                .min(MAX_API_RESPONSE_BYTES)
+        })
+        .unwrap_or(8192);
+    let mut body = Vec::with_capacity(capacity);
+    let mut stream = response;
+    while let Some(chunk) = stream.chunk().await.map_err(&network)? {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_API_RESPONSE_BYTES {
+            return Err(too_large());
+        }
+    }
+    Ok(body)
+}
+
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;
