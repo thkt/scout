@@ -245,6 +245,25 @@ mod tests {
             );
         }
     }
+
+    /// [T-FS012] validate_url_allows_cgn_boundary_neighbors
+    ///
+    /// CGN block is 100.64.0.0/10 (100.64.0.0–100.127.255.255). T-FS003 covers
+    /// the inside of the range; this test guards the fence-post on both ends so
+    /// a one-octet shift in `is_cgn` cannot pass silently. The neighbors are
+    /// public IPs and must be allowed by `validate_url_sync` (DNS-free pre-check).
+    #[test]
+    fn validate_url_allows_cgn_boundary_neighbors() {
+        for url in [
+            "http://100.63.255.255/", // one below CGN start (100.64.0.0)
+            "http://100.128.0.0/",    // one above CGN end (100.127.255.255)
+        ] {
+            assert!(
+                validate_url_sync(url).is_ok(),
+                "should allow public IP outside CGN: {url}"
+            );
+        }
+    }
 }
 
 /// Resolver test double returning a fixed IP list.
