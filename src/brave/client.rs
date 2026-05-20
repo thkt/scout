@@ -188,11 +188,12 @@ impl BraveClient {
             validate_https(&self.base_url, || BraveError::InsecureBaseUrl)?;
         }
         let url = build_url(&self.base_url, query, search_lang)?;
+        let query_len = query.len();
 
         // Bracket the call with info events so operators can attribute
         // latency from the default log level. `query_len` (not `query`)
         // keeps the user term out of logs.
-        info!(query_len = query.len(), "Brave search dispatching");
+        info!(query_len, "Brave search dispatching");
         let started = Instant::now();
 
         let response = self
@@ -210,7 +211,7 @@ impl BraveClient {
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
         info!(
-            query_len = query.len(),
+            query_len,
             result_count = parsed.web.as_ref().map_or(0, |w| w.results.len()),
             elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "Brave search complete"
