@@ -1,4 +1,5 @@
 use std::error::Error as _;
+use std::fmt;
 use std::future::Future;
 use std::io;
 use std::time::{Duration, UNIX_EPOCH};
@@ -6,7 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use reqwest::Error;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::clock::Clock;
 use crate::rng::Rng;
@@ -76,6 +77,7 @@ async fn retry_with<T, E, F, Fut>(
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T, E>>,
+    E: fmt::Display,
 {
     let mut last_err = None;
     for attempt in 0..=max_retries {
@@ -84,9 +86,13 @@ where
             Err(e) if is_retriable(&e) => {
                 if attempt < max_retries {
                     let delay = delay_for(&e, attempt);
-                    debug!(
+                    // warn (not debug) because retries are recoverable anomalies;
+                    // the error field surfaces the underlying failure without
+                    // requiring RUST_LOG=debug.
+                    warn!(
                         attempt = attempt + 1,
                         delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                        error = %e,
                         "retrying after transient error"
                     );
                     sleep(delay).await;
@@ -155,6 +161,7 @@ pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T, E>>,
+    E: fmt::Display,
 {
     retry_with(
         operation,
