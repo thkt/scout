@@ -1,10 +1,10 @@
 use std::env;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 use crate::clock::{Clock, SystemClock};
 use crate::redacted::{Redacted, validate_https};
@@ -189,6 +189,12 @@ impl BraveClient {
         }
         let url = build_url(&self.base_url, query, search_lang)?;
 
+        // Bracket the call with info events so operators can attribute
+        // latency from the default log level. `query_len` (not `query`)
+        // keeps the user term out of logs.
+        info!(query_len = query.len(), "Brave search dispatching");
+        let started = Instant::now();
+
         let response = self
             .http
             .get(url)
@@ -203,9 +209,10 @@ impl BraveClient {
         let bytes = response.bytes().await?;
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
-        debug!(
+        info!(
             query_len = query.len(),
             result_count = parsed.web.as_ref().map_or(0, |w| w.results.len()),
+            elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "Brave search complete"
         );
         Ok(parsed)
@@ -319,6 +326,46 @@ mod http_tests {
                 ]
             }
         })
+    }
+
+    /// [T-BC-LOG001] (issue #166 / OPS-003)
+    /// Setup: wiremock returns a 1-result Brave payload.
+    /// Action: `client.search("foo", None)` is invoked under `traced_test`.
+    /// Expected: an INFO-level `Brave search dispatching` event fires before
+    /// dispatch, and an INFO-level `Brave search complete` event fires after,
+    /// carrying `result_count` and `elapsed_ms` structured fields. Operators
+    /// at the default `info` log level can attribute latency without enabling
+    /// `RUST_LOG=debug`.
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn search_emits_info_dispatch_and_complete_events() {
+        let Some(server) = try_spawn_mock_server("brave::http").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
+            .mount(&server)
+            .await;
+
+        let client = BraveClient::with_base_url(Client::new(), &server.uri());
+        client.search("foo", None).await.unwrap();
+
+        assert!(
+            logs_contain("Brave search dispatching"),
+            "expected INFO dispatch event before the HTTP call"
+        );
+        assert!(
+            logs_contain("Brave search complete"),
+            "expected INFO completion event after the HTTP call"
+        );
+        assert!(
+            logs_contain("result_count=1"),
+            "completion event should carry result_count"
+        );
+        assert!(
+            logs_contain("elapsed_ms"),
+            "completion event should carry elapsed_ms for latency attribution"
+        );
     }
 
     /// [T-001] BraveClient sends query unmodified with q parameter
