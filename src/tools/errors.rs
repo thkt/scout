@@ -6,29 +6,56 @@ use crate::brave::client::BraveError;
 use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
 use crate::github;
-use crate::retry::is_transient_network;
 use crate::slack::SlackError;
 
 /// Reusable next_step hints so transient/network errors stay consistent.
 const HINT_RETRY_DELAY: &str = "Retry after a short delay";
 const HINT_CHECK_NETWORK: &str = "Check your network connection";
 
-/// Builds a transient `ScoutError` with the "retry after a short delay" hint.
-/// Used for rate-limit, 5xx, and other timing-recoverable failures.
-fn transient_with_retry_hint(e: &impl fmt::Display) -> ScoutError {
-    ScoutError::transient(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+/// Per-variant error classification produced by each backend error type's
+/// `classify()` method. Carries the `ErrorCode` and the optional `next_step`
+/// hint; `From<XxxError> for ScoutError` composes it with the variant's
+/// `Display` message into a `ScoutError`.
+///
+/// Centralising classification on the variant (instead of inside `From`) keeps
+/// the ADR-0011 priority decision next to the variant definition and lets
+/// `classify()` be unit-tested directly.
+pub(crate) struct Classification {
+    pub(crate) kind: ErrorCode,
+    pub(crate) next_step: Option<String>,
 }
 
-/// Builds a transient `ScoutError` with the "check your network" hint.
-/// Used for connect-level network failures where retry alone will not help.
-fn transient_with_network_hint(e: &impl fmt::Display) -> ScoutError {
-    ScoutError::transient(e.to_string()).with_next_step(HINT_CHECK_NETWORK)
-}
+impl Classification {
+    pub(crate) fn new(kind: ErrorCode) -> Self {
+        Self {
+            kind,
+            next_step: None,
+        }
+    }
 
-/// Builds a timeout `ScoutError` with the "retry after a short delay" hint.
-/// Used for transport-timeout failures distinct from generic transients.
-fn timeout_with_retry_hint(e: &impl fmt::Display) -> ScoutError {
-    ScoutError::timeout(e.to_string()).with_next_step(HINT_RETRY_DELAY)
+    pub(crate) fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.next_step = Some(hint.into());
+        self
+    }
+
+    /// TempFailure(75) with the "retry after a short delay" hint. Used for
+    /// 5xx, rate-limit, and other timing-recoverable failures.
+    pub(crate) fn transient_retry() -> Self {
+        Self::new(ErrorCode::TempFailure).with_hint(HINT_RETRY_DELAY)
+    }
+
+    /// TempFailure(75) with the "check your network" hint. Used for
+    /// connect-level network failures where retry alone will not help.
+    pub(crate) fn transient_network() -> Self {
+        Self::new(ErrorCode::TempFailure).with_hint(HINT_CHECK_NETWORK)
+    }
+
+    /// Timeout(124) with the "retry after a short delay" hint. Split from
+    /// TempFailure(75) per ADR-0002 so caller scripts can apply a longer
+    /// backoff than for rate-limit / 5xx failures.
+    pub(crate) fn timeout_retry() -> Self {
+        Self::new(ErrorCode::Timeout).with_hint(HINT_RETRY_DELAY)
+    }
 }
 
 #[derive(Debug)]
@@ -74,26 +101,13 @@ impl ScoutError {
 
     /// External tool / IO failure outside scout's invariants (e.g. headless
     /// browser CDP error). Maps to `ErrorCode::IoError` (exit 74 EX_IOERR).
-    /// Use [`Self::internal_bug`] for scout-side schema bugs (exit 70).
+    /// scout-side schema bugs route through `Classification::new(Internal)`
+    /// in each backend's `classify()` instead.
     pub(super) fn io_error(msg: impl Into<String>) -> Self {
         Self::new(ErrorCode::IoError, msg)
     }
 
-    /// scout-side invariant violation (e.g., unexpected API schema during
-    /// deserialize). Maps to `ErrorCode::Internal` (exit 70 EX_SOFTWARE) per
-    /// ADR-0011 priority 5.
-    pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
-        Self::new(ErrorCode::Internal, msg)
-    }
-
-    /// Unclassifiable failure — the priority rules (1-5) did not match.
-    /// Maps to `ErrorCode::Unknown` (exit 104, PJ extension per ADR-0002) per
-    /// ADR-0011 §Classification Priority Table 退避 slot. A rising Unknown rate
-    /// signals the classification design needs revisiting.
-    pub(super) fn unknown(msg: impl Into<String>) -> Self {
-        Self::new(ErrorCode::Unknown, msg)
-    }
-
+    #[cfg(test)]
     pub(super) fn transient(msg: impl Into<String>) -> Self {
         Self::new(ErrorCode::TempFailure, msg)
     }
@@ -106,15 +120,24 @@ impl ScoutError {
         Self::new(ErrorCode::Timeout, msg)
     }
 
+    #[cfg(test)]
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
         Self::new(ErrorCode::NotFound, msg)
     }
 
-    pub(super) fn data_error(msg: impl Into<String>) -> Self {
-        Self::new(ErrorCode::DataError, msg)
+    /// Build a `ScoutError` from a backend-emitted [`Classification`] paired
+    /// with the variant's `Display` message. Used by `From<XxxError>` impls
+    /// so the classification logic stays co-located with each error variant.
+    fn from_classification(c: Classification, msg: impl Into<String>) -> Self {
+        let mut err = Self::new(c.kind, msg);
+        err.next_step = c.next_step;
+        err
     }
 
-    /// Attach a recovery hint to this error per ADR-0002 `error.next_step`.
+    /// Test-only builder for fixtures that construct `ScoutError` directly
+    /// without going through `From<XxxError>`; production paths attach
+    /// `next_step` via [`Classification`].
+    #[cfg(test)]
     pub(super) fn with_next_step(mut self, hint: impl Into<String>) -> Self {
         self.next_step = Some(hint.into());
         self
@@ -161,203 +184,33 @@ pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutEr
     github::parse_repo(repository).map_err(ScoutError::from)
 }
 
-// Match arms in each `From<...>` impl below evaluate in classification-priority
-// order per ADR-0011 §Classification Priority Table:
-//   1. USAGE_ERROR  — env/config/argument misuse
-//   2. DATA_ERROR   — format violations (URL, owner/repo, encoding, 4xx body)
-//   3. NOT_FOUND    — resource absence (404, search 0 hits)
-//   4. TEMP_FAILURE — retryable (rate limit, 5xx, network); TIMEOUT(124) splits off
-//   5. INTERNAL     — scout-side invariant violation (unexpected schema); IO_ERROR(74)
-//                     is the sibling for external tool failure (browser)
-// Disjoint variants are otherwise free to be reordered; the priority comments
-// document intent so a reviewer can spot a misclassification mechanically.
+// `From<XxxError>` impls delegate to each backend's `classify()` so the
+// ADR-0011 priority decision stays exhaustiveness-checked next to the variant.
 impl From<github::GitHubError> for ScoutError {
     fn from(e: github::GitHubError) -> Self {
-        match &e {
-            // Priority 1: USAGE_ERROR
-            github::GitHubError::Forbidden(_) => Self::user_error(e.to_string())
-                .with_next_step("Check that your GITHUB_TOKEN has the required scopes"),
-            // 401 must precede the 4xx arm below to avoid falling into DataError.
-            github::GitHubError::Api { code: 401, .. } => Self::user_error(e.to_string())
-                .with_next_step("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
-            // Priority 2: DATA_ERROR
-            github::GitHubError::InvalidRepo(_) => Self::data_error(e.to_string())
-                .with_next_step("Use 'owner/repo' format, e.g., 'facebook/react'"),
-            github::GitHubError::InvalidRef(_) => Self::data_error(e.to_string())
-                .with_next_step("Use a branch name, tag, or commit SHA"),
-            github::GitHubError::InvalidPath(_) => {
-                Self::data_error(e.to_string()).with_next_step("Use a path within the repository")
-            }
-            github::GitHubError::InvalidLineRange(_) => Self::data_error(e.to_string())
-                .with_next_step("Use format like '1-80', '50-', or '100' (first N lines)"),
-            github::GitHubError::InvalidPattern(_) => Self::data_error(e.to_string())
-                .with_next_step("Use a glob pattern like '*.rs' or '*.{ts,tsx}'"),
-            github::GitHubError::NonUtf8(_) => Self::data_error(e.to_string())
-                .with_next_step("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
-            github::GitHubError::InsecureUrl => Self::data_error(e.to_string()),
-            github::GitHubError::Api { code, .. } if (400..500).contains(code) => {
-                Self::data_error(e.to_string())
-            }
-            // Priority 3: NOT_FOUND
-            github::GitHubError::NotFound(_) => Self::not_found(e.to_string()).with_next_step(
-                "Check that the repository or path exists, and that you have access",
-            ),
-            // Priority 4: TIMEOUT (request timeout via reqwest builder)
-            github::GitHubError::Network(re) if re.is_timeout() => timeout_with_retry_hint(&e),
-            // Priority 4: TEMP_FAILURE
-            github::GitHubError::RateLimited { retry_after } => Self::transient(e.to_string())
-                .with_next_step(match retry_after {
-                    Some(secs) => format!(
-                        "Retry after {secs} seconds, or set GITHUB_TOKEN to increase rate limit"
-                    ),
-                    None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
-                }),
-            github::GitHubError::Network(_) => transient_with_network_hint(&e),
-            github::GitHubError::Api { code, .. } if (500..=599).contains(code) => {
-                transient_with_retry_hint(&e)
-            }
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
-            github::GitHubError::Decode(_) => Self::internal_bug(e.to_string()),
-            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
-            github::GitHubError::Api { .. } => Self::unknown(e.to_string()),
-        }
+        let msg = e.to_string();
+        Self::from_classification(e.classify(), msg)
     }
 }
 
 impl From<FetchError> for ScoutError {
     fn from(e: FetchError) -> Self {
-        match &e {
-            // Priority 1: USAGE_ERROR
-            FetchError::BrowserNotFound(_) => Self::user_error(e.to_string()),
-            // Priority 2: DATA_ERROR (non-Status variants)
-            FetchError::InvalidScheme => {
-                Self::data_error(e.to_string()).with_next_step("URL must use http:// or https://")
-            }
-            FetchError::InvalidUrl(_) => {
-                Self::data_error(e.to_string()).with_next_step("URL must include scheme and host")
-            }
-            FetchError::InternalHost => Self::data_error(e.to_string())
-                .with_next_step("URL must point to an external host (private IPs are blocked)"),
-            FetchError::UnsupportedContentType(_) => Self::data_error(e.to_string())
-                .with_next_step("URL must serve HTML or text content"),
-            FetchError::RedirectMissingLocation => Self::data_error(e.to_string()),
-            FetchError::TooLarge => {
-                Self::data_error(e.to_string()).with_next_step("fetch a smaller resource")
-            }
-            // Classified as DataError (terminal) per priority 2. cap=5 absorbs
-            // canonical chains (HTTPS upgrade → trailing slash → final URL);
-            // breach dominantly indicates a server-side redirect loop or caller
-            // URL config mistake, both caller-fixable. Retry success rate is
-            // unobservable from inside scout (single-shot CLI with no
-            // caller-side telemetry seam), so the empirical calibration scoped
-            // in issue #148 cannot be run — terminal classification confirmed
-            // by first principles, not deferred.
-            FetchError::TooManyRedirects(_) => Self::data_error(e.to_string())
-                .with_next_step("URL has too many redirects; check for a redirect loop"),
-            // Status arms order specific HTTP codes before the 4xx / _ fallback;
-            // the per-arm priority label restores ADR-0011 ranking for review.
-            // Priority 1: USAGE_ERROR
-            FetchError::Status(401 | 403) => Self::user_error(e.to_string())
-                .with_next_step("URL requires authentication that scout does not support"),
-            // Priority 3: NOT_FOUND
-            FetchError::Status(404) => Self::not_found(e.to_string())
-                .with_next_step("Check that the URL is correct and the resource exists"),
-            // Priority 4: TEMP_FAILURE
-            FetchError::Status(408 | 429) => transient_with_retry_hint(&e),
-            // Priority 2: DATA_ERROR (4xx body)
-            FetchError::Status(code) if (400..500).contains(code) => {
-                Self::data_error(e.to_string())
-            }
-            // Priority 4: TEMP_FAILURE (5xx and other unmatched)
-            FetchError::Status(_) => transient_with_retry_hint(&e),
-            // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
-            FetchError::Timeout(_) => timeout_with_retry_hint(&e),
-            // Priority 4: TEMP_FAILURE (non-Status variants)
-            FetchError::DnsResolution(_) => Self::transient(e.to_string())
-                .with_next_step("Check the URL's domain name and your DNS resolver"),
-            // `is_transient_network` covers connect, timeout, and mid-stream
-            // body drop (issue #113), but ADR-0002 splits timeout into 124.
-            // Check `is_timeout()` first.
-            FetchError::Http(re) if re.is_timeout() => timeout_with_retry_hint(&e),
-            FetchError::Http(re) if is_transient_network(re) => transient_with_network_hint(&e),
-            // Priority 5 sibling: IO_ERROR — external tool failure (browser)
-            FetchError::BrowserFailed(_) => Self::io_error(e.to_string()),
-            // Unknown — reqwest errors that do not match transient network patterns
-            FetchError::Http(_) => Self::unknown(e.to_string()),
-        }
+        let msg = e.to_string();
+        Self::from_classification(e.classify(), msg)
     }
 }
 
 impl From<SlackError> for ScoutError {
     fn from(e: SlackError) -> Self {
-        match &e {
-            // Priority 1: USAGE_ERROR
-            SlackError::TokenNotSet => Self::user_error(e.to_string())
-                .with_next_step("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
-            // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
-            SlackError::InsecureUrl => Self::data_error(e.to_string()),
-            // Slack API surfaces failures as error code strings (not HTTP status),
-            // so per-string classification replaces the priority-2 HTTP arm.
-            SlackError::Api { error } => match error.as_str() {
-                // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
-                // codes; "message not found" (space) is scout's own string from
-                // `fetch_message` when the resolved messages list is empty.
-                "channel_not_found" | "message_not_found" | "thread_not_found"
-                | "message not found" => Self::not_found(e.to_string()),
-                // Priority 4: TEMP_FAILURE
-                "internal_error" | "service_unavailable" | "fatal_error" => {
-                    transient_with_retry_hint(&e)
-                }
-                // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
-                _ => Self::user_error(e.to_string()),
-            },
-            // Priority 4: TEMP_FAILURE
-            SlackError::RateLimited { .. } => transient_with_retry_hint(&e),
-            SlackError::Network(_) => transient_with_network_hint(&e),
-            // Priority 4: TIMEOUT
-            SlackError::Timeout(_) => timeout_with_retry_hint(&e),
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
-            SlackError::Decode(_) => Self::internal_bug(e.to_string()),
-        }
+        let msg = e.to_string();
+        Self::from_classification(e.classify(), msg)
     }
 }
 
 impl From<BraveError> for ScoutError {
     fn from(e: BraveError) -> Self {
-        match &e {
-            // Priority 1: USAGE_ERROR / config
-            BraveError::ApiKeyNotSet => Self::user_error(e.to_string())
-                .with_next_step("Set BRAVE_SEARCH_API_KEY environment variable"),
-            BraveError::Unauthorized => Self::user_error(e.to_string()).with_next_step(
-                "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
-            ),
-            // Priority 2: DATA_ERROR (4xx body, URL parse failure, or insecure base URL)
-            BraveError::ParseUrl(_) | BraveError::InsecureBaseUrl => {
-                Self::data_error(e.to_string())
-            }
-            BraveError::Api { code, .. } if (400..500).contains(code) => {
-                Self::data_error(e.to_string())
-            }
-            // Priority 4: TIMEOUT
-            BraveError::Network(re) if re.is_timeout() => timeout_with_retry_hint(&e),
-            // Priority 4: TEMP_FAILURE
-            BraveError::RateLimited { .. } => transient_with_retry_hint(&e),
-            BraveError::Server(_) => transient_with_retry_hint(&e),
-            BraveError::Network(_) => transient_with_network_hint(&e),
-            BraveError::Api { code, .. } if (500..=599).contains(code) => {
-                transient_with_retry_hint(&e)
-            }
-            // Priority 5: INTERNAL — schema drift is a scout-side invariant;
-            // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
-            // body is an upstream invariant violation (Brave returning >1 MiB
-            // on `web/search`), classified the same as schema drift because
-            // it signals the API surface drifted and retry will not recover.
-            BraveError::ParseJson(_) | BraveError::ResponseTooLarge => {
-                Self::internal_bug(e.to_string())
-            }
-            // Unknown — Api codes that did not match 4xx or 5xx
-            BraveError::Api { .. } => Self::unknown(e.to_string()),
-        }
+        let msg = e.to_string();
+        Self::from_classification(e.classify(), msg)
     }
 }
 
@@ -870,6 +723,8 @@ mod tests {
     async fn fetch_error_http_connection_refused_is_transient() {
         use reqwest::Client;
         use std::net::TcpListener;
+
+        use crate::retry::is_transient_network;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();

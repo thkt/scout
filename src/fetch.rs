@@ -20,6 +20,10 @@ use std::sync::OnceLock;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 
+use crate::envelope::ErrorCode;
+use crate::retry::is_transient_network;
+use crate::tools::Classification;
+
 use tokio::sync::watch;
 #[cfg(feature = "js-rendering")]
 use tokio::time::timeout;
@@ -95,6 +99,66 @@ pub(crate) enum FetchError {
 
     #[error("browser rendering failed: {0}")]
     BrowserFailed(String),
+}
+
+impl FetchError {
+    /// Map each variant to its ADR-0011 priority-table [`Classification`].
+    ///
+    /// Arm order is load-bearing: specific `Status` codes (401/403, 404,
+    /// 408/429) precede the 4xx fallback so a reorder cannot silently demote
+    /// them to DataError.
+    pub(crate) fn classify(&self) -> Classification {
+        match self {
+            // Priority 1: USAGE_ERROR
+            Self::BrowserNotFound(_) => Classification::new(ErrorCode::UsageError),
+            // Priority 2: DATA_ERROR (non-Status variants)
+            Self::InvalidScheme => Classification::new(ErrorCode::DataError)
+                .with_hint("URL must use http:// or https://"),
+            Self::InvalidUrl(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("URL must include scheme and host"),
+            Self::InternalHost => Classification::new(ErrorCode::DataError)
+                .with_hint("URL must point to an external host (private IPs are blocked)"),
+            Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("URL must serve HTML or text content"),
+            Self::RedirectMissingLocation => Classification::new(ErrorCode::DataError),
+            Self::TooLarge => {
+                Classification::new(ErrorCode::DataError).with_hint("fetch a smaller resource")
+            }
+            // Terminal DataError: cap=5 absorbs canonical chains (HTTPS upgrade →
+            // trailing slash → final URL), so a breach dominantly indicates a
+            // server-side redirect loop or caller URL mistake — both caller-fixable.
+            Self::TooManyRedirects(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("URL has too many redirects; check for a redirect loop"),
+            // Priority 1: USAGE_ERROR (specific HTTP codes before 4xx fallback)
+            Self::Status(401 | 403) => Classification::new(ErrorCode::UsageError)
+                .with_hint("URL requires authentication that scout does not support"),
+            // Priority 3: NOT_FOUND
+            Self::Status(404) => Classification::new(ErrorCode::NotFound)
+                .with_hint("Check that the URL is correct and the resource exists"),
+            // Priority 4: TEMP_FAILURE
+            Self::Status(408 | 429) => Classification::transient_retry(),
+            // Priority 2: DATA_ERROR (4xx body)
+            Self::Status(code) if (400..500).contains(code) => {
+                Classification::new(ErrorCode::DataError)
+            }
+            // Priority 4: TEMP_FAILURE (5xx and other unmatched)
+            Self::Status(_) => Classification::transient_retry(),
+            // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
+            Self::Timeout(_) => Classification::timeout_retry(),
+            // Priority 4: TEMP_FAILURE (non-Status variants)
+            Self::DnsResolution(_) => Classification::new(ErrorCode::TempFailure)
+                .with_hint("Check the URL's domain name and your DNS resolver"),
+            // `is_transient_network` covers connect, timeout, and mid-stream
+            // body drop (issue #113), but ADR-0002 splits timeout into 124.
+            // Check `is_timeout()` first.
+            Self::Http(re) if re.is_timeout() => Classification::timeout_retry(),
+            Self::Http(re) if is_transient_network(re) => Classification::transient_network(),
+            // Priority 5 sibling: IO_ERROR — external tool failure (browser)
+            Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),
+            // Unknown — reqwest errors that do not match transient network patterns
+            Self::Http(_) => Classification::new(ErrorCode::Unknown),
+        }
+    }
 }
 
 /// ~1 sentence; pages below this almost always need JS rendering.
@@ -1860,5 +1924,118 @@ mod cdp_integration_tests {
             "rendered HTML should contain page content, got {} bytes",
             html.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    /// [T-FEC001] BrowserNotFound classifies as UsageError.
+    #[test]
+    fn browser_not_found_is_usage_error() {
+        let c = FetchError::BrowserNotFound("not installed".into()).classify();
+        assert_eq!(c.kind, ErrorCode::UsageError);
+    }
+
+    /// [T-FEC002] Status(401) and Status(403) classify as UsageError
+    /// (priority 1 over the priority-2 4xx fallback).
+    #[test]
+    fn status_401_403_is_usage_error_not_data_error() {
+        for code in [401u16, 403] {
+            let c = FetchError::Status(code).classify();
+            assert_eq!(
+                c.kind,
+                ErrorCode::UsageError,
+                "code {code} must precede 4xx arm"
+            );
+        }
+    }
+
+    /// [T-FEC003] Status(404) classifies as NotFound
+    /// (priority 3 over the priority-2 4xx fallback).
+    #[test]
+    fn status_404_is_not_found_not_data_error() {
+        let c = FetchError::Status(404).classify();
+        assert_eq!(c.kind, ErrorCode::NotFound);
+        assert!(
+            c.next_step.as_deref().is_some_and(|h| h.contains("URL")),
+            "expected URL hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-FEC004] Status(408) and Status(429) classify as TempFailure
+    /// (priority 4 over the priority-2 4xx fallback).
+    #[test]
+    fn status_408_429_is_temp_failure_not_data_error() {
+        for code in [408u16, 429] {
+            let c = FetchError::Status(code).classify();
+            assert_eq!(c.kind, ErrorCode::TempFailure, "code {code}");
+        }
+    }
+
+    /// [T-FEC005] Other 4xx Status codes classify as DataError.
+    #[test]
+    fn status_other_4xx_is_data_error() {
+        for code in [400u16, 410, 422, 499] {
+            let c = FetchError::Status(code).classify();
+            assert_eq!(c.kind, ErrorCode::DataError, "code {code}");
+        }
+    }
+
+    /// [T-FEC006] 5xx Status codes classify as TempFailure.
+    #[test]
+    fn status_5xx_is_temp_failure() {
+        for code in [500u16, 502, 503, 599] {
+            let c = FetchError::Status(code).classify();
+            assert_eq!(c.kind, ErrorCode::TempFailure, "code {code}");
+        }
+    }
+
+    /// [T-FEC007] Priority-2 DataError variants (non-Status) classify as DataError.
+    #[test]
+    fn data_error_variants_classify_as_data_error() {
+        let cases: Vec<FetchError> = vec![
+            FetchError::InvalidScheme,
+            FetchError::InternalHost,
+            FetchError::UnsupportedContentType("image/png".into()),
+            FetchError::RedirectMissingLocation,
+            FetchError::TooLarge,
+            FetchError::TooManyRedirects(10),
+        ];
+        for case in &cases {
+            assert_eq!(
+                case.classify().kind,
+                ErrorCode::DataError,
+                "{case:?} must classify as DataError"
+            );
+        }
+    }
+
+    /// [T-FEC008] Timeout classifies as Timeout (exit 124 split from TempFailure).
+    #[test]
+    fn timeout_is_timeout_kind() {
+        let c = FetchError::Timeout("timed out".into()).classify();
+        assert_eq!(c.kind, ErrorCode::Timeout);
+    }
+
+    /// [T-FEC009] DnsResolution classifies as TempFailure with a DNS hint.
+    #[test]
+    fn dns_resolution_is_temp_failure_with_dns_hint() {
+        let c = FetchError::DnsResolution("dns failed".into()).classify();
+        assert_eq!(c.kind, ErrorCode::TempFailure);
+        assert!(
+            c.next_step.as_deref().is_some_and(|h| h.contains("DNS")),
+            "expected DNS hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-FEC010] BrowserFailed classifies as IoError (priority 5 sibling).
+    #[test]
+    fn browser_failed_is_io_error() {
+        let c = FetchError::BrowserFailed("CDP error".into()).classify();
+        assert_eq!(c.kind, ErrorCode::IoError);
     }
 }

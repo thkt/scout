@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
 use crate::clock::{Clock, SystemClock};
+use crate::envelope::ErrorCode;
 use crate::fetch::converter::escape_yaml;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
@@ -18,6 +19,7 @@ use crate::retry::{
     retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
+use crate::tools::Classification;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SlackError {
@@ -41,6 +43,45 @@ pub(crate) enum SlackError {
 
     #[error("Insecure URL: HTTPS required for token-bearing request")]
     InsecureUrl,
+}
+
+impl SlackError {
+    /// Map each variant to its ADR-0011 priority-table [`Classification`].
+    ///
+    /// Slack surfaces failures as `error` strings inside `Api` instead of HTTP
+    /// status codes, so the string-table arm replaces the HTTP-status arm used
+    /// by other backends. The table's `internal_error` / `service_unavailable`
+    /// / `fatal_error` entries are load-bearing — without them those codes
+    /// would fall through to UsageError instead of the retryable TempFailure.
+    pub(crate) fn classify(&self) -> Classification {
+        match self {
+            // Priority 1: USAGE_ERROR
+            Self::TokenNotSet => Classification::new(ErrorCode::UsageError)
+                .with_hint("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
+            // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
+            Self::InsecureUrl => Classification::new(ErrorCode::DataError),
+            Self::Api { error } => match error.as_str() {
+                // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
+                // codes; "message not found" (space) is scout's own string from
+                // `fetch_message` when the resolved messages list is empty.
+                "channel_not_found" | "message_not_found" | "thread_not_found"
+                | "message not found" => Classification::new(ErrorCode::NotFound),
+                // Priority 4: TEMP_FAILURE
+                "internal_error" | "service_unavailable" | "fatal_error" => {
+                    Classification::transient_retry()
+                }
+                // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
+                _ => Classification::new(ErrorCode::UsageError),
+            },
+            // Priority 4: TEMP_FAILURE
+            Self::RateLimited { .. } => Classification::transient_retry(),
+            Self::Network(_) => Classification::transient_network(),
+            // Priority 4: TIMEOUT
+            Self::Timeout(_) => Classification::timeout_retry(),
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
+            Self::Decode(_) => Classification::new(ErrorCode::Internal),
+        }
+    }
 }
 
 /// Parsed Slack message URL. Fields are private so the only construction path
@@ -1179,5 +1220,108 @@ parent body
                 "with_rng must install the supplied Arc into SlackClient.rng"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    /// [T-SLC001] TokenNotSet classifies as UsageError with SLACK_TOKEN hint.
+    #[test]
+    fn token_not_set_is_usage_error_with_token_hint() {
+        let c = SlackError::TokenNotSet.classify();
+        assert_eq!(c.kind, ErrorCode::UsageError);
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("SLACK_TOKEN")),
+            "expected SLACK_TOKEN hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-SLC002] InsecureUrl classifies as DataError (peer to other backends' InsecureUrl).
+    #[test]
+    fn insecure_url_is_data_error() {
+        let c = SlackError::InsecureUrl.classify();
+        assert_eq!(c.kind, ErrorCode::DataError);
+    }
+
+    /// [T-SLC003] Slack-native NOT_FOUND error codes classify as NotFound.
+    /// scout's internal "message not found" (space form) must classify the same
+    /// as Slack's `message_not_found` (underscore) — both should land on
+    /// EX_NOINPUT(66) per issue #114.
+    #[test]
+    fn api_not_found_codes_classify_as_not_found() {
+        for code in [
+            "channel_not_found",
+            "message_not_found",
+            "thread_not_found",
+            "message not found",
+        ] {
+            let c = SlackError::Api {
+                error: code.to_owned(),
+            }
+            .classify();
+            assert_eq!(
+                c.kind,
+                ErrorCode::NotFound,
+                "{code} must classify as NotFound"
+            );
+        }
+    }
+
+    /// [T-SLC004] Slack TEMP_FAILURE error codes classify as TempFailure
+    /// (ADR-0003 — internal_error must not be misclassified as UsageError).
+    #[test]
+    fn api_temp_failure_codes_classify_as_temp_failure() {
+        for code in ["internal_error", "service_unavailable", "fatal_error"] {
+            let c = SlackError::Api {
+                error: code.to_owned(),
+            }
+            .classify();
+            assert_eq!(c.kind, ErrorCode::TempFailure, "{code}");
+        }
+    }
+
+    /// [T-SLC005] Other Slack API error codes (e.g., invalid_auth) classify as UsageError.
+    #[test]
+    fn api_other_codes_classify_as_usage_error() {
+        for code in ["invalid_auth", "missing_scope", "not_authed"] {
+            let c = SlackError::Api {
+                error: code.to_owned(),
+            }
+            .classify();
+            assert_eq!(c.kind, ErrorCode::UsageError, "{code}");
+        }
+    }
+
+    /// [T-SLC006] RateLimited classifies as TempFailure.
+    #[test]
+    fn rate_limited_is_temp_failure() {
+        let c = SlackError::RateLimited { retry_after: None }.classify();
+        assert_eq!(c.kind, ErrorCode::TempFailure);
+    }
+
+    /// [T-SLC007] Network classifies as TempFailure (network-class hint).
+    #[test]
+    fn network_is_temp_failure() {
+        let c = SlackError::Network("connection reset".into()).classify();
+        assert_eq!(c.kind, ErrorCode::TempFailure);
+    }
+
+    /// [T-SLC008] Timeout classifies as Timeout (exit 124 split from TempFailure).
+    #[test]
+    fn timeout_is_timeout_kind() {
+        let c = SlackError::Timeout("timed out".into()).classify();
+        assert_eq!(c.kind, ErrorCode::Timeout);
+    }
+
+    /// [T-SLC009] Decode (schema drift) classifies as Internal per ADR-0011 priority 5.
+    #[test]
+    fn decode_is_internal() {
+        let c = SlackError::Decode("schema mismatch".into()).classify();
+        assert_eq!(c.kind, ErrorCode::Internal);
     }
 }
