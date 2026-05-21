@@ -7,6 +7,7 @@ pub use errors::ScoutError;
 pub use params::Command;
 
 pub(crate) use config::RuntimeConfig;
+pub(crate) use errors::Classification;
 
 use std::io::{IsTerminal, stdin};
 use std::sync::Arc;

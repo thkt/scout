@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
 use crate::clock::{Clock, SystemClock};
+use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
@@ -21,6 +22,7 @@ use crate::retry::{
 };
 use crate::rng::{FastrandRng, Rng};
 use crate::token_source::TokenSource;
+use crate::tools::Classification;
 
 use helpers::encode_path;
 pub(crate) use helpers::{
@@ -75,6 +77,62 @@ pub(crate) enum GitHubError {
 
     #[error("Insecure URL: HTTPS required for token-bearing request")]
     InsecureUrl,
+}
+
+impl GitHubError {
+    /// Map each variant to its ADR-0011 priority-table [`Classification`].
+    ///
+    /// Arm order is load-bearing: `Api { code: 401 }` precedes the generic 4xx
+    /// arm so a reorder cannot silently demote 401 from UsageError(64) to
+    /// DataError(65).
+    pub(crate) fn classify(&self) -> Classification {
+        match self {
+            // Priority 1: USAGE_ERROR
+            Self::Forbidden(_) => Classification::new(ErrorCode::UsageError)
+                .with_hint("Check that your GITHUB_TOKEN has the required scopes"),
+            // 401 must precede the 4xx arm below to avoid falling into DataError.
+            Self::Api { code: 401, .. } => Classification::new(ErrorCode::UsageError)
+                .with_hint("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
+            // Priority 2: DATA_ERROR
+            Self::InvalidRepo(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use 'owner/repo' format, e.g., 'facebook/react'"),
+            Self::InvalidRef(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use a branch name, tag, or commit SHA"),
+            Self::InvalidPath(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use a path within the repository"),
+            Self::InvalidLineRange(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use format like '1-80', '50-', or '100' (first N lines)"),
+            Self::InvalidPattern(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use a glob pattern like '*.rs' or '*.{ts,tsx}'"),
+            Self::NonUtf8(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
+            Self::InsecureUrl => Classification::new(ErrorCode::DataError),
+            Self::Api { code, .. } if (400..500).contains(code) => {
+                Classification::new(ErrorCode::DataError)
+            }
+            // Priority 3: NOT_FOUND
+            Self::NotFound(_) => Classification::new(ErrorCode::NotFound)
+                .with_hint("Check that the repository or path exists, and that you have access"),
+            // Priority 4: TIMEOUT (request timeout via reqwest builder)
+            Self::Network(re) if re.is_timeout() => Classification::timeout_retry(),
+            // Priority 4: TEMP_FAILURE
+            Self::RateLimited { retry_after } => Classification::new(ErrorCode::TempFailure)
+                .with_hint(match retry_after {
+                    Some(secs) => format!(
+                        "Retry after {secs} seconds, or set GITHUB_TOKEN to increase rate limit"
+                    ),
+                    None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
+                }),
+            Self::Network(_) => Classification::transient_network(),
+            Self::Api { code, .. } if (500..=599).contains(code) => {
+                Classification::transient_retry()
+            }
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
+            Self::Decode(_) => Classification::new(ErrorCode::Internal),
+            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
+            Self::Api { .. } => Classification::new(ErrorCode::Unknown),
+        }
+    }
 }
 
 /// HTTP client for the GitHub REST API v3.
@@ -762,5 +820,149 @@ mod http_tests {
             ),
             "expected retry_after = 300 (reset 1300 - clock 1000), got: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    /// [T-GHC001] Forbidden classifies as UsageError with GITHUB_TOKEN scope hint.
+    #[test]
+    fn forbidden_is_usage_error_with_scope_hint() {
+        let c = GitHubError::Forbidden("denied".into()).classify();
+        assert_eq!(c.kind, ErrorCode::UsageError);
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("GITHUB_TOKEN")),
+            "expected GITHUB_TOKEN hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-GHC002] Api { code: 401 } classifies as UsageError (priority 1 over 4xx fallback).
+    /// Regression guard: a reorder that moves the 4xx arm above 401 would flip this to
+    /// DataError(65) without `match` exhaustiveness catching it.
+    #[test]
+    fn api_401_is_usage_error_not_data_error() {
+        let c = GitHubError::Api {
+            code: 401,
+            message: "Bad credentials".into(),
+        }
+        .classify();
+        assert_eq!(c.kind, ErrorCode::UsageError, "401 must precede 4xx arm");
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("gh auth login")),
+            "expected gh auth login hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-GHC003] All priority-2 DataError variants classify as DataError.
+    #[test]
+    fn data_error_variants_classify_as_data_error() {
+        let cases: Vec<GitHubError> = vec![
+            GitHubError::InvalidRepo("bad".into()),
+            GitHubError::InvalidRef("bad".into()),
+            GitHubError::InvalidPath("bad".into()),
+            GitHubError::InvalidLineRange("bad".into()),
+            GitHubError::InvalidPattern("bad".into()),
+            GitHubError::NonUtf8("bad".into()),
+            GitHubError::InsecureUrl,
+            GitHubError::Api {
+                code: 400,
+                message: "bad request".into(),
+            },
+            GitHubError::Api {
+                code: 422,
+                message: "unprocessable".into(),
+            },
+        ];
+        for case in &cases {
+            assert_eq!(
+                case.classify().kind,
+                ErrorCode::DataError,
+                "{case:?} must classify as DataError"
+            );
+        }
+    }
+
+    /// [T-GHC004] NotFound classifies as NotFound with a "check the repo/path" hint.
+    #[test]
+    fn not_found_is_not_found_with_hint() {
+        let c = GitHubError::NotFound("/x".into()).classify();
+        assert_eq!(c.kind, ErrorCode::NotFound);
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("repository or path")),
+            "expected repo/path hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-GHC005] RateLimited with retry_after embeds the seconds into next_step.
+    #[test]
+    fn rate_limited_with_retry_after_embeds_seconds() {
+        let c = GitHubError::RateLimited {
+            retry_after: Some(42),
+        }
+        .classify();
+        assert_eq!(c.kind, ErrorCode::TempFailure);
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("42 seconds")),
+            "expected 42 seconds in hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-GHC006] RateLimited without retry_after still suggests GITHUB_TOKEN.
+    #[test]
+    fn rate_limited_without_retry_after_suggests_token() {
+        let c = GitHubError::RateLimited { retry_after: None }.classify();
+        assert_eq!(c.kind, ErrorCode::TempFailure);
+        assert!(
+            c.next_step
+                .as_deref()
+                .is_some_and(|h| h.contains("GITHUB_TOKEN")),
+            "expected GITHUB_TOKEN hint, got: {:?}",
+            c.next_step
+        );
+    }
+
+    /// [T-GHC007] Api 5xx classifies as TempFailure (priority 4 over Unknown fallback).
+    #[test]
+    fn api_5xx_is_temp_failure() {
+        for code in [500u16, 502, 503, 599] {
+            let c = GitHubError::Api {
+                code,
+                message: "x".into(),
+            }
+            .classify();
+            assert_eq!(c.kind, ErrorCode::TempFailure, "code {code}");
+        }
+    }
+
+    /// [T-GHC008] Decode (schema drift) classifies as Internal per ADR-0011 priority 5.
+    #[test]
+    fn decode_is_internal() {
+        let c = GitHubError::Decode("schema mismatch".into()).classify();
+        assert_eq!(c.kind, ErrorCode::Internal);
+    }
+
+    /// [T-GHC009] Api codes outside 4xx/5xx (e.g., 1xx/3xx leak) land on Unknown.
+    #[test]
+    fn api_non_4xx_5xx_is_unknown() {
+        let c = GitHubError::Api {
+            code: 304,
+            message: "not modified".into(),
+        }
+        .classify();
+        assert_eq!(c.kind, ErrorCode::Unknown);
     }
 }
