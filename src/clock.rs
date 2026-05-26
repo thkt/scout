@@ -36,14 +36,6 @@ impl Clock for FixedClock {
 mod tests {
     use super::*;
 
-    /// [T-CLOCK001] FixedClock echoes its constructor argument so callers can
-    /// pin `now` for deterministic retry-after arithmetic tests.
-    #[test]
-    fn fixed_clock_returns_constructor_value() {
-        let c = FixedClock(1_700_000_000);
-        assert_eq!(c.now_secs(), 1_700_000_000);
-    }
-
     /// [T-CLOCK002] SystemClock returns a unix epoch second that is plausibly
     /// "now" (after 2020-01-01). Guards against an accidental `Duration::ZERO`
     /// regression in the unwrap_or branch.

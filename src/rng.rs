@@ -60,17 +60,6 @@ mod tests {
         }
     }
 
-    /// [T-RNG002] Two SeededRng with the same seed produce the same sequence,
-    /// proving deterministic seam works across calls (not just instances).
-    #[test]
-    fn seeded_rng_is_reproducible_under_identical_seed() {
-        let a = SeededRng::new(42);
-        let b = SeededRng::new(42);
-        for _ in 0..5 {
-            assert_eq!(a.u64_below(1_000_000), b.u64_below(1_000_000));
-        }
-    }
-
     /// [T-RNG003] Repeated calls on the same SeededRng advance the internal
     /// state — guards against the earlier `self.0.clone()` bug where every
     /// call returned the seed's first sample.

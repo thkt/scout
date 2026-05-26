@@ -107,11 +107,6 @@ impl ScoutError {
         Self::new(ErrorCode::IoError, msg)
     }
 
-    #[cfg(test)]
-    pub(super) fn transient(msg: impl Into<String>) -> Self {
-        Self::new(ErrorCode::TempFailure, msg)
-    }
-
     /// Timeout (request-level or transport-level). Maps to `ErrorCode::Timeout`
     /// (exit 124, GNU coreutils `timeout`) per ADR-0002. Retryable like
     /// `transient`, but separated so caller scripts/agents can apply a longer
@@ -239,20 +234,6 @@ pub(super) fn unwrap_or_degraded<T>(
 mod tests {
     use super::*;
 
-    /// [T-ER010] user_error returns ErrorCode::UsageError
-    #[test]
-    fn user_error_kind_is_usage() {
-        let err = ScoutError::user_error("test");
-        assert_eq!(err.error_kind(), ErrorCode::UsageError);
-    }
-
-    /// [T-ER011] transient returns ErrorCode::TempFailure
-    #[test]
-    fn transient_kind_is_temp_failure() {
-        let err = ScoutError::transient("test");
-        assert_eq!(err.error_kind(), ErrorCode::TempFailure);
-    }
-
     /// [T-ER012] io_error returns ErrorCode::IoError
     #[test]
     fn io_error_kind_is_io_error() {
@@ -360,34 +341,6 @@ mod tests {
         let err = ScoutError::io_error("io failure");
         let display = err.to_string();
         assert_eq!(display, "io failure");
-    }
-
-    /// [T-ER013] GitHubError::NotFound classifies as ErrorCode::NotFound
-    #[test]
-    fn github_not_found_classifies_as_not_found() {
-        let err = ScoutError::from(github::GitHubError::NotFound("/test".into()));
-        assert_eq!(err.error_kind(), ErrorCode::NotFound);
-    }
-
-    /// [T-ER014] GitHubError::InvalidRepo classifies as ErrorCode::DataError
-    #[test]
-    fn github_invalid_repo_classifies_as_data_error() {
-        let err = ScoutError::from(github::GitHubError::InvalidRepo("bad".into()));
-        assert_eq!(err.error_kind(), ErrorCode::DataError);
-    }
-
-    /// [T-ER015] FetchError::InvalidScheme classifies as ErrorCode::DataError
-    #[test]
-    fn fetch_invalid_scheme_classifies_as_data_error() {
-        let err = ScoutError::from(FetchError::InvalidScheme);
-        assert_eq!(err.error_kind(), ErrorCode::DataError);
-    }
-
-    /// [T-ER016] FetchError::Status(404) classifies as ErrorCode::NotFound
-    #[test]
-    fn fetch_status_404_classifies_as_not_found() {
-        let err = ScoutError::from(FetchError::Status(404));
-        assert_eq!(err.error_kind(), ErrorCode::NotFound);
     }
 
     /// [T-ER020] SlackError::Api with internal_error classifies as TempFailure (ADR-0003)

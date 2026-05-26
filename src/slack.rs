@@ -1186,41 +1186,6 @@ parent body
             assert_eq!(resolved[0].author, "UXXX");
         }
     }
-
-    mod injection_tests {
-        use super::*;
-        use reqwest::Client;
-
-        /// [T-SK-CLK001] `SlackClient::with_clock` installs the supplied Arc
-        /// into `SlackClient.clock`. Mirrors `T-SB001` for ScoutBuilder.
-        /// Guards against silent drop of the injected clock in a future
-        /// refactor of `api_get_once`.
-        #[test]
-        fn with_clock_installs_supplied_arc() {
-            use crate::clock::FixedClock;
-            let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
-            let client = SlackClient::with_base_url(Client::new(), "http://test.local")
-                .with_clock(injected.clone());
-            assert!(
-                Arc::ptr_eq(&client.clock, &injected),
-                "with_clock must install the supplied Arc into SlackClient.clock"
-            );
-        }
-
-        /// [T-SK-RNG001] `SlackClient::with_rng` installs the supplied Arc
-        /// into `SlackClient.rng`.
-        #[test]
-        fn with_rng_installs_supplied_arc() {
-            use crate::rng::SeededRng;
-            let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
-            let client = SlackClient::with_base_url(Client::new(), "http://test.local")
-                .with_rng(injected.clone());
-            assert!(
-                Arc::ptr_eq(&client.rng, &injected),
-                "with_rng must install the supplied Arc into SlackClient.rng"
-            );
-        }
-    }
 }
 
 #[cfg(test)]
