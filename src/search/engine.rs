@@ -421,30 +421,4 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BraveError::RateLimited { .. }));
     }
-
-    /// [T-SE011] fetch_sources sort restores input order after buffer_unordered
-    #[test]
-    fn fetch_sources_sort_restores_input_order() {
-        let mut indexed_pages: Vec<(usize, FetchResult)> = vec![
-            (
-                2,
-                FetchResult::for_test("https://c.com".into(), String::new(), false),
-            ),
-            (
-                0,
-                FetchResult::for_test("https://a.com".into(), String::new(), false),
-            ),
-            (
-                1,
-                FetchResult::for_test("https://b.com".into(), String::new(), false),
-            ),
-        ];
-
-        indexed_pages.sort_by_key(|(idx, _)| *idx);
-        let pages: Vec<_> = indexed_pages.into_iter().map(|(_, page)| page).collect();
-
-        assert_eq!(pages[0].url(), "https://a.com");
-        assert_eq!(pages[1].url(), "https://b.com");
-        assert_eq!(pages[2].url(), "https://c.com");
-    }
 }

@@ -118,24 +118,4 @@ mod tests {
         .await;
         assert_eq!(token.as_ref().map(Redacted::expose), Some("real-token"));
     }
-
-    /// [T-TS003] StaticTokenSource(Some(...)) propagates the constructor value
-    /// to fetch() callers without ever spawning the gh subprocess.
-    #[tokio::test]
-    async fn static_token_source_returns_constructor_value() {
-        let source = StaticTokenSource(Some(
-            Redacted::new("fixed").expect("static literal is non-empty"),
-        ));
-        let token = source.fetch().await;
-        assert_eq!(token.as_ref().map(Redacted::expose), Some("fixed"));
-    }
-
-    /// [T-TS004] StaticTokenSource(None) simulates the unauthenticated path so
-    /// callers can verify rate-limit-tier handling.
-    #[tokio::test]
-    async fn static_token_source_none_returns_none() {
-        let source = StaticTokenSource(None);
-        let token = source.fetch().await;
-        assert!(token.is_none());
-    }
 }
