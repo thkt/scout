@@ -46,11 +46,20 @@ fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     if !raw.contains('@') {
         return Cow::Borrowed(raw);
     }
-    if let Ok(mut parsed) = url::Url::parse(raw)
-        && (!parsed.username().is_empty() || parsed.password().is_some())
-    {
-        let _ = parsed.set_username("");
-        let _ = parsed.set_password(None);
+    // Fail closed: a '@'-bearing URL that `url` cannot parse (e.g.
+    // `file://user:pass@host`, rejected with IdnaError) would otherwise be
+    // logged with credentials intact.
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return Cow::Borrowed("[redacted-url]");
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        // Defense in depth: set_* fails when the parsed URL has no settable
+        // host (non-special scheme, empty host); the `file:` case is already
+        // caught by the parse Err arm above. No reachable post-parse input is
+        // known, but fail closed rather than risk emitting userinfo.
+        if parsed.set_username("").is_err() || parsed.set_password(None).is_err() {
+            return Cow::Borrowed("[redacted-url]");
+        }
         return Cow::Owned(parsed.to_string());
     }
     Cow::Borrowed(raw)
@@ -112,6 +121,11 @@ pub(crate) async fn ssrf_check(
             .port()
             .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
         let addrs = resolver.lookup(domain, port).await?;
+        if addrs.is_empty() {
+            return Err(FetchError::DnsResolution(format!(
+                "DNS lookup for {domain} returned no addresses"
+            )));
+        }
 
         for ip in addrs {
             if is_private_ip(ip) {
@@ -334,6 +348,22 @@ mod dns_tests {
         assert!(result.is_ok());
     }
 
+    /// [T-FS013] ssrf_rejects_empty_dns_response
+    ///
+    /// A domain resolving to zero addresses (NOERROR + empty A/AAAA) must fail
+    /// closed: the `ValidatedUrl` "DNS-checked" invariant is unmet, so the
+    /// for-loop being skipped must not yield `Ok`. T-FS007 above shows the IP
+    /// literal path stays `Ok` with the same empty resolver.
+    #[tokio::test]
+    async fn ssrf_rejects_empty_dns_response() {
+        let resolver = StaticDnsResolver(vec![]);
+        let result = ssrf_check("https://evil.com/secret", &resolver).await;
+        assert!(
+            matches!(result, Err(FetchError::DnsResolution(_))),
+            "empty DNS response must fail closed, got: {result:?}"
+        );
+    }
+
     /// [T-FS008] redact_strips_userinfo
     #[test]
     fn redact_strips_userinfo() {
@@ -370,5 +400,35 @@ mod dns_tests {
         assert!(!formatted.contains("secret"));
         assert!(!formatted.contains("user:"));
         assert!(formatted.contains("example.com/path"));
+    }
+
+    /// [T-FS014] redact_falls_back_when_unparseable
+    ///
+    /// `url::Url::parse` rejects `file://user:pass@host/path` with `IdnaError`
+    /// (file scheme has no userinfo grammar, so `user:pass@host` parses as an
+    /// invalid host). The browser-subrequest log path
+    /// (`check_browser_request` unrecognized-scheme branch) hands such raw URLs
+    /// to redaction; returning the input unchanged on parse failure leaks the
+    /// credentials into the log. Redaction must fail closed to `[redacted-url]`.
+    #[test]
+    fn redact_falls_back_when_unparseable() {
+        let safe = redact_url_credentials("file://user:pass@host/path");
+        assert!(!safe.contains("user"), "username leaked: {safe}");
+        assert!(!safe.contains("pass"), "password leaked: {safe}");
+        assert_eq!(safe, "[redacted-url]");
+    }
+
+    /// [T-FS015] redact_preserves_at_sign_outside_userinfo
+    ///
+    /// Fail-closed parse handling (T-FS014) must not over-redact: a `@` in the
+    /// path parses cleanly with an empty username, so the URL is returned
+    /// verbatim instead of collapsing to `[redacted-url]`.
+    #[test]
+    fn redact_preserves_at_sign_outside_userinfo() {
+        let url = "https://example.com/feed@v2";
+        assert!(
+            matches!(redact_url_credentials(url), Cow::Borrowed(s) if s == url),
+            "URL without userinfo must be returned verbatim"
+        );
     }
 }
