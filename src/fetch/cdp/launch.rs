@@ -1,0 +1,247 @@
+//! Browser binary discovery and Chrome process lifecycle for CDP rendering.
+
+#[cfg(feature = "js-rendering")]
+use nix::unistd::Pid;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::sync::OnceLock;
+#[cfg(feature = "js-rendering")]
+use std::time::Duration;
+#[cfg(feature = "js-rendering")]
+use tokio::io::{AsyncBufRead, BufReader};
+#[cfg(feature = "js-rendering")]
+use tokio::process::{Child as TokioChild, ChildStderr, Command as TokioCommand};
+#[cfg(feature = "js-rendering")]
+use tokio::time::{sleep, timeout};
+use tracing::warn;
+
+use super::BrowserError;
+use crate::fetch::ssrf::{self, RedactedLogUrl};
+
+#[cfg(feature = "js-rendering")]
+pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
+    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+    let cached = CACHE.get_or_init(|| {
+        let path_commands: &[&str] = if cfg!(target_os = "macos") {
+            &["chromium"]
+        } else {
+            &[
+                "google-chrome-stable",
+                "google-chrome",
+                "chromium-browser",
+                "chromium",
+            ]
+        };
+        let known_paths: &[&Path] = if cfg!(target_os = "macos") {
+            &[
+                Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            ]
+        } else {
+            &[]
+        };
+        resolve_browser_binary_from(path_commands, known_paths).map_err(|e| e.to_string())
+    });
+
+    cached.clone().map_err(|_| BrowserError::NotFound)
+}
+
+/// See spec.md Chrome Launch Flags table for rationale.
+#[cfg(feature = "js-rendering")]
+fn build_launch_args() -> Vec<&'static str> {
+    vec![
+        "--headless=new",
+        "--disable-webrtc",
+        "--disable-background-networking",
+        "--disable-features=DnsOverHttps",
+        "--disable-domain-reliability",
+        "--no-pings",
+        "--disable-extensions",
+        "--no-first-run",
+        "--disable-default-apps",
+    ]
+}
+
+/// SSRF check for a browser-initiated subrequest URL (CDP `Fetch.RequestPaused`).
+///
+/// Scheme handling rationale:
+/// - `http`/`https`: passed directly to `ssrf::ssrf_check`
+/// - `ws`/`wss`: WebSocket can reach internal services; rewritten to http(s) for SSRF allowlist check
+/// - `data:`/`about:`/`chrome:`/`blob:`: synthetic browser schemes with no external egress, allowed without SSRF check
+/// - Unrecognized scheme: blocked (warn + return false) because the scheme cannot be classified
+///
+/// See ADR-0001 for the SSRF defense architecture.
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+pub(crate) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
+    let check_url = if url.starts_with("http://") || url.starts_with("https://") {
+        Cow::Borrowed(url)
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        Cow::Owned(format!("http://{rest}"))
+    } else if let Some(rest) = url.strip_prefix("wss://") {
+        Cow::Owned(format!("https://{rest}"))
+    } else if url.starts_with("data:")
+        || url.starts_with("about:")
+        || url.starts_with("chrome:")
+        || url.starts_with("blob:")
+    {
+        return true;
+    } else {
+        warn!(url = %RedactedLogUrl(url), "SSRF: blocked browser subrequest with unrecognized scheme");
+        return false;
+    };
+    ssrf::ssrf_check(&check_url, resolver).await.is_ok()
+}
+
+/// Grace period between SIGTERM and SIGKILL when reaping the chromium pgroup.
+/// 50 ms is enough for chromium subprocess (Helper Renderer, GPU, Network) to
+/// observe the signal after `browser.close()` already drove the graceful path.
+#[cfg(feature = "js-rendering")]
+const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
+
+#[cfg(feature = "js-rendering")]
+pub(super) fn spawn_chromium_pgroup(
+    browser_path: &Path,
+) -> Result<(TokioChild, Pid, BufReader<ChildStderr>), BrowserError> {
+    use std::env::temp_dir;
+    use std::process::{Stdio, id};
+
+    // PID suffix prevents `SingletonLock` failure when two scout processes
+    // run --js concurrently (chromium refuses to share a profile dir).
+    let user_data_dir = temp_dir().join(format!("scout-chromium-{}", id()));
+    let mut cmd = TokioCommand::new(browser_path);
+    cmd.arg("--remote-debugging-port=0")
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .args(build_launch_args())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| BrowserError::ProcessFailed(format!("spawn chromium: {e}")))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| BrowserError::ProcessFailed("chromium pid unavailable".into()))?;
+    let pgid = Pid::from_raw(
+        i32::try_from(pid)
+            .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
+    );
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BrowserError::ProcessFailed("chromium stderr missing".into()))?;
+    Ok((child, pgid, BufReader::new(stderr)))
+}
+
+/// Read chromium stderr line-by-line until `DevTools listening on ws://...`.
+///
+/// Mirrors chromiumoxide 0.9's `ws_url_from_output` — the marker has been
+/// stable in Chrome/Chromium for years. Generic over `AsyncBufRead` so unit
+/// tests can drive it with an in-memory cursor.
+#[cfg(feature = "js-rendering")]
+pub(super) async fn parse_ws_url_from_lines<R>(reader: R) -> Result<String, BrowserError>
+where
+    R: AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+
+    let mut lines = reader.lines();
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|e| BrowserError::ProcessFailed(format!("stderr read: {e}")))?;
+        let Some(line) = line else {
+            return Err(BrowserError::ProcessFailed(
+                "chromium exited before announcing DevTools URL".into(),
+            ));
+        };
+        if let Some((_, ws)) = line.rsplit_once("listening on ")
+            && ws.starts_with("ws")
+            && ws.contains("devtools/browser")
+        {
+            return Ok(ws.trim().to_owned());
+        }
+    }
+}
+
+/// Send SIGTERM to the pgroup, wait a short grace, then SIGKILL.
+///
+/// `ESRCH` from the first killpg means the group already exited (the common
+/// case after a successful `browser.close()`); skip the grace + SIGKILL in
+/// that branch to avoid a 50 ms cleanup penalty on every `--js` fetch. The
+/// `Child` is awaited unconditionally so the kernel can reap the parent and
+/// we don't leave a zombie pid behind.
+#[cfg(feature = "js-rendering")]
+pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, killpg};
+
+    let term = killpg(pgid, Signal::SIGTERM);
+    let already_gone = matches!(term, Err(Errno::ESRCH));
+    if let Err(e) = term
+        && e != Errno::ESRCH
+    {
+        warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
+    }
+    if !already_gone {
+        sleep(PGROUP_SIGTERM_GRACE).await;
+        if let Err(e) = killpg(pgid, Signal::SIGKILL)
+            && e != Errno::ESRCH
+        {
+            warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
+        }
+    }
+    // Reap so the kernel can release the parent slot. `Ok(Err)` means waitpid
+    // itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
+    // means the 2s budget elapsed before chromium exited, which is the zombie
+    // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
+    // honest (issue #152).
+    match timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
+        Err(_) => warn!(
+            timeout_secs = 2,
+            pgid = %pgid,
+            "chromium child did not exit within timeout after SIGKILL"
+        ),
+    }
+}
+
+/// Borrows browser so the caller retains ownership for cleanup on timeout.
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+fn resolve_browser_binary_from(
+    path_commands: &[&str],
+    known_paths: &[&Path],
+) -> Result<PathBuf, BrowserError> {
+    for cmd in path_commands {
+        if let Ok(output) = Command::new("which").arg(cmd).output()
+            && output.status.success()
+        {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    for path in known_paths {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+    }
+
+    Err(BrowserError::NotFound)
+}
+
+#[cfg(test)]
+mod browser_binary_tests;
+#[cfg(test)]
+mod browser_request_tests;
+#[cfg(all(test, feature = "js-rendering"))]
+mod cdp_launch_tests;
+#[cfg(all(test, feature = "js-rendering"))]
+mod ws_url_parse_tests;
