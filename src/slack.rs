@@ -677,4 +677,21 @@ fn is_retriable(e: &SlackError) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+#[allow(dead_code)]
+#[derive(Debug, serde::Deserialize)]
+struct DummyBody {
+    ok: bool,
+}
+
+#[cfg(test)]
+mod classify_tests;
+#[cfg(test)]
+mod constructor_tests;
+#[cfg(test)]
+mod http_tests;
+#[cfg(test)]
+mod mention_tests;
+#[cfg(test)]
+mod resolve_messages_tests;
+#[cfg(test)]
+mod url_tests;
