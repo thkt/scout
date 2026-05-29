@@ -908,4 +908,14 @@ fn format_fetch_output(result: &FetchResult) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod builder_tests;
+#[cfg(test)]
+mod query_tests;
+#[cfg(test)]
+mod repo_io_tests;
+#[cfg(test)]
+mod repo_lazy_tests;
+#[cfg(test)]
+mod stdin_tests;
+#[cfg(test)]
+mod test_helpers;
