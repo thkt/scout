@@ -464,4 +464,6 @@ fn secs_until_ratelimit_reset(headers: &HeaderMap, clock: &dyn Clock) -> Option<
 }
 
 #[cfg(test)]
-mod tests;
+mod classify_tests;
+#[cfg(test)]
+mod http_tests;
