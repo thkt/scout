@@ -270,4 +270,10 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
 }
 
 #[cfg(test)]
-mod tests;
+mod file_content_tests;
+#[cfg(test)]
+mod overview_tests;
+#[cfg(test)]
+mod size_tests;
+#[cfg(test)]
+mod tree_tests;
