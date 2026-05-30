@@ -231,4 +231,6 @@ pub(super) fn unwrap_or_degraded<T>(
 }
 
 #[cfg(test)]
-mod tests;
+mod classification_tests;
+#[cfg(test)]
+mod exit_code_tests;

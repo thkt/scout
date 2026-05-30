@@ -40,7 +40,7 @@ Chosen option: "Hybrid B+", because it closes both findings with a small, locali
 
 ### Confirmation
 
-`grep -n 'cfg!(test)' src/redacted.rs` returns zero hits after the change. Unit tests cover `validate_https("http://...")` → `Err(InsecureBaseUrl)` and `validate_https("https://...")` → `Ok(())`. The existing wiremock-based tests in `brave/client.rs::http_tests` continue to pass via the explicit `skip_https_check` flag on test-only clients.
+`grep -n 'cfg!(test)' src/redacted.rs` returns zero hits after the change. Unit tests cover `validate_https("http://...")` → `Err(InsecureBaseUrl)` and `validate_https("https://...")` → `Ok(())`. The existing wiremock-based tests in `brave/client/http_tests.rs` continue to pass via the explicit `skip_https_check` flag on test-only clients.
 
 ## Pros and Cons of the Options
 

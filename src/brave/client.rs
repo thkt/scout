@@ -363,4 +363,6 @@ fn is_retriable(e: &BraveError) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+mod classify_tests;
+#[cfg(test)]
+mod http_tests;

@@ -1,0 +1,63 @@
+use super::*;
+
+/// [T-F020] all_spa_frameworks_detected
+#[test]
+fn all_spa_frameworks_detected() {
+    for id in SPA_ROOT_IDS {
+        let html = format!(
+            r#"<html><head><script src="app.js"></script></head>
+                <body><div {id}></div></body></html>"#
+        );
+        assert!(is_js_dependent(&html), "should detect SPA with {id}");
+    }
+}
+
+/// [T-F021] normal_html_not_detected
+#[test]
+fn normal_html_not_detected() {
+    let html = r#"<html><body><article>
+        <h1>Title</h1><p>Long paragraph with enough content to exceed
+        the threshold of one hundred characters easily.</p>
+        </article></body></html>"#;
+    assert!(!is_js_dependent(html));
+}
+
+/// [T-F022] script_without_spa_pattern_but_empty_body
+#[test]
+fn script_without_spa_pattern_but_empty_body() {
+    let html = r#"<html><head><script src="bundle.js"></script></head>
+        <body><div class="app"></div></body></html>"#;
+    assert!(is_js_dependent(html));
+}
+
+/// [T-F023] spa_pattern_without_script_but_empty_body
+#[test]
+fn spa_pattern_without_script_but_empty_body() {
+    let html = r#"<html><body><div id="root"></div></body></html>"#;
+    assert!(is_js_dependent(html));
+}
+
+/// [T-F024] rich_body_with_scripts_not_detected
+#[test]
+fn rich_body_with_scripts_not_detected() {
+    let content = "x".repeat(200);
+    let html = format!(
+        r#"<html><head><script src="app.js"></script></head>
+            <body><div id="root"><p>{content}</p></div></body></html>"#
+    );
+    assert!(!is_js_dependent(&html));
+}
+
+/// [T-F025] thin_body_without_script_or_spa_pattern_not_detected
+#[test]
+fn thin_body_without_script_or_spa_pattern_not_detected() {
+    let html = "<html><body><p>short</p></body></html>";
+    assert!(!is_js_dependent(html));
+}
+
+/// [T-F026] no_body_tag_falls_back_to_full_html
+#[test]
+fn no_body_tag_falls_back_to_full_html() {
+    let html = r#"<div id="root"></div><script src="app.js"></script>"#;
+    assert!(is_js_dependent(html));
+}
