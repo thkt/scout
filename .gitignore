@@ -7,3 +7,5 @@ docs/*
 !docs/audit/
 target/
 workspace/
+*.profraw
+/lcov.info
