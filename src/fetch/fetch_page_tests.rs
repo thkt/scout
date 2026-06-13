@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::{no_redirect_client, try_spawn_mock_server};
+use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -58,6 +59,45 @@ async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
     assert!(
         !logs_contain("user:"),
         "userinfo must be stripped from logs",
+    );
+}
+
+/// [T-003] fetch_blocks_dns_rebind_at_connect_time
+///
+/// ADR-0012 contract pin: the pre-flight `ssrf_check` resolver returns a public
+/// IP (passing pre-flight), while the `fetch_http` client's injected
+/// `SsrfResolver` resolves the host to a private IP at connect time (DNS
+/// rebinding). The fetch must fail AND emit `"blocked connect to private IP"`.
+/// The log assertion is non-tautological: a broken connect-time guard would
+/// still yield `is_err()` via a real connect failure but emit no such warn.
+/// A domain (not an IP literal) is used so reqwest consults the resolver.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn fetch_blocks_dns_rebind_at_connect_time() {
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .dns_resolver(Arc::new(SsrfResolver::new(StaticDnsResolver::single(
+            "10.0.0.1",
+        ))))
+        .build()
+        .unwrap();
+    let preflight: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let (cancel, _) = watch::channel(false);
+    let result = fetch_page(
+        &client,
+        "http://rebind.example.com/",
+        FetchOptions::default(),
+        preflight,
+        &cancel,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "DNS rebind to private IP must be blocked at connect, got: {result:?}"
+    );
+    assert!(
+        logs_contain("blocked connect to private IP"),
+        "expected the connect-time SSRF guard to fire",
     );
 }
 

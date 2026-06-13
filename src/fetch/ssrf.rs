@@ -3,10 +3,12 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use tokio::net::lookup_host;
 use tokio::time::timeout;
 use tracing::warn;
@@ -187,8 +189,13 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
                 || v6.is_unspecified()
                 || is_ipv6_link_local(&v6)
                 || is_ipv6_unique_local(&v6)
+                // `to_ipv4` (not `to_ipv4_mapped`) so both IPv4-mapped
+                // (`::ffff:a.b.c.d`) and IPv4-compatible (`::a.b.c.d`, e.g.
+                // `::7f00:1` = `::127.0.0.1`) embeddings are unwrapped and
+                // re-checked. `::1`/`::` map to `0.0.0.1`/`0.0.0.0`, already
+                // caught by the loopback/unspecified arms — no false positives.
                 || v6
-                    .to_ipv4_mapped()
+                    .to_ipv4()
                     .is_some_and(|v4| is_private_ip(IpAddr::V4(v4)))
         }
     }
@@ -200,6 +207,48 @@ fn is_ipv6_link_local(v6: &Ipv6Addr) -> bool {
 
 fn is_ipv6_unique_local(v6: &Ipv6Addr) -> bool {
     (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// reqwest [`Resolve`] implementation that re-validates resolved IPs at connect
+/// time, closing the SSRF DNS-rebind TOCTOU gap (ADR-0012).
+///
+/// [`ssrf_check`] validates the IPs resolved during the pre-flight lookup, but
+/// reqwest re-resolves the host when it opens the connection. A name server that
+/// returns a public IP for the pre-flight query and a private IP at connect time
+/// (DNS rebinding) would slip past the pre-flight check. Injecting this resolver
+/// via `ClientBuilder::dns_resolver` makes reqwest reuse the same private-IP
+/// block for the addresses it actually dials.
+pub(crate) struct SsrfResolver {
+    inner: Arc<dyn DnsResolver>,
+}
+
+impl SsrfResolver {
+    pub(crate) fn new(inner: impl DnsResolver + 'static) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+impl Resolve for SsrfResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let host = name.as_str();
+            // Port 0: reqwest substitutes the scheme default before dialing.
+            let ips = inner.lookup(host, 0).await?;
+            let mut addrs = Vec::with_capacity(ips.len());
+            for ip in ips {
+                if is_private_ip(ip) {
+                    warn!(host = %host, ip = %ip, "blocked connect to private IP");
+                    return Err(format!("blocked connect to private IP {ip}").into());
+                }
+                addrs.push(SocketAddr::new(ip, 0));
+            }
+            let addrs: Addrs = Box::new(addrs.into_iter());
+            Ok(addrs)
+        })
+    }
 }
 
 #[cfg(test)]
