@@ -33,34 +33,41 @@ pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 /// not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
-/// Drain `response` into a `Vec<u8>` while enforcing `MAX_API_RESPONSE_BYTES`.
-/// Content-Length is pre-checked before any allocation; the chunk loop also
-/// rejects bodies that exceed the cap when the header is absent or lies.
-/// `fetch.rs` keeps its own copy because it interleaves charset and redirect
-/// handling around the same loop.
+/// Upper bound on JSON response body bytes accepted from the GitHub backend
+/// (issue #186). GitHub's payloads are an order of magnitude larger than
+/// Brave/Slack: `git/trees?recursive=1` is served up to GitHub's own ~7 MB
+/// truncation ceiling, and `git/blobs` returns base64-inflated file content.
+/// 10 MB matches `fetch.rs`'s `MAX_RESPONSE_BYTES` (the largest content scout
+/// already returns) so legitimate large-repo trees and files are not rejected,
+/// while still bounding the memory a hostile or runaway response can consume.
+pub(crate) const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
+
+/// Drain `response` into a `Vec<u8>` while enforcing `cap` bytes. Content-Length
+/// is pre-checked before any allocation; the chunk loop also rejects bodies that
+/// exceed the cap when the header is absent or lies. Callers pass the cap that
+/// matches their backend's legitimate payload size (`MAX_API_RESPONSE_BYTES` for
+/// Brave/Slack, `MAX_GITHUB_RESPONSE_BYTES` for GitHub). `fetch.rs` keeps its own
+/// copy because it interleaves charset and redirect handling around the same loop.
 pub(crate) async fn read_body_capped<E>(
     response: reqwest::Response,
+    cap: usize,
     too_large: impl Fn() -> E,
     network: impl Fn(reqwest::Error) -> E,
 ) -> Result<Vec<u8>, E> {
     let content_length = response.content_length();
     if let Some(len) = content_length
-        && usize::try_from(len).unwrap_or(usize::MAX) > MAX_API_RESPONSE_BYTES
+        && usize::try_from(len).unwrap_or(usize::MAX) > cap
     {
         return Err(too_large());
     }
     let capacity = content_length
-        .map(|len| {
-            usize::try_from(len)
-                .unwrap_or(usize::MAX)
-                .min(MAX_API_RESPONSE_BYTES)
-        })
+        .map(|len| usize::try_from(len).unwrap_or(usize::MAX).min(cap))
         .unwrap_or(8192);
     let mut body = Vec::with_capacity(capacity);
     let mut stream = response;
     while let Some(chunk) = stream.chunk().await.map_err(&network)? {
         body.extend_from_slice(&chunk);
-        if body.len() > MAX_API_RESPONSE_BYTES {
+        if body.len() > cap {
             return Err(too_large());
         }
     }
@@ -75,15 +82,6 @@ pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
 
 pub(crate) fn is_transient_network(e: &Error) -> bool {
     e.is_connect() || e.is_timeout() || is_transient_decode(e)
-}
-
-/// True only when a `Decode`-classified reqwest error originates in a
-/// schema mismatch (serde failure), not a transport-level IO failure.
-/// Body-decode call sites use this to route schema fails to terminal
-/// `Decode` while letting transport drops fall through to `Network` for
-/// the retry loop (issue #113).
-pub(crate) fn is_schema_decode_fail(e: &Error) -> bool {
-    e.is_decode() && !is_transient_decode(e)
 }
 
 /// True when a `Decode`-classified reqwest error originates in a transport

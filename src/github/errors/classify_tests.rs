@@ -128,6 +128,14 @@ fn decode_is_internal() {
     assert_eq!(c.kind, ErrorCode::Internal);
 }
 
+/// [T-GHC010] ResponseTooLarge classifies as Internal per ADR-0011 priority 5,
+/// peer to Decode (issue #186). End-to-end non-retriability is pinned by T-GH020.
+#[test]
+fn response_too_large_is_internal() {
+    let c = GitHubError::ResponseTooLarge.classify();
+    assert_eq!(c.kind, ErrorCode::Internal);
+}
+
 /// [T-GHC009] Api codes outside 4xx/5xx (e.g., 1xx/3xx leak) land on Unknown.
 #[test]
 fn api_non_4xx_5xx_is_unknown() {
