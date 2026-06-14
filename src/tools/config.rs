@@ -399,4 +399,28 @@ mod tests {
             "github_timeout ({github:?}) must exceed CANDIDATE_FETCH_TIMEOUT"
         );
     }
+
+    /// [T-CFG022] SCOUT_GITHUB_TIMEOUT_SECS の範囲外値は UsageError
+    #[test]
+    fn github_timeout_out_of_range_fails() {
+        let err =
+            RuntimeConfig::from_env_with(single_env("SCOUT_GITHUB_TIMEOUT_SECS", "0")).unwrap_err();
+        assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    }
+
+    /// [T-CFG-LOG003] SCOUT_GITHUB_TIMEOUT_SECS override が INFO event を出す
+    #[tracing_test::traced_test]
+    #[test]
+    fn github_timeout_override_surfaces_info_event() {
+        let _ =
+            RuntimeConfig::from_env_with(single_env("SCOUT_GITHUB_TIMEOUT_SECS", "200")).unwrap();
+        assert!(
+            logs_contain("SCOUT_GITHUB_TIMEOUT_SECS override applied"),
+            "expected INFO event for the overridden field"
+        );
+        assert!(
+            logs_contain("github_timeout_secs=200"),
+            "expected structured field carrying the active value"
+        );
+    }
 }
