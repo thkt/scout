@@ -480,3 +480,120 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
         "the parent body should render once, not once per page: {out}"
     );
 }
+
+/// [T-SK046] A thread whose reply pages never stop (every page returns
+/// has_more:true + a cursor) stops paginating at SLACK_MAX_REPLY_PAGES and
+/// emits a WARN that the thread was truncated, rather than looping forever
+/// (issue #188 claim 2, cap path). Covers the post-loop cap-hit branch in
+/// fetch_replies. The parent recurs on every page and is deduped by ts, so the
+/// returned thread is the parent alone and fetch_message still succeeds.
+#[tokio::test]
+#[traced_test]
+async fn fetch_replies_stops_at_page_cap_and_warns() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Every page advertises another page, so the loop only ends at the cap.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "PARENT_BODY", "ts": parent_ts}],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("a truncated thread still returns the pages fetched so far");
+    assert!(
+        out.contains("PARENT_BODY"),
+        "expected the parent body in the truncated output, got: {out}"
+    );
+    assert!(
+        logs_contain("hit the page cap"),
+        "expected a WARN that the thread was truncated at the page cap"
+    );
+    assert!(logs_contain("WARN"));
+}
+
+/// [T-SK047] A message-permalink URL (no thread_ts) whose target has replies
+/// triggers the conversations.history reply_count probe; when reply_count > 0
+/// fetch_thread re-fetches the full thread via conversations.replies and marks
+/// the result as a thread, so the replies render (issue #188 claim 2, probe
+/// path). Covers the has_replies branch in fetch_thread. Without it a permalink
+/// to a thread root would show only the root with no replies.
+#[tokio::test]
+async fn fetch_message_link_with_replies_fetches_thread() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // The probe reports the target has one reply, so fetch_replies runs next.
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "parent", "ts": parent_ts, "reply_count": 1}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "parent", "ts": parent_ts},
+                {"user": "U2", "text": "a reply", "ts": "1000.000002"}
+            ],
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: None,
+        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("a permalink to a thread root resolves the full thread");
+    assert!(
+        out.contains("a reply"),
+        "expected the probed thread's reply in output, got: {out}"
+    );
+}
