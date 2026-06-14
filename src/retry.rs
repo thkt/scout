@@ -187,7 +187,12 @@ pub(crate) fn retry_after_or_backoff(
 ) -> Duration {
     match retry_after {
         Some(secs) => Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)),
-        None => Duration::from_millis(jittered_backoff(attempt, rng)),
+        // Cap the exponential backoff at the same ceiling as the server-supplied
+        // `Retry-After`. Without this, a high `SCOUT_MAX_RETRIES` lets the
+        // `2^attempt` growth produce a single multi-minute sleep (e.g. attempt 9
+        // → 512s) that overruns the surrounding tool timeout (issue #185).
+        None => Duration::from_millis(jittered_backoff(attempt, rng))
+            .min(Duration::from_secs(MAX_RETRY_AFTER_SECS)),
     }
 }
 

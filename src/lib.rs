@@ -80,6 +80,8 @@ Tuning (override built-in timeouts and retry budget):
   SCOUT_FETCH_TIMEOUT_SECS      fetch wall-clock budget per URL (default 95, range 1-600)
   SCOUT_RESEARCH_TIMEOUT_SECS   research wall-clock budget (default 45, range 1-600)
   SCOUT_SLACK_TIMEOUT_SECS      slack fetch wall-clock budget (default 60, range 1-600)
+  SCOUT_GITHUB_TIMEOUT_SECS     repo-tree/repo-read/repo-overview wall-clock budget
+                                (default 180, range 1-600)
   SCOUT_MAX_RETRIES             retries on transient API failures, on top of the
                                 initial attempt (default 2 → 3 total attempts,
                                 range 0-10; set to 0 to disable retry)
@@ -362,6 +364,7 @@ mod tests {
             "SCOUT_FETCH_TIMEOUT_SECS",
             "SCOUT_RESEARCH_TIMEOUT_SECS",
             "SCOUT_SLACK_TIMEOUT_SECS",
+            "SCOUT_GITHUB_TIMEOUT_SECS",
             "SCOUT_MAX_RETRIES",
         ] {
             assert!(
