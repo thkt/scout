@@ -2,7 +2,7 @@ use super::*;
 use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 use reqwest::Client;
 use tracing_test::traced_test;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
 
 /// [T-SK001] HTTP 429 response maps to SlackError::RateLimited
@@ -214,4 +214,64 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
         "expected a warn for the null user name"
     );
     assert!(logs_contain("WARN"));
+}
+
+/// [T-SK042] conversations.replies pagination: a thread whose target message
+/// lands on the second page (page 1 returns has_more:true + next_cursor) is
+/// still found. Before the pagination loop, serde dropped has_more/next_cursor
+/// and only page 1 was fetched, so a >200-reply thread lost the target and
+/// fetch_message returned "not found" (issue #188 claim 2).
+#[tokio::test]
+async fn fetch_replies_paginates_to_find_target_on_page_two() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    let target_ts = "1000.000500";
+    // Page 1: parent + filler, has_more with a cursor. Target is NOT here.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "parent", "ts": parent_ts},
+                {"user": "U1", "text": "filler", "ts": "1000.000002"}
+            ],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "PAGE2"}
+        })))
+        .mount(&server)
+        .await;
+    // Page 2: contains the target message, no further pages.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param("cursor", "PAGE2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "the target reply", "ts": target_ts}
+            ],
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: target_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000500".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("target message on page 2 is found via pagination");
+    assert!(
+        out.contains("the target reply"),
+        "expected the page-2 target in output, got: {out}"
+    );
 }

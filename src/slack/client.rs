@@ -64,6 +64,12 @@ const SLACK_REPLIES_LIMIT: &str = "200";
 /// (issue #155 / OPS-009 / CHX-001).
 const SLACK_USERS_CONCURRENCY: usize = 5;
 
+/// Upper bound on `conversations.replies` pages fetched per thread. At
+/// `SLACK_REPLIES_LIMIT` (200) messages per page this covers threads up to
+/// ~10k replies; the cap stops an unbounded paging loop from re-introducing
+/// the rate-limit exhaustion that claim 3 bounds (issue #188 claim 2).
+const SLACK_MAX_REPLY_PAGES: usize = 50;
+
 impl SlackClient {
     pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
@@ -265,21 +271,49 @@ impl SlackClient {
             .await
     }
 
+    /// Fetch every reply in a thread, following `response_metadata.next_cursor`
+    /// across pages up to `SLACK_MAX_REPLY_PAGES`. Without this loop a target
+    /// message past the first `SLACK_REPLIES_LIMIT` page is silently dropped and
+    /// surfaces as "not found" (issue #188 claim 2).
+    async fn fetch_replies(&self, channel: &str, ts: &str) -> Result<Vec<Message>, SlackError> {
+        let mut messages = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..SLACK_MAX_REPLY_PAGES {
+            // Scope `params` so its borrow of `cursor` ends before the
+            // reassignment below.
+            let body: MessagesBody = {
+                let mut params = vec![
+                    ("channel", channel),
+                    ("ts", ts),
+                    ("limit", SLACK_REPLIES_LIMIT),
+                ];
+                if let Some(c) = cursor.as_deref() {
+                    params.push(("cursor", c));
+                }
+                self.api_get("conversations.replies", &params).await?
+            };
+            let next = body.next_cursor().map(str::to_owned);
+            messages.extend(body.messages);
+            match next {
+                Some(c) => cursor = Some(c),
+                None => return Ok(messages),
+            }
+        }
+        warn!(
+            channel = %channel,
+            ts = %ts,
+            max_pages = SLACK_MAX_REPLY_PAGES,
+            "conversations.replies hit the page cap, thread truncated"
+        );
+        Ok(messages)
+    }
+
     async fn fetch_thread(&self, slack_url: &SlackUrl) -> Result<FetchedThread, SlackError> {
         let ch = &slack_url.channel;
         if let Some(ref thread_ts) = slack_url.thread_ts {
-            let body: MessagesBody = self
-                .api_get(
-                    "conversations.replies",
-                    &[
-                        ("channel", ch),
-                        ("ts", thread_ts),
-                        ("limit", SLACK_REPLIES_LIMIT),
-                    ],
-                )
-                .await?;
+            let messages = self.fetch_replies(ch, thread_ts).await?;
             return Ok(FetchedThread {
-                messages: body.messages,
+                messages,
                 is_thread: true,
             });
         }
@@ -300,18 +334,9 @@ impl SlackClient {
             .first()
             .is_some_and(|m| m.reply_count.unwrap_or(0) > 0);
         if has_replies {
-            let thread: MessagesBody = self
-                .api_get(
-                    "conversations.replies",
-                    &[
-                        ("channel", ch),
-                        ("ts", &slack_url.ts),
-                        ("limit", SLACK_REPLIES_LIMIT),
-                    ],
-                )
-                .await?;
+            let messages = self.fetch_replies(ch, &slack_url.ts).await?;
             Ok(FetchedThread {
-                messages: thread.messages,
+                messages,
                 is_thread: true,
             })
         } else {

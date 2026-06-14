@@ -145,6 +145,29 @@ pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
 struct MessagesBody {
     #[serde(default)]
     messages: Vec<Message>,
+    #[serde(default)]
+    has_more: bool,
+    response_metadata: Option<ResponseMetadata>,
+}
+
+impl MessagesBody {
+    /// The non-empty `next_cursor` to fetch the following page, if Slack
+    /// signalled more results. Returns `None` when `has_more` is false or the
+    /// cursor is absent/empty, so the pagination loop terminates.
+    fn next_cursor(&self) -> Option<&str> {
+        if !self.has_more {
+            return None;
+        }
+        self.response_metadata
+            .as_ref()
+            .and_then(|m| m.next_cursor.as_deref())
+            .filter(|c| !c.is_empty())
+    }
+}
+
+#[derive(Deserialize)]
+struct ResponseMetadata {
+    next_cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
