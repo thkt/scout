@@ -1,4 +1,5 @@
 use crate::envelope::ErrorCode;
+use crate::retry::MAX_GITHUB_RESPONSE_BYTES;
 use crate::tools::Classification;
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +35,9 @@ pub(crate) enum GitHubError {
 
     #[error("Invalid glob pattern: {0}")]
     InvalidPattern(String),
+
+    #[error("GitHub API response too large (>{MAX_GITHUB_RESPONSE_BYTES} bytes)")]
+    ResponseTooLarge,
 
     #[error("Content decode error: {0}")]
     Decode(String),
@@ -93,8 +97,11 @@ impl GitHubError {
             Self::Api { code, .. } if (500..=599).contains(code) => {
                 Classification::transient_retry()
             }
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
-            Self::Decode(_) => Classification::new(ErrorCode::Internal),
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
+            // response that overran the byte cap (issue #186; peer to
+            // BraveError::ResponseTooLarge). Non-retriable: a retry would refetch
+            // the same oversized body.
+            Self::Decode(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
             // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
             Self::Api { .. } => Classification::new(ErrorCode::Unknown),
         }

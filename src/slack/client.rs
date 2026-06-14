@@ -170,6 +170,7 @@ impl SlackClient {
 
         let bytes = read_body_capped(
             resp,
+            MAX_API_RESPONSE_BYTES,
             || {
                 SlackError::Decode(format!(
                     "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"

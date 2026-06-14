@@ -288,6 +288,32 @@ async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
     let _ = handle.join();
 }
 
+/// [T-GH020] A 2xx response whose body exceeds `MAX_GITHUB_RESPONSE_BYTES`
+/// returns `ResponseTooLarge` instead of buffering the whole body (issue #186).
+/// The variant is non-retriable, so the mock is hit exactly once.
+#[tokio::test]
+async fn get_json_2xx_oversized_body_returns_too_large() {
+    let Some(server) = try_spawn_mock_server("github::http").await else {
+        return;
+    };
+    // One byte past the cap. wiremock sets a matching Content-Length, so this
+    // exercises the pre-check arm (the chunk-loop arm guards a lying/absent header).
+    let body = vec![b'x'; MAX_GITHUB_RESPONSE_BYTES + 1];
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
+    assert!(
+        matches!(result, Err(GitHubError::ResponseTooLarge)),
+        "expected ResponseTooLarge for oversized 2xx body, got: {result:?}"
+    );
+}
+
 /// [T-GH014] secs_until_ratelimit_reset subtracts the injected clock
 /// from the x-ratelimit-reset header. Pinning the clock removes wall-clock
 /// flakiness from the arithmetic test.

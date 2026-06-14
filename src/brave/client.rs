@@ -253,8 +253,13 @@ impl BraveClient {
             .await?;
 
         let response = classify_response(response, self.clock.as_ref()).await?;
-        let bytes =
-            read_body_capped(response, || BraveError::ResponseTooLarge, BraveError::from).await?;
+        let bytes = read_body_capped(
+            response,
+            MAX_API_RESPONSE_BYTES,
+            || BraveError::ResponseTooLarge,
+            BraveError::from,
+        )
+        .await?;
         let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
 
         info!(

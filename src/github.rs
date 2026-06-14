@@ -17,8 +17,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    is_schema_decode_fail, is_transient_network, parse_retry_after, retry_after_within_cap,
-    retry_with_rate_limit,
+    MAX_GITHUB_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
+    retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 use crate::token_source::TokenSource;
@@ -162,16 +162,22 @@ impl GitHubClient {
         let status = response.status();
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
-            // Schema fail → Decode (terminal). Transport drop / connect /
-            // timeout → Network → retry loop. See `is_schema_decode_fail`
-            // for the source-chain discrimination (issue #113).
-            200..=299 => response.json().await.map_err(|e| {
-                if is_schema_decode_fail(&e) {
-                    GitHubError::Decode(e.to_string())
-                } else {
-                    e.into()
-                }
-            }),
+            // Body capped at `MAX_GITHUB_RESPONSE_BYTES` to bound the memory an
+            // oversized response can consume (issue #186). Splitting the read
+            // from the parse also separates failure modes: a transport drop is
+            // mapped to `Network` by `GitHubError::from` (→ retry loop), while a
+            // schema mismatch surfaces from `serde_json::from_slice` as terminal
+            // `Decode` (issue #113).
+            200..=299 => {
+                let bytes = read_body_capped(
+                    response,
+                    MAX_GITHUB_RESPONSE_BYTES,
+                    || GitHubError::ResponseTooLarge,
+                    GitHubError::from,
+                )
+                .await?;
+                serde_json::from_slice(&bytes).map_err(|e| GitHubError::Decode(e.to_string()))
+            }
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
                 let retry_after = parse_retry_after(response.headers(), self.clock.as_ref());
