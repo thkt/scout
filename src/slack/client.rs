@@ -214,7 +214,10 @@ impl SlackClient {
                 .channel
                 .and_then(|c| c.name)
                 .map(|n| format!("#{n}"))
-                .unwrap_or_else(|| id.to_owned()),
+                .unwrap_or_else(|| {
+                    warn!(channel_id = %id, "channel name missing in response, using raw ID");
+                    id.to_owned()
+                }),
             Err(e) => {
                 warn!(channel_id = %id, error = %e, "channel resolution failed, using raw ID");
                 id.to_owned()
@@ -234,7 +237,10 @@ impl SlackClient {
                         .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
                         .or(u.real_name)
                 })
-                .unwrap_or_else(|| id.to_owned()),
+                .unwrap_or_else(|| {
+                    warn!(user_id = %id, "user name missing in response, using raw ID");
+                    id.to_owned()
+                }),
             Err(e) => {
                 warn!(user_id = %id, error = %e, "user resolution failed, using raw ID");
                 id.to_owned()

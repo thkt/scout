@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 use reqwest::Client;
+use tracing_test::traced_test;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -160,4 +161,57 @@ async fn api_get_once_2xx_mid_stream_drop_returns_network() {
         "expected SlackError::Network for mid-stream drop, got: {result:?}"
     );
     let _ = handle.join();
+}
+
+/// [T-SK040] conversations.info 200 with a null channel.name emits a WARN
+/// before falling back to the raw channel ID. Without it the label-resolution
+/// degradation is silent to operators (issue #188 claim 1). The Err branch
+/// already warns; this covers the Ok-but-null path.
+#[tokio::test]
+#[traced_test]
+async fn resolve_channel_null_name_warns_then_falls_back() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.info"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "channel": {"id": "C123"}})),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let name = client.resolve_channel("C123").await;
+    assert_eq!(name, "C123", "falls back to the raw channel ID");
+    assert!(
+        logs_contain("channel name missing"),
+        "expected a warn for the null channel name"
+    );
+    assert!(logs_contain("WARN"));
+}
+
+/// [T-SK041] users.info 200 with a null user emits a WARN before falling back
+/// to the raw user ID (issue #188 claim 1). Mirrors T-SK040 for the user path.
+#[tokio::test]
+#[traced_test]
+async fn fetch_user_name_null_user_warns_then_falls_back() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let name = client.fetch_user_name("U123").await;
+    assert_eq!(name, "U123", "falls back to the raw user ID");
+    assert!(
+        logs_contain("user name missing"),
+        "expected a warn for the null user name"
+    );
+    assert!(logs_contain("WARN"));
 }
