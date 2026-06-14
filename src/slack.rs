@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::envelope::ErrorCode;
-use crate::fetch::converter::escape_yaml;
+use crate::fetch::converter::{escape_yaml, neutralize_yaml_markers};
 use crate::tools::Classification;
 
 mod client;
@@ -310,7 +310,7 @@ fn format_slack_output(
     out.push_str(&format!("url: \"{}\"\n", escape(&slack_url.raw_url)));
     out.push_str("---\n\n");
 
-    out.push_str(&first.text);
+    out.push_str(&neutralize_yaml_markers(&first.text));
 
     for msg in replies {
         let ts_suffix = if msg.ts.is_empty() {
@@ -320,7 +320,9 @@ fn format_slack_output(
         };
         out.push_str(&format!(
             "\n\n---\n\n{}{}:\n{}",
-            msg.author, ts_suffix, msg.text
+            neutralize_yaml_markers(&msg.author),
+            ts_suffix,
+            neutralize_yaml_markers(&msg.text)
         ));
     }
 

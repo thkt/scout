@@ -70,8 +70,48 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     }
 
     fm.push_str("---\n\n");
-    fm.push_str(markdown);
+    // The body is untrusted page content appended after the frontmatter; neutralize
+    // any column-0 `---`/`...` so it cannot inject a YAML document boundary.
+    fm.push_str(&neutralize_yaml_markers(markdown));
     fm
+}
+
+/// Neutralize YAML document markers in untrusted body text appended after a
+/// `---`-delimited frontmatter block.  A line that is exactly `---` or `...` (a
+/// YAML document start/end marker, and also a Markdown thematic break) is rewritten
+/// to `***`, which renders as the same thematic break but is not a YAML marker, so
+/// the body cannot inject a document boundary or a forged frontmatter block.  Only
+/// column-0 markers are rewritten; indented or inline `---` is ordinary content and
+/// left intact.
+pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    for (i, line) in body.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        match yaml_marker_rest(line) {
+            // Bare marker (only trailing whitespace): collapse to `***`.
+            Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
+            // Marker with content (`--- evil: true`): rewrite the leading token only,
+            // preserving the rest as ordinary text.
+            Some(rest) => {
+                out.push_str("***");
+                out.push_str(rest);
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
+/// If `line` is a YAML document marker (`---` start or `...` end) at column 0 —
+/// the three chars followed by end-of-line or whitespace — return the text after
+/// the marker (`""` for a bare marker).  `----` and `...foo` are not markers.
+fn yaml_marker_rest(line: &str) -> Option<&str> {
+    let token = line
+        .strip_prefix("---")
+        .or_else(|| line.strip_prefix("..."))?;
+    (token.is_empty() || token.starts_with([' ', '\t', '\r'])).then_some(token)
 }
 
 pub(crate) fn escape_yaml(s: &str) -> String {
@@ -145,5 +185,60 @@ mod tests {
             escape_yaml("She said \"hi\"\nand left\\"),
             "She said \\\"hi\\\"\\nand left\\\\"
         );
+    }
+
+    /// [T-FC005] neutralize_yaml_markers rewrites bare ---/... lines to ***
+    #[test]
+    fn neutralize_yaml_markers_rewrites_bare_doc_markers() {
+        assert_eq!(
+            neutralize_yaml_markers("before\n---\nmiddle\n...\nafter"),
+            "before\n***\nmiddle\n***\nafter"
+        );
+        // Trailing whitespace / CR on the marker line is tolerated.
+        assert_eq!(neutralize_yaml_markers("---  "), "***");
+        assert_eq!(neutralize_yaml_markers("...\r"), "***");
+    }
+
+    /// [T-FC006] neutralize_yaml_markers leaves indented and inline --- intact
+    #[test]
+    fn neutralize_yaml_markers_preserves_non_markers() {
+        // Indented `---` is not a YAML document marker (must be at column 0).
+        assert_eq!(neutralize_yaml_markers("  ---"), "  ---");
+        // `---` embedded in a line is ordinary content.
+        assert_eq!(neutralize_yaml_markers("a --- b"), "a --- b");
+        assert_eq!(neutralize_yaml_markers("----"), "----");
+        assert_eq!(neutralize_yaml_markers("...foo"), "...foo");
+        assert_eq!(neutralize_yaml_markers("plain"), "plain");
+    }
+
+    /// [T-FC007] neutralize_yaml_markers catches markers carrying inline content
+    /// (`--- evil: true`), which a YAML parser still honors as a document start
+    #[test]
+    fn neutralize_yaml_markers_rewrites_marker_with_content() {
+        assert_eq!(neutralize_yaml_markers("--- evil: true"), "*** evil: true");
+        assert_eq!(neutralize_yaml_markers("--- #x"), "*** #x");
+        assert_eq!(neutralize_yaml_markers("---\tfoo"), "***\tfoo");
+        assert_eq!(neutralize_yaml_markers("... bar"), "*** bar");
+    }
+
+    /// [T-FC008] format_with_frontmatter neutralizes doc markers in the page body
+    #[test]
+    fn frontmatter_body_cannot_inject_document_marker() {
+        let article = ExtractedArticle {
+            title: Some("T".into()),
+            byline: None,
+            published_time: None,
+            content_html: String::new(),
+            used_raw_fallback: false,
+        };
+        let body = "intro\n---\ninjected: pwned\nreal";
+        let out = format_with_frontmatter(&article, body);
+
+        let after_fm = out.split("---\n\n").nth(1).expect("body after frontmatter");
+        assert!(
+            !after_fm.lines().any(|l| l == "---" || l == "..."),
+            "page body must not introduce a bare YAML document marker:\n{out}"
+        );
+        assert!(after_fm.contains("injected: pwned"));
     }
 }

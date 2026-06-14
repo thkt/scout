@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 
 /// Escape characters that break Markdown link syntax: `[`, `]`, `(`, `)`.
+/// Newlines are folded to spaces so an untrusted value cannot break onto a new
+/// line and inject block Markdown (a heading or list item).
 pub(crate) fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -9,10 +11,32 @@ pub(crate) fn escape_md_link(s: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
+            '\n' | '\r' => out.push(' '),
             _ => out.push(c),
         }
     }
     out
+}
+
+/// Render a Markdown link `[text](url)` only when `url` carries an http/https
+/// scheme.  Untrusted URLs with any other scheme (`javascript:`, `data:`, …) are
+/// emitted as inert escaped text `text (url)` so they can never become a
+/// clickable/executable link target.  Allowlisting fails closed: obfuscated or
+/// whitespace-prefixed schemes do not match http/https and are neutralized.
+pub(crate) fn md_link(text: &str, url: &str) -> String {
+    let lower = url.to_ascii_lowercase();
+    let scheme_ok = lower.starts_with("http://") || lower.starts_with("https://");
+    // A real URL carries no ASCII whitespace or control chars; a raw newline in the
+    // link target would break out of `[](…)` and inject Markdown, so route any such
+    // value to the inert branch (where newlines are collapsed to spaces).
+    let clean = !url
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control());
+    if scheme_ok && clean {
+        format!("[{}]({})", escape_md_inline(text), escape_md_link(url))
+    } else {
+        format!("{} ({})", escape_md_inline(text), escape_md_inline(url))
+    }
 }
 
 /// Sanitize untrusted input for embedding in Markdown table cells and inline text.
@@ -118,6 +142,8 @@ mod tests {
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
+        // Newlines fold to spaces so the value cannot inject a new Markdown line.
+        assert_eq!(escape_md_link("a\n## h"), "a ## h");
     }
 
     /// [T-MD002] escape_md_inline escapes pipes and replaces newlines
@@ -203,6 +229,53 @@ mod tests {
             result, "###### H5\n###### H6\n### H1",
             "shifted headings must clamp at h6 (6 hashes max)"
         );
+    }
+
+    /// [T-MD014] md_link renders a clickable link for http/https targets
+    #[test]
+    fn md_link_renders_safe_scheme() {
+        assert_eq!(md_link("A", "https://a.com"), "[A](https://a.com)");
+        assert_eq!(md_link("A", "http://a.com"), "[A](http://a.com)");
+    }
+
+    /// [T-MD015] md_link neutralizes javascript:/data: targets to inert text
+    #[test]
+    fn md_link_neutralizes_unsafe_scheme() {
+        assert_eq!(
+            md_link("click", "javascript:alert(1)"),
+            r"click (javascript:alert\(1\))"
+        );
+        assert_eq!(
+            md_link("x", "data:text/html,<script>"),
+            "x (data:text/html,<script>)"
+        );
+    }
+
+    /// [T-MD016] md_link fails closed on scheme obfuscation (case, leading space)
+    #[test]
+    fn md_link_unsafe_scheme_obfuscation_fails_closed() {
+        assert_eq!(
+            md_link("x", "JaVaScRiPt:alert(1)"),
+            r"x (JaVaScRiPt:alert\(1\))"
+        );
+        // Leading whitespace is not http/https -> inert (whitespace newlines collapsed).
+        assert_eq!(md_link("x", " javascript:1"), "x ( javascript:1)");
+    }
+
+    /// [T-MD017] md_link escapes link syntax in the visible text
+    #[test]
+    fn md_link_escapes_text() {
+        assert_eq!(md_link("a]b", "https://a.com"), r"[a\]b](https://a.com)");
+    }
+
+    /// [T-MD018] md_link routes a newline-bearing URL to the inert branch so it
+    /// cannot break out of `[](…)` and inject Markdown
+    #[test]
+    fn md_link_newline_in_url_cannot_break_out() {
+        let out = md_link("x", "https://a.com\n## Injected");
+        assert!(!out.contains("](https://"), "must not stay a link: {out}");
+        assert!(!out.contains('\n'), "newline must be collapsed: {out}");
+        assert_eq!(out, "x (https://a.com ## Injected)");
     }
 
     /// [T-MD011] truncate_with_note returns input unchanged when under limit
