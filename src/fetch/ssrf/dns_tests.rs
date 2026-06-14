@@ -48,6 +48,45 @@ async fn ssrf_rejects_empty_dns_response() {
     );
 }
 
+/// [T-001] ssrf_resolver_blocks_connect_to_private_ip
+///
+/// The connect-time resolver (ADR-0012) must reject a host that resolves to a
+/// private IP and emit the `"blocked connect to private IP"` warn, which
+/// distinguishes a working guard from a connect failure that would also error.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn ssrf_resolver_blocks_connect_to_private_ip() {
+    let resolver = SsrfResolver::new(StaticDnsResolver::single("10.0.0.1"));
+    let name = "evil.com".parse::<Name>().unwrap();
+    let result = resolver.resolve(name).await;
+    assert!(
+        result.is_err(),
+        "private IP must be blocked at connect time"
+    );
+    assert!(logs_contain("blocked connect to private IP"));
+}
+
+/// [T-002] ssrf_resolver_allows_connect_to_public_ip
+///
+/// A host resolving to a public IP passes through, and the resolved address is
+/// returned for reqwest to dial.
+#[tokio::test]
+async fn ssrf_resolver_allows_connect_to_public_ip() {
+    let resolver = SsrfResolver::new(StaticDnsResolver::single("8.8.8.8"));
+    let name = "example.com".parse::<Name>().unwrap();
+    let addrs: Vec<_> = resolver
+        .resolve(name)
+        .await
+        .expect("public IP allowed")
+        .collect();
+    assert!(
+        addrs
+            .iter()
+            .any(|a| a.ip() == "8.8.8.8".parse::<IpAddr>().unwrap()),
+        "resolved public IP must be returned, got: {addrs:?}"
+    );
+}
+
 /// [T-FS008] redact_strips_userinfo
 #[test]
 fn redact_strips_userinfo() {

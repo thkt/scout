@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::brave::client::BraveClient;
 use crate::clock::{Clock, SystemClock};
-use crate::fetch::{DnsResolver, TokioDnsResolver};
+use crate::fetch::{DnsResolver, SsrfResolver, TokioDnsResolver};
 #[cfg(test)]
 use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
@@ -59,6 +59,9 @@ fn build_default_clients() -> Result<(Client, Client), ScoutError> {
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(Policy::none())
+        // ADR-0012: re-validate connect-time IPs to close the DNS-rebind TOCTOU
+        // gap left by the `ssrf_check` pre-flight (which reqwest re-resolves).
+        .dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver)))
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
     Ok((http, fetch_http))

@@ -37,6 +37,8 @@ fn validate_url_rejects_internal_hosts() {
         "http://[::ffff:127.0.0.1]/secret",
         "http://[::ffff:169.254.169.254]/metadata",
         "http://[::ffff:10.0.0.1]/internal",
+        "http://[::7f00:1]/secret", // IPv4-compatible ::127.0.0.1 (SEC-001)
+        "http://[::a9fe:a9fe]/metadata", // IPv4-compatible ::169.254.169.254
         "http://[fe80::1]/secret",
         "http://[fd00::1]/secret",
         "http://[fc00::1]/secret",

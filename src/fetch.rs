@@ -9,7 +9,7 @@ mod extractor;
 mod ssrf;
 
 use ssrf::ssrf_check;
-pub(crate) use ssrf::{DnsResolver, RedactedLogUrl, TokioDnsResolver};
+pub(crate) use ssrf::{DnsResolver, RedactedLogUrl, SsrfResolver, TokioDnsResolver};
 #[cfg(test)]
 pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 
@@ -167,9 +167,12 @@ pub(crate) async fn fetch_page(
         ));
     }
 
-    // SECURITY: Local CLI only. TOCTOU gap between DNS check and reqwest connect
-    // is acceptable here; a network service would need a custom resolver that
-    // enforces the allowlist at connect time.
+    // SECURITY: Defense in depth (ADR-0012). `ssrf_check` is a pre-flight that
+    // resolves the host and blocks private IPs, but reqwest re-resolves at
+    // connect time, leaving a DNS-rebind TOCTOU gap. The `fetch_http` client is
+    // built with `SsrfResolver` (ClientBuilder::dns_resolver), which re-applies
+    // the private-IP block to the addresses reqwest actually dials and closes
+    // that gap.
     //
     // The returned `ValidatedUrl` is the only constructor for SSRF-checked URLs;
     // `download` requires `&ValidatedUrl` so the redirect loop cannot bypass it.
