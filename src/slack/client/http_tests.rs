@@ -398,3 +398,85 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
         "every author should resolve to a name, but a raw author ID leaked: {out}"
     );
 }
+
+/// [T-SK045] conversations.replies repeats the thread parent as messages[0] on
+/// every page. The pagination loop flat-extends pages, so a parent that recurs
+/// across pages was counted once per page: extract_target removes only the
+/// first copy, leaving the rest as duplicate replies that inflate
+/// context_messages and re-render the parent body. Dedup by ts so the parent
+/// appears once regardless of page count (issue #188 audit RU1/RU2).
+#[tokio::test]
+async fn fetch_replies_dedups_parent_repeated_across_pages() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Page 1: parent + first reply, more pages follow.
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "PARENT_BODY", "ts": parent_ts, "reply_count": 2}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "PARENT_BODY", "ts": parent_ts},
+                {"user": "U2", "text": "first reply", "ts": "1000.000002"}
+            ],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "PAGE2"}
+        })))
+        .mount(&server)
+        .await;
+    // Page 2: parent repeats as messages[0], plus the second reply.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param("cursor", "PAGE2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "PARENT_BODY", "ts": parent_ts},
+                {"user": "U3", "text": "second reply", "ts": "1000.000003"}
+            ],
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("thread spanning two pages resolves");
+    assert!(
+        out.contains("context_messages: 2"),
+        "two distinct replies expected, parent duplicate must not inflate the count: {out}"
+    );
+    assert_eq!(
+        out.matches("PARENT_BODY").count(),
+        1,
+        "the parent body should render once, not once per page: {out}"
+    );
+}

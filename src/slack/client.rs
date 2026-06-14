@@ -284,6 +284,10 @@ impl SlackClient {
     /// surfaces as "not found" (issue #188 claim 2).
     async fn fetch_replies(&self, channel: &str, ts: &str) -> Result<Vec<Message>, SlackError> {
         let mut messages = Vec::new();
+        // conversations.replies is observed to repeat the thread parent as
+        // messages[0] on each page; the official reference is silent, so dedup
+        // by ts defensively. Safe because ts is unique per message in a channel.
+        let mut seen: HashSet<String> = HashSet::new();
         let mut cursor: Option<String> = None;
         for _ in 0..SLACK_MAX_REPLY_PAGES {
             // Scope `params` so its borrow of `cursor` ends before the
@@ -300,7 +304,13 @@ impl SlackClient {
                 self.api_get("conversations.replies", &params).await?
             };
             let next = body.next_cursor().map(str::to_owned);
-            messages.extend(body.messages);
+            for msg in body.messages {
+                // A message with no ts cannot be deduped; keep it as-is.
+                match &msg.ts {
+                    Some(t) if !seen.insert(t.clone()) => continue,
+                    _ => messages.push(msg),
+                }
+            }
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(messages),
