@@ -325,3 +325,76 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         .expect("mass-mention message resolves");
     // The `.expect(cap)` is verified when `server` drops at end of scope.
 }
+
+/// [T-SK044] When distinct IDs exceed SLACK_MAX_USER_LOOKUPS, message authors
+/// are kept in the lookup set ahead of mentions. Authors render on every
+/// message, so dropping one degrades visible output more than dropping a
+/// mention. The earlier cap took an arbitrary HashSet slice, so authors could
+/// be evicted nondeterministically (issue #188 audit RU7/SF-1). Here three
+/// distinct authors compete with thousands of mentions for a 50-slot cap; with
+/// author-first priority every author resolves to a name, so no raw "UAUTHOR"
+/// ID leaks into the rendered output.
+#[tokio::test]
+async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Far more mentions than the cap, so an arbitrary slice would almost
+    // certainly evict at least one of the three authors.
+    let mentions = (0..3000)
+        .map(|i| format!("<@U{i}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Thread probe: the root has replies, so fetch_replies is used.
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "UAUTHOR0", "text": "parent", "ts": parent_ts, "reply_count": 2}]
+        })))
+        .mount(&server)
+        .await;
+    // Replies carry three distinct authors; the mass mention lives in one reply.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "UAUTHOR0", "text": "parent", "ts": parent_ts},
+                {"user": "UAUTHOR1", "text": mentions, "ts": "1000.000002"},
+                {"user": "UAUTHOR2", "text": "carol reply", "ts": "1000.000003"}
+            ],
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+    // Any looked-up user resolves to a name, so a resolved author cannot leave
+    // its raw ID in the output.
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("thread with capped lookups resolves");
+    assert!(
+        !out.contains("UAUTHOR"),
+        "every author should resolve to a name, but a raw author ID leaked: {out}"
+    );
+}

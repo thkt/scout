@@ -362,22 +362,38 @@ impl SlackClient {
             });
         }
 
-        let mut user_ids = HashSet::new();
+        // Authors render on every message, so when distinct IDs exceed the
+        // lookup cap they take priority over mentions: an unresolved author
+        // degrades visible output more than an unresolved mention.
+        let mut authors = HashSet::new();
+        let mut mentions = HashSet::new();
         for msg in &fetched.messages {
             if let Some(uid) = &msg.user {
-                user_ids.insert(uid.clone());
+                authors.insert(uid.clone());
             }
-            collect_mention_ids(&msg.text, &mut user_ids);
+            collect_mention_ids(&msg.text, &mut mentions);
         }
 
-        if user_ids.len() > SLACK_MAX_USER_LOOKUPS {
+        let distinct_total = authors.union(&mentions).count();
+        let user_ids: HashSet<String> = if distinct_total > SLACK_MAX_USER_LOOKUPS {
             warn!(
-                distinct_users = user_ids.len(),
+                distinct_users = distinct_total,
                 cap = SLACK_MAX_USER_LOOKUPS,
-                "too many distinct user IDs; capping users.info lookups, excess mentions degrade to raw IDs"
+                "too many distinct user IDs; capping users.info lookups, excess IDs render as raw IDs (authors kept first)"
             );
-            user_ids = user_ids.into_iter().take(SLACK_MAX_USER_LOOKUPS).collect();
-        }
+            let mut kept: HashSet<String> =
+                authors.into_iter().take(SLACK_MAX_USER_LOOKUPS).collect();
+            for id in mentions {
+                if kept.len() >= SLACK_MAX_USER_LOOKUPS {
+                    break;
+                }
+                kept.insert(id);
+            }
+            kept
+        } else {
+            authors.extend(mentions);
+            authors
+        };
 
         let (channel_name, users) = tokio::join!(
             self.resolve_channel(&slack_url.channel),
