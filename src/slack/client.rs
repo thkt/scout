@@ -70,6 +70,13 @@ const SLACK_USERS_CONCURRENCY: usize = 5;
 /// the rate-limit exhaustion that claim 3 bounds (issue #188 claim 2).
 const SLACK_MAX_REPLY_PAGES: usize = 50;
 
+/// Upper bound on distinct user IDs resolved via `users.info` per message.
+/// A single message can mention an unbounded number of users; without a cap a
+/// mass-mention burst can exhaust Slack's Tier-4 per-minute budget. IDs beyond
+/// the cap are not looked up and degrade to their raw `<@UID>` form (issue
+/// #188 claim 3).
+const SLACK_MAX_USER_LOOKUPS: usize = 50;
+
 impl SlackClient {
     pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
@@ -361,6 +368,15 @@ impl SlackClient {
                 user_ids.insert(uid.clone());
             }
             collect_mention_ids(&msg.text, &mut user_ids);
+        }
+
+        if user_ids.len() > SLACK_MAX_USER_LOOKUPS {
+            warn!(
+                distinct_users = user_ids.len(),
+                cap = SLACK_MAX_USER_LOOKUPS,
+                "too many distinct user IDs; capping users.info lookups, excess mentions degrade to raw IDs"
+            );
+            user_ids = user_ids.into_iter().take(SLACK_MAX_USER_LOOKUPS).collect();
         }
 
         let (channel_name, users) = tokio::join!(

@@ -275,3 +275,53 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
         "expected the page-2 target in output, got: {out}"
     );
 }
+
+/// [T-SK043] A message mentioning far more distinct users than
+/// SLACK_MAX_USER_LOOKUPS caps the number of users.info requests at the limit,
+/// so a mass-mention message cannot exhaust Slack's per-minute rate budget.
+/// Excess mentions degrade to raw IDs. The `.expect(cap)` on the users.info
+/// mock fails on server drop if the cap is not enforced (issue #188 claim 3).
+#[tokio::test]
+async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let total = SLACK_MAX_USER_LOOKUPS + 50;
+    let mentions = (0..total)
+        .map(|i| format!("<@U{i}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Single message (no thread): conversations.history returns it directly.
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"text": mentions, "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+    // users.info must be hit exactly SLACK_MAX_USER_LOOKUPS times, not `total`.
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .expect(SLACK_MAX_USER_LOOKUPS as u64)
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: "1000.000001".into(),
+        thread_ts: None,
+        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
+    };
+    client
+        .fetch_message(&url)
+        .await
+        .expect("mass-mention message resolves");
+    // The `.expect(cap)` is verified when `server` drops at end of scope.
+}
