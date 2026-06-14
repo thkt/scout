@@ -68,6 +68,64 @@ parent body
     assert_eq!(output, expected);
 }
 
+/// [T-SK015] an untrusted message body starting with `---` cannot inject a YAML
+/// document boundary into scout's frontmatter output (a naive multi-document YAML
+/// reader splits on bare `---`/`...` lines; the body must contribute none).
+#[test]
+fn body_cannot_inject_yaml_document_marker() {
+    let slack_url = parse_slack_url("https://team.slack.com/archives/C123/p1111111111222222")
+        .expect("URL fixture should parse");
+    let first = ResolvedMessage {
+        author: "attacker".into(),
+        text: "---\ninjected: pwned\nreal body".into(),
+        ts: "1111111111.222222".into(),
+    };
+    let output = format_slack_output(&slack_url, "#general", &first, &[]);
+
+    let body = output
+        .split("---\n\n")
+        .nth(1)
+        .expect("body follows the frontmatter close delimiter");
+    assert!(
+        !body.lines().any(|l| l == "---" || l == "..."),
+        "untrusted body must not introduce a bare YAML document marker, got:\n{output}"
+    );
+    assert!(
+        body.contains("injected: pwned"),
+        "body content is preserved (only the marker line is rewritten):\n{output}"
+    );
+}
+
+/// [T-SK016] a reply author's untrusted display name (user-settable) cannot inject
+/// a YAML document marker into the body either
+#[test]
+fn reply_author_cannot_inject_yaml_document_marker() {
+    let slack_url = parse_slack_url("https://team.slack.com/archives/C123/p1111111111222222")
+        .expect("URL fixture should parse");
+    let first = ResolvedMessage {
+        author: "alice".into(),
+        text: "hello".into(),
+        ts: "1111111111.222222".into(),
+    };
+    let reply = ResolvedMessage {
+        author: "evil\n---\ninjected: pwned".into(),
+        text: "reply".into(),
+        ts: "1234567890.123456".into(),
+    };
+    let output = format_slack_output(&slack_url, "#general", &first, &[reply]);
+
+    // The only bare `---` lines scout emits are structural: the frontmatter open and
+    // close, plus one separator per reply. Untrusted content must add none.
+    let bare_markers = output
+        .lines()
+        .filter(|l| *l == "---" || *l == "...")
+        .count();
+    assert_eq!(
+        bare_markers, 3,
+        "expected 2 frontmatter delimiters + 1 reply separator and no injected marker, got:\n{output}"
+    );
+}
+
 fn msg(ts: &str, author: &str) -> ResolvedMessage {
     ResolvedMessage {
         author: author.into(),

@@ -14,7 +14,7 @@ use crate::fetch;
 use crate::fetch::DnsResolver;
 use crate::fetch::converter::FetchResult;
 use crate::markdown::{
-    escape_md_inline, escape_md_link, sanitize_heading, shift_headings, truncate_with_note,
+    escape_md_inline, escape_md_link, md_link, sanitize_heading, shift_headings, truncate_with_note,
 };
 use crate::search::Lang;
 
@@ -169,12 +169,7 @@ fn format_sources(sources: &[SearchResult], out: &mut String) {
     }
     out.push_str("## Sources\n\n");
     for source in sources {
-        let _ = writeln!(
-            out,
-            "- [{}]({})",
-            escape_md_inline(&source.title),
-            escape_md_link(&source.url)
-        );
+        let _ = writeln!(out, "- {}", md_link(&source.title, &source.url));
     }
 }
 

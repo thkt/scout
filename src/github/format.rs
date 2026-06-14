@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
-use crate::markdown::{escape_md_inline, escape_md_link, shift_headings};
+use crate::markdown::{escape_md_inline, md_link, shift_headings};
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -200,9 +200,8 @@ fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
             .unwrap_or_default();
         let _ = writeln!(
             out,
-            "- [#{}]({}) {}{}{}",
-            issue.number,
-            escape_md_link(&issue.html_url),
+            "- {} {}{}{}",
+            md_link(&format!("#{}", issue.number), &issue.html_url),
             escape_md_inline(&issue.title),
             escape_md_inline(&labels),
             user
@@ -229,9 +228,8 @@ fn format_pulls_section(pulls: &[PullInfo], out: &mut String) {
             .unwrap_or_default();
         let _ = writeln!(
             out,
-            "- [#{}]({}) {}{}{}",
-            pr.number,
-            escape_md_link(&pr.html_url),
+            "- {} {}{}{}",
+            md_link(&format!("#{}", pr.number), &pr.html_url),
             escape_md_inline(&pr.title),
             draft,
             user
@@ -259,9 +257,8 @@ fn format_releases_section(releases: &[ReleaseInfo], out: &mut String) {
         };
         let _ = writeln!(
             out,
-            "- [{}]({}) — {}{}",
-            escape_md_inline(name),
-            escape_md_link(&release.html_url),
+            "- {} — {}{}",
+            md_link(name, &release.html_url),
             date,
             pre
         );

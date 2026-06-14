@@ -77,6 +77,26 @@ fn format_report_includes_sections() {
     assert!(text.contains("[A](https://a.com)"));
 }
 
+/// [T-SE010] a source URL with a non-http scheme is not emitted as a clickable link
+#[test]
+fn format_report_neutralizes_javascript_source_url() {
+    let report = ResearchReport {
+        fetched_pages: vec![],
+        failed_urls: vec![],
+        sources: vec![make_source("javascript:alert(1)", "Evil")],
+    };
+
+    let text = format_report(&report, "q");
+    assert!(
+        !text.contains("](javascript:"),
+        "javascript: URL must not become a clickable Markdown link, got:\n{text}"
+    );
+    assert!(
+        text.contains("Evil (javascript:"),
+        "the URL is preserved as inert text, got:\n{text}"
+    );
+}
+
 /// [T-7] AC-3.1: format_report does not emit "## Search Result" header
 #[test]
 fn format_report_omits_search_result_header() {
