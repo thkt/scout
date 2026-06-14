@@ -19,7 +19,9 @@ use crate::token_source::{GhCliSource, TokenSource};
 use super::{RuntimeConfig, Scout, ScoutError};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per-request timeout for a single HTTP call. `pub(crate)` so the config
+/// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
+pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
 /// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
@@ -135,6 +137,16 @@ impl ScoutBuilder {
     #[cfg(test)]
     pub(crate) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
         self.dns = dns;
+        self
+    }
+
+    /// Inject a short outer GitHub-command timeout so a test can force the
+    /// `run()`-level guard to trip against a delayed wiremock response without
+    /// waiting the production 120s (issue #185). `RuntimeConfig` is `Copy`, so
+    /// the field assignment leaves the rest of the config untouched.
+    #[cfg(test)]
+    pub(crate) fn with_github_timeout(mut self, timeout: Duration) -> Self {
+        self.config.github_timeout = timeout;
         self
     }
 

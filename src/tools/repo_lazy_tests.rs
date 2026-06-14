@@ -2,8 +2,53 @@ use super::test_helpers::*;
 use super::*;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
+use std::time::Duration;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, ResponseTemplate};
+
+/// [T-TS020] run() wraps GitHub commands in the outer github_timeout
+///
+/// Issue #185: `repo-tree` / `repo-read` / `repo-overview` reach GitHub through
+/// bare async handlers; a persistent slow/5xx upstream would hang the command
+/// for minutes (each inner HTTP call has its own 30s timeout plus retries).
+/// `run()` now caps the whole command. A GitHub endpoint that delays 30s past
+/// the 200ms `github_timeout` must surface a timeout error AND emit the
+/// `"github command timed out"` warn — the log assertion is non-tautological:
+/// a real connect failure would also yield `is_err()` but emit no such warn.
+/// Going through `run()` (not the handler directly) is essential since the guard
+/// lives at the dispatch layer.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn run_repo_tree_times_out_on_slow_github() {
+    let Some(server) = try_spawn_mock_server("tools::t_185").await else {
+        return;
+    };
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&server)
+        .await;
+
+    let s = scout_with_github_timeout(&server.uri(), &server.uri(), Duration::from_millis(200));
+    let cmd = Command::RepoTree(RepoTreeParams {
+        repository: Some("owner/repo".into()),
+        ref_: None,
+        path: None,
+        pattern: None,
+    });
+
+    let result = s.run(cmd).await;
+    let err = result.expect_err("slow GitHub must trip the outer github_timeout");
+    assert!(
+        err.message().contains("timed out"),
+        "expected a timeout error, got: {}",
+        err.message()
+    );
+    assert!(
+        logs_contain("github command timed out"),
+        "expected the run()-level github timeout guard to fire",
+    );
+}
 
 /// [T-TS009] repo_overview: get_repo 404 -> readme/issues/pulls/releases
 /// APIs receive 0 requests.

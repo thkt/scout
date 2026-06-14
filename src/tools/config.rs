@@ -10,10 +10,24 @@ use super::errors::ScoutError;
 const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 95;
 const DEFAULT_RESEARCH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_SLACK_TIMEOUT_SECS: u64 = 60;
+/// Outer cap for a single GitHub command (`repo-tree` / `repo-read` /
+/// `repo-overview`). Fail-fast bias by design (issue #185). 180s clears the
+/// happy path of the most complex command — `repo-overview` runs a sequential
+/// `get_repo`, four parallel calls, and a conditional README blob fetch, ~30s
+/// `HTTP_TIMEOUT` each, so well under 180s when calls succeed — and clears every
+/// cheap-retry path (5xx / rate-limit retries return in seconds) plus a typical
+/// retried run where only some calls hit the 30s timeout. It sits *below* the
+/// all-timeouts retry budget (~279s: three serial phases each retried 3× at the
+/// 30s HTTP timeout), so a command whose upstream repeatedly hangs is cut rather
+/// than waited out. Trade-off: a command where every phase exhausts its retries
+/// on full 30s timeouts (~186s even without the blob fetch) is still cut.
+/// Calibration is the operator's via `SCOUT_GITHUB_TIMEOUT_SECS`.
+const DEFAULT_GITHUB_TIMEOUT_SECS: u64 = 180;
 
 const ENV_FETCH_TIMEOUT: &str = "SCOUT_FETCH_TIMEOUT_SECS";
 const ENV_RESEARCH_TIMEOUT: &str = "SCOUT_RESEARCH_TIMEOUT_SECS";
 const ENV_SLACK_TIMEOUT: &str = "SCOUT_SLACK_TIMEOUT_SECS";
+const ENV_GITHUB_TIMEOUT: &str = "SCOUT_GITHUB_TIMEOUT_SECS";
 const ENV_MAX_RETRIES: &str = "SCOUT_MAX_RETRIES";
 
 const TIMEOUT_MIN_SECS: u64 = 1;
@@ -32,6 +46,7 @@ pub(crate) struct RuntimeConfig {
     pub(crate) fetch_timeout: Duration,
     pub(crate) research_timeout: Duration,
     pub(crate) slack_timeout: Duration,
+    pub(crate) github_timeout: Duration,
     pub(crate) max_retries: u32,
 }
 
@@ -41,6 +56,7 @@ impl Default for RuntimeConfig {
             fetch_timeout: Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECS),
             research_timeout: Duration::from_secs(DEFAULT_RESEARCH_TIMEOUT_SECS),
             slack_timeout: Duration::from_secs(DEFAULT_SLACK_TIMEOUT_SECS),
+            github_timeout: Duration::from_secs(DEFAULT_GITHUB_TIMEOUT_SECS),
             max_retries: DEFAULT_MAX_RETRIES,
         }
     }
@@ -66,6 +82,11 @@ impl RuntimeConfig {
                 DEFAULT_RESEARCH_TIMEOUT_SECS,
             )?,
             slack_timeout: parse_timeout(&get_var, ENV_SLACK_TIMEOUT, DEFAULT_SLACK_TIMEOUT_SECS)?,
+            github_timeout: parse_timeout(
+                &get_var,
+                ENV_GITHUB_TIMEOUT,
+                DEFAULT_GITHUB_TIMEOUT_SECS,
+            )?,
             max_retries: parse_max_retries(&get_var)?,
         };
         config.surface_overrides();
@@ -93,6 +114,12 @@ impl RuntimeConfig {
             info!(
                 slack_timeout_secs = self.slack_timeout.as_secs(),
                 "{ENV_SLACK_TIMEOUT} override applied"
+            );
+        }
+        if self.github_timeout.as_secs() != DEFAULT_GITHUB_TIMEOUT_SECS {
+            info!(
+                github_timeout_secs = self.github_timeout.as_secs(),
+                "{ENV_GITHUB_TIMEOUT} override applied"
             );
         }
         if self.max_retries != DEFAULT_MAX_RETRIES {
@@ -193,6 +220,7 @@ mod tests {
         assert_eq!(cfg.fetch_timeout, Duration::from_secs(95));
         assert_eq!(cfg.research_timeout, Duration::from_secs(45));
         assert_eq!(cfg.slack_timeout, Duration::from_secs(60));
+        assert_eq!(cfg.github_timeout, Duration::from_secs(180));
         assert_eq!(cfg.max_retries, 2);
     }
 
@@ -347,6 +375,28 @@ mod tests {
         assert_eq!(from_empty.fetch_timeout, from_default.fetch_timeout);
         assert_eq!(from_empty.research_timeout, from_default.research_timeout);
         assert_eq!(from_empty.slack_timeout, from_default.slack_timeout);
+        assert_eq!(from_empty.github_timeout, from_default.github_timeout);
         assert_eq!(from_empty.max_retries, from_default.max_retries);
+    }
+
+    /// [T-CFG021] github_timeout の既定は内側の HTTP / 候補取得 timeout を上回る
+    ///
+    /// 外側の GitHub コマンド timeout が内側の per-request timeout 以下だと、
+    /// 1 リクエストの正常完了前に外側が切れる。階層 (外側 > 内側) を値で固定し、
+    /// 内側定数を縮めた将来の変更がこの不等式を壊したら検知する (issue #185)。
+    #[test]
+    fn github_timeout_exceeds_inner_request_timeouts() {
+        use crate::tools::builder::HTTP_TIMEOUT;
+        use crate::tools::repo::CANDIDATE_FETCH_TIMEOUT;
+
+        let github = RuntimeConfig::default().github_timeout;
+        assert!(
+            github > HTTP_TIMEOUT,
+            "github_timeout ({github:?}) must exceed per-request HTTP_TIMEOUT"
+        );
+        assert!(
+            github > CANDIDATE_FETCH_TIMEOUT,
+            "github_timeout ({github:?}) must exceed CANDIDATE_FETCH_TIMEOUT"
+        );
     }
 }

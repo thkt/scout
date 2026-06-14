@@ -97,6 +97,7 @@ Override the built-in timeouts and retry budget. Invalid values fail with exit 6
 | `SCOUT_FETCH_TIMEOUT_SECS`    | 95      | 1–600 | Per-URL wall-clock budget for `fetch`                                                 |
 | `SCOUT_RESEARCH_TIMEOUT_SECS` | 45      | 1–600 | Wall-clock budget for `research`                                                      |
 | `SCOUT_SLACK_TIMEOUT_SECS`    | 60      | 1–600 | Wall-clock budget for Slack permalink `fetch`                                         |
+| `SCOUT_GITHUB_TIMEOUT_SECS`   | 180     | 1–600 | Wall-clock budget per `repo-tree` / `repo-read` / `repo-overview` command             |
 | `SCOUT_MAX_RETRIES`           | 2       | 0–10  | Retries on transient API failures, on top of the initial attempt (`0` disables retry) |
 
 ### Optional: JS rendering (for SPAs)
@@ -147,8 +148,8 @@ scout search "Next.js server actions security"
 scout search "Rust async runtime" | head -3 | xargs -I _ scout fetch _
 ```
 
-| Flag         | Description                                                                          |
-| ------------ | ------------------------------------------------------------------------------------ |
+| Flag         | Description                                                                                               |
+| ------------ | --------------------------------------------------------------------------------------------------------- |
 | `-l, --lang` | `ja`, `en`, or `auto` (default) — maps to Brave's `search_lang` parameter, no rewrite of the query string |
 
 JSON envelope: `data = {query, sources}`, where each `sources[i] = {url, title, description}`. `description` is the search-engine snippet (Brave-provided, not an LLM summary). Zero-result responses return `sources: []`, not `null`.
@@ -161,9 +162,9 @@ Searches the web via Brave, fetches the top N source pages, and compiles a repor
 scout research "Rust async runtime comparison" --depth 5 --lang ja
 ```
 
-| Flag          | Description                                                  |
-| ------------- | ------------------------------------------------------------ |
-| `-d, --depth` | Pages to fetch (1–10, default 3)                             |
+| Flag          | Description                                                     |
+| ------------- | --------------------------------------------------------------- |
+| `-d, --depth` | Pages to fetch (1–10, default 3)                                |
 | `-l, --lang`  | `ja`, `en`, or `auto` (default) — maps to Brave's `search_lang` |
 
 JSON envelope: `data = {query, sources, fetched_pages, failed_urls}`. All array fields are `[]` (never `null`) when empty.
@@ -280,19 +281,19 @@ Single binary, zero runtime dependencies.
 
 Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `timeout` (124), an extension code (104) for unclassifiable failures, and the POSIX signal convention (128 + signal number) for interruption:
 
-| Code | Meaning                                                             |
-| ---- | ------------------------------------------------------------------- |
-| 0    | Success                                                             |
-| 64   | Usage error (clap parse, missing API key, conflicts_with violation) |
-| 65   | Data error (invalid input, malformed format, encoding error, 4xx body) |
-| 66   | Not found (repo/file not found, 404)                                |
-| 70   | Internal (scout-side invariant violation, unexpected response schema) |
-| 74   | IO error (external tool failure such as headless browser)           |
-| 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)      |
+| Code | Meaning                                                                  |
+| ---- | ------------------------------------------------------------------------ |
+| 0    | Success                                                                  |
+| 64   | Usage error (clap parse, missing API key, conflicts_with violation)      |
+| 65   | Data error (invalid input, malformed format, encoding error, 4xx body)   |
+| 66   | Not found (repo/file not found, 404)                                     |
+| 70   | Internal (scout-side invariant violation, unexpected response schema)    |
+| 74   | IO error (external tool failure such as headless browser)                |
+| 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)           |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
-| 124  | Timeout (request/transport timeout, retryable — longer backoff advised) |
-| 130  | Interrupted by SIGINT (128 + 2; e.g. Ctrl-C)                        |
-| 143  | Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default) |
+| 124  | Timeout (request/transport timeout, retryable — longer backoff advised)  |
+| 130  | Interrupted by SIGINT (128 + 2; e.g. Ctrl-C)                             |
+| 143  | Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default)      |
 
 ## Migration to v2
 

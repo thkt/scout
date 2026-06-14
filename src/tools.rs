@@ -13,6 +13,7 @@ pub(crate) use builder::ScoutBuilder;
 pub(crate) use config::RuntimeConfig;
 pub(crate) use errors::Classification;
 
+use std::future::Future;
 use std::io::{IsTerminal, stdin};
 use std::sync::Arc;
 use std::time::Duration;
@@ -228,14 +229,48 @@ impl Scout {
             .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
     }
 
+    /// Wrap a GitHub command future in the outer `github_timeout`. The inner
+    /// `repo_*` handlers chain several per-request HTTP calls (each with its own
+    /// 30s `HTTP_TIMEOUT`); a persistent 5xx makes those calls each run their
+    /// full retry budget, so without this outer cap a single command could hang
+    /// for minutes. Mirrors the `fetch`/`research`/`slack` timeout wrapping in
+    /// `query` (issue #185).
+    async fn with_github_timeout<F>(&self, label: &str, fut: F) -> Result<CommandOutput, ScoutError>
+    where
+        F: Future<Output = Result<CommandOutput, ScoutError>>,
+    {
+        timeout(self.config.github_timeout, fut)
+            .await
+            .unwrap_or_else(|_| {
+                warn!(
+                    command = label,
+                    timeout_secs = self.config.github_timeout.as_secs(),
+                    "github command timed out"
+                );
+                Err(ScoutError::timeout(format!(
+                    "{label} timed out after {}s",
+                    self.config.github_timeout.as_secs()
+                )))
+            })
+    }
+
     pub async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
         match cmd {
             Command::Search(params) => self.search(params).await,
             Command::Fetch(params) => self.fetch(params).await,
             Command::Research(params) => self.research(params).await,
-            Command::RepoTree(params) => self.repo_tree(params).await,
-            Command::RepoRead(params) => self.repo_read(params).await,
-            Command::RepoOverview(params) => self.repo_overview(params).await,
+            Command::RepoTree(params) => {
+                self.with_github_timeout("repo-tree", self.repo_tree(params))
+                    .await
+            }
+            Command::RepoRead(params) => {
+                self.with_github_timeout("repo-read", self.repo_read(params))
+                    .await
+            }
+            Command::RepoOverview(params) => {
+                self.with_github_timeout("repo-overview", self.repo_overview(params))
+                    .await
+            }
         }
     }
 }

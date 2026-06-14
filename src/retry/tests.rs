@@ -204,6 +204,36 @@ fn jittered_backoff_is_deterministic_with_seeded_rng() {
     );
 }
 
+// T-R008: backoff_is_capped_at_max_retry_after
+// Issue #185: the `None` arm of `retry_after_or_backoff` (exponential
+// backoff) had no ceiling, so a high `SCOUT_MAX_RETRIES` could produce a
+// single multi-minute sleep (attempt 9 → up to ~512s) that overruns the
+// surrounding tool timeout. The cap must match the `Some` arm's
+// `MAX_RETRY_AFTER_SECS`. attempt=10 has `half = 512s >= 300s`, so the
+// floor of the jitter envelope already exceeds the cap — the result is
+// exactly the cap regardless of the rng sample.
+#[test]
+fn backoff_is_capped_at_max_retry_after() {
+    let cap = Duration::from_secs(MAX_RETRY_AFTER_SECS);
+    // Invariant across (and beyond) the attempt range the helper can reach
+    // (`SCOUT_MAX_RETRIES` is capped at 10): the uncapped exponential growth
+    // never escapes the ceiling.
+    for attempt in 0..=12u32 {
+        let delay = retry_after_or_backoff(None, attempt, &FastrandRng);
+        assert!(
+            delay <= cap,
+            "backoff for attempt {attempt} ({delay:?}) must not exceed {cap:?}"
+        );
+    }
+    // Rng-independent equality: at attempt 10 the minimum backoff (256s
+    // half + 0 jitter = 512s base... half=512s) already exceeds the cap.
+    assert_eq!(
+        retry_after_or_backoff(None, 10, &FastrandRng),
+        cap,
+        "backoff past the cap boundary must clamp exactly to the cap"
+    );
+}
+
 // T-R004: is_transient_network_recognizes_mid_stream_body_drop
 // Issue #113: reqwest 0.13 surfaces a mid-stream body drop as
 // `is_decode() == true` with an `io::Error` (UnexpectedEof) in the

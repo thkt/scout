@@ -223,8 +223,9 @@ impl Scout {
 
 /// Maximum time spent on best-effort candidate generation in the NotFound
 /// error path. The user is already waiting on a failure; we'd rather skip
-/// candidates than block them on a slow tree fetch.
-const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// candidates than block them on a slow tree fetch. `pub(crate)` so the config
+/// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
+pub(crate) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum OSA distance and number of suggestions returned per error.
 const CANDIDATE_MAX_DISTANCE: usize = 3;
