@@ -89,3 +89,43 @@ fn api_non_4xx_5xx_is_unknown() {
     .classify();
     assert_eq!(c.kind, ErrorCode::Unknown);
 }
+
+/// [T-BRC007] is_degradable is true exactly for TempFailure/Timeout infra faults.
+#[test]
+fn temp_failure_variants_are_degradable() {
+    let cases: Vec<BraveError> = vec![
+        BraveError::Server(503),
+        BraveError::RateLimited { retry_after: None },
+        BraveError::Api {
+            code: 502,
+            message: "bad gateway".into(),
+        },
+    ];
+    for case in &cases {
+        assert!(case.is_degradable(), "{case:?}");
+    }
+}
+
+/// [T-BRC008] is_degradable is false for config, data, internal, and Unknown
+/// variants. The `Api { code: 304 }` case pins the classify-derived behavior
+/// against [T-BRC006]: an Unknown status propagates rather than degrading.
+#[test]
+fn non_temp_failure_variants_are_not_degradable() {
+    let cases: Vec<BraveError> = vec![
+        BraveError::ApiKeyNotSet,
+        BraveError::Unauthorized,
+        BraveError::InsecureBaseUrl,
+        BraveError::ResponseTooLarge,
+        BraveError::Api {
+            code: 400,
+            message: "bad".into(),
+        },
+        BraveError::Api {
+            code: 304,
+            message: "not modified".into(),
+        },
+    ];
+    for case in &cases {
+        assert!(!case.is_degradable(), "{case:?}");
+    }
+}

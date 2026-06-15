@@ -61,23 +61,16 @@ impl BraveError {
     /// Returns `true` when the error is a transient infrastructure failure that callers
     /// may legitimately surface as a degraded result instead of propagating.
     ///
-    /// Configuration errors (`ApiKeyNotSet`, `Unauthorized`, `ParseUrl`,
-    /// `InsecureBaseUrl`), the scout-side invariants `ParseJson` and
-    /// `ResponseTooLarge`, and 4xx `Api` codes stay propagated — they require
-    /// user action or signal a scout/upstream invariant violation.
+    /// Derived from [`classify`](Self::classify) so the degradable set stays a
+    /// single source of truth: only `TempFailure` and `Timeout` (retryable
+    /// infrastructure faults) degrade. Everything else propagates, including
+    /// the `Unknown` escape hatch — a non-4xx/5xx `Api` code surfaces as an
+    /// error rather than masking an unrecognized status as an empty result.
     pub(crate) fn is_degradable(&self) -> bool {
-        match self {
-            Self::ApiKeyNotSet
-            | Self::Unauthorized
-            | Self::ParseJson(_)
-            | Self::ResponseTooLarge
-            | Self::ParseUrl(_)
-            | Self::InsecureBaseUrl => false,
-            Self::Api { code, .. } if (400..500).contains(code) => false,
-            Self::RateLimited { .. } | Self::Server(_) | Self::Network(_) | Self::Api { .. } => {
-                true
-            }
-        }
+        matches!(
+            self.classify().kind,
+            ErrorCode::TempFailure | ErrorCode::Timeout
+        )
     }
 
     /// Map each variant to its ADR-0011 priority-table [`Classification`].
