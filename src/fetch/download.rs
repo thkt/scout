@@ -81,7 +81,7 @@ pub(super) async fn download(
             FetchError::from,
         )
         .await?;
-        let html = decode_body(&body, charset.as_deref());
+        let html = decode_body(body, charset.as_deref());
         return Ok((current_url, html));
     }
 
@@ -112,7 +112,7 @@ fn extract_charset(content_type: &str) -> Option<String> {
     })
 }
 
-fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
+fn decode_body(bytes: Vec<u8>, charset: Option<&str>) -> String {
     let label = charset.unwrap_or("utf-8");
     let encoding = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or_else(|| {
         warn!(
@@ -122,9 +122,14 @@ fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
         encoding_rs::UTF_8
     });
     if encoding == encoding_rs::UTF_8 {
-        return String::from_utf8_lossy(bytes).into_owned();
+        // Valid UTF-8 (the overwhelming majority) moves the buffer with no copy;
+        // only invalid bytes fall back to a lossy re-encode.
+        return match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
     }
-    let (decoded, _, had_errors) = encoding.decode(bytes);
+    let (decoded, _, had_errors) = encoding.decode(&bytes);
     if had_errors {
         warn!(
             charset = label,

@@ -66,13 +66,26 @@ fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
 }
 
 /// Fallback when dom_smoothie fails to parse the HTML.
+///
+/// Scans the bytes case-insensitively in place rather than lowercasing the whole
+/// document, which would copy up to the full (multi-MB) input on the warm path.
 fn extract_title_from_html(html: &str) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
-    let tag_start = lower.find("<title")?;
-    let content_start = tag_start + lower[tag_start..].find('>')? + 1;
-    let content_end = content_start + lower[content_start..].find("</title>")?;
+    let bytes = html.as_bytes();
+    let tag_start = find_ascii_ci(bytes, b"<title")?;
+    // `>` is ASCII, so a byte search is exact even inside multi-byte UTF-8 content.
+    let content_start = tag_start + bytes[tag_start..].iter().position(|&b| b == b'>')? + 1;
+    let content_end = content_start + find_ascii_ci(&bytes[content_start..], b"</title>")?;
     let title = html[content_start..content_end].trim();
     (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// Byte offset of the first case-insensitive (ASCII) match of `needle` in `haystack`,
+/// or `None`.  Offsets index into the original bytes, so slicing the source `&str` at
+/// the returned position stays on a char boundary (`needle` is ASCII).
+fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
 }
 
 #[cfg(test)]
@@ -189,8 +202,9 @@ mod tests {
     /// [T-FX010] title_extraction_safe_with_unicode_case_expansion
     #[test]
     fn title_extraction_safe_with_unicode_case_expansion() {
-        // Turkish İ (U+0130) expands from 2→3 bytes under full to_lowercase().
-        // to_ascii_lowercase preserves byte offsets, preventing panic on slice.
+        // The byte-window scan matches the uppercase <TITLE> tag without lowercasing,
+        // and returns byte offsets, so slicing the source &str past multibyte content
+        // (İ, U+0130, 2 bytes) stays on a char boundary and does not panic.
         let html = "<html><head><TITLE>My Title</TITLE></head><body>İİİ</body></html>";
         assert_eq!(extract_title_from_html(html), Some("My Title".to_owned()));
     }

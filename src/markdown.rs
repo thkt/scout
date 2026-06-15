@@ -58,7 +58,13 @@ pub(crate) fn escape_md_inline(s: &str) -> String {
 
 /// Sanitize user input for embedding in a Markdown heading.
 /// Replaces newlines (which would break heading structure) with spaces.
-pub(crate) fn sanitize_heading(s: &str) -> String {
+///
+/// Returns the input borrowed when it carries no newline, which is the common case
+/// for headings (titles, URLs), so no allocation happens on that path.
+pub(crate) fn sanitize_heading(s: &str) -> Cow<'_, str> {
+    if !s.contains(['\n', '\r']) {
+        return Cow::Borrowed(s);
+    }
     s.chars()
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect()
@@ -174,6 +180,15 @@ mod tests {
     fn sanitize_heading_replaces_newlines() {
         assert_eq!(sanitize_heading("line1\nline2\rline3"), "line1 line2 line3");
         assert_eq!(sanitize_heading("no newlines"), "no newlines");
+    }
+
+    /// [T-MD011] sanitize_heading borrows input without newlines (no allocation)
+    #[test]
+    fn sanitize_heading_borrows_when_no_newline() {
+        assert!(matches!(
+            sanitize_heading("plain heading"),
+            Cow::Borrowed(_)
+        ));
     }
 
     /// [T-MD006] shift_headings deepens levels by N
