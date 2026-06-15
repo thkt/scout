@@ -34,6 +34,7 @@ use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
 use crate::github::GitHubClient;
 use crate::markdown::{shift_headings, truncate_with_note};
 use crate::rng::Rng;
+use crate::slack::SlackClient;
 use crate::token_source::TokenSource;
 
 // Re-imported under `cfg(test)` so the in-module test files (which reach them
@@ -164,6 +165,10 @@ pub struct Scout {
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
+    /// Lazy-initialized on first Slack permalink fetch. Mirrors `github`:
+    /// non-Slack commands never read `SLACK_TOKEN`. Tests pre-set the cell via
+    /// `ScoutBuilder::with_slack_endpoint`.
+    slack: OnceCell<SlackClient>,
     /// Sticky shutdown flag. `lib::run` flips this to `true` on SIGINT or
     /// SIGTERM. Each `fetch_with_cdp` invocation subscribes a fresh receiver
     /// so the cancellation is delivered to fetches that start after the
@@ -227,6 +232,19 @@ impl Scout {
         self.brave
             .as_ref()
             .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
+    }
+
+    /// Lazy Slack client, mirroring `github()`. `get_or_try_init` defers the
+    /// fallible `from_env` (token read) to the first Slack fetch; tests inject a
+    /// wiremock-backed client by pre-setting the `OnceCell` in `build()`.
+    async fn slack(&self) -> Result<&SlackClient, ScoutError> {
+        self.slack
+            .get_or_try_init(|| async {
+                SlackClient::from_env(self.http.clone(), self.config.max_retries)
+                    .map(|c| c.with_clock(self.clock.clone()).with_rng(self.rng.clone()))
+                    .map_err(ScoutError::from)
+            })
+            .await
     }
 
     /// Wrap a GitHub command future in the outer `github_timeout`. The inner

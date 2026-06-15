@@ -14,6 +14,8 @@ use crate::fetch::{DnsResolver, SsrfResolver, TokioDnsResolver};
 #[cfg(test)]
 use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
+#[cfg(test)]
+use crate::slack::SlackClient;
 use crate::token_source::{GhCliSource, TokenSource};
 
 use super::{RuntimeConfig, Scout, ScoutError};
@@ -45,6 +47,11 @@ pub(crate) struct ScoutBuilder {
     /// `from_env_with_source`. `None` (production) preserves lazy init.
     #[cfg(test)]
     github_endpoint: Option<String>,
+    /// Pre-init `Scout.slack` (`OnceCell`) with a test client pointed at this
+    /// base URL so `Scout::slack()` returns it without reading `SLACK_TOKEN`.
+    /// `None` (production) preserves lazy init. Mirrors `github_endpoint`.
+    #[cfg(test)]
+    slack_endpoint: Option<String>,
 }
 
 /// Build the two `reqwest::Client`s shared between production and test paths
@@ -91,6 +98,8 @@ impl ScoutBuilder {
             config,
             #[cfg(test)]
             github_endpoint: None,
+            #[cfg(test)]
+            slack_endpoint: None,
         })
     }
 
@@ -113,6 +122,7 @@ impl ScoutBuilder {
             cancel: watch::channel(false).0,
             config: RuntimeConfig::default(),
             github_endpoint: None,
+            slack_endpoint: None,
         }
     }
 
@@ -167,12 +177,30 @@ impl ScoutBuilder {
         self
     }
 
+    /// Stores `endpoint`; `build()` uses the current `clock` / `rng` to pre-init
+    /// the `slack` `OnceCell`. Composes with `with_clock` / `with_rng` (call
+    /// those before `build`). Mirrors `with_github_endpoint`.
+    #[cfg(test)]
+    pub(crate) fn with_slack_endpoint(mut self, endpoint: &str) -> Self {
+        self.slack_endpoint = Some(endpoint.to_owned());
+        self
+    }
+
     pub(crate) fn build(self) -> Scout {
         let github = OnceCell::new();
         #[cfg(test)]
         if let Some(endpoint) = self.github_endpoint.as_deref() {
             let _ = github.set(
                 GitHubClient::with_base_url(self.http.clone(), endpoint)
+                    .with_clock(self.clock.clone())
+                    .with_rng(self.rng.clone()),
+            );
+        }
+        let slack = OnceCell::new();
+        #[cfg(test)]
+        if let Some(endpoint) = self.slack_endpoint.as_deref() {
+            let _ = slack.set(
+                SlackClient::with_base_url(self.http.clone(), endpoint)
                     .with_clock(self.clock.clone())
                     .with_rng(self.rng.clone()),
             );
@@ -185,6 +213,7 @@ impl ScoutBuilder {
             fetch_http: self.fetch_http,
             brave,
             github,
+            slack,
             cancel: self.cancel,
             config: self.config,
             clock: self.clock,

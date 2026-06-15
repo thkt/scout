@@ -91,14 +91,29 @@ impl SlackClient {
         }
     }
 
-    pub fn from_env(http: Client, max_retries: u32) -> Result<Self, SlackError> {
-        let raw = env::var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
+    pub(crate) fn from_env(http: Client, max_retries: u32) -> Result<Self, SlackError> {
+        Self::from_env_with(http, max_retries, |k| env::var(k))
+    }
+
+    /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
+    /// tests can exercise the token-not-set / whitespace branches without
+    /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
+    /// Mirrors [`crate::brave::client::BraveClient::from_env_with`] (ADR-0007).
+    pub(crate) fn from_env_with<F>(
+        http: Client,
+        max_retries: u32,
+        get_var: F,
+    ) -> Result<Self, SlackError>
+    where
+        F: Fn(&str) -> Result<String, env::VarError>,
+    {
+        let raw = get_var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
         let token = Redacted::new(&raw).ok_or(SlackError::TokenNotSet)?;
         Ok(Self::new(http, token, max_retries))
     }
 
     #[cfg(test)]
-    fn with_base_url(http: Client, base_url: &str) -> Self {
+    pub(crate) fn with_base_url(http: Client, base_url: &str) -> Self {
         Self {
             http,
             token: Redacted::new("xoxp-test").expect("static literal is non-empty"),
