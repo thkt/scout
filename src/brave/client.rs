@@ -253,7 +253,9 @@ impl BraveClient {
             BraveError::from,
         )
         .await?;
-        let parsed: WebSearchResponse = serde_json::from_slice(&bytes)?;
+        let parsed: WebSearchResponse = serde_json::from_slice(&bytes).inspect_err(|e| {
+            warn!(query_len, error = %e, "Brave search response parse failed");
+        })?;
 
         info!(
             query_len,

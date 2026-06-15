@@ -3,6 +3,7 @@ use std::str;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::Encoding;
+use tracing::debug;
 
 use super::GitHubError;
 
@@ -82,7 +83,13 @@ fn decode_explicit(bytes: &[u8], label: &str) -> Result<DecodeResult, GitHubErro
 
 fn decode_bom(bytes: &[u8]) -> Option<DecodeResult> {
     let (encoding, bom_len) = Encoding::for_bom(bytes)?;
-    let (decoded, _) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
+    let (decoded, had_errors) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
+    if had_errors {
+        debug!(
+            encoding = encoding.name(),
+            had_errors, "BOM-identified encoding produced replacement characters during decode"
+        );
+    }
     Some(DecodeResult {
         text: decoded.into_owned(),
         encoding: encoding.name().to_ascii_lowercase(),
@@ -145,7 +152,10 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         }
     }
 
-    // FR-007: chardetng inconclusive or had errors; try strict UTF-8
+    // FR-007: chardetng inconclusive or had errors; try strict UTF-8.
+    // Note: with `Utf8Detection::Allow`, chardetng already guesses UTF-8 for any
+    // valid-UTF-8 bytes, so this branch is unreachable in practice; it remains as a
+    // defensive backstop for the documented detection priority (FR-007).
     if let Ok(s) = str::from_utf8(bytes) {
         return Ok(DecodeResult {
             text: s.to_owned(),
