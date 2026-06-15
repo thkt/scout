@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use serde::Serialize;
@@ -114,13 +115,28 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
     (token.is_empty() || token.starts_with([' ', '\t', '\r'])).then_some(token)
 }
 
-pub(crate) fn escape_yaml(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-        .replace('\0', "")
+pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {
+    // The common frontmatter value (a plain title/author/date) carries no escapable
+    // char, so borrow it untouched instead of allocating a copy.
+    if !s
+        .bytes()
+        .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
+    {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => {}
+            _ => out.push(c),
+        }
+    }
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -185,6 +201,12 @@ mod tests {
             escape_yaml("She said \"hi\"\nand left\\"),
             "She said \\\"hi\\\"\\nand left\\\\"
         );
+    }
+
+    /// [T-FC012] escape_yaml borrows input that needs no escaping (no allocation)
+    #[test]
+    fn escape_yaml_borrows_when_no_escape_needed() {
+        assert!(matches!(escape_yaml("plain title 2026"), Cow::Borrowed(_)));
     }
 
     /// [T-FC005] neutralize_yaml_markers rewrites bare ---/... lines to ***
