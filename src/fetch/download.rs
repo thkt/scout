@@ -6,6 +6,7 @@ use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, RedactedLogUrl, ValidatedUrl, ssrf_check};
 use super::{FetchError, MAX_RESPONSE_BYTES};
+use crate::retry::read_body_capped;
 
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
 ///
@@ -73,28 +74,13 @@ pub(super) async fn download(
             },
         }
 
-        let content_length = response.content_length();
-        if let Some(len) = content_length
-            && usize::try_from(len).unwrap_or(usize::MAX) > MAX_RESPONSE_BYTES
-        {
-            return Err(FetchError::TooLarge);
-        }
-
-        let capacity = content_length
-            .map(|len| {
-                usize::try_from(len)
-                    .unwrap_or(usize::MAX)
-                    .min(MAX_RESPONSE_BYTES)
-            })
-            .unwrap_or(8192);
-        let mut body = Vec::with_capacity(capacity);
-        let mut stream = response;
-        while let Some(chunk) = stream.chunk().await? {
-            body.extend_from_slice(&chunk);
-            if body.len() > MAX_RESPONSE_BYTES {
-                return Err(FetchError::TooLarge);
-            }
-        }
+        let body = read_body_capped(
+            response,
+            MAX_RESPONSE_BYTES,
+            || FetchError::TooLarge,
+            FetchError::from,
+        )
+        .await?;
         let html = decode_body(&body, charset.as_deref());
         return Ok((current_url, html));
     }

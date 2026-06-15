@@ -46,8 +46,8 @@ pub(crate) const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
 /// is pre-checked before any allocation; the chunk loop also rejects bodies that
 /// exceed the cap when the header is absent or lies. Callers pass the cap that
 /// matches their backend's legitimate payload size (`MAX_API_RESPONSE_BYTES` for
-/// Brave/Slack, `MAX_GITHUB_RESPONSE_BYTES` for GitHub). `fetch.rs` keeps its own
-/// copy because it interleaves charset and redirect handling around the same loop.
+/// Brave/Slack, `MAX_GITHUB_RESPONSE_BYTES` for GitHub, `MAX_RESPONSE_BYTES` for
+/// `fetch`'s HTML downloads).
 pub(crate) async fn read_body_capped<E>(
     response: reqwest::Response,
     cap: usize,
