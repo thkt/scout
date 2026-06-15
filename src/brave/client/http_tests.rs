@@ -304,6 +304,41 @@ async fn search_malformed_json_returns_parse_error() {
     }
 }
 
+/// [T-BC-LOG002] (issue #189)
+/// Setup: wiremock returns a 200 with a malformed JSON body.
+/// Action: `client.search("foobar", None)` is invoked under `traced_test`.
+/// Expected: a WARN-level `Brave search response parse failed` event fires,
+/// carrying `query_len=6` and the serde `error` field, so operators can see a
+/// schema-drift fallback without the raw query text leaking.
+#[tracing_test::traced_test]
+#[tokio::test]
+async fn search_logs_warn_on_parse_failure() {
+    let Some(server) = try_spawn_mock_server("brave::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{\"web\":"))
+        .mount(&server)
+        .await;
+
+    let client = BraveClient::with_base_url(Client::new(), &server.uri());
+    let _ = client.search("foobar", None).await;
+
+    assert!(
+        logs_contain("Brave search response parse failed"),
+        "expected the parse-failure WARN event"
+    );
+    assert!(logs_contain("WARN"), "event level should be WARN");
+    assert!(
+        logs_contain("query_len=6"),
+        "event should carry query_len (length, not the raw query)"
+    );
+    assert!(
+        logs_contain("error="),
+        "event should carry the serde error field"
+    );
+}
+
 // T-RC001: from_env_with_returns_api_key_not_set_when_closure_errs
 /// FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
 /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable

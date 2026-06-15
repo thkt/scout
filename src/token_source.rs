@@ -77,8 +77,13 @@ where
     .ok()?;
 
     if !output.status.success() {
+        // SEC: `gh auth token` stderr can echo back the token or other secrets,
+        // so the raw stderr is dropped; only the exit code is reported.
         warn!(
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            redacted_reason = %format!(
+                "non-zero exit (code {}); stderr withheld",
+                output.status.code().unwrap_or(-1)
+            ),
             "gh auth token failed; falling back to unauthenticated"
         );
         return None;

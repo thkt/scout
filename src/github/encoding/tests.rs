@@ -295,6 +295,36 @@ fn decode_base64_invalid_input_returns_decode_error() {
     );
 }
 
+// ── Fallback logging (issue #189) ──
+
+/// [T-GE015] decode_bom emits a debug event when the BOM-identified encoding
+/// produces replacement characters (had_errors=true).
+/// Action: decode UTF-16BE BOM + lone high surrogate (D800) under `traced_test`.
+#[tracing_test::traced_test]
+#[test]
+fn decode_bom_logs_debug_on_replacement_characters() {
+    // UTF-16BE BOM (FE FF) + lone high surrogate (D8 00) with no trailing low
+    // surrogate → encoding_rs substitutes U+FFFD and sets had_errors=true.
+    let bytes: &[u8] = &[0xFE, 0xFF, 0xD8, 0x00];
+
+    let result = decode_bytes(bytes, None).unwrap();
+
+    assert_eq!(result.source, DetectionSource::Bom);
+    assert!(
+        logs_contain("BOM-identified encoding produced replacement characters"),
+        "expected the BOM replacement-character debug event"
+    );
+    assert!(logs_contain("DEBUG"), "event level should be DEBUG");
+    assert!(
+        logs_contain("had_errors=true"),
+        "had_errors field should be true"
+    );
+    assert!(
+        logs_contain("UTF-16BE"),
+        "encoding field should name the BOM encoding"
+    );
+}
+
 // ── Helper ──
 
 fn base64_encode(input: &[u8]) -> String {

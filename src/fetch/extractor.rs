@@ -1,6 +1,14 @@
 use dom_smoothie::{Config, Readability};
 use tracing::warn;
 
+use super::RedactedLogUrl;
+
+/// Render an optional source URL for logging with credentials redacted.
+/// `url` is `None` only in tests; production fetch paths always pass `Some`.
+fn log_url(url: Option<&str>) -> String {
+    url.map_or_else(|| "(none)".to_owned(), |u| RedactedLogUrl(u).to_string())
+}
+
 pub(super) struct ExtractedArticle {
     pub title: Option<String>,
     pub byline: Option<String>,
@@ -15,7 +23,7 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
     let mut readability = match Readability::new(html, url, Some(Config::default())) {
         Ok(r) => r,
         Err(e) => {
-            warn!(%e, "readability init failed, using raw fallback");
+            warn!(url = %log_url(url), error = %e, "readability init failed, using raw fallback");
             return raw_fallback(html);
         }
     };
@@ -33,7 +41,7 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
             }
         }
         Err(e) => {
-            warn!(%e, "readability parse failed, using raw fallback");
+            warn!(url = %log_url(url), error = %e, "readability parse failed, using raw fallback");
             raw_fallback(html)
         }
     }
@@ -185,5 +193,47 @@ mod tests {
         // to_ascii_lowercase preserves byte offsets, preventing panic on slice.
         let html = "<html><head><TITLE>My Title</TITLE></head><body>İİİ</body></html>";
         assert_eq!(extract_title_from_html(html), Some("My Title".to_owned()));
+    }
+
+    /// [T-FX011] (issue #189) readability fallback emits a WARN event whose `url`
+    /// field has credentials redacted, so the raw userinfo never reaches the log.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_logs_warn_with_redacted_url() {
+        // Empty HTML drives readability into the fallback path.
+        let result = extract_article("", Some("https://user:s3cret@example.com/page"));
+
+        assert!(result.used_raw_fallback);
+        assert!(
+            logs_contain("using raw fallback"),
+            "expected the fallback WARN event"
+        );
+        assert!(logs_contain("WARN"), "event level should be WARN");
+        assert!(
+            logs_contain("example.com"),
+            "url field should retain the host for diagnosis"
+        );
+        assert!(
+            !logs_contain("s3cret"),
+            "url credentials must be redacted before logging"
+        );
+    }
+
+    /// [T-FX012] (issue #189) the fallback `url` field renders a placeholder when
+    /// no source URL is available, instead of leaking a Rust `None` debug form.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_logs_placeholder_when_url_absent() {
+        let result = extract_article("", None);
+
+        assert!(result.used_raw_fallback);
+        assert!(
+            logs_contain("using raw fallback"),
+            "expected the fallback WARN event"
+        );
+        assert!(
+            logs_contain("url=(none)"),
+            "absent url should render as the (none) placeholder"
+        );
     }
 }
