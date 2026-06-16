@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
+use reqwest::redirect::Policy;
+use serde::ser::Error as _;
+
 use super::query::to_data_value;
 use super::test_helpers::*;
 use super::*;
+use crate::envelope::ErrorCode;
 use crate::fetch::StaticDnsResolver;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
@@ -393,7 +399,7 @@ impl serde::Serialize for FailingSerialize {
     where
         S: serde::Serializer,
     {
-        Err(serde::ser::Error::custom("forced serialize failure"))
+        Err(S::Error::custom("forced serialize failure"))
     }
 }
 
@@ -410,7 +416,7 @@ fn to_data_value_serializes_owned_value() {
 #[test]
 fn to_data_value_maps_serialize_failure_to_internal_bug() {
     let err = to_data_value(&FailingSerialize, "fetch result").unwrap_err();
-    assert_eq!(err.error_kind(), crate::envelope::ErrorCode::Internal);
+    assert_eq!(err.error_kind(), ErrorCode::Internal);
     assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
     assert!(
         err.message().contains("failed to serialize fetch result"),
@@ -449,14 +455,12 @@ async fn fetch_returns_ok_for_reachable_page() {
     // Guard-free client: `.resolve()` maps the test host to the loopback wiremock
     // socket. No `SsrfResolver` is installed, so the loopback connect proceeds.
     let fetch_http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(Policy::none())
         .resolve("scout-test.example", addr)
         .build()
         .unwrap();
     let scout = ScoutBuilder::for_test()
-        .with_dns(std::sync::Arc::new(StaticDnsResolver::single(
-            "93.184.216.34",
-        )))
+        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
         .with_fetch_http(fetch_http)
         .build();
 
