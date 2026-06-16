@@ -100,9 +100,10 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let addr = listener.local_addr().ok()?;
     let handle = thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
+        // Single-shot: the test makes exactly one connection, so a failed
+        // accept is a test-environment fault — panic loudly rather than
+        // hang the joining test on a silent return.
+        let (mut stream, _) = listener.accept().expect("accept loopback connection");
         // Drain the request so the write below is the response, not racing
         // an unread request buffer.
         let mut buf = [0u8; 4096];
