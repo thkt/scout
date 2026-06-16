@@ -78,7 +78,9 @@ impl Scout {
 
         info!(url = %RedactedLogUrl(&url), "fetch complete");
         let markdown = format_fetch_output(&result);
-        let data = serde_json::to_value(&result).expect("FetchResult is Serialize");
+        let data = serde_json::to_value(&result).map_err(|e| {
+            ScoutError::internal_bug(format!("failed to serialize fetch result: {e}"))
+        })?;
         let mut degradation = Degradation::default();
         if result.used_raw_fallback() {
             degradation.push(
@@ -187,7 +189,9 @@ impl Scout {
         );
 
         let markdown = engine::format_report(&report, &query);
-        let mut data = serde_json::to_value(&report).expect("ResearchReport is Serialize");
+        let mut data = serde_json::to_value(&report).map_err(|e| {
+            ScoutError::internal_bug(format!("failed to serialize research report: {e}"))
+        })?;
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query));
         }

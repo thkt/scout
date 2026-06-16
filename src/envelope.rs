@@ -224,6 +224,16 @@ pub(crate) struct ErrorEnvelope {
     pub error: ErrorPayload,
 }
 
+impl ErrorEnvelope {
+    /// Serialize as the one-line JSON error envelope per ADR-0010. Single
+    /// serialize point so every error consumer (CLI runtime, clap usage-error
+    /// path) shares one infallible-serialize contract instead of duplicating
+    /// `serde_json::to_string(..).expect(..)`.
+    pub(crate) fn to_json_line(&self) -> String {
+        serde_json::to_string(self).expect("ErrorEnvelope is Serialize")
+    }
+}
+
 /// Error payload nested under `ErrorEnvelope::error` per ADR-0010.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorPayload {

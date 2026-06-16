@@ -190,7 +190,7 @@ fn render_json_success(output: CommandOutput) -> String {
 /// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0010.
 /// Uses `err.message()` (bare) so `next_step` is not duplicated in `message`.
 fn render_json_error(err: &ScoutError) -> String {
-    let envelope = ErrorEnvelope {
+    ErrorEnvelope {
         error: ErrorPayload {
             code: err.error_kind(),
             message: err.message().to_owned(),
@@ -198,8 +198,8 @@ fn render_json_error(err: &ScoutError) -> String {
             candidates: err.candidates().to_vec(),
             retryable: err.retryable(),
         },
-    };
-    serde_json::to_string(&envelope).expect("envelope is Serialize")
+    }
+    .to_json_line()
 }
 
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
@@ -214,7 +214,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
         }
         _ => {
             if json_mode {
-                let envelope = ErrorEnvelope {
+                let line = ErrorEnvelope {
                     error: ErrorPayload {
                         code: ErrorCode::UsageError,
                         message: err.to_string().trim().to_owned(),
@@ -222,8 +222,8 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
                         candidates: Vec::new(),
                         retryable: false,
                     },
-                };
-                let line = serde_json::to_string(&envelope).expect("envelope is Serialize");
+                }
+                .to_json_line();
                 eprintln!("{line}");
             } else {
                 let _ = err.print();

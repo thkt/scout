@@ -218,6 +218,18 @@ fn schema_decode_classifies_as_internal_exit_70() {
     }
 }
 
+/// [T-ER032] `ScoutError::internal_bug` (direct constructor for scout-side
+/// serialize/invariant violations, e.g. `serde_json::to_value` failure in a
+/// handler) classifies as Internal / exit 70 (EX_SOFTWARE) and is non-retryable,
+/// matching the `Decode`-routed Internal path pinned by T-ER025.
+#[test]
+fn internal_bug_constructor_classifies_as_internal_exit_70() {
+    let err = ScoutError::internal_bug("failed to serialize fetch result");
+    assert_eq!(err.error_kind(), ErrorCode::Internal);
+    assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
+    assert!(!err.retryable(), "Internal must not be retryable");
+}
+
 /// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint
 /// (issue #101).
 ///

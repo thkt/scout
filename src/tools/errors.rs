@@ -107,6 +107,15 @@ impl ScoutError {
         Self::new(ErrorCode::IoError, msg)
     }
 
+    /// scout-side invariant violation (e.g. a `serde_json::to_value` failure on
+    /// a type scout itself controls). Maps to `ErrorCode::Internal` (exit 70
+    /// EX_SOFTWARE), the sibling of `io_error`/`unknown` named per ADR-0003 §104.
+    /// Lets handlers propagate serialize failures via `?` through the JSON error
+    /// envelope instead of `.expect()` panicking and bypassing it.
+    pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, msg)
+    }
+
     /// Timeout (request-level or transport-level). Maps to `ErrorCode::Timeout`
     /// (exit 124, GNU coreutils `timeout`) per ADR-0002. Retryable like
     /// `transient`, but separated so caller scripts/agents can apply a longer
