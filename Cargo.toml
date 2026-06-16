@@ -29,9 +29,10 @@ fastrand = "2"
 httpdate = "1"
 chromiumoxide = { version = "0.9", optional = true }
 nix = { version = "0.31", features = ["signal"], optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
-js-rendering = ["chromiumoxide", "nix"]
+js-rendering = ["chromiumoxide", "nix", "tempfile"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
