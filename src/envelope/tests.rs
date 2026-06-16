@@ -78,10 +78,11 @@ fn error_envelope_wraps_payload_under_error_key() {
     );
 }
 
-/// [T-EN016] `ErrorEnvelope::to_json_line` is the single serialize point per
-/// ADR-0010 and emits the same one-line JSON as direct `serde_json::to_string`.
+/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010 and
+/// emits the same one-line JSON as direct `serde_json::to_string` for an
+/// `ErrorEnvelope`.
 #[test]
-fn error_envelope_to_json_line_matches_direct_serialize() {
+fn to_json_line_matches_direct_serialize() {
     let env = ErrorEnvelope {
         error: ErrorPayload {
             code: ErrorCode::Internal,
@@ -91,7 +92,7 @@ fn error_envelope_to_json_line_matches_direct_serialize() {
             retryable: false,
         },
     };
-    let line = env.to_json_line();
+    let line = to_json_line(&env);
     assert_eq!(line, serde_json::to_string(&env).unwrap());
     assert!(line.starts_with(r#"{"error":"#), "got: {line}");
     assert!(line.contains(r#""code":"INTERNAL""#), "got: {line}");
