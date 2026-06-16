@@ -22,7 +22,7 @@ use crate::rng::{FastrandRng, Rng};
 
 use super::{
     ChannelBody, Message, MessagesBody, ResolvedMessage, SlackError, SlackUrl, UserBody,
-    collect_mention_ids, extract_target, format_slack_output, resolve_messages,
+    collect_mention_ids_ordered, extract_target, format_slack_output, resolve_messages,
 };
 
 struct FetchedThread {
@@ -389,36 +389,40 @@ impl SlackClient {
 
         // Authors render on every message, so when distinct IDs exceed the
         // lookup cap they take priority over mentions: an unresolved author
-        // degrades visible output more than an unresolved mention.
-        let mut authors = HashSet::new();
-        let mut mentions = HashSet::new();
+        // degrades visible output more than an unresolved mention. The keep set
+        // is fixed to first-occurrence (thread chronological) order so which IDs
+        // resolve is reproducible across runs (issue #221). Two passes over the
+        // messages — all authors first, then mentions — share one `seen` set, so
+        // a dual-role ID is kept as an author and consumes one slot, not two.
+        let mut authors: Vec<String> = Vec::new();
+        let mut mentions: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for msg in &fetched.messages {
-            if let Some(uid) = &msg.user {
-                authors.insert(uid.clone());
+            if let Some(uid) = &msg.user
+                && seen.insert(uid.clone())
+            {
+                authors.push(uid.clone());
             }
-            collect_mention_ids(&msg.text, &mut mentions);
+        }
+        for msg in &fetched.messages {
+            collect_mention_ids_ordered(&msg.text, &mut seen, &mut mentions);
         }
 
-        let distinct_total = authors.union(&mentions).count();
-        let user_ids: HashSet<String> = if distinct_total > SLACK_MAX_USER_LOOKUPS {
+        let distinct_total = authors.len() + mentions.len();
+        if distinct_total > SLACK_MAX_USER_LOOKUPS {
             warn!(
                 distinct_users = distinct_total,
                 cap = SLACK_MAX_USER_LOOKUPS,
                 "too many distinct user IDs; capping users.info lookups, excess IDs render as raw IDs (authors kept first)"
             );
-            let mut kept: HashSet<String> =
-                authors.into_iter().take(SLACK_MAX_USER_LOOKUPS).collect();
-            for id in mentions {
-                if kept.len() >= SLACK_MAX_USER_LOOKUPS {
-                    break;
-                }
-                kept.insert(id);
-            }
-            kept
-        } else {
-            authors.extend(mentions);
-            authors
-        };
+        }
+        // `take` is a no-op under the cap, so the capped and uncapped cases
+        // collapse to one chained collect: authors first, then mention top-up.
+        let user_ids: HashSet<String> = authors
+            .into_iter()
+            .chain(mentions)
+            .take(SLACK_MAX_USER_LOOKUPS)
+            .collect();
 
         let (channel_name, users) = tokio::join!(
             self.resolve_channel(&slack_url.channel),
