@@ -489,3 +489,24 @@ async fn fetch_returns_ok_for_reachable_page() {
         "rendered markdown should be non-empty"
     );
 }
+
+/// [T-SK057] `insert_preamble_notes` prepends the note at the very top when the
+/// input carries no `---\n\n` frontmatter terminator. `format_slack_output`
+/// always emits that terminator, so this path is unreachable in production, but
+/// the fallback prepends rather than silently dropping the cap notes if that
+/// shape ever changes (issue #222 defensive seam).
+#[test]
+fn insert_preamble_notes_prepends_when_frontmatter_absent() {
+    let out = super::query::insert_preamble_notes(
+        "a body with no frontmatter".to_owned(),
+        &["a cap note"],
+    );
+    assert!(
+        out.starts_with("> Note: a cap note\n\n"),
+        "absent frontmatter must fall back to a top prepend, got: {out}"
+    );
+    assert!(
+        out.contains("a body with no frontmatter"),
+        "the original body must be preserved after the prepended note, got: {out}"
+    );
+}

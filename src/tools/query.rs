@@ -256,7 +256,7 @@ pub(super) fn to_data_value<T: serde::Serialize>(
 /// any reply and above the truncation point. A reply-less single message has only
 /// one `---\n\n`, which is still the terminator, so this stays correct. Returns
 /// the input unchanged when there are no notes (no cap fired).
-fn insert_preamble_notes(markdown: String, notes: &[&str]) -> String {
+pub(super) fn insert_preamble_notes(markdown: String, notes: &[&str]) -> String {
     const FRONTMATTER_END: &str = "---\n\n";
     if notes.is_empty() {
         return markdown;

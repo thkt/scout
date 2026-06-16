@@ -31,24 +31,24 @@ impl DegradedReason {
     /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
     /// to build the `"Could not fetch {label} ({e})"` message. The four
     /// fetch-style variants (three `*FetchFailed` plus `BraveSearchFailed`)
-    /// that flow through that helper get a meaningful label; other variants
-    /// build bespoke messages at their callsite. The three Slack variants are
-    /// in the latter group: `fetch_slack` writes their note text directly, so
-    /// these labels are only a semantic placeholder for the exhaustive match.
+    /// that flow through that helper get a meaningful label; the rest build
+    /// their note text at their callsite and never reach `label()`, so they
+    /// share the generic `"resource"` fallback that only keeps the match
+    /// exhaustive (`ReadabilityFallback` and the three Slack cap variants).
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::IssuesFetchFailed => "issues",
             Self::PullsFetchFailed => "pull requests",
             Self::ReleasesFetchFailed => "releases",
             Self::BraveSearchFailed => "Brave search",
-            Self::SlackThreadTruncated => "Slack thread",
-            Self::SlackUsersCapped => "Slack users",
-            Self::SlackOutputTruncated => "Slack output",
             Self::ReadmeFetchFailed
             | Self::ReadmeBlobFetchFailed
             | Self::ReadmeDecodeFailed
             | Self::UrlFetchFailed
-            | Self::ReadabilityFallback => "resource",
+            | Self::ReadabilityFallback
+            | Self::SlackThreadTruncated
+            | Self::SlackUsersCapped
+            | Self::SlackOutputTruncated => "resource",
         }
     }
 }
