@@ -249,7 +249,27 @@ mod tests {
 
     use clap::CommandFactory;
 
-    use super::{init_tracing, write_output};
+    use super::{CommandOutput, init_tracing, render_json_success, write_output};
+
+    /// [T-RJS001] render_json_success serializes a `CommandOutput` as a one-line
+    /// success envelope per ADR-0010: `data` payload preserved, `degraded:false`,
+    /// no embedded newline. Pins the `--json` happy-path boundary so a regression
+    /// in `into_envelope` / `to_json_line` wiring fails here.
+    #[test]
+    fn render_json_success_emits_one_line_success_envelope() {
+        let output = CommandOutput::ok(
+            String::from("hello"),
+            serde_json::json!({"markdown": "hello"}),
+        );
+        let line = render_json_success(output);
+        assert!(line.starts_with(r#"{"data":"#), "got: {line}");
+        assert!(line.contains(r#""markdown":"hello""#), "got: {line}");
+        assert!(line.contains(r#""degraded":false"#), "got: {line}");
+        assert!(
+            !line.contains('\n'),
+            "envelope must be one line, got: {line}"
+        );
+    }
 
     /// [T-INIT001] init_tracing tolerates a second invocation (issue #103).
     /// `.init()` would panic on the duplicate; `.try_init()` returns Err which

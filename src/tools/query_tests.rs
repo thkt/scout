@@ -1,3 +1,4 @@
+use super::query::to_data_value;
 use super::test_helpers::*;
 use super::*;
 use crate::search::Lang;
@@ -378,5 +379,41 @@ fn fetch_output_truncates_long_content() {
     assert!(
         output.contains("### Title"),
         "headings should still be shifted"
+    );
+}
+
+/// A type whose `Serialize` impl always errors. Needed because the values scout
+/// actually serializes never fail (`f64::NAN` serializes to `null`, it does not
+/// error), so the error arm of `to_data_value` requires a forced failure.
+struct FailingSerialize;
+
+impl serde::Serialize for FailingSerialize {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom("forced serialize failure"))
+    }
+}
+
+/// [T-TDV001] to_data_value returns the serialized JSON value on success.
+#[test]
+fn to_data_value_serializes_owned_value() {
+    let value = to_data_value(&serde_json::json!({"k": "v"}), "test value").unwrap();
+    assert_eq!(value, serde_json::json!({"k": "v"}));
+}
+
+/// [T-TDV002] to_data_value maps a serialize failure to an Internal (exit 70)
+/// ScoutError naming the value, so a handler serde failure surfaces through the
+/// JSON error envelope via `?` instead of `.expect()` panicking (issue #192).
+#[test]
+fn to_data_value_maps_serialize_failure_to_internal_bug() {
+    let err = to_data_value(&FailingSerialize, "fetch result").unwrap_err();
+    assert_eq!(err.error_kind(), crate::envelope::ErrorCode::Internal);
+    assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
+    assert!(
+        err.message().contains("failed to serialize fetch result"),
+        "message should name the value, got: {}",
+        err.message()
     );
 }

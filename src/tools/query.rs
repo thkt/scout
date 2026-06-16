@@ -78,9 +78,7 @@ impl Scout {
 
         info!(url = %RedactedLogUrl(&url), "fetch complete");
         let markdown = format_fetch_output(&result);
-        let data = serde_json::to_value(&result).map_err(|e| {
-            ScoutError::internal_bug(format!("failed to serialize fetch result: {e}"))
-        })?;
+        let data = to_data_value(&result, "fetch result")?;
         let mut degradation = Degradation::default();
         if result.used_raw_fallback() {
             degradation.push(
@@ -189,15 +187,27 @@ impl Scout {
         );
 
         let markdown = engine::format_report(&report, &query);
-        let mut data = serde_json::to_value(&report).map_err(|e| {
-            ScoutError::internal_bug(format!("failed to serialize research report: {e}"))
-        })?;
+        let mut data = to_data_value(&report, "research report")?;
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query));
         }
         collect_research_degradations(&report, &mut degradation);
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
+}
+
+/// Serialize a handler's scout-owned result into the envelope `data` value,
+/// mapping a `serde_json` failure to `ScoutError::internal_bug` (exit 70) so it
+/// flows through the JSON error envelope via `?` instead of `.expect()`
+/// panicking and bypassing it (issue #192). `what` names the value for the
+/// error message. The single serialize-to-`data` point shared by `fetch` and
+/// `research`.
+pub(super) fn to_data_value<T: serde::Serialize>(
+    value: &T,
+    what: &str,
+) -> Result<serde_json::Value, ScoutError> {
+    serde_json::to_value(value)
+        .map_err(|e| ScoutError::internal_bug(format!("failed to serialize {what}: {e}")))
 }
 
 fn collect_research_degradations(report: &engine::ResearchReport, degradation: &mut Degradation) {
