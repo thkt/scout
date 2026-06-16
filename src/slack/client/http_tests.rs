@@ -597,3 +597,154 @@ async fn fetch_message_link_with_replies_fetches_thread() {
         "expected the probed thread's reply in output, got: {out}"
     );
 }
+
+/// [T-SK048] When distinct authors exceed SLACK_MAX_USER_LOOKUPS, the keep set
+/// is fixed to first-occurrence (thread chronological) order rather than
+/// HashSet iteration order, so which authors resolve to names is reproducible
+/// across runs. A thread carrying SLACK_MAX_USER_LOOKUPS + 10 distinct authors
+/// keeps exactly the first 50 by message order; authors 50..59 are evicted and
+/// render as raw IDs. T-SK044 has only 3 authors « cap, so it never exercises
+/// this path (issue #221).
+#[tokio::test]
+async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000000";
+    let total = SLACK_MAX_USER_LOOKUPS + 10; // 60 distinct authors
+    // Author i authors message i, in a fixed order. Zero-padded IDs (U000..U059)
+    // avoid the substring trap where contains("U5") would match "U50".
+    let messages = (0..total)
+        .map(|i| {
+            serde_json::json!({
+                "user": format!("U{i:03}"),
+                "text": "reply",
+                "ts": format!("1000.{i:06}"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": messages,
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000000".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("thread with capped author lookups resolves");
+    // The first 50 authors (U000..U049) are kept, so each resolves to a name and
+    // no raw ID leaks.
+    for i in 0..SLACK_MAX_USER_LOOKUPS {
+        let raw = format!("U{i:03}");
+        assert!(
+            !out.contains(&raw),
+            "author {raw} is within the first 50 by order and must resolve, but its raw ID leaked: {out}"
+        );
+    }
+    // Authors 50..59 fall past the cap, so they are evicted and render raw.
+    for i in SLACK_MAX_USER_LOOKUPS..total {
+        let raw = format!("U{i:03}");
+        assert!(
+            out.contains(&raw),
+            "evicted author {raw} must render as a raw ID, but it was absent: {out}"
+        );
+    }
+}
+
+/// [T-SK049] A user mentioned in an early message who authors a later message is
+/// kept as an author, not demoted to an evictable mention. The keep set is built
+/// in two passes — all authors first, then mentions — sharing one `seen` set, so
+/// the author role wins a dual-role ID's single slot. A single interleaved pass
+/// would record the early mention first and evict the late author, shrinking
+/// effective author coverage (issue #221 implementation hazard).
+#[tokio::test]
+async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000000";
+    // The parent mentions UMENT01 then UDUAL (in-text order). UDUAL authors a
+    // later message, so under two-pass author-first priority it keeps a slot;
+    // the pure mention UMENT01 loses the (zero) remaining slots and renders raw.
+    let mut messages = vec![serde_json::json!({
+        "user": "UA00",
+        "text": "<@UMENT01> <@UDUAL>",
+        "ts": parent_ts,
+    })];
+    // UA00 plus UA01.. give SLACK_MAX_USER_LOOKUPS - 1 distinct pure authors;
+    // UDUAL as a late author makes exactly the cap, leaving no top-up slot for
+    // mentions. Derived from the cap so the boundary holds if the cap changes.
+    for i in 1..(SLACK_MAX_USER_LOOKUPS - 1) {
+        messages.push(serde_json::json!({
+            "user": format!("UA{i:02}"),
+            "text": "reply",
+            "ts": format!("1000.{i:06}"),
+        }));
+    }
+    messages.push(serde_json::json!({
+        "user": "UDUAL",
+        "text": "dual-role author",
+        "ts": "1000.000049",
+    }));
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": messages,
+            "has_more": false,
+            "response_metadata": {"next_cursor": ""}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: parent_ts.into(),
+        thread_ts: Some(parent_ts.into()),
+        raw_url: "https://acme.slack.com/archives/C1/p1000000000".into(),
+    };
+    let out = client
+        .fetch_message(&url)
+        .await
+        .expect("thread with a dual-role ID resolves");
+    assert!(
+        !out.contains("UDUAL"),
+        "the dual-role ID must stay kept as an author, but its raw ID leaked: {out}"
+    );
+    assert!(
+        out.contains("UMENT01"),
+        "the pure mention must be evicted past the full cap and render raw: {out}"
+    );
+}

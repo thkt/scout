@@ -241,9 +241,14 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
     spans
 }
 
-fn collect_mention_ids(text: &str, ids: &mut HashSet<String>) {
+/// Append mention IDs from `text` to `out` in first-occurrence order, skipping
+/// any already in `seen`. Sharing `seen` across calls (and with an author pass)
+/// dedupes a dual-role ID so it consumes a single lookup slot.
+fn collect_mention_ids_ordered(text: &str, seen: &mut HashSet<String>, out: &mut Vec<String>) {
     for span in parse_mentions(text) {
-        ids.insert(span.user_id.to_owned());
+        if seen.insert(span.user_id.to_owned()) {
+            out.push(span.user_id.to_owned());
+        }
     }
 }
 
