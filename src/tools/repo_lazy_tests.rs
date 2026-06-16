@@ -1,5 +1,6 @@
 use super::test_helpers::*;
 use super::*;
+use crate::ErrorCode;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
 use std::time::Duration;
@@ -411,5 +412,42 @@ async fn github_lazy_init_from_empty_cell() {
     assert!(
         ptr::eq(client, client2),
         "second call returns the same cached reference"
+    );
+}
+
+/// [T-TS023] slack() lazily routes the non-injected production path through
+/// `SlackClient::from_env`, and a missing `SLACK_TOKEN` surfaces as a
+/// `ScoutError` without poisoning the `OnceCell` (`get_or_try_init` does not
+/// cache errors). This covers the lazy seam that `with_slack_endpoint` bypasses
+/// in T-SB005 (issue #191).
+///
+/// Guarded like `try_spawn_mock_server`: when the ambient environment provides a
+/// real `SLACK_TOKEN` (developer shell), `from_env` would succeed and this spec
+/// no longer applies, so skip rather than assert a different spec. CI runs with
+/// `SLACK_TOKEN` unset, exercising the asserted `TokenNotSet` branch.
+#[tokio::test]
+async fn slack_lazy_init_surfaces_token_not_set_without_token() {
+    use std::env;
+    if env::var("SLACK_TOKEN").is_ok_and(|t| !t.trim().is_empty()) {
+        return;
+    }
+    let s = scout_lazy("http://localhost:0");
+    assert!(s.slack.get().is_none(), "slack OnceCell starts empty");
+
+    // `.map(|_| ())` drops the `&SlackClient` (no `Debug`) so `expect_err` can
+    // format the `Ok` side on failure.
+    let err = s
+        .slack()
+        .await
+        .map(|_| ())
+        .expect_err("unset SLACK_TOKEN must surface as an error");
+    assert_eq!(
+        err.error_kind(),
+        ErrorCode::UsageError,
+        "missing Slack token maps to UsageError (SlackError::TokenNotSet)"
+    );
+    assert!(
+        s.slack.get().is_none(),
+        "get_or_try_init must not cache a failed initialization"
     );
 }
