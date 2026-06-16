@@ -85,6 +85,36 @@ pub fn spawn_mid_stream_drop_server(
     Some((format!("http://{addr}"), counter, handle))
 }
 
+/// One-shot server that accepts one connection and replies with a
+/// close-delimited HTTP/1.1 response: no `Content-Length`, no
+/// `Transfer-Encoding`, `Connection: close`, then `body_size` body bytes
+/// before dropping the socket (EOF delimits the body). reqwest sees
+/// `content_length() == None`, so `read_body_capped`'s pre-check goes inert
+/// and the chunk loop becomes the live cap guard — the path a compressed or
+/// Content-Length-absent upstream drives (issue #219).
+///
+/// Returns `None` when loopback bind is unavailable so callers can
+/// early-return in restricted environments, matching
+/// `spawn_mid_stream_drop_server`.
+pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let addr = listener.local_addr().ok()?;
+    let handle = thread::spawn(move || {
+        // Single-shot: the test makes exactly one connection, so a failed
+        // accept is a test-environment fault — panic loudly rather than
+        // hang the joining test on a silent return.
+        let (mut stream, _) = listener.accept().expect("accept loopback connection");
+        // Drain the request so the write below is the response, not racing
+        // an unread request buffer.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+        let _ = stream.write_all(&vec![b'x'; body_size]);
+        // stream drops here → socket close is the body's EOF delimiter.
+    });
+    Some((format!("http://{addr}"), handle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
