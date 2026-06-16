@@ -22,14 +22,19 @@ pub(crate) enum DegradedReason {
     UrlFetchFailed,
     ReadabilityFallback,
     BraveSearchFailed,
+    SlackThreadTruncated,
+    SlackUsersCapped,
+    SlackOutputTruncated,
 }
 
 impl DegradedReason {
     /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
     /// to build the `"Could not fetch {label} ({e})"` message. The four
     /// fetch-style variants (three `*FetchFailed` plus `BraveSearchFailed`)
-    /// that flow through that helper get a meaningful label; other variants
-    /// build bespoke messages at their callsite.
+    /// that flow through that helper get a meaningful label; the rest build
+    /// their note text at their callsite and never reach `label()`, so they
+    /// share the generic `"resource"` fallback that only keeps the match
+    /// exhaustive (`ReadabilityFallback` and the three Slack cap variants).
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::IssuesFetchFailed => "issues",
@@ -40,7 +45,10 @@ impl DegradedReason {
             | Self::ReadmeBlobFetchFailed
             | Self::ReadmeDecodeFailed
             | Self::UrlFetchFailed
-            | Self::ReadabilityFallback => "resource",
+            | Self::ReadabilityFallback
+            | Self::SlackThreadTruncated
+            | Self::SlackUsersCapped
+            | Self::SlackOutputTruncated => "resource",
         }
     }
 }
