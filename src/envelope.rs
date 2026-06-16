@@ -224,6 +224,14 @@ pub(crate) struct ErrorEnvelope {
     pub error: ErrorPayload,
 }
 
+/// Serialize an output envelope as its one-line JSON form per ADR-0010. The
+/// single serialize point for both `SuccessEnvelope` and `ErrorEnvelope`: these
+/// crate-owned types serialize infallibly, so the `expect` is unreachable and
+/// callers stay free of a `Result` they could only `.expect()` themselves.
+pub(crate) fn to_json_line<T: Serialize>(envelope: &T) -> String {
+    serde_json::to_string(envelope).expect("envelope is Serialize")
+}
+
 /// Error payload nested under `ErrorEnvelope::error` per ADR-0010.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorPayload {

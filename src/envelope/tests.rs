@@ -78,6 +78,30 @@ fn error_envelope_wraps_payload_under_error_key() {
     );
 }
 
+/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010 and
+/// emits the same one-line JSON as direct `serde_json::to_string` for an
+/// `ErrorEnvelope`.
+#[test]
+fn to_json_line_matches_direct_serialize() {
+    let env = ErrorEnvelope {
+        error: ErrorPayload {
+            code: ErrorCode::Internal,
+            message: String::from("failed to serialize fetch result"),
+            next_step: None,
+            candidates: vec![],
+            retryable: false,
+        },
+    };
+    let line = to_json_line(&env);
+    assert_eq!(line, serde_json::to_string(&env).unwrap());
+    assert!(line.starts_with(r#"{"error":"#), "got: {line}");
+    assert!(line.contains(r#""code":"INTERNAL""#), "got: {line}");
+    assert!(
+        !line.contains('\n'),
+        "envelope must be one line, got: {line}"
+    );
+}
+
 /// [T-EN005] SuccessEnvelope serializes data + degraded + notes
 #[test]
 fn success_envelope_serializes_required_fields() {

@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
-use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload};
+use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, to_json_line};
 use signals::{InterruptSignal, wait_for_signal};
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
@@ -184,13 +184,13 @@ pub async fn run() -> ExitCode {
 /// Takes `CommandOutput` by value so `data` and `notes` move into the envelope
 /// instead of being deep-cloned.
 fn render_json_success(output: CommandOutput) -> String {
-    serde_json::to_string(&output.into_envelope()).expect("envelope is Serialize")
+    to_json_line(&output.into_envelope())
 }
 
 /// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0010.
 /// Uses `err.message()` (bare) so `next_step` is not duplicated in `message`.
 fn render_json_error(err: &ScoutError) -> String {
-    let envelope = ErrorEnvelope {
+    to_json_line(&ErrorEnvelope {
         error: ErrorPayload {
             code: err.error_kind(),
             message: err.message().to_owned(),
@@ -198,8 +198,7 @@ fn render_json_error(err: &ScoutError) -> String {
             candidates: err.candidates().to_vec(),
             retryable: err.retryable(),
         },
-    };
-    serde_json::to_string(&envelope).expect("envelope is Serialize")
+    })
 }
 
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
@@ -214,7 +213,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
         }
         _ => {
             if json_mode {
-                let envelope = ErrorEnvelope {
+                let line = to_json_line(&ErrorEnvelope {
                     error: ErrorPayload {
                         code: ErrorCode::UsageError,
                         message: err.to_string().trim().to_owned(),
@@ -222,8 +221,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
                         candidates: Vec::new(),
                         retryable: false,
                     },
-                };
-                let line = serde_json::to_string(&envelope).expect("envelope is Serialize");
+                });
                 eprintln!("{line}");
             } else {
                 let _ = err.print();
@@ -251,7 +249,27 @@ mod tests {
 
     use clap::CommandFactory;
 
-    use super::{init_tracing, write_output};
+    use super::{CommandOutput, init_tracing, render_json_success, write_output};
+
+    /// [T-RJS001] render_json_success serializes a `CommandOutput` as a one-line
+    /// success envelope per ADR-0010: `data` payload preserved, `degraded:false`,
+    /// no embedded newline. Pins the `--json` happy-path boundary so a regression
+    /// in `into_envelope` / `to_json_line` wiring fails here.
+    #[test]
+    fn render_json_success_emits_one_line_success_envelope() {
+        let output = CommandOutput::ok(
+            String::from("hello"),
+            serde_json::json!({"markdown": "hello"}),
+        );
+        let line = render_json_success(output);
+        assert!(line.starts_with(r#"{"data":"#), "got: {line}");
+        assert!(line.contains(r#""markdown":"hello""#), "got: {line}");
+        assert!(line.contains(r#""degraded":false"#), "got: {line}");
+        assert!(
+            !line.contains('\n'),
+            "envelope must be one line, got: {line}"
+        );
+    }
 
     /// [T-INIT001] init_tracing tolerates a second invocation (issue #103).
     /// `.init()` would panic on the duplicate; `.try_init()` returns Err which

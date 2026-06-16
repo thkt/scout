@@ -150,6 +150,20 @@ impl ScoutBuilder {
         self
     }
 
+    /// Replace the fetch HTTP client so a test can point `fetch` at a loopback
+    /// wiremock server. Production `fetch_http` carries the connect-time
+    /// `SsrfResolver` guard (ADR-0012), which by design blocks loopback; a test
+    /// supplies a guard-free client (e.g. via reqwest `.resolve()`) paired with
+    /// a public-IP `with_dns` so the pre-flight `ssrf_check` still passes. This
+    /// seam is test-only and never weakens the production guard — `from_env`
+    /// keeps `build_default_clients`. The SSRF contract stays pinned by the
+    /// dedicated T-003 / T-F017 fetch_page tests, not by this client.
+    #[cfg(test)]
+    pub(crate) fn with_fetch_http(mut self, client: Client) -> Self {
+        self.fetch_http = client;
+        self
+    }
+
     /// Inject a short outer GitHub-command timeout so a test can force the
     /// `run()`-level guard to trip against a delayed wiremock response without
     /// waiting the production 120s (issue #185). `RuntimeConfig` is `Copy`, so

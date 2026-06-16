@@ -1,5 +1,13 @@
+use std::sync::Arc;
+
+use reqwest::redirect::Policy;
+use serde::ser::Error as _;
+
+use super::query::to_data_value;
 use super::test_helpers::*;
 use super::*;
+use crate::envelope::ErrorCode;
+use crate::fetch::StaticDnsResolver;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path};
@@ -378,5 +386,106 @@ fn fetch_output_truncates_long_content() {
     assert!(
         output.contains("### Title"),
         "headings should still be shifted"
+    );
+}
+
+/// A type whose `Serialize` impl always errors. Needed because the values scout
+/// actually serializes never fail (`f64::NAN` serializes to `null`, it does not
+/// error), so the error arm of `to_data_value` requires a forced failure.
+struct FailingSerialize;
+
+impl serde::Serialize for FailingSerialize {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(S::Error::custom("forced serialize failure"))
+    }
+}
+
+/// [T-TDV001] to_data_value returns the serialized JSON value on success.
+#[test]
+fn to_data_value_serializes_owned_value() {
+    let value = to_data_value(&serde_json::json!({"k": "v"}), "test value").unwrap();
+    assert_eq!(value, serde_json::json!({"k": "v"}));
+}
+
+/// [T-TDV002] to_data_value maps a serialize failure to an Internal (exit 70)
+/// ScoutError naming the value, so a handler serde failure surfaces through the
+/// JSON error envelope via `?` instead of `.expect()` panicking (issue #192).
+#[test]
+fn to_data_value_maps_serialize_failure_to_internal_bug() {
+    let err = to_data_value(&FailingSerialize, "fetch result").unwrap_err();
+    assert_eq!(err.error_kind(), ErrorCode::Internal);
+    assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
+    assert!(
+        err.message().contains("failed to serialize fetch result"),
+        "message should name the value, got: {}",
+        err.message()
+    );
+}
+
+/// [T-FETCH-OK] fetch handler returns Ok for a reachable page, exercising the
+/// success path end-to-end: page download, markdown render, and `data`
+/// serialize (query.rs `to_data_value` delegation). SSRF stays intact — the
+/// pre-flight `ssrf_check` resolves the test host to a public IP via
+/// `with_dns`, while a guard-free `fetch_http` (reqwest `.resolve()` override,
+/// no `SsrfResolver`) reaches the loopback wiremock. Production `fetch_http`
+/// keeps the connect-time guard; the SSRF contract is pinned by T-003 / T-F017,
+/// not by this test client.
+#[tokio::test]
+async fn fetch_returns_ok_for_reachable_page() {
+    let Some(server) = try_spawn_mock_server("query::fetch_ok").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/page"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<html><head><title>Scout Test</title></head><body><article><h1>Scout Test</h1>\
+             <p>This is a sufficiently long article body so Readability extracts it cleanly \
+             rather than falling back to raw conversion. Lorem ipsum dolor sit amet, \
+             consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et \
+             dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation.</p>\
+             </article></body></html>",
+        ))
+        .mount(&server)
+        .await;
+
+    let addr = *server.address();
+    // Guard-free client: `.resolve()` maps the test host to the loopback wiremock
+    // socket. No `SsrfResolver` is installed, so the loopback connect proceeds.
+    let fetch_http = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .unwrap();
+    let scout = ScoutBuilder::for_test()
+        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
+        .with_fetch_http(fetch_http)
+        .build();
+
+    let params = super::params::FetchParams {
+        url: Some(format!("http://scout-test.example:{}/page", addr.port())),
+        js: false,
+        raw: false,
+    };
+    let output = scout.fetch(params).await.expect("fetch should succeed");
+
+    let data = output.data();
+    assert!(
+        data["url"]
+            .as_str()
+            .is_some_and(|u| u.contains("scout-test.example")),
+        "data.url should echo the fetched host, got: {data}"
+    );
+    assert!(
+        data["markdown"]
+            .as_str()
+            .is_some_and(|m| m.contains("Scout Test")),
+        "data.markdown should contain the page heading, got: {data}"
+    );
+    assert!(
+        !output.markdown().is_empty(),
+        "rendered markdown should be non-empty"
     );
 }
