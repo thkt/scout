@@ -1,8 +1,19 @@
+use std::io::Write;
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
+
 use super::*;
 use crate::fetch::{MAX_REDIRECTS, ssrf};
 use crate::test_support::{no_redirect_client, try_spawn_mock_server};
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, ResponseTemplate};
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
 
 fn validated(url: &str) -> ValidatedUrl {
     ValidatedUrl::for_test(url)
@@ -276,5 +287,43 @@ async fn redirect_missing_location_header_returns_error() {
     assert!(
         matches!(result, Err(FetchError::RedirectMissingLocation)),
         "missing Location header should error, got: {result:?}"
+    );
+}
+
+/// [T-F058] download_transparently_decodes_gzip_response (issue #202): a server
+/// that returns `Content-Encoding: gzip` even without an `Accept-Encoding`
+/// request header must be transparently decompressed, not handed to the charset
+/// decoder as raw gzip bytes (which yields mojibake). Requires reqwest's `gzip`
+/// feature so its default `Accepts` advertises and auto-decodes the encoding.
+#[tokio::test]
+async fn download_transparently_decodes_gzip_response() {
+    let Some(server) = try_spawn_mock_server("fetch::download").await else {
+        return;
+    };
+    let html = "<html><body><p>hello</p></body></html>";
+    Mock::given(method("GET"))
+        .and(path("/gz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .insert_header("content-encoding", "gzip")
+                .set_body_bytes(gzip(html.as_bytes())),
+        )
+        .mount(&server)
+        .await;
+
+    let client = no_redirect_client();
+    let (_final_url, body) = download(
+        &client,
+        &validated(&format!("{}/gz", server.uri())),
+        MAX_REDIRECTS,
+        &public_resolver(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        body.contains("hello"),
+        "gzip body should be transparently decompressed, got: {body:?}"
     );
 }
