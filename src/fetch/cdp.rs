@@ -5,6 +5,8 @@
 //! error type and request gate compile in both modes (dead in default).
 
 mod launch;
+#[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
+mod proxy;
 
 #[cfg(feature = "js-rendering")]
 use std::sync::Arc;
@@ -15,6 +17,8 @@ use std::time::Duration;
 use chromiumoxide::error::CdpError;
 #[cfg(feature = "js-rendering")]
 use tokio::sync::watch;
+#[cfg(feature = "js-rendering")]
+use tokio::task::JoinHandle;
 #[cfg(feature = "js-rendering")]
 use tokio::time::timeout;
 #[cfg(feature = "js-rendering")]
@@ -76,6 +80,20 @@ impl From<CdpInterceptError> for BrowserError {
 #[cfg(feature = "js-rendering")]
 const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Aborts the wrapped task when dropped, so the SSRF proxy is torn down on every
+/// exit path of `fetch_with_cdp` (early `return`s included). Awaiting the task to
+/// observe a panic is not possible from `Drop`; an abort is sufficient because the
+/// proxy holds no state that must be flushed.
+#[cfg(feature = "js-rendering")]
+struct AbortOnDrop(JoinHandle<()>);
+
+#[cfg(feature = "js-rendering")]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,
@@ -87,10 +105,26 @@ pub(super) async fn fetch_with_cdp(
 
     let browser_path = resolve_browser_binary()?;
 
+    // Launch the loopback SSRF proxy before chromium so its port can be wired
+    // into the proxy flags. chromium routes every TCP egress through it and the
+    // proxy re-validates connect-time IPs, closing the DNS-rebind gap that the
+    // resolve-time `check_browser_request` pre-flight cannot reach (issue #201).
+    let (proxy_port, proxy_task) =
+        proxy::spawn_ssrf_proxy(Arc::clone(&resolver), cancel.subscribe())
+            .await
+            .map_err(|e| BrowserError::ProcessFailed(format!("spawn SSRF proxy: {e}")))?;
+
+    // Abort the proxy on every exit path (early `return`s included) via RAII.
+    // Declared before the chromium locals so it drops last — after `reap_pgroup`
+    // below — so no late subrequest can reach the proxy once chromium is gone and
+    // its validation context with it. On the SIGINT path the `cancel` flag already
+    // ended the accept loop, so the abort is a no-op there and a stop otherwise.
+    let _proxy_guard = AbortOnDrop(proxy_task);
+
     // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
     // function returns — i.e. after every `reap_pgroup` path below — so its
     // `Drop` removes the dir only once chromium has exited (issue #198).
-    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(&browser_path)?;
+    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(&browser_path, proxy_port)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
         Ok(Ok(url)) => url,

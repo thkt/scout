@@ -52,18 +52,31 @@ pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
 }
 
 /// See spec.md Chrome Launch Flags table for rationale.
+///
+/// The proxy flags route every chromium TCP egress through scout's loopback
+/// SOCKS5 proxy so connect-time IPs are re-validated (issue #201):
+/// - `--proxy-server=socks5://127.0.0.1:{proxy_port}`: SOCKS5 (not v4) so the
+///   target host is resolved by the proxy, not chromium, closing DNS rebinding.
+/// - `--proxy-bypass-list=<-loopback>`: subtracts chromium's implicit DIRECT
+///   bypass for loopback AND link-local (169.254/16, the IMDS range), forcing
+///   even those through the proxy.
+/// - `--disable-quic`: QUIC/HTTP3 egresses over UDP, which a TCP SOCKS5 proxy
+///   cannot intercept; disabling it keeps all egress on the proxied TCP path.
 #[cfg(feature = "js-rendering")]
-fn build_launch_args() -> Vec<&'static str> {
+fn build_launch_args(proxy_port: u16) -> Vec<String> {
     vec![
-        "--headless=new",
-        "--disable-webrtc",
-        "--disable-background-networking",
-        "--disable-features=DnsOverHttps",
-        "--disable-domain-reliability",
-        "--no-pings",
-        "--disable-extensions",
-        "--no-first-run",
-        "--disable-default-apps",
+        "--headless=new".to_owned(),
+        "--disable-webrtc".to_owned(),
+        "--disable-background-networking".to_owned(),
+        "--disable-features=DnsOverHttps".to_owned(),
+        "--disable-domain-reliability".to_owned(),
+        "--no-pings".to_owned(),
+        "--disable-extensions".to_owned(),
+        "--no-first-run".to_owned(),
+        "--disable-default-apps".to_owned(),
+        format!("--proxy-server=socks5://127.0.0.1:{proxy_port}"),
+        "--proxy-bypass-list=<-loopback>".to_owned(),
+        "--disable-quic".to_owned(),
     ]
 }
 
@@ -106,6 +119,7 @@ const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
+    proxy_port: u16,
 ) -> Result<(TokioChild, Pid, BufReader<ChildStderr>, TempDir), BrowserError> {
     use std::process::Stdio;
 
@@ -124,7 +138,7 @@ pub(super) fn spawn_chromium_pgroup(
             "--user-data-dir={}",
             user_data_dir.path().display()
         ))
-        .args(build_launch_args())
+        .args(build_launch_args(proxy_port))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .process_group(0)
