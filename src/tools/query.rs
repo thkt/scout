@@ -9,7 +9,7 @@ use crate::fetch::converter::FetchResult;
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_page};
 use crate::markdown::truncate_with_note;
 use crate::search::engine;
-use crate::slack::{SlackClient, SlackError, SlackUrl, parse_slack_url};
+use crate::slack::{SlackError, SlackUrl, parse_slack_url};
 
 use super::params::{FetchParams, ResearchParams, SearchParams};
 use super::{MAX_FETCH_OUTPUT_BYTES, Scout, ScoutError, format_fetch_output, resolve_stdin_arg};
@@ -93,9 +93,7 @@ impl Scout {
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack)");
-        let client = SlackClient::from_env(self.http.clone(), self.config.max_retries)?
-            .with_clock(self.clock.clone())
-            .with_rng(self.rng.clone());
+        let client = self.slack().await?;
         let slack_timeout = self.config.slack_timeout;
         let output = timeout(slack_timeout, client.fetch_message(&slack_url))
             .await

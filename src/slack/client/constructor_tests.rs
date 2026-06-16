@@ -21,3 +21,45 @@ async fn t010_with_base_url_constructs_usable_client() {
     let result: Result<DummyBody, _> = client.api_get_once("auth.test", &[]).await;
     assert!(result.is_ok());
 }
+
+/// [T-SK033] from_env_with surfaces a closure `Err(VarError::NotPresent)` as
+/// `SlackError::TokenNotSet` — the token-unset path that `unsafe_code = "forbid"`
+/// blocks from being reached via `env::set_var` (ADR-0007, issue #191).
+#[test]
+fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
+    // `.map(|_| ())` drops the `SlackClient` (no `Debug`) so the failure
+    // message can format the `Result`.
+    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+        Err(env::VarError::NotPresent)
+    })
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(SlackError::TokenNotSet)),
+        "expected TokenNotSet, got: {result:?}"
+    );
+}
+
+/// [T-SK034] from_env_with rejects a whitespace-only token as `TokenNotSet`
+/// (parity with `Redacted::new` rejecting blank secrets).
+#[test]
+fn t034_from_env_with_rejects_whitespace_only_token() {
+    let result =
+        SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("   ".to_owned()))
+            .map(|_| ());
+    assert!(
+        matches!(result, Err(SlackError::TokenNotSet)),
+        "expected TokenNotSet for whitespace-only token, got: {result:?}"
+    );
+}
+
+/// [T-SK035] from_env_with with a real token yields `Ok(client)` whose token
+/// round-trips through `Redacted::expose()` and whose `base_url` is `API_BASE`.
+#[test]
+fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
+    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+        Ok("xoxp-real".to_owned())
+    });
+    let client = result.expect("expected Ok(client) from valid token");
+    assert_eq!(client.token.expose(), "xoxp-real");
+    assert_eq!(client.base_url, API_BASE);
+}

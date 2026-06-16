@@ -153,3 +153,46 @@ async fn scout_builder_clock_reaches_github_client_via_seam() {
         "expected retry_after = 600 (reset 1600 - clock 1000), got: {result:?}"
     );
 }
+
+/// [T-SB005] `with_slack_endpoint` で inject した wiremock endpoint が
+/// `fetch`(slack permalink) → `fetch_slack` → `slack()` の production 経路で
+/// 構築される `SlackClient` まで届くことを end-to-end で確認する。`slack()` の
+/// `OnceCell` を build() で pre-set するため `SLACK_TOKEN` 未設定でも注入
+/// クライアントが使われ、`conversations.history` に到達して本文を取得できる。
+/// 注入が wire できていなければ `from_env` が `TokenNotSet` を返し落ちる
+/// (issue #191)。
+#[tokio::test]
+async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
+    let Some(server) = try_spawn_mock_server("tools::scout_builder_slack_seam").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"type": "message", "text": "hello from wiremock", "ts": "1773819598.273499"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+
+    let result = scout
+        .fetch(FetchParams {
+            url: Some("https://team.slack.com/archives/C123/p1773819598273499".into()),
+            js: false,
+            raw: false,
+        })
+        .await;
+    let output =
+        result.expect("injected slack endpoint must serve fetch_slack without SLACK_TOKEN");
+    assert!(
+        output.markdown().contains("hello from wiremock"),
+        "fetch output must carry the wiremock message body, got: {}",
+        output.markdown()
+    );
+}
