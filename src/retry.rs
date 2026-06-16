@@ -48,6 +48,13 @@ pub(crate) const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
 /// matches their backend's legitimate payload size (`MAX_API_RESPONSE_BYTES` for
 /// Brave/Slack, `MAX_GITHUB_RESPONSE_BYTES` for GitHub, `MAX_RESPONSE_BYTES` for
 /// `fetch`'s HTML downloads).
+///
+/// `cap` applies to *decoded* bytes: with reqwest's compression features enabled,
+/// `chunk()` yields already-decompressed data and `content_length()` returns
+/// `None` for compressed responses (so the pre-check goes inert and the chunk
+/// loop is the live guard). This bounds peak memory to `cap + one chunk` even
+/// against a decompression bomb, at the cost of rejecting a legitimately large
+/// page whose decompressed size exceeds the cap.
 pub(crate) async fn read_body_capped<E>(
     response: reqwest::Response,
     cap: usize,

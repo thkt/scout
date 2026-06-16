@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use flate2::Compression;
-use flate2::write::GzEncoder;
+use flate2::write::{GzEncoder, ZlibEncoder};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -11,6 +11,14 @@ use crate::test_support::{no_redirect_client, try_spawn_mock_server};
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// reqwest's `deflate` Content-Encoding expects zlib-wrapped data (not raw
+/// DEFLATE), which is what `ZlibEncoder` produces.
+fn zlib_deflate(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()
 }
@@ -325,5 +333,42 @@ async fn download_transparently_decodes_gzip_response() {
     assert!(
         body.contains("hello"),
         "gzip body should be transparently decompressed, got: {body:?}"
+    );
+}
+
+/// [T-F059] download_transparently_decodes_deflate_response (issue #202): pins a
+/// second enabled codec beyond gzip. `Content-Encoding: deflate` carries
+/// zlib-wrapped data; reqwest's `deflate` feature must transparently decompress
+/// it rather than hand the raw bytes to the charset decoder.
+#[tokio::test]
+async fn download_transparently_decodes_deflate_response() {
+    let Some(server) = try_spawn_mock_server("fetch::download").await else {
+        return;
+    };
+    let html = "<html><body><p>hello</p></body></html>";
+    Mock::given(method("GET"))
+        .and(path("/df"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .insert_header("content-encoding", "deflate")
+                .set_body_bytes(zlib_deflate(html.as_bytes())),
+        )
+        .mount(&server)
+        .await;
+
+    let client = no_redirect_client();
+    let (_final_url, body) = download(
+        &client,
+        &validated(&format!("{}/df", server.uri())),
+        MAX_REDIRECTS,
+        &public_resolver(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        body.contains("hello"),
+        "deflate body should be transparently decompressed, got: {body:?}"
     );
 }
