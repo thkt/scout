@@ -102,7 +102,9 @@ Override the built-in timeouts and retry budget. Invalid values fail with exit 6
 
 ### Optional: JS rendering (for SPAs)
 
-`fetch` auto-detects JS-dependent pages (React, Next.js, Vue, Nuxt) and falls back to headless Chrome via CDP. Requires Chrome or Chromium installed locally and the `js-rendering` feature:
+`fetch` auto-detects JS-dependent pages (React, Next.js, Vue, Nuxt) and falls back to headless Chrome via CDP. Chrome or Chromium must be installed locally; without it, auto-detected pages fall back to the original HTML and `--js` returns an error.
+
+Prebuilt binaries (Homebrew, GitHub Releases) ship with the `js-rendering` feature enabled. Source builds enable it per-install:
 
 ```sh
 cargo install --path . --features js-rendering

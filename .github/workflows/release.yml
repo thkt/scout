@@ -61,7 +61,7 @@ jobs:
           if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           fi
-          cargo build --release --target "$TARGET"
+          cargo build --release --target "$TARGET" --features js-rendering
 
       - name: Package
         env:
