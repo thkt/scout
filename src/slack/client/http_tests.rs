@@ -269,7 +269,8 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
     let out = client
         .fetch_message(&url)
         .await
-        .expect("target message on page 2 is found via pagination");
+        .expect("target message on page 2 is found via pagination")
+        .markdown;
     assert!(
         out.contains("the target reply"),
         "expected the page-2 target in output, got: {out}"
@@ -319,10 +320,14 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         thread_ts: None,
         raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
     };
-    client
+    let outcome = client
         .fetch_message(&url)
         .await
         .expect("mass-mention message resolves");
+    assert!(
+        outcome.users_capped,
+        "distinct user IDs exceed the cap, so users_capped must be set"
+    );
     // The `.expect(cap)` is verified when `server` drops at end of scope.
 }
 
@@ -392,7 +397,8 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
     let out = client
         .fetch_message(&url)
         .await
-        .expect("thread with capped lookups resolves");
+        .expect("thread with capped lookups resolves")
+        .markdown;
     assert!(
         !out.contains("UAUTHOR"),
         "every author should resolve to a name, but a raw author ID leaked: {out}"
@@ -466,10 +472,15 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
         thread_ts: Some(parent_ts.into()),
         raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
     };
-    let out = client
+    let outcome = client
         .fetch_message(&url)
         .await
         .expect("thread spanning two pages resolves");
+    assert!(
+        !outcome.thread_truncated,
+        "a thread whose last page advertises no next cursor ends naturally and must not be flagged truncated (page-cap false-positive guard, symmetric to the user-cap boundary in T-SK055)"
+    );
+    let out = outcome.markdown;
     assert!(
         out.contains("context_messages: 2"),
         "two distinct replies expected, parent duplicate must not inflate the count: {out}"
@@ -522,10 +533,15 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
         thread_ts: Some(parent_ts.into()),
         raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
     };
-    let out = client
+    let outcome = client
         .fetch_message(&url)
         .await
         .expect("a truncated thread still returns the pages fetched so far");
+    assert!(
+        outcome.thread_truncated,
+        "the reply page cap was hit, so thread_truncated must be set"
+    );
+    let out = outcome.markdown;
     assert!(
         out.contains("PARENT_BODY"),
         "expected the parent body in the truncated output, got: {out}"
@@ -591,7 +607,8 @@ async fn fetch_message_link_with_replies_fetches_thread() {
     let out = client
         .fetch_message(&url)
         .await
-        .expect("a permalink to a thread root resolves the full thread");
+        .expect("a permalink to a thread root resolves the full thread")
+        .markdown;
     assert!(
         out.contains("a reply"),
         "expected the probed thread's reply in output, got: {out}"
@@ -653,7 +670,8 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
     let out = client
         .fetch_message(&url)
         .await
-        .expect("thread with capped author lookups resolves");
+        .expect("thread with capped author lookups resolves")
+        .markdown;
     // The first 50 authors (U000..U049) are kept, so each resolves to a name and
     // no raw ID leaks.
     for i in 0..SLACK_MAX_USER_LOOKUPS {
@@ -738,7 +756,8 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
     let out = client
         .fetch_message(&url)
         .await
-        .expect("thread with a dual-role ID resolves");
+        .expect("thread with a dual-role ID resolves")
+        .markdown;
     assert!(
         !out.contains("UDUAL"),
         "the dual-role ID must stay kept as an author, but its raw ID leaked: {out}"

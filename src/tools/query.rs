@@ -1,5 +1,7 @@
 //! `Scout` query commands: web search, page fetch (including Slack), research.
 
+use std::borrow::Cow;
+
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -95,7 +97,7 @@ impl Scout {
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack)");
         let client = self.slack().await?;
         let slack_timeout = self.config.slack_timeout;
-        let output = timeout(slack_timeout, client.fetch_message(&slack_url))
+        let outcome = timeout(slack_timeout, client.fetch_message(&slack_url))
             .await
             .unwrap_or_else(|_| {
                 warn!(
@@ -113,12 +115,48 @@ impl Scout {
                 warn!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), error = %e, "slack fetch failed");
             })?;
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
-        let markdown = truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned();
+
+        // Truncate first, then prepend the cap preamble: the preamble must
+        // survive the 100KB cut, so it is added after truncation rather than
+        // counted toward the limit (issue #222 Finding A). The inline byte-count
+        // note from `truncate_with_note` lands at the body end and covers the
+        // output-truncation case on the Markdown side, so only thread/users caps
+        // go into the preamble to avoid double-reporting truncation.
+        let truncated = truncate_with_note(&outcome.markdown, MAX_FETCH_OUTPUT_BYTES);
+        let output_truncated = matches!(truncated, Cow::Owned(_));
+
+        let mut degradation = Degradation::default();
+        let mut preamble_notes: Vec<&str> = Vec::new();
+        if outcome.thread_truncated {
+            let note = "Thread truncated: reply page cap reached, some replies are omitted.";
+            preamble_notes.push(note);
+            degradation.push(note.to_owned(), DegradedReason::SlackThreadTruncated);
+        }
+        if outcome.users_capped {
+            let note = "User lookups were capped, so some authors and mentions show raw IDs.";
+            preamble_notes.push(note);
+            degradation.push(note.to_owned(), DegradedReason::SlackUsersCapped);
+        }
+        if output_truncated {
+            degradation.push(
+                "Output truncated at the size cap; trailing content is omitted.".to_owned(),
+                DegradedReason::SlackOutputTruncated,
+            );
+        }
+
+        // `truncate_with_note` borrows `outcome.markdown` when the body is under
+        // the cap (the common case), so move it out rather than clone; only the
+        // over-cap path owns a freshly truncated copy.
+        let body = match truncated {
+            Cow::Owned(s) => s,
+            Cow::Borrowed(_) => outcome.markdown,
+        };
+        let markdown = insert_preamble_notes(body, &preamble_notes);
         let data = serde_json::json!({
             "url": slack_url.raw_url(),
             "markdown": markdown,
         });
-        Ok(CommandOutput::ok(markdown, data))
+        Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
     pub(super) async fn research(
@@ -208,6 +246,33 @@ pub(super) fn to_data_value<T: serde::Serialize>(
 ) -> Result<serde_json::Value, ScoutError> {
     serde_json::to_value(value)
         .map_err(|e| ScoutError::internal_bug(format!("failed to serialize {what}: {e}")))
+}
+
+/// Insert cap notes as a Markdown blockquote right after the Slack frontmatter
+/// so they reach the agent even when the body is truncated. `format_slack_output`
+/// opens with `---\n` then frontmatter then `---\n\n`, so the frontmatter
+/// terminator is the FIRST `---\n\n`; reply separators (`\n\n---\n\n`) come later
+/// in the body. Inserting after the first occurrence keeps the preamble ahead of
+/// any reply and above the truncation point. A reply-less single message has only
+/// one `---\n\n`, which is still the terminator, so this stays correct. Returns
+/// the input unchanged when there are no notes (no cap fired).
+fn insert_preamble_notes(markdown: String, notes: &[&str]) -> String {
+    const FRONTMATTER_END: &str = "---\n\n";
+    if notes.is_empty() {
+        return markdown;
+    }
+    let preamble = format!("> Note: {}\n\n", notes.join(" "));
+    match markdown.find(FRONTMATTER_END) {
+        Some(idx) => {
+            let insert_at = idx + FRONTMATTER_END.len();
+            let mut out = String::with_capacity(markdown.len() + preamble.len());
+            out.push_str(&markdown[..insert_at]);
+            out.push_str(&preamble);
+            out.push_str(&markdown[insert_at..]);
+            out
+        }
+        None => format!("{preamble}{markdown}"),
+    }
 }
 
 fn collect_research_degradations(report: &engine::ResearchReport, degradation: &mut Degradation) {

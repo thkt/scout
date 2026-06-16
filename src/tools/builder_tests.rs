@@ -1,6 +1,6 @@
 use super::*;
 use crate::clock::FixedClock;
-use crate::envelope::ErrorCode;
+use crate::envelope::{DegradedReason, ErrorCode};
 use crate::fetch::{FailingDnsResolver, StaticDnsResolver};
 use crate::rng::SeededRng;
 use crate::test_support::try_spawn_mock_server;
@@ -194,5 +194,410 @@ async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
         output.markdown().contains("hello from wiremock"),
         "fetch output must carry the wiremock message body, got: {}",
         output.markdown()
+    );
+}
+
+/// [T-SK050] A thread whose reply pages never stop hits the page cap, so
+/// `fetch_slack` wires the truncation into the ADR-0003 channel: `degraded` is
+/// set, `degraded_reasons` carries `SLACK_THREAD_TRUNCATED`, and the Markdown
+/// body gains a cap note in the frontmatter preamble (issue #222). Before this,
+/// a truncated Slack thread returned `degraded: false` and the omission was
+/// invisible to callers. The target ts is on page 1 so the message resolves;
+/// only the reply tail past the cap is lost.
+#[tokio::test]
+async fn fetch_slack_thread_page_cap_sets_degraded_reason_and_preamble() {
+    let Some(server) = try_spawn_mock_server("tools::slack_thread_cap").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Every page advertises another, so the loop only ends at the page cap.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "parent body", "ts": parent_ts}],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some(
+                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
+            ),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("a truncated thread still resolves the target on page 1");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackThreadTruncated),
+        "page-cap truncation must surface SLACK_THREAD_TRUNCATED, got: {:?}",
+        output.degraded_reasons()
+    );
+    assert!(
+        output.markdown().contains("> Note:") && output.markdown().contains("Thread truncated"),
+        "the cap note must appear in the Markdown preamble, got: {}",
+        output.markdown()
+    );
+}
+
+/// [T-SK051] A message mentioning more distinct users than the lookup cap (50)
+/// surfaces `SLACK_USERS_CAPPED` in `degraded_reasons` and a preamble note, so a
+/// caller can tell that some `<@UID>` mentions render raw rather than resolved
+/// (issue #222).
+#[tokio::test]
+async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
+    let Some(server) = try_spawn_mock_server("tools::slack_users_cap").await else {
+        return;
+    };
+    // 60 distinct mentions > SLACK_MAX_USER_LOOKUPS (50), so the lookup is capped.
+    let mentions = (0..60)
+        .map(|i| format!("<@U{i}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"text": mentions, "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("a mass-mention message resolves");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackUsersCapped),
+        "exceeding the user-lookup cap must surface SLACK_USERS_CAPPED, got: {:?}",
+        output.degraded_reasons()
+    );
+    assert!(
+        output.markdown().contains("> Note:") && output.markdown().contains("User lookups"),
+        "the user-cap note must appear in the Markdown preamble, got: {}",
+        output.markdown()
+    );
+}
+
+/// [T-SK052] A message body over `MAX_FETCH_OUTPUT_BYTES` (100KB) is truncated,
+/// and `fetch_slack` reports it via `SLACK_OUTPUT_TRUNCATED` plus the inline
+/// byte-count note that `truncate_with_note` appends at the body end (issue
+/// #222). The non-Slack `fetch` path already cut output silently for Slack.
+#[tokio::test]
+async fn fetch_slack_output_truncation_sets_degraded_reason() {
+    let Some(server) = try_spawn_mock_server("tools::slack_output_trunc").await else {
+        return;
+    };
+    let huge = "x".repeat(150_000);
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"text": huge, "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("an oversized message still resolves, truncated");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackOutputTruncated),
+        "exceeding the output cap must surface SLACK_OUTPUT_TRUNCATED, got: {:?}",
+        output.degraded_reasons()
+    );
+    assert!(
+        output.markdown().contains("(truncated: showing"),
+        "the inline truncation note must remain at the body end, got len {}",
+        output.markdown().len()
+    );
+}
+
+/// [T-SK053] When a thread is page-capped AND its body exceeds the output cap,
+/// the thread note must still reach the agent. The preamble is inserted after
+/// truncation, so the 100KB cut cannot drop it (issue #222 Finding A). Both
+/// `SLACK_THREAD_TRUNCATED` and `SLACK_OUTPUT_TRUNCATED` are reported, and the
+/// thread note survives in the Markdown alongside the inline truncation note.
+#[tokio::test]
+async fn fetch_slack_thread_cap_note_survives_output_truncation() {
+    let Some(server) = try_spawn_mock_server("tools::slack_combo_cap").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    let huge = "x".repeat(150_000);
+    // Every page advertises another (page cap) and the parent body is oversized
+    // (output cap), so both degradations fire on one fetch.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": huge, "ts": parent_ts}],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some(
+                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
+            ),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("an oversized truncated thread still resolves");
+
+    let reasons = output.degraded_reasons();
+    assert!(
+        reasons.contains(&DegradedReason::SlackThreadTruncated)
+            && reasons.contains(&DegradedReason::SlackOutputTruncated),
+        "both the thread and output caps must be reported, got: {reasons:?}"
+    );
+    assert!(
+        output.markdown().contains("Thread truncated"),
+        "the thread note must survive the output truncation in the preamble, got len {}",
+        output.markdown().len()
+    );
+}
+
+/// [T-SK054] A normal thread with no caps keeps `degraded: false`: no reason is
+/// emitted and no `> Note:` preamble is injected, so the wiring does not flag
+/// healthy fetches (issue #222 negative case).
+#[tokio::test]
+async fn fetch_slack_without_caps_stays_undegraded() {
+    let Some(server) = try_spawn_mock_server("tools::slack_no_cap").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"text": "a short healthy message", "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("a healthy message resolves");
+
+    assert!(
+        output.degraded_reasons().is_empty(),
+        "a fetch with no caps must carry no degraded_reasons, got: {:?}",
+        output.degraded_reasons()
+    );
+    assert!(
+        !output.markdown().contains("> Note:"),
+        "no cap note preamble should be injected, got: {}",
+        output.markdown()
+    );
+}
+
+/// [T-SK055] Distinct user IDs exactly equal to the lookup cap (50) do NOT
+/// trigger `SLACK_USERS_CAPPED`: the condition is `> SLACK_MAX_USER_LOOKUPS`, so
+/// the boundary value resolves fully and stays undegraded (issue #222 boundary).
+#[tokio::test]
+async fn fetch_slack_users_at_cap_boundary_stays_undegraded() {
+    let Some(server) = try_spawn_mock_server("tools::slack_users_boundary").await else {
+        return;
+    };
+    // Exactly SLACK_MAX_USER_LOOKUPS (50) distinct mentions: == cap, not > cap.
+    let mentions = (0..50)
+        .map(|i| format!("<@U{i}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"text": mentions, "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("a message mentioning exactly the cap resolves");
+
+    assert!(
+        !output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackUsersCapped),
+        "distinct users == cap is within budget and must not degrade, got: {:?}",
+        output.degraded_reasons()
+    );
+}
+
+/// [T-SK056] A reply-bearing thread that hits both the page cap and the
+/// user-lookup cap pins where the preamble lands and that multiple notes join
+/// into one blockquote. `insert_preamble_notes` must insert after the FIRST
+/// `---\n\n` (the frontmatter terminator) and never at a reply separator
+/// (`\n\n---\n\n`); the other cap tests dedup replies to the parent alone, so no
+/// reply separator ever appears and that placement rule goes unverified. Here a
+/// distinct reply survives, so the note must sit after the frontmatter and
+/// before the first reply separator, and the join must carry both the thread and
+/// users notes (the only path that produces a 2-note preamble) (issue #222).
+#[tokio::test]
+async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatter() {
+    let Some(server) = try_spawn_mock_server("tools::slack_thread_users_cap").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // 60 distinct mentions (> SLACK_MAX_USER_LOOKUPS 50) in the parent body fire
+    // the user cap; U100.. avoids colliding with the U1/U2 authors.
+    let mentions = (100..160)
+        .map(|i| format!("<@U{i}>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Every page advertises another (page cap) and carries a distinct reply that
+    // dedups to one, so the rendered thread has a reply separator to place
+    // against.
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": mentions, "ts": parent_ts},
+                {"user": "U2", "text": "a surviving reply", "ts": "1000.000002"}
+            ],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams {
+            url: Some(
+                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
+            ),
+            js: false,
+            raw: false,
+        })
+        .await
+        .expect("a capped reply-bearing thread resolves the target on page 1");
+
+    let reasons = output.degraded_reasons();
+    assert!(
+        reasons.contains(&DegradedReason::SlackThreadTruncated)
+            && reasons.contains(&DegradedReason::SlackUsersCapped),
+        "both the page cap and the user cap must be reported, got: {reasons:?}"
+    );
+
+    let md = output.markdown();
+    let note_pos = md.find("> Note:").expect("a preamble note is present");
+    let frontmatter_end = md
+        .find("---\n\n")
+        .expect("the frontmatter terminator is present");
+    let reply_sep = md
+        .find("\n\n---\n\n")
+        .expect("a reply separator is present for the surviving reply");
+    assert!(
+        note_pos > frontmatter_end,
+        "the note must sit after the frontmatter terminator, not before it: {md}"
+    );
+    assert!(
+        note_pos < reply_sep,
+        "the note must sit before the first reply separator, not at one: {md}"
+    );
+    let preamble = &md[note_pos..reply_sep];
+    assert!(
+        preamble.contains("Thread truncated") && preamble.contains("User lookups"),
+        "both cap notes must join into one preamble blockquote: {preamble}"
     );
 }

@@ -28,6 +28,22 @@ use super::{
 struct FetchedThread {
     messages: Vec<Message>,
     is_thread: bool,
+    /// True when `fetch_replies` stopped at `SLACK_MAX_REPLY_PAGES` with more
+    /// pages still available, so the thread is missing replies past the cap.
+    truncated: bool,
+}
+
+/// Result of resolving a Slack permalink into rendered Markdown, carrying the
+/// cap-hit signals `fetch_slack` needs to wire into the ADR-0003 degradation
+/// channel. A bare `String` return hid these, so caps were invisible to callers
+/// (issue #222).
+pub(crate) struct SlackFetchOutcome {
+    pub markdown: String,
+    /// `conversations.replies` hit the page cap; replies past it are omitted.
+    pub thread_truncated: bool,
+    /// Distinct user IDs exceeded `SLACK_MAX_USER_LOOKUPS`; the excess render
+    /// as raw `<@UID>` instead of resolved names.
+    pub users_capped: bool,
 }
 
 pub(crate) struct SlackClient {
@@ -297,7 +313,14 @@ impl SlackClient {
     /// across pages up to `SLACK_MAX_REPLY_PAGES`. Without this loop a target
     /// message past the first `SLACK_REPLIES_LIMIT` page is silently dropped and
     /// surfaces as "not found" (issue #188 claim 2).
-    async fn fetch_replies(&self, channel: &str, ts: &str) -> Result<Vec<Message>, SlackError> {
+    /// Returns the fetched replies paired with a `truncated` flag: `true` when
+    /// the loop stopped at `SLACK_MAX_REPLY_PAGES` with another page still
+    /// advertised, `false` when it ran out of pages naturally.
+    async fn fetch_replies(
+        &self,
+        channel: &str,
+        ts: &str,
+    ) -> Result<(Vec<Message>, bool), SlackError> {
         let mut messages = Vec::new();
         // conversations.replies is observed to repeat the thread parent as
         // messages[0] on each page; the official reference is silent, so dedup
@@ -328,7 +351,7 @@ impl SlackClient {
             }
             match next {
                 Some(c) => cursor = Some(c),
-                None => return Ok(messages),
+                None => return Ok((messages, false)),
             }
         }
         warn!(
@@ -337,16 +360,17 @@ impl SlackClient {
             max_pages = SLACK_MAX_REPLY_PAGES,
             "conversations.replies hit the page cap, thread truncated"
         );
-        Ok(messages)
+        Ok((messages, true))
     }
 
     async fn fetch_thread(&self, slack_url: &SlackUrl) -> Result<FetchedThread, SlackError> {
         let ch = &slack_url.channel;
         if let Some(ref thread_ts) = slack_url.thread_ts {
-            let messages = self.fetch_replies(ch, thread_ts).await?;
+            let (messages, truncated) = self.fetch_replies(ch, thread_ts).await?;
             return Ok(FetchedThread {
                 messages,
                 is_thread: true,
+                truncated,
             });
         }
 
@@ -366,20 +390,25 @@ impl SlackClient {
             .first()
             .is_some_and(|m| m.reply_count.unwrap_or(0) > 0);
         if has_replies {
-            let messages = self.fetch_replies(ch, &slack_url.ts).await?;
+            let (messages, truncated) = self.fetch_replies(ch, &slack_url.ts).await?;
             Ok(FetchedThread {
                 messages,
                 is_thread: true,
+                truncated,
             })
         } else {
             Ok(FetchedThread {
                 messages: body.messages,
                 is_thread: false,
+                truncated: false,
             })
         }
     }
 
-    pub async fn fetch_message(&self, slack_url: &SlackUrl) -> Result<String, SlackError> {
+    pub async fn fetch_message(
+        &self,
+        slack_url: &SlackUrl,
+    ) -> Result<SlackFetchOutcome, SlackError> {
         let fetched = self.fetch_thread(slack_url).await?;
         if fetched.messages.is_empty() {
             return Err(SlackError::Api {
@@ -409,7 +438,8 @@ impl SlackClient {
         }
 
         let distinct_total = authors.len() + mentions.len();
-        if distinct_total > SLACK_MAX_USER_LOOKUPS {
+        let users_capped = distinct_total > SLACK_MAX_USER_LOOKUPS;
+        if users_capped {
             warn!(
                 distinct_users = distinct_total,
                 cap = SLACK_MAX_USER_LOOKUPS,
@@ -443,7 +473,11 @@ impl SlackClient {
             replies = replies.len(),
             "slack fetch complete"
         );
-        Ok(output)
+        Ok(SlackFetchOutcome {
+            markdown: output,
+            thread_truncated: fetched.truncated,
+            users_capped,
+        })
     }
 }
 
