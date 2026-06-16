@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 #[cfg(feature = "js-rendering")]
+use tempfile::{Builder, TempDir};
+#[cfg(feature = "js-rendering")]
 use tokio::io::{AsyncBufRead, BufReader};
 #[cfg(feature = "js-rendering")]
 use tokio::process::{Child as TokioChild, ChildStderr, Command as TokioCommand};
@@ -104,16 +106,24 @@ const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
-) -> Result<(TokioChild, Pid, BufReader<ChildStderr>), BrowserError> {
-    use std::env::temp_dir;
-    use std::process::{Stdio, id};
+) -> Result<(TokioChild, Pid, BufReader<ChildStderr>, TempDir), BrowserError> {
+    use std::process::Stdio;
 
-    // PID suffix prevents `SingletonLock` failure when two scout processes
-    // run --js concurrently (chromium refuses to share a profile dir).
-    let user_data_dir = temp_dir().join(format!("scout-chromium-{}", id()));
+    // `TempDir` gives each --js fetch a unique profile dir (random suffix avoids
+    // chromium's `SingletonLock` failure when two scout processes run --js
+    // concurrently) and deletes it on `Drop`. The caller must hold the returned
+    // guard until after `reap_pgroup`, because chromium keeps writing profile
+    // state during graceful shutdown (issue #198).
+    let user_data_dir = Builder::new()
+        .prefix("scout-chromium-")
+        .tempdir()
+        .map_err(|e| BrowserError::ProcessFailed(format!("create chromium profile dir: {e}")))?;
     let mut cmd = TokioCommand::new(browser_path);
     cmd.arg("--remote-debugging-port=0")
-        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg(format!(
+            "--user-data-dir={}",
+            user_data_dir.path().display()
+        ))
         .args(build_launch_args())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -135,7 +145,7 @@ pub(super) fn spawn_chromium_pgroup(
         .stderr
         .take()
         .ok_or_else(|| BrowserError::ProcessFailed("chromium stderr missing".into()))?;
-    Ok((child, pgid, BufReader::new(stderr)))
+    Ok((child, pgid, BufReader::new(stderr), user_data_dir))
 }
 
 /// Read chromium stderr line-by-line until `DevTools listening on ws://...`.

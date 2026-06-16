@@ -87,7 +87,10 @@ pub(super) async fn fetch_with_cdp(
 
     let browser_path = resolve_browser_binary()?;
 
-    let (mut child, pgid, reader) = spawn_chromium_pgroup(&browser_path)?;
+    // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
+    // function returns — i.e. after every `reap_pgroup` path below — so its
+    // `Drop` removes the dir only once chromium has exited (issue #198).
+    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(&browser_path)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
         Ok(Ok(url)) => url,
