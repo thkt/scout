@@ -214,6 +214,10 @@ struct ResolvedMessage {
 /// A `<@UID>` or `<@UID|label>` mention span within a text.
 struct MentionSpan<'a> {
     user_id: &'a str,
+    /// Human-readable label Slack embedded as `<@UID|label>`, `None` when absent
+    /// or empty. Used as a best-effort render fallback when the user id is
+    /// unresolved; it is the send-time display name and may be stale.
+    label: Option<&'a str>,
     /// Byte range covering the entire `<@…>` token.
     start: usize,
     end: usize,
@@ -230,9 +234,13 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
         };
         let abs_end = after + rel_end + 1;
         let inner = &text[after..after + rel_end];
-        let user_id = inner.split('|').next().unwrap_or(inner);
+        let (user_id, label) = match inner.split_once('|') {
+            Some((id, label)) => (id, Some(label).filter(|l| !l.is_empty())),
+            None => (inner, None),
+        };
         spans.push(MentionSpan {
             user_id,
+            label,
             start: abs_start,
             end: abs_end,
         });
@@ -292,6 +300,8 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
             cache
                 .get(span.user_id)
                 .map(String::as_str)
+                .filter(|name| !name.is_empty())
+                .or(span.label)
                 .unwrap_or(span.user_id),
         );
         pos = span.end;
