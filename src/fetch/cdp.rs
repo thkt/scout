@@ -9,6 +9,8 @@ mod launch;
 mod proxy;
 
 #[cfg(feature = "js-rendering")]
+use std::path::Path;
+#[cfg(feature = "js-rendering")]
 use std::sync::Arc;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
@@ -94,16 +96,36 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Resolve the browser binary, then render via CDP. Production entry: thin
+/// wrapper over `fetch_with_cdp_with`. Binary discovery runs per call (no
+/// process-global cache) so the path stays injectable for tests (issue #227,
+/// the #191 DI seam pattern). The discovery cost (a few `which` probes, ~1-5 ms)
+/// is negligible against the ~2 s chromium render that follows.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,
     resolver: Arc<dyn ssrf::DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<String, BrowserError> {
+    let browser_path = resolve_browser_binary()?;
+    fetch_with_cdp_with(url, &browser_path, resolver, cancel).await
+}
+
+/// Render `url` with headless chromium at `browser_path` via CDP.
+///
+/// Seam for testing: the browser binary path is injected, so a test can drive
+/// the launch path with a bogus path (asserting `ProcessFailed`) without a real
+/// Chrome on the host. `fetch_with_cdp` is the production caller that resolves
+/// the path first.
+#[cfg(feature = "js-rendering")]
+pub(super) async fn fetch_with_cdp_with(
+    url: &ValidatedUrl,
+    browser_path: &Path,
+    resolver: Arc<dyn ssrf::DnsResolver>,
+    cancel: &watch::Sender<bool>,
+) -> Result<String, BrowserError> {
     use chromiumoxide::Browser;
     use futures::StreamExt;
-
-    let browser_path = resolve_browser_binary()?;
 
     // Launch the loopback SSRF proxy before chromium so its port can be wired
     // into the proxy flags. chromium routes every TCP egress through it and the
@@ -124,7 +146,7 @@ pub(super) async fn fetch_with_cdp(
     // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
     // function returns — i.e. after every `reap_pgroup` path below — so its
     // `Drop` removes the dir only once chromium has exited (issue #198).
-    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(&browser_path, proxy_port)?;
+    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(browser_path, proxy_port)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
         Ok(Ok(url)) => url,
