@@ -25,6 +25,7 @@ pub(crate) enum DegradedReason {
     SlackThreadTruncated,
     SlackUsersCapped,
     SlackOutputTruncated,
+    DecodeUncertain,
 }
 
 impl DegradedReason {
@@ -48,7 +49,8 @@ impl DegradedReason {
             | Self::ReadabilityFallback
             | Self::SlackThreadTruncated
             | Self::SlackUsersCapped
-            | Self::SlackOutputTruncated => "resource",
+            | Self::SlackOutputTruncated
+            | Self::DecodeUncertain => "resource",
         }
     }
 }

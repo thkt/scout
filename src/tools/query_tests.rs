@@ -336,6 +336,47 @@ async fn research_json_zero_results_returns_empty_arrays() {
     );
 }
 
+/// [T-F070] collect_research_degradations pushes DecodeUncertain for an uncertain
+/// page and omits it for a clean one (research-path machine-readable signal, #241)
+#[test]
+fn collect_research_degradations_pushes_decode_uncertain() {
+    use super::query::collect_research_degradations;
+    use crate::envelope::{Degradation, DegradedReason};
+    use crate::search::engine::ResearchReport;
+
+    let report = ResearchReport {
+        fetched_pages: vec![
+            FetchResult::for_test("https://clean.example".into(), "Readable.".into(), false),
+            FetchResult::for_test(
+                "https://garbled.example".into(),
+                "Best-effort.".into(),
+                false,
+            )
+            .with_decode_uncertain(true),
+        ],
+        failed_urls: vec![],
+        sources: vec![],
+    };
+
+    let mut degradation = Degradation::default();
+    collect_research_degradations(&report, &mut degradation);
+    let (notes, reasons) = degradation.into_parts();
+
+    assert_eq!(
+        reasons,
+        vec![DegradedReason::DecodeUncertain],
+        "only the uncertain page yields a DecodeUncertain reason, got: {reasons:?}"
+    );
+    assert!(
+        notes[0].contains("https://garbled.example"),
+        "note must name the uncertain URL, got: {notes:?}"
+    );
+    assert!(
+        !notes[0].contains("https://clean.example"),
+        "the clean page must not appear in the note, got: {notes:?}"
+    );
+}
+
 /// [T-TS003] fetch_output_shifts_headings
 #[test]
 fn fetch_output_shifts_headings() {
@@ -487,6 +528,56 @@ async fn fetch_returns_ok_for_reachable_page() {
     assert!(
         !output.markdown().is_empty(),
         "rendered markdown should be non-empty"
+    );
+}
+
+/// [T-F071] fetch end-to-end flags `DegradedReason::DecodeUncertain` (exit 0) when
+/// the page is an undecodable windows-1252 body mislabeled `charset=utf-8` (#241).
+/// Same guard-free `fetch_http` + public-IP `with_dns` seam as T-F017 keeps SSRF
+/// intact; the body reuses the smart-quote bytes pinned by T-F067.
+#[tokio::test]
+async fn fetch_flags_decode_uncertain_for_undecodable_body() {
+    let Some(server) = try_spawn_mock_server("query::fetch_decode_uncertain").await else {
+        return;
+    };
+    let mut body = b"<html><body><p>It\x92s a fine day, isn\x92t it? ".to_vec();
+    body.extend_from_slice(
+        b"\x93Quoted\x94 text and an \x97 em dash, with plenty more prose.</p></body></html>",
+    );
+    Mock::given(method("GET"))
+        .and(path("/page"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .set_body_bytes(body),
+        )
+        .mount(&server)
+        .await;
+
+    let addr = *server.address();
+    let fetch_http = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .unwrap();
+    let scout = ScoutBuilder::for_test()
+        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
+        .with_fetch_http(fetch_http)
+        .build();
+
+    let params = super::params::FetchParams {
+        url: Some(format!("http://scout-test.example:{}/page", addr.port())),
+        js: false,
+        raw: false,
+    };
+    let output = scout.fetch(params).await.expect("fetch should succeed");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::DecodeUncertain),
+        "undecodable body must surface DecodeUncertain at exit 0; got: {:?}",
+        output.degraded_reasons()
     );
 }
 

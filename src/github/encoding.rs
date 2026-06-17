@@ -6,6 +6,7 @@ use encoding_rs::Encoding;
 use tracing::debug;
 
 use super::GitHubError;
+use crate::charset::is_reliable_detection;
 
 /// How the encoding was determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,25 +106,6 @@ fn decode_bom(bytes: &[u8]) -> Option<DecodeResult> {
 
 fn is_likely_binary(bytes: &[u8]) -> bool {
     bytes.contains(&0)
-}
-
-/// Returns true for encodings that chardetng can reliably detect.
-///
-/// Multi-byte encodings have strict byte-pattern constraints, so a successful decode
-/// is meaningful evidence. Single-byte encodings (windows-1252, windows-1251, iso-8859-*,
-/// etc.) accept nearly every byte, making `had_errors == false` an unreliable signal.
-fn is_reliable_detection(encoding: &'static encoding_rs::Encoding) -> bool {
-    [
-        encoding_rs::UTF_8,
-        encoding_rs::SHIFT_JIS,
-        encoding_rs::EUC_JP,
-        encoding_rs::ISO_2022_JP,
-        encoding_rs::BIG5,
-        encoding_rs::GBK,
-        encoding_rs::GB18030,
-        encoding_rs::EUC_KR,
-    ]
-    .contains(&encoding)
 }
 
 fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {

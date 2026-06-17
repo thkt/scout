@@ -140,6 +140,40 @@ fn format_report_includes_fetched_pages() {
     );
 }
 
+/// [T-SE011] format_report prepends the decode-uncertain note for a flagged page (issue #241)
+#[test]
+fn format_report_prepends_decode_uncertain_note() {
+    let report = ResearchReport {
+        fetched_pages: vec![
+            FetchResult::for_test(
+                "https://clean.example".into(),
+                "Readable content.".into(),
+                false,
+            ),
+            FetchResult::for_test(
+                "https://garbled.example".into(),
+                "Best-effort body.".into(),
+                false,
+            )
+            .with_decode_uncertain(true),
+        ],
+        failed_urls: vec![],
+        sources: vec![],
+    };
+
+    let text = format_report(&report, "test");
+    let note = fetch::converter::DECODE_UNCERTAIN_NOTE.trim_end();
+    assert!(
+        text.contains(note),
+        "uncertain page must carry the encoding note, got:\n{text}"
+    );
+    assert_eq!(
+        text.matches(note).count(),
+        1,
+        "only the flagged page gets the note, not the clean one, got:\n{text}"
+    );
+}
+
 /// [T-SE005] format_report truncates long pages with a byte-count note
 #[test]
 fn format_report_truncates_long_pages() {

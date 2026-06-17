@@ -270,6 +270,7 @@ fn degraded_reason_serializes_screaming_snake_case() {
             DegradedReason::BraveSearchFailed,
             r#""BRAVE_SEARCH_FAILED""#,
         ),
+        (DegradedReason::DecodeUncertain, r#""DECODE_UNCERTAIN""#),
     ];
     for (reason, expected) in pairs {
         let actual = serde_json::to_string(&reason).unwrap();

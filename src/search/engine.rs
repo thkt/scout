@@ -139,6 +139,9 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         if page.used_raw_fallback() {
             out.push_str(fetch::converter::RAW_FALLBACK_NOTE);
         }
+        if page.decode_uncertain() {
+            out.push_str(fetch::converter::DECODE_UNCERTAIN_NOTE);
+        }
         // Shift headings by 3 levels so page content (h1->h4, h2->h5, ...)
         // does not collide with the report's own heading hierarchy.
         let content = shift_headings(page.markdown(), 3);

@@ -16,6 +16,11 @@ pub(crate) struct FetchResult {
     /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
     #[serde(skip_serializing)]
     used_raw_fallback: bool,
+    /// Internal flag (issue #241): the body could not be decoded cleanly, so the
+    /// markdown is a best-effort lossy rendering. Surfaced as `DECODE_UNCERTAIN`
+    /// in `degraded_reasons`, not as data.
+    #[serde(skip_serializing)]
+    decode_uncertain: bool,
 }
 
 impl FetchResult {
@@ -31,6 +36,10 @@ impl FetchResult {
         self.used_raw_fallback
     }
 
+    pub(crate) fn decode_uncertain(&self) -> bool {
+        self.decode_uncertain
+    }
+
     /// Test-only constructor. Production code goes through [`to_fetch_result`].
     #[cfg(test)]
     pub(crate) fn for_test(url: String, markdown: String, used_raw_fallback: bool) -> Self {
@@ -38,14 +47,29 @@ impl FetchResult {
             url,
             markdown,
             used_raw_fallback,
+            decode_uncertain: false,
         }
+    }
+
+    /// Test-only builder to flag a page as decode-uncertain without widening
+    /// [`for_test`] into boolean-blind positional args.
+    #[cfg(test)]
+    pub(crate) fn with_decode_uncertain(mut self, decode_uncertain: bool) -> Self {
+        self.decode_uncertain = decode_uncertain;
+        self
     }
 }
 
 pub(crate) const RAW_FALLBACK_NOTE: &str =
     "> Note: Readability extraction failed. Showing raw page conversion.\n\n";
 
-pub(super) fn to_fetch_result(article: &ExtractedArticle, url: String) -> FetchResult {
+pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could not be determined; the body is a best-effort decode and may be garbled.\n\n";
+
+pub(super) fn to_fetch_result(
+    article: &ExtractedArticle,
+    url: String,
+    decode_uncertain: bool,
+) -> FetchResult {
     let markdown = html2md::rewrite_html(&article.content_html, false);
     let output = format_with_frontmatter(article, &markdown);
 
@@ -53,6 +77,7 @@ pub(super) fn to_fetch_result(article: &ExtractedArticle, url: String) -> FetchR
         url,
         markdown: output,
         used_raw_fallback: article.used_raw_fallback,
+        decode_uncertain,
     }
 }
 
@@ -154,7 +179,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(result.markdown().starts_with("---\n"));
         assert!(result.markdown().contains("\n---\n\n"));
@@ -175,7 +200,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into());
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(result.markdown().contains("title: \"Only Title\""));
         assert!(!result.markdown().contains("author:"));
