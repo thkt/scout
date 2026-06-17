@@ -6,8 +6,6 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(feature = "js-rendering")]
-use std::sync::OnceLock;
-#[cfg(feature = "js-rendering")]
 use std::time::Duration;
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
@@ -22,33 +20,32 @@ use tracing::warn;
 use super::BrowserError;
 use crate::fetch::ssrf::{self, RedactedLogUrl};
 
+/// Discover the chromium/Chrome binary by probing `PATH` then known install
+/// locations. Called once per `--js` fetch (issue #227 removed the prior
+/// process-global `OnceLock` cache, which broke test isolation and pinned the
+/// first result for the process lifetime); the few `which` probes cost ~1-5 ms,
+/// negligible against the ~2 s chromium render that follows.
 #[cfg(feature = "js-rendering")]
 pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
-    static CACHE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-
-    let cached = CACHE.get_or_init(|| {
-        let path_commands: &[&str] = if cfg!(target_os = "macos") {
-            &["chromium"]
-        } else {
-            &[
-                "google-chrome-stable",
-                "google-chrome",
-                "chromium-browser",
-                "chromium",
-            ]
-        };
-        let known_paths: &[&Path] = if cfg!(target_os = "macos") {
-            &[
-                Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-                Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
-            ]
-        } else {
-            &[]
-        };
-        resolve_browser_binary_from(path_commands, known_paths).map_err(|e| e.to_string())
-    });
-
-    cached.clone().map_err(|_| BrowserError::NotFound)
+    let path_commands: &[&str] = if cfg!(target_os = "macos") {
+        &["chromium"]
+    } else {
+        &[
+            "google-chrome-stable",
+            "google-chrome",
+            "chromium-browser",
+            "chromium",
+        ]
+    };
+    let known_paths: &[&Path] = if cfg!(target_os = "macos") {
+        &[
+            Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        ]
+    } else {
+        &[]
+    };
+    resolve_browser_binary_from(path_commands, known_paths)
 }
 
 /// See spec.md Chrome Launch Flags table for rationale.

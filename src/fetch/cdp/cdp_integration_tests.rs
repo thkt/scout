@@ -3,7 +3,7 @@ use crate::fetch::TokioDnsResolver;
 use std::collections::HashSet;
 use std::env::temp_dir;
 use std::fs::read_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn chrome_available() -> bool {
     resolve_browser_binary().is_ok()
@@ -23,6 +23,38 @@ fn chromium_profile_dirs() -> HashSet<PathBuf> {
                 .is_some_and(|n| n.starts_with("scout-chromium-"))
         })
         .collect()
+}
+
+/// [T-F060] `fetch_with_cdp_with` honors the injected browser binary path.
+///
+/// Guards issue #227: the binary path is now an explicit parameter (no
+/// process-global `OnceLock` cache), so a test can drive the launch path
+/// without a real Chrome on the host. Injecting a path that is not an
+/// executable makes `spawn_chromium_pgroup` fail at spawn time, surfacing
+/// `BrowserError::ProcessFailed`. This exercises the seam (#191 DI pattern)
+/// host-independently — no Chrome required, unlike the Chrome-gated test below.
+#[tokio::test]
+async fn t007_fetch_with_cdp_with_injects_browser_path() {
+    let (cancel, _) = watch::channel(false);
+    let bogus = Path::new("/nonexistent/scout-test-no-such-chromium");
+    let err = fetch_with_cdp_with(
+        &ValidatedUrl::for_test("https://example.com"),
+        bogus,
+        Arc::new(TokioDnsResolver),
+        &cancel,
+    )
+    .await
+    .expect_err("spawning a nonexistent browser binary must fail");
+    // Pin the failure to the chromium spawn (launch.rs), not the SSRF proxy or
+    // profile-dir setup that also surface as `ProcessFailed` — otherwise the
+    // test could pass without the injected path being the cause.
+    let BrowserError::ProcessFailed(msg) = &err else {
+        panic!("expected ProcessFailed for a nonexistent binary, got {err:?}");
+    };
+    assert!(
+        msg.contains("spawn chromium"),
+        "failure must come from spawning the injected binary, got {msg:?}"
+    );
 }
 
 /// [T-F051] cdp renders public url + [T-F057] cdp removes profile dir after fetch
