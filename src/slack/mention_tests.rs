@@ -28,6 +28,32 @@ fn t003_pipe_label_extracts_user_id_only() {
     assert_eq!(spans[0].user_id, "U123");
 }
 
+/// [T-SK058] parse_mentions captures the embedded label from a pipe-labeled mention
+#[test]
+fn t003b_pipe_label_captured() {
+    let spans = parse_mentions("cc <@U123|alice>");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].user_id, "U123");
+    assert_eq!(spans[0].label, Some("alice"));
+}
+
+/// [T-SK059] parse_mentions leaves label as None for a bare mention
+#[test]
+fn t003c_bare_mention_has_no_label() {
+    let spans = parse_mentions("hi <@U123>");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].label, None);
+}
+
+/// [T-SK060] parse_mentions normalizes an empty label to None
+#[test]
+fn t003d_empty_label_normalized_to_none() {
+    let spans = parse_mentions("x <@U123|>");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].user_id, "U123");
+    assert_eq!(spans[0].label, None);
+}
+
 /// [T-SK018] parse_mentions captures consecutive adjacent mentions
 #[test]
 fn t004_multiple_adjacent_mentions() {
@@ -102,4 +128,40 @@ fn t009b_pipe_label_substituted_with_display_name() {
     let cache: HashMap<String, String> = [("U123".into(), "Alice".into())].into_iter().collect();
     let result = substitute_mentions("cc <@U123|alice_handle>", &cache);
     assert_eq!(result, "cc @Alice");
+}
+
+/// [T-SK061] substitute_mentions falls back to embedded label when the user id
+/// is absent from the cache
+#[test]
+fn t025_cache_miss_renders_embedded_label() {
+    let cache: HashMap<String, String> = HashMap::new();
+    let result = substitute_mentions("cc <@U123|alice>", &cache);
+    assert_eq!(result, "cc @alice");
+}
+
+/// [T-SK062] substitute_mentions falls back to the raw user id when the cache
+/// misses and the embedded label is empty
+#[test]
+fn t026_cache_miss_empty_label_renders_user_id() {
+    let cache: HashMap<String, String> = HashMap::new();
+    let result = substitute_mentions("x <@U123|>", &cache);
+    assert_eq!(result, "x @U123");
+}
+
+/// [T-SK063] substitute_mentions treats an empty cache value as a miss and
+/// falls through to the embedded label
+#[test]
+fn t027_empty_cache_value_falls_through_to_label() {
+    let cache: HashMap<String, String> = [("U123".into(), String::new())].into_iter().collect();
+    let result = substitute_mentions("cc <@U123|alice>", &cache);
+    assert_eq!(result, "cc @alice");
+}
+
+/// [T-SK064] substitute_mentions prefers a resolved cache value over the
+/// embedded label
+#[test]
+fn t028_cache_hit_takes_priority_over_label() {
+    let cache: HashMap<String, String> = [("U123".into(), "Bob".into())].into_iter().collect();
+    let result = substitute_mentions("cc <@U123|alice>", &cache);
+    assert_eq!(result, "cc @Bob");
 }
