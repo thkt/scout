@@ -25,6 +25,7 @@ use std::time::Duration;
 use clap::Parser;
 use envelope::{CommandOutput, ErrorCode, ErrorEnvelope, ErrorPayload, to_json_line};
 use signals::{InterruptSignal, wait_for_signal};
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
 
@@ -115,6 +116,40 @@ fn init_tracing() {
         .try_init();
 }
 
+/// Race the in-flight command against signal arrival, returning the resulting
+/// `Outcome`. On interrupt, notify the cancel handle so `fetch_with_cdp` can run
+/// `browser.close()` (issue #121), then await the command for a bounded window
+/// before returning the interrupt outcome.
+///
+/// Extracted from `run` with the signal source injected so the
+/// signal-vs-command wiring (select → cancel notify → drain → `Interrupted`) is
+/// unit-testable without spawning the real OS signal handlers (issue #228).
+async fn drive<C, S>(
+    cmd_fut: C,
+    signal_fut: S,
+    cancel: &watch::Sender<bool>,
+) -> Outcome<Result<CommandOutput, ScoutError>>
+where
+    C: Future<Output = Result<CommandOutput, ScoutError>>,
+    S: Future<Output = InterruptSignal>,
+{
+    tokio::pin!(cmd_fut);
+    tokio::select! {
+        res = &mut cmd_fut => Outcome::Completed(res),
+        sig = signal_fut => {
+            tracing::info!(signal = %sig, "interrupted, draining for graceful close");
+            let _ = cancel.send(true);
+            if timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await.is_err() {
+                tracing::warn!(
+                    timeout_secs = SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
+                    "drain timed out; in-flight command was dropped before completion"
+                );
+            }
+            Outcome::Interrupted(sig)
+        }
+    }
+}
+
 pub async fn run() -> ExitCode {
     init_tracing();
 
@@ -133,28 +168,7 @@ pub async fn run() -> ExitCode {
         Err(e) => return emit_error(&e, json_mode),
     };
     let cancel = scout.cancel_handle();
-
-    let cmd_fut = scout.run(cli.command);
-    tokio::pin!(cmd_fut);
-
-    // Race the in-flight command against signal arrival. On interrupt,
-    // notify the cancel handle so fetch_with_cdp can run `browser.close()`
-    // (issue #121) and then await the command for a bounded window before
-    // returning the interrupt exit code.
-    let outcome: Outcome<Result<CommandOutput, ScoutError>> = tokio::select! {
-        res = &mut cmd_fut => Outcome::Completed(res),
-        sig = wait_for_signal() => {
-            tracing::info!(signal = %sig, "interrupted, draining for graceful close");
-            let _ = cancel.send(true);
-            if timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut cmd_fut).await.is_err() {
-                tracing::warn!(
-                    timeout_secs = SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
-                    "drain timed out; in-flight command was dropped before completion"
-                );
-            }
-            Outcome::Interrupted(sig)
-        }
-    };
+    let outcome = drive(scout.run(cli.command), wait_for_signal(), &cancel).await;
     match outcome {
         Outcome::Completed(Ok(output)) => {
             let rendered = if json_mode {
@@ -245,11 +259,74 @@ fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{pending, ready};
     use std::io::{self, Write};
 
     use clap::CommandFactory;
+    use tokio::sync::watch;
 
-    use super::{CommandOutput, init_tracing, render_json_success, write_output};
+    use super::{
+        CommandOutput, InterruptSignal, Outcome, ScoutError, drive, init_tracing,
+        render_json_success, write_output,
+    };
+
+    /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
+    /// signal maps to its POSIX exit code, when the signal future resolves before
+    /// the command. This is the issue #228 acceptance criterion: the
+    /// signal → exit code wiring is exercised without the real OS signal handler.
+    /// `start_paused` auto-advances the 7s drain timer so the pending command does
+    /// not block for wall-clock time.
+    #[tokio::test(start_paused = true)]
+    async fn drive_interrupt_yields_signal_exit_code() {
+        let (cancel, _rx) = watch::channel(false);
+        let outcome = drive(
+            pending::<Result<CommandOutput, ScoutError>>(),
+            ready(InterruptSignal::Sigint),
+            &cancel,
+        )
+        .await;
+        let code = match outcome {
+            Outcome::Interrupted(sig) => sig.exit_code(),
+            Outcome::Completed(_) => panic!("expected interrupt, command never completes"),
+        };
+        assert_eq!(code, 130);
+    }
+
+    /// [T-DRV002] On interrupt, drive notifies the cancel handle so `fetch_with_cdp`
+    /// can run `browser.close()` for graceful shutdown (issue #121).
+    #[tokio::test(start_paused = true)]
+    async fn drive_interrupt_notifies_cancel_handle() {
+        let (cancel, rx) = watch::channel(false);
+        let _ = drive(
+            pending::<Result<CommandOutput, ScoutError>>(),
+            ready(InterruptSignal::Sigint),
+            &cancel,
+        )
+        .await;
+        assert!(
+            *rx.borrow(),
+            "cancel handle must be notified so CDP can close gracefully"
+        );
+    }
+
+    /// [T-DRV003] When the command completes before any signal, drive returns
+    /// `Completed` and leaves the cancel handle untouched (no spurious shutdown).
+    #[tokio::test]
+    async fn drive_command_completion_wins_over_pending_signal() {
+        let (cancel, rx) = watch::channel(false);
+        let output = CommandOutput::ok(String::from("hi"), serde_json::json!({"markdown": "hi"}));
+        let outcome = drive(
+            ready(Ok::<_, ScoutError>(output)),
+            pending::<InterruptSignal>(),
+            &cancel,
+        )
+        .await;
+        assert!(matches!(outcome, Outcome::Completed(Ok(_))));
+        assert!(
+            !*rx.borrow(),
+            "cancel must not fire when the command completes normally"
+        );
+    }
 
     /// [T-RJS001] render_json_success serializes a `CommandOutput` as a one-line
     /// success envelope per ADR-0010: `data` payload preserved, `degraded:false`,
