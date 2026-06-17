@@ -27,24 +27,29 @@ use crate::fetch::ssrf::{self, RedactedLogUrl};
 /// negligible against the ~2 s chromium render that follows.
 #[cfg(feature = "js-rendering")]
 pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
-    let path_commands: &[&str] = if cfg!(target_os = "macos") {
-        &["chromium"]
-    } else {
-        &[
-            "google-chrome-stable",
-            "google-chrome",
-            "chromium-browser",
-            "chromium",
-        ]
-    };
-    let known_paths: &[&Path] = if cfg!(target_os = "macos") {
-        &[
-            Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
-        ]
-    } else {
-        &[]
-    };
+    // Compile-time `#[cfg]` (not runtime `cfg!`) so each platform's table is the
+    // only one compiled: the other OS's lines never enter `cargo llvm-cov`, so
+    // the diff-coverage gate does not flag the macOS table as uncovered on the
+    // Linux CI runner (where it is unreachable). Mirrors transport.rs's exclusion
+    // of OS-I/O that the offline suite cannot exercise.
+    #[cfg(target_os = "macos")]
+    let path_commands: &[&str] = &["chromium"];
+    #[cfg(not(target_os = "macos"))]
+    let path_commands: &[&str] = &[
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium-browser",
+        "chromium",
+    ];
+
+    #[cfg(target_os = "macos")]
+    let known_paths: &[&Path] = &[
+        Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let known_paths: &[&Path] = &[];
+
     resolve_browser_binary_from(path_commands, known_paths)
 }
 
