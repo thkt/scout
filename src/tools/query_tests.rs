@@ -531,6 +531,56 @@ async fn fetch_returns_ok_for_reachable_page() {
     );
 }
 
+/// [T-F071] fetch end-to-end flags `DegradedReason::DecodeUncertain` (exit 0) when
+/// the page is an undecodable windows-1252 body mislabeled `charset=utf-8` (#241).
+/// Same guard-free `fetch_http` + public-IP `with_dns` seam as T-F017 keeps SSRF
+/// intact; the body reuses the smart-quote bytes pinned by T-F067.
+#[tokio::test]
+async fn fetch_flags_decode_uncertain_for_undecodable_body() {
+    let Some(server) = try_spawn_mock_server("query::fetch_decode_uncertain").await else {
+        return;
+    };
+    let mut body = b"<html><body><p>It\x92s a fine day, isn\x92t it? ".to_vec();
+    body.extend_from_slice(
+        b"\x93Quoted\x94 text and an \x97 em dash, with plenty more prose.</p></body></html>",
+    );
+    Mock::given(method("GET"))
+        .and(path("/page"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .set_body_bytes(body),
+        )
+        .mount(&server)
+        .await;
+
+    let addr = *server.address();
+    let fetch_http = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .unwrap();
+    let scout = ScoutBuilder::for_test()
+        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
+        .with_fetch_http(fetch_http)
+        .build();
+
+    let params = super::params::FetchParams {
+        url: Some(format!("http://scout-test.example:{}/page", addr.port())),
+        js: false,
+        raw: false,
+    };
+    let output = scout.fetch(params).await.expect("fetch should succeed");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::DecodeUncertain),
+        "undecodable body must surface DecodeUncertain at exit 0; got: {:?}",
+        output.degraded_reasons()
+    );
+}
+
 /// [T-SK057] `insert_preamble_notes` prepends the note at the very top when the
 /// input carries no `---\n\n` frontmatter terminator. `format_slack_output`
 /// always emits that terminator, so this path is unreachable in production, but
