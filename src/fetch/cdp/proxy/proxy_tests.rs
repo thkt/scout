@@ -6,7 +6,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::yield_now;
@@ -288,5 +288,60 @@ async fn t201_14_abrupt_client_disconnect_is_logged_not_fatal() {
     assert!(
         logs_contain("SOCKS5 proxy connection ended with error"),
         "an abrupt disconnect must be logged at the accept loop"
+    );
+}
+
+/// T-201-15: a client that connects but sends no SOCKS5 bytes is closed after
+/// `HANDSHAKE_TIMEOUT` with no reply, rather than pinning its handler on the
+/// first `read_exact` forever. Driven over an in-memory `duplex` under a paused
+/// clock so the timeout fires in virtual time with no real wait and no socket
+/// reactor I/O (the module is generic over the stream precisely for this).
+#[tokio::test(start_paused = true)]
+#[traced_test]
+async fn t201_15_no_handshake_bytes_times_out_and_closes() {
+    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let (mut client, server) = duplex(64);
+
+    // Send nothing: handle_conn hangs on the greeting read until the deadline.
+    let result = handle_conn(server, resolver.as_ref()).await;
+
+    assert!(
+        result.is_ok(),
+        "handshake timeout closes cleanly, not as Err"
+    );
+    assert!(
+        logs_contain("SOCKS5 handshake timed out"),
+        "the timeout path must log its reason"
+    );
+    let mut reply = Vec::new();
+    client.read_to_end(&mut reply).await.unwrap();
+    assert!(reply.is_empty(), "no reply on handshake timeout");
+}
+
+/// T-201-16: a client that sends only the greeting and then stalls before the
+/// request is closed after `HANDSHAKE_TIMEOUT`. The deadline spans both read
+/// stages, so the stall on the request `read_exact` (a different hang point than
+/// T-201-15) is bounded too; only the greeting's method reply was written back.
+#[tokio::test(start_paused = true)]
+#[traced_test]
+async fn t201_16_partial_handshake_times_out_after_method_reply() {
+    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let (mut client, server) = duplex(64);
+
+    // Greeting only: handle_conn replies no-auth, then hangs on the request read.
+    client.write_all(&GREETING).await.unwrap();
+    let result = handle_conn(server, resolver.as_ref()).await;
+
+    assert!(
+        result.is_ok(),
+        "handshake timeout closes cleanly, not as Err"
+    );
+    assert!(logs_contain("SOCKS5 handshake timed out"));
+    let mut reply = Vec::new();
+    client.read_to_end(&mut reply).await.unwrap();
+    assert_eq!(
+        reply,
+        vec![0x05, 0x00],
+        "only the greeting method reply precedes the timeout"
     );
 }
