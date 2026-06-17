@@ -54,10 +54,20 @@ impl SlackError {
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
             Self::Api { error } => match error.as_str() {
                 // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
-                // codes; "message not found" (space) is scout's own string from
-                // `fetch_message` when the resolved messages list is empty.
-                "channel_not_found" | "message_not_found" | "thread_not_found"
-                | "message not found" => Classification::new(ErrorCode::NotFound),
+                // codes; the space forms are scout's own strings from
+                // `fetch_message`: bare "message not found" (resolved list empty)
+                // and "message {ts} not found in thread" (target absent or in a
+                // truncated page). The latter interpolates `{ts}`, so it can't be
+                // exact-matched — the `starts_with`/`contains` guard catches the
+                // whole "message … not found …" family (issue #224). Slack-native
+                // codes are snake_case and never start with "message " (space),
+                // so they fall through to their own arms below.
+                "channel_not_found" | "message_not_found" | "thread_not_found" => {
+                    Classification::new(ErrorCode::NotFound)
+                }
+                s if s.starts_with("message ") && s.contains("not found") => {
+                    Classification::new(ErrorCode::NotFound)
+                }
                 // Priority 4: TEMP_FAILURE
                 "internal_error" | "service_unavailable" | "fatal_error" => {
                     Classification::transient_retry()

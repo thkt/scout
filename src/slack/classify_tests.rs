@@ -45,6 +45,21 @@ fn api_not_found_codes_classify_as_not_found() {
     }
 }
 
+/// [T-SLC010] scout's ts-bearing "message {ts} not found in thread" string
+/// (built at client.rs when `extract_target` misses — target absent or in a
+/// truncated page) classifies as NotFound, same as the bare "message not found"
+/// form. Guards issue #224: the interpolated `{ts}` made the old exact-match arm
+/// miss this string, dropping it to UsageError (exit 64) instead of NotFound
+/// (exit 66).
+#[test]
+fn api_not_found_in_thread_with_ts_classifies_as_not_found() {
+    let c = SlackError::Api {
+        error: "message 1700000000.123456 not found in thread".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::NotFound);
+}
+
 /// [T-SLC004] Slack TEMP_FAILURE error codes classify as TempFailure
 /// (ADR-0003 — internal_error must not be misclassified as UsageError).
 #[test]
