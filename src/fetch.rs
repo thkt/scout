@@ -178,11 +178,16 @@ pub(crate) async fn fetch_page(
     // `download` requires `&ValidatedUrl` so the redirect loop cannot bypass it.
     let validated = ssrf_check(url, resolver.as_ref()).await?;
 
+    // `decode_uncertain` flags a body neither the server charset label nor
+    // reliability-gated detection could decode cleanly (issue #241). It is
+    // cleared whenever CDP output replaces the body below, because the headless
+    // browser re-decodes the page from its own response handling.
     #[cfg(feature = "js-rendering")]
-    let (final_url, mut html) =
+    let (final_url, mut html, mut decode_uncertain) =
         download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
     #[cfg(not(feature = "js-rendering"))]
-    let (final_url, html) = download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
+    let (final_url, html, decode_uncertain) =
+        download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
 
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
@@ -201,6 +206,7 @@ pub(crate) async fn fetch_page(
                 Ok(js_html) => {
                     info!("JS rendering succeeded via CDP");
                     html = js_html;
+                    decode_uncertain = false;
                 }
                 Err(e) if opts.js => {
                     return Err(FetchError::from(e));
@@ -231,6 +237,9 @@ pub(crate) async fn fetch_page(
         match fetch_with_cdp(&final_url, Arc::clone(&resolver), cancel).await {
             Ok(js_html) => {
                 let re_extracted = extract_article(&js_html, Some(final_url.as_str()));
+                // CDP re-decoded the page from its own response handling, so the
+                // original label/detection uncertainty no longer applies.
+                decode_uncertain = false;
                 if is_thin_extract(&re_extracted) {
                     debug!(url = %RedactedLogUrl(final_url.as_str()), "JS re-extraction still thin, returning best-effort result");
                 } else {
@@ -252,7 +261,11 @@ pub(crate) async fn fetch_page(
     }
 
     debug!(url = %RedactedLogUrl(final_url.as_str()), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(&article, final_url.as_str().to_owned()))
+    Ok(to_fetch_result(
+        &article,
+        final_url.as_str().to_owned(),
+        decode_uncertain,
+    ))
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates

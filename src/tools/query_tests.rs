@@ -336,6 +336,47 @@ async fn research_json_zero_results_returns_empty_arrays() {
     );
 }
 
+/// [T-F070] collect_research_degradations pushes DecodeUncertain for an uncertain
+/// page and omits it for a clean one (research-path machine-readable signal, #241)
+#[test]
+fn collect_research_degradations_pushes_decode_uncertain() {
+    use super::query::collect_research_degradations;
+    use crate::envelope::{Degradation, DegradedReason};
+    use crate::search::engine::ResearchReport;
+
+    let report = ResearchReport {
+        fetched_pages: vec![
+            FetchResult::for_test("https://clean.example".into(), "Readable.".into(), false),
+            FetchResult::for_test(
+                "https://garbled.example".into(),
+                "Best-effort.".into(),
+                false,
+            )
+            .with_decode_uncertain(true),
+        ],
+        failed_urls: vec![],
+        sources: vec![],
+    };
+
+    let mut degradation = Degradation::default();
+    collect_research_degradations(&report, &mut degradation);
+    let (notes, reasons) = degradation.into_parts();
+
+    assert_eq!(
+        reasons,
+        vec![DegradedReason::DecodeUncertain],
+        "only the uncertain page yields a DecodeUncertain reason, got: {reasons:?}"
+    );
+    assert!(
+        notes[0].contains("https://garbled.example"),
+        "note must name the uncertain URL, got: {notes:?}"
+    );
+    assert!(
+        !notes[0].contains("https://clean.example"),
+        "the clean page must not appear in the note, got: {notes:?}"
+    );
+}
+
 /// [T-TS003] fetch_output_shifts_headings
 #[test]
 fn fetch_output_shifts_headings() {

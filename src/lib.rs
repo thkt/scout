@@ -1,4 +1,5 @@
 mod brave;
+mod charset;
 mod clock;
 mod envelope;
 mod fetch;

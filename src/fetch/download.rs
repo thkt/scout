@@ -1,11 +1,13 @@
 //! HTTP download with per-hop SSRF re-validation and charset-aware decoding.
 
+use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use reqwest::Client;
 use reqwest::header::LOCATION;
 use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, RedactedLogUrl, ValidatedUrl, ssrf_check};
 use super::{FetchError, MAX_RESPONSE_BYTES};
+use crate::charset::is_reliable_detection;
 use crate::retry::read_body_capped;
 
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
@@ -22,7 +24,7 @@ pub(super) async fn download(
     url: &ValidatedUrl,
     max_redirects: usize,
     resolver: &dyn DnsResolver,
-) -> Result<(ValidatedUrl, String), FetchError> {
+) -> Result<(ValidatedUrl, String, bool), FetchError> {
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
@@ -81,8 +83,8 @@ pub(super) async fn download(
             FetchError::from,
         )
         .await?;
-        let html = decode_body(body, charset.as_deref());
-        return Ok((current_url, html));
+        let decoded = decode_body(&body, charset.as_deref());
+        return Ok((current_url, decoded.text, decoded.uncertain));
     }
 
     // CALIBRATION (issue #145 / #148 follow-up): structured fields below let
@@ -112,31 +114,82 @@ fn extract_charset(content_type: &str) -> Option<String> {
     })
 }
 
-fn decode_body(bytes: Vec<u8>, charset: Option<&str>) -> String {
+/// Outcome of decoding a response body. `uncertain` is true when neither the
+/// server-labeled encoding nor reliability-gated detection produced a clean
+/// decode, so `text` is a best-effort lossy rendering the caller surfaces via
+/// `DegradedReason::DecodeUncertain` (issue #241). The body is still returned at
+/// exit 0; the AI caller decides whether to trust it.
+struct DecodedBody {
+    text: String,
+    uncertain: bool,
+}
+
+/// Decode a response body label-first, recovering mislabeled multi-byte content
+/// via chardetng before giving up (issue #241).
+///
+/// 1. Decode with the server charset label (default utf-8). A clean decode
+///    (`had_errors == false`) is returned as-is, not uncertain.
+/// 2. On a lossy or unknown-label decode, fall back to reliability-gated
+///    detection: a multi-byte encoding that decodes cleanly is trusted and the
+///    recovered text is returned, not uncertain.
+/// 3. If neither succeeds, return the lossy UTF-8 best effort with
+///    `uncertain = true`.
+fn decode_body(bytes: &[u8], charset: Option<&str>) -> DecodedBody {
     let label = charset.unwrap_or("utf-8");
-    let encoding = encoding_rs::Encoding::for_label(label.as_bytes()).unwrap_or_else(|| {
-        warn!(
+    match encoding_rs::Encoding::for_label(label.as_bytes()) {
+        Some(encoding) => {
+            let (decoded, _, had_errors) = encoding.decode(bytes);
+            if !had_errors {
+                return DecodedBody {
+                    text: decoded.into_owned(),
+                    uncertain: false,
+                };
+            }
+            debug!(
+                charset = label,
+                "labeled decode produced replacement characters, trying detection"
+            );
+        }
+        None => warn!(
             charset = label,
-            "unknown charset label, falling back to UTF-8"
-        );
-        encoding_rs::UTF_8
-    });
-    if encoding == encoding_rs::UTF_8 {
-        // Valid UTF-8 (the overwhelming majority) moves the buffer with no copy;
-        // only invalid bytes fall back to a lossy re-encode.
-        return match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+            "unknown charset label, trying detection then UTF-8"
+        ),
+    }
+
+    if let Some(text) = detect_decode(bytes) {
+        return DecodedBody {
+            text,
+            uncertain: false,
         };
     }
-    let (decoded, _, had_errors) = encoding.decode(&bytes);
-    if had_errors {
-        warn!(
-            charset = label,
-            "lossy decoding: some bytes could not be decoded"
-        );
+
+    warn!(
+        charset = label,
+        "decode uncertain: returning best-effort lossy body (DECODE_UNCERTAIN)"
+    );
+    DecodedBody {
+        text: String::from_utf8_lossy(bytes).into_owned(),
+        uncertain: true,
     }
-    decoded.into_owned()
+}
+
+/// Reliability-gated chardetng detection. Returns a clean decode only when the
+/// guessed encoding is a multi-byte one (strict byte-pattern constraints, see
+/// [`crate::charset::is_reliable_detection`]) and it decodes without errors.
+/// Single-byte guesses and lossy decodes return `None` so the caller treats the
+/// body as uncertain rather than silently trusting mojibake.
+fn detect_decode(bytes: &[u8]) -> Option<String> {
+    let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
+    detector.feed(bytes, true);
+    let encoding = detector.guess(None, Utf8Detection::Allow);
+    if !is_reliable_detection(encoding) {
+        return None;
+    }
+    let (decoded, _, had_errors) = encoding.decode(bytes);
+    if had_errors {
+        return None;
+    }
+    Some(decoded.into_owned())
 }
 
 fn check_content_type(content_type: &str) -> Result<(), FetchError> {

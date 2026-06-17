@@ -90,6 +90,14 @@ impl Scout {
                 DegradedReason::ReadabilityFallback,
             );
         }
+        if result.decode_uncertain() {
+            degradation.push(
+                String::from(
+                    "Character encoding could not be determined; the body is a best-effort decode and may be garbled. Do not trust it as a faithful primary source.",
+                ),
+                DegradedReason::DecodeUncertain,
+            );
+        }
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }
 
@@ -275,7 +283,10 @@ pub(super) fn insert_preamble_notes(markdown: String, notes: &[&str]) -> String 
     }
 }
 
-fn collect_research_degradations(report: &engine::ResearchReport, degradation: &mut Degradation) {
+pub(super) fn collect_research_degradations(
+    report: &engine::ResearchReport,
+    degradation: &mut Degradation,
+) {
     for f in &report.failed_urls {
         degradation.push(
             format!("Failed to fetch {}: {}", f.url, f.reason),
@@ -295,6 +306,21 @@ fn collect_research_degradations(report: &engine::ResearchReport, degradation: &
                 raw_fallback_pages.join(", ")
             ),
             DegradedReason::ReadabilityFallback,
+        );
+    }
+    let decode_uncertain_pages: Vec<&str> = report
+        .fetched_pages
+        .iter()
+        .filter(|p| p.decode_uncertain())
+        .map(FetchResult::url)
+        .collect();
+    if !decode_uncertain_pages.is_empty() {
+        degradation.push(
+            format!(
+                "Character encoding could not be determined for: {}. The body is a best-effort decode and may be garbled.",
+                decode_uncertain_pages.join(", ")
+            ),
+            DegradedReason::DecodeUncertain,
         );
     }
 }
