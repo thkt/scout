@@ -70,7 +70,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 brew install thkt/tap/scout
 ```
 
-Or build from source (requires Rust 1.95+):
+Or build from source (requires Rust 1.96+):
 
 ```sh
 cargo install --path .

@@ -60,7 +60,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 brew install thkt/tap/scout
 ```
 
-ソースからビルドする場合は、Rust 1.95+が必要です。
+ソースからビルドする場合は、Rust 1.96+が必要です。
 
 ```sh
 cargo install --path .
