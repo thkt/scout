@@ -9,6 +9,7 @@ fn usage_errors_have_exit_code_64() {
         FetchError::Status(401).into(),
         FetchError::Status(403).into(),
         SlackError::TokenNotSet.into(),
+        SlackError::TokenWrongType.into(),
         SlackError::Api {
             error: "err".into(),
         }

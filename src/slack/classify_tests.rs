@@ -14,6 +14,22 @@ fn token_not_set_is_usage_error_with_token_hint() {
     );
 }
 
+/// [T-SLC011] TokenWrongType classifies as UsageError with the SLACK_TOKEN hint
+/// — same caller-facing treatment as `TokenNotSet`, since both are a
+/// misconfigured credential the user must fix before retrying (issue #261).
+#[test]
+fn token_wrong_type_is_usage_error_with_token_hint() {
+    let c = SlackError::TokenWrongType.classify();
+    assert_eq!(c.kind, ErrorCode::UsageError);
+    assert!(
+        c.next_step
+            .as_deref()
+            .is_some_and(|h| h.contains("SLACK_TOKEN")),
+        "expected SLACK_TOKEN hint, got: {:?}",
+        c.next_step
+    );
+}
+
 /// [T-SLC002] InsecureUrl classifies as DataError (peer to other backends' InsecureUrl).
 #[test]
 fn insecure_url_is_data_error() {

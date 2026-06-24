@@ -18,6 +18,14 @@ pub(crate) enum SlackError {
     #[error("SLACK_TOKEN is not set — export a User OAuth token (xoxp-…)")]
     TokenNotSet,
 
+    /// `SLACK_TOKEN` is set but is not a User OAuth token — it does not begin
+    /// with the `xoxp-` prefix. A bot token (`xoxb-…`) or arbitrary string would
+    /// otherwise pass construction and fail later with an opaque API error
+    /// (issue #261). The contract the `TokenNotSet` hint promises is enforced
+    /// at construction by [`client::SlackClient::from_env_with`].
+    #[error("SLACK_TOKEN must be a User OAuth token (xoxp-…)")]
+    TokenWrongType,
+
     #[error("Slack API error: {error}")]
     Api { error: String },
 
@@ -48,7 +56,7 @@ impl SlackError {
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
-            Self::TokenNotSet => Classification::new(ErrorCode::UsageError)
+            Self::TokenNotSet | Self::TokenWrongType => Classification::new(ErrorCode::UsageError)
                 .with_hint("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
             // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),

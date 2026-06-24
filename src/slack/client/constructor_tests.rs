@@ -63,3 +63,34 @@ fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
     assert_eq!(client.token.expose(), "xoxp-real");
     assert_eq!(client.base_url, API_BASE);
 }
+
+/// [T-SK065] from_env_with rejects a bot token (`xoxb-…`) as `TokenWrongType`.
+/// The `SLACK_TOKEN must be a User OAuth token` contract the message promises is
+/// now enforced at construction, so a bot token can no longer pass through to
+/// fail later with an opaque API error (issue #261).
+#[test]
+fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
+    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+        Ok("xoxb-bot-token".to_owned())
+    })
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(SlackError::TokenWrongType)),
+        "expected TokenWrongType for bot token, got: {result:?}"
+    );
+}
+
+/// [T-SK066] from_env_with rejects an arbitrary non-`xoxp-` string as
+/// `TokenWrongType` — the prefix check covers any string outside Slack's
+/// user-token taxonomy, not just bot tokens.
+#[test]
+fn t066_from_env_with_rejects_arbitrary_string_as_wrong_type() {
+    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+        Ok("garbage".to_owned())
+    })
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(SlackError::TokenWrongType)),
+        "expected TokenWrongType for arbitrary string, got: {result:?}"
+    );
+}
