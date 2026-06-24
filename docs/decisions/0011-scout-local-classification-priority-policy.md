@@ -43,14 +43,14 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 `ScoutError` → `ErrorCode` mapping は以下の優先順位で評価する。上から順、最初にマッチした priority で確定。
 
-| 優先 | 条件 | `ErrorCode` | sysexits (per ADR-0002) |
-| --- | --- | --- | --- |
-| 1 | env var missing / 設定起因 / 引数誤り / auth misconfig (401/403) | `UsageError` | 64 EX_USAGE |
-| 2 | URL / owner / repo / encoding の形式不正、API 4xx (other than 401/403/404) | `DataError` | 65 EX_DATAERR |
-| 3 | リソース不在 (404, search 0 件) | `NotFound` | 66 EX_NOINPUT |
-| 4 | retry で回復見込みあり (rate limit, 5xx, transport timeout) | `TempFailure` または `Timeout` | 75 EX_TEMPFAIL / 124 |
-| 5 | scout 内部不変条件違反 (schema mismatch, invalid state) | `Internal` | 70 EX_SOFTWARE |
-| 退避 | priority 1-5 のどれにも fall through しなかった | `Unknown` | 104 (PJ extension) |
+| 優先 | 条件                                                                       | `ErrorCode`                    | sysexits (per ADR-0002) |
+| ---- | -------------------------------------------------------------------------- | ------------------------------ | ----------------------- |
+| 1    | env var missing / 設定起因 / 引数誤り / auth misconfig (401/403)           | `UsageError`                   | 64 EX_USAGE             |
+| 2    | URL / owner / repo / encoding の形式不正、API 4xx (other than 401/403/404) | `DataError`                    | 65 EX_DATAERR           |
+| 3    | リソース不在 (404, search 0 件)                                            | `NotFound`                     | 66 EX_NOINPUT           |
+| 4    | retry で回復見込みあり (rate limit, 5xx, transport timeout)                | `TempFailure` または `Timeout` | 75 EX_TEMPFAIL / 124    |
+| 5    | scout 内部不変条件違反 (schema mismatch, invalid state)                    | `Internal`                     | 70 EX_SOFTWARE          |
+| 退避 | priority 1-5 のどれにも fall through しなかった                            | `Unknown`                      | 104 (PJ extension)      |
 
 `IoError` (74 EX_IOERR) は priority slot を占めない: external tool / IO failure (例: headless browser CDP error) は priority 5 (scout-side bug) でも priority 4 (retry 見込み) でもない別 axis のため、`io_error()` constructor で直接 `ErrorCode::IoError` に分類する (ADR-0003 §Decision Outcome 参照)。
 
@@ -77,7 +77,7 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 ### Confirmation
 
-- `src/tools/errors.rs` の各 `From<*Error>` 実装が本 ADR table の priority 順で `match` arm を並べていることを inline comment (`// per ADR-0011 priority N`) で確認可能。
+- 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) が本 ADR table の priority 順で `match` arm を並べていることを inline comment (`// Priority N:`) で確認可能。`src/tools/errors.rs` の `From<*Error>` 実装は各 backend の `classify()` へ委譲するため、priority 判定はバリアント定義の隣で exhaustiveness-checked に保たれる。
 - 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx) / `T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
 - `ugrep "ADR-0065" src/ tests/` で hit 0 (本 PR で移行完了)。
 
@@ -123,12 +123,12 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 
 ### Reassessment Triggers
 
-| Trigger | アクション |
-| --- | --- |
-| 新規 `ErrorCode` variant 追加、priority slot が現行 5 段に収まらない | priority table 拡張、`match` arm 順序を本 ADR に同期 |
-| `Unknown` rate が caller logs で持続的に上昇 | classification design audit、`Unknown` を新規 priority slot に分類できないか検討 (新規 ErrorCode variant 化) |
-| priority 評価順 (上から順、マッチで確定) が用法上不適と判明 | 評価 model 再考 (例: priority weight に変更、本 ADR supersede + 移行 ADR 起票) |
-| IoError を priority slot に取り込みたい case が surface | 本 ADR table の axis 再評価 (`io_error` constructor の存在意義を再検討) |
+| Trigger                                                              | アクション                                                                                                   |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 新規 `ErrorCode` variant 追加、priority slot が現行 5 段に収まらない | priority table 拡張、`match` arm 順序を本 ADR に同期                                                         |
+| `Unknown` rate が caller logs で持続的に上昇                         | classification design audit、`Unknown` を新規 priority slot に分類できないか検討 (新規 ErrorCode variant 化) |
+| priority 評価順 (上から順、マッチで確定) が用法上不適と判明          | 評価 model 再考 (例: priority weight に変更、本 ADR supersede + 移行 ADR 起票)                               |
+| IoError を priority slot に取り込みたい case が surface              | 本 ADR table の axis 再評価 (`io_error` constructor の存在意義を再検討)                                      |
 
 ### 参照
 
@@ -136,4 +136,5 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 - `docs/decisions/0003-error-classification-contract-for-sysexits-and-json-output.md` (HTTP status → ErrorCode mapping、本 ADR と別軸)
 - `docs/decisions/0010-scout-local-json-envelope-contract.md` (本 ADR と並ぶ supersede portion 2、Rule 1 `is_retryable` が本 ADR の Unknown 退避と整合)
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` §Classification Priority (本 ADR が supersede する meta ADR section)
-- `src/tools/errors.rs` (match arm 順序の実装 site)
+- `src/tools/errors.rs` (`Classification` 型、`From<*Error>` の委譲、`ScoutError` の home)
+- 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) (`// Priority N:` match arm 順序の実装 site)

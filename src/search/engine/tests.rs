@@ -275,7 +275,7 @@ async fn research_auto_lang_issues_single_call() {
     assert_eq!(captured[0].1, None, "Lang::Auto -> search_lang omitted");
 }
 
-/// [T-SE010] research surfaces the underlying Brave error when search fails
+/// [T-SE012] research surfaces the underlying Brave error when search fails
 #[tokio::test]
 async fn research_search_failure_returns_error() {
     let mock = MockSearch::all_fail(BraveError::RateLimited { retry_after: None });

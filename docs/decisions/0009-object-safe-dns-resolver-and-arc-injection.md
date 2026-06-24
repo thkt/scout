@@ -68,6 +68,8 @@ Internal helper signatures split by need:
 
 `Scout::fetch` and `Scout::research` pass `self.dns.clone()` (cheap `Arc::clone`) instead of `&TokioDnsResolver`.
 
+注: `engine::fetch_one` は後の refactor で独立関数として消滅し、その pre-fetch SSRF read は `fetch_page` にインライン化された。`&dyn DnsResolver` を渡す挙動は保持されているため、上表の行は当時の signature 変更記録として残す。
+
 ### Consequences
 
 - Good, because the four trait seams (`Clock` / `Rng` / `TokenSource` / `DnsResolver`) are now visually uniform: same `Arc<dyn Trait>` field, same `ScoutBuilder::with_*` setter, same `Pin<Box<dyn Future + Send + '_>>` future alias convention.
