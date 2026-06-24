@@ -8,7 +8,7 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-ADR-0008 unified test-seam injection across `Clock` / `Rng` / `TokenSource` through `Arc<dyn Trait>` fields on `Scout` and chainable `ScoutBuilder::for_test().with_*()` setters. The fourth proposed seam, `DnsResolver`, was left out and recorded under *Deferred concerns* because the existing trait shape required structural changes that did not fit inside the PR sequence #127–#132.
+ADR-0008 unified test-seam injection across `Clock` / `Rng` / `TokenSource` through `Arc<dyn Trait>` fields on `Scout` and chainable `ScoutBuilder::for_test().with_*()` setters. The fourth proposed seam, `DnsResolver`, was left out and recorded under _Deferred concerns_ because the existing trait shape required structural changes that did not fit inside the PR sequence #127–#132.
 
 Today the picture in `src/fetch/ssrf.rs` is:
 
@@ -26,7 +26,7 @@ Issue #134 asks for parity with ADR-0008 — object-safe trait, `Scout.dns: Arc<
 - `Arc<dyn DnsResolver>` requires object-safety: dropping `Clone` and replacing `impl Future` with `Pin<Box<dyn Future + Send + '_>>`. ADR-0008 already paid this cost for `TokenSource`; reusing the same pattern keeps the four traits visually uniform.
 - `fetch_with_cdp` spawns an intercept task that needs `resolver: Send + 'static`. The old `Clone + 'static` bound made an owned-clone trivial; with `Arc<dyn DnsResolver>` the clone is an `Arc::clone`, which is also cheap. The signature of internal helpers must allow this.
 - `ssrf_check` and `download` only read the resolver. Passing `Arc` everywhere would be over-budget; `&dyn DnsResolver` is enough for pure-read sites. The split (`Arc` at task-spawning sites, `&dyn` at pure-read sites) keeps overhead at one indirection per call without proliferating `Arc::clone`.
-- Tests must be able to inject `StaticDnsResolver(Vec<IpAddr>)` / `FailingDnsResolver(FetchError)` and prove the injected double was used by an end-to-end assertion, not just `Arc::ptr_eq`. ADR-0008's `T-SB004` is the precedent.
+- Tests must be able to inject `StaticDnsResolver(Vec<IpAddr>)` / `FailingDnsResolver(pub String)` and prove the injected double was used by an end-to-end assertion, not just `Arc::ptr_eq`. ADR-0008's `T-SB004` is the precedent.
 
 ## Considered Options
 
@@ -49,22 +49,22 @@ pub(crate) trait DnsResolver: Send + Sync {
 }
 ```
 
-`TokioDnsResolver` keeps the same async body but wraps it with `Box::pin(async move { ... })`. The test doubles `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(FetchError)` move into `#[cfg(test)]` inside `fetch/ssrf.rs` and replace the ad-hoc `AllowDns` / `FailDns` types in the same module.
+`TokioDnsResolver` keeps the same async body but wraps it with `Box::pin(async move { ... })`. The test doubles `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` move into `#[cfg(test)]` inside `fetch/ssrf.rs` and replace the ad-hoc `AllowDns` / `FailDns` types in the same module; `FailingDnsResolver::lookup` wraps its stored `String` message into `FetchError::DnsResolution` (`src/fetch/ssrf.rs:279-287`).
 
-`Scout` gains `dns: Arc<dyn DnsResolver>`. `ScoutBuilder::for_test()` and `ScoutBuilder::from_env()` both default it to `Arc::new(TokioDnsResolver)` — production has only one implementation, so no env knob is added. `ScoutBuilder` exposes `#[cfg(test)] pub(crate) fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self`, matching the `#[cfg(test)] pub(crate)` visibility of `with_clock` / `with_rng` / `with_token_source` (`tools.rs:665-681`). The cfg gate prevents the injection surface from leaking into the production crate API.
+`Scout` gains `dns: Arc<dyn DnsResolver>`. `ScoutBuilder::for_test()` and `ScoutBuilder::from_env()` both default it to `Arc::new(TokioDnsResolver)` — production has only one implementation, so no env knob is added. `ScoutBuilder` exposes `#[cfg(test)] pub(crate) fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self`, matching the `#[cfg(test)] pub(crate)` visibility of `with_clock` / `with_rng` / `with_token_source` (`src/tools/builder.rs:130-151`, `with_dns` at `:148`). The cfg gate prevents the injection surface from leaking into the production crate API.
 
 Internal helper signatures split by need:
 
-| Site | Old signature | New signature | Why |
-|---|---|---|---|
-| `ssrf_check` | `resolver: &impl DnsResolver` | `resolver: &dyn DnsResolver` | Pure read; one indirection acceptable |
-| `download` | `resolver: &impl DnsResolver` | `resolver: &dyn DnsResolver` | Pure read |
-| `check_browser_request` | `resolver: &impl ssrf::DnsResolver` | `resolver: &dyn ssrf::DnsResolver` | Pure read inside spawn body |
-| `fetch_page` | `resolver: &impl DnsResolver` | `resolver: Arc<dyn DnsResolver>` | Hands ownership to `fetch_with_cdp` via clone |
-| `fetch_with_cdp` | `resolver: impl ssrf::DnsResolver` (owned, `Clone` cloned) | `resolver: Arc<dyn ssrf::DnsResolver>` | Cloned across `tokio::spawn` move boundary |
-| `cdp_navigate` | `resolver: impl ssrf::DnsResolver` | `resolver: Arc<dyn ssrf::DnsResolver>` | Owned by spawned intercept task |
-| `engine::research` | `resolver: impl DnsResolver` | `resolver: Arc<dyn DnsResolver>` | Forwards into `fetch_page` |
-| `engine::fetch_one` | `resolver: &impl DnsResolver` | `resolver: &dyn DnsResolver` | Pure read in pre-fetch SSRF check |
+| Site                    | Old signature                                              | New signature                          | Why                                           |
+| ----------------------- | ---------------------------------------------------------- | -------------------------------------- | --------------------------------------------- |
+| `ssrf_check`            | `resolver: &impl DnsResolver`                              | `resolver: &dyn DnsResolver`           | Pure read; one indirection acceptable         |
+| `download`              | `resolver: &impl DnsResolver`                              | `resolver: &dyn DnsResolver`           | Pure read                                     |
+| `check_browser_request` | `resolver: &impl ssrf::DnsResolver`                        | `resolver: &dyn ssrf::DnsResolver`     | Pure read inside spawn body                   |
+| `fetch_page`            | `resolver: &impl DnsResolver`                              | `resolver: Arc<dyn DnsResolver>`       | Hands ownership to `fetch_with_cdp` via clone |
+| `fetch_with_cdp`        | `resolver: impl ssrf::DnsResolver` (owned, `Clone` cloned) | `resolver: Arc<dyn ssrf::DnsResolver>` | Cloned across `tokio::spawn` move boundary    |
+| `cdp_navigate`          | `resolver: impl ssrf::DnsResolver`                         | `resolver: Arc<dyn ssrf::DnsResolver>` | Owned by spawned intercept task               |
+| `engine::research`      | `resolver: impl DnsResolver`                               | `resolver: Arc<dyn DnsResolver>`       | Forwards into `fetch_page`                    |
+| `engine::fetch_one`     | `resolver: &impl DnsResolver`                              | `resolver: &dyn DnsResolver`           | Pure read in pre-fetch SSRF check             |
 
 `Scout::fetch` and `Scout::research` pass `self.dns.clone()` (cheap `Arc::clone`) instead of `&TokioDnsResolver`.
 
@@ -84,7 +84,7 @@ Internal helper signatures split by need:
 - `cargo clippy --offline --all-targets` and `cargo clippy --offline --all-targets --features js-rendering` are clean (no `-D clippy::absolute-paths` violations from the new test paths).
 - `ScoutBuilder::for_test().with_dns(Arc::new(StaticDnsResolver(vec!["10.0.0.1".parse().unwrap()]))).build().fetch(FetchParams { url: Some("https://example.com".into()), .. }).await` returns a `ScoutError` mapped from `FetchError::InternalHost`. The injected resolver's `Ok(vec![10.0.0.1])` short-circuits inside `ssrf_check` before any HTTP connect, so the assertion holds independent of `fetch_timeout`.
 - `ugrep -rn 'Clone::clone\(resolver\)' src/` returns 0 hits.
-- ADR-0008 *Deferred concerns* now links to ADR-0009.
+- ADR-0008 _Deferred concerns_ now links to ADR-0009.
 
 ## Pros and Cons of the Options
 
@@ -119,11 +119,11 @@ Leave `DnsResolver` production-only; test SSRF paths against `TokioDnsResolver` 
 1. Rewrite `DnsResolver` to be object-safe; convert `TokioDnsResolver` and test doubles. Existing `ssrf::tests` and `dns_tests` modules compile against the new shape.
 2. Update internal helper signatures in `src/fetch.rs` and `src/search/engine.rs` per the table above. `fetch_with_cdp` switches from `Clone::clone(resolver)` to `Arc::clone(&resolver)`.
 3. Add `dns: Arc<dyn DnsResolver>` field to `Scout`; thread `Arc::new(TokioDnsResolver)` through `ScoutBuilder::{from_env, for_test, build_default_clients}`.
-4. Add `#[cfg(test)] fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self` to `ScoutBuilder`.
+4. Add `#[cfg(test)] fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self` to `ScoutBuilder` (`src/tools/builder.rs:148`).
 5. Replace the two `&TokioDnsResolver` literals in `tools.rs::Scout::fetch` and `Scout::research` with `self.dns.clone()`.
-6. Add `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(FetchError)` under `#[cfg(test)]` in `fetch/ssrf.rs`; remove the now-redundant `AllowDns` / `FailDns` ad-hoc types and re-point existing T-FS004..T-FS007 tests.
+6. Add `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` under `#[cfg(test)]` in `fetch/ssrf.rs` (`src/fetch/ssrf.rs:279-287`), where `FailingDnsResolver::lookup` wraps the stored `String` into `FetchError::DnsResolution`; remove the now-redundant `AllowDns` / `FailDns` ad-hoc types and re-point existing T-FS004..T-FS007 tests.
 7. Add `T-DNS001` end-to-end test: `with_dns` + `Scout::fetch` → assert `FetchError::InternalHost` when the injected resolver returns a private IP.
-8. Update ADR-0008 *Deferred concerns* to link to ADR-0009.
+8. Update ADR-0008 _Deferred concerns_ to link to ADR-0009.
 
 ### Reassessment Triggers
 

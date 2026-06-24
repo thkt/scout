@@ -98,5 +98,5 @@ scout は素通しし parser 側の安全性に依存する。
 - `src/markdown.rs` (markdown 層中和 + テスト T-MD001..018)
 - `src/fetch/converter.rs` (YAML 層中和 + テスト T-FC001..012)
 - `src/search/engine.rs` + `src/search/engine/tests.rs:T-SE010` (search 出力中和)
-- `src/slack.rs:339-382` (Slack 出力が converter helper を再利用)
+- `src/slack.rs:353-393` (Slack 出力が converter helper を再利用)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #2)

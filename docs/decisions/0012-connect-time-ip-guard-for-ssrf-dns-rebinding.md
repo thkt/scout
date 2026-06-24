@@ -28,7 +28,7 @@ decision-makers: thkt (project owner)
 
 ## Decision Outcome
 
-Chosen option: 方式 Y'。`SsrfResolver` (reqwest `Resolve` 実装) を `fetch_http` に `dns_resolver` 注入し、connect 時に解決→`is_private_ip` 検証→private なら reject する。`ssrf_check` pre-flight は維持し `ValidatedUrl` 型契約と `InternalHost` (sysexits 65) UX を保つ。
+Chosen option: 方式 Y'。`SsrfResolver` (reqwest `Resolve` 実装) を共有 HTTP client 構築箇所の reqwest `ClientBuilder::dns_resolver` で `fetch_http` client に注入し (src/tools/builder.rs:73)、connect 時に解決→`is_private_ip` 検証→private なら reject する。`ssrf_check` pre-flight は維持し `ValidatedUrl` 型契約と `InternalHost` (sysexits 65) UX を保つ。
 
 方式 Y' は connector が実際に dial するアドレスで private 判定するため rebind を原理的に閉じる。方式 X は「検証済みのその IP に connect する」性質に security value がない (constraint が問うのは private か否かだけで、それは dial するアドレスで検証すれば足りる) 一方、マップの lifecycle・並行競合・host-key 不一致による正当 host の誤ブロックを足すため却下。方式 Z は ADR-0001 が記録した単一 `fetch_http` invariant を破壊し、redirect 先 host が client 構築時に未知のため却下。方式 B は OUTCOME Constraint を緩める方向で、クラウド実行の AI エージェントに metadata 露出を残すため却下。
 

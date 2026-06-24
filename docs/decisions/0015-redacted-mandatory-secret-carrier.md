@@ -38,7 +38,7 @@ Option B は人間の規律に依存し、1 箇所の忘れが漏洩に直結す
 - Bad, because `Serialize` は未実装だが、誤って `.expose()` した値を serde に渡せば保護は効かない
 - Bad, because `Clone` は secret をメモリに複製し、drop 時の消去 (zeroize) は無い
 - Bad, because 境界での包み忘れは型で検出できず、平文 String のまま運ぶ経路を作れる (現状は全境界が `Redacted::new` 経由)
-- Bad, because Slack の `SLACK_TOKEN` 未設定 error は `xoxp-` prefix を案内するが、`Redacted::new` は prefix を検証しない。prefix 要求は error 文言のみで強制されない (別タスクで追跡)
+- Neutral, because `Redacted::new` は汎用 secret carrier のため token 種別を知らず `xoxp-` prefix を検証しない。prefix 要求自体は `SlackClient::from_env_with` の構築時検証 (`SlackError::TokenWrongType`) で強制済み (ADR-0022)
 
 ### Confirmation
 

@@ -99,5 +99,5 @@ out.push_str(&shift_headings(&content[..end], 2)); // 見出し level を 2 下�
 - `src/github/format.rs:6` (`MAX_README_BYTES = 24_000`)、`:106-267` (整形一式)
 - `src/github/format/overview_tests.rs` (T-GF006..036)
 - ADR-0010 (JSON envelope 契約。本 ADR はテキスト整形契約で別レイヤ)
-- `src/github/types.rs:72` の `ADR-0065` 参照は不在 ADR。JSON 出力契約は ADR-0010 が担う。source コメント差し替えは横流しタスク
+- `src/github/types.rs:72` の source コメントは `#67/ADR-0010` を参照する (旧 `ADR-0065` 不在参照は差し替え済み)。JSON 出力契約は ADR-0010 が担う
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #8)
