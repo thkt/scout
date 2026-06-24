@@ -1,4 +1,4 @@
-//! Typo correction utilities for ADR-0065 `error.candidates`.
+//! Typo correction utilities for the `error.candidates` JSON envelope field (ADR-0010).
 //!
 //! Uses Optimal String Alignment (OSA) distance — Levenshtein extended with
 //! adjacent transpositions, so "REDAME" matches "README" at distance 1.

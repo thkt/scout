@@ -69,7 +69,7 @@ pub(crate) struct IssueInfo {
     pub labels: Vec<LabelInfo>,
     pub user: Option<UserInfo>,
     /// Internal: present when GitHub's issues endpoint returns a PR.
-    /// Not part of scout's public JSON output (#67/ADR-0065).
+    /// Not part of scout's public JSON output (#67/ADR-0010).
     #[serde(skip_serializing)]
     pub pull_request: Option<serde_json::Value>,
 }
