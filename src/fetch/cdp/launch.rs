@@ -53,7 +53,7 @@ pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
     resolve_browser_binary_from(path_commands, known_paths)
 }
 
-/// See spec.md Chrome Launch Flags table for rationale.
+/// See ADR-0021 (CDP Chromium Launch Egress Flags) for rationale.
 ///
 /// The proxy flags route every chromium TCP egress through scout's loopback
 /// SOCKS5 proxy so connect-time IPs are re-validated (issue #201):

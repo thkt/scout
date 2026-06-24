@@ -51,10 +51,10 @@ pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
 
 /// Decode raw bytes into Unicode text.
 ///
-/// Detection priority (BR-003 > BR-002 > BR-001):
-/// 1. If `hint` is Some, use the explicit encoding (BR-003)
-/// 2. If a BOM is found, use the BOM-identified encoding (BR-002)
-/// 3. Run chardetng on full content; if decode succeeds, use detected encoding (BR-001)
+/// Detection priority (highest first; see ADR-0013 for rationale):
+/// 1. If `hint` is Some, use the explicit encoding
+/// 2. If a BOM is found, use the BOM-identified encoding
+/// 3. Run chardetng on full content; if decode succeeds, use detected encoding
 /// 4. Fall back to strict UTF-8 validation (AssumedUtf8)
 /// 5. If all fail, return NonUtf8 error with retry hint
 pub(super) fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
@@ -119,7 +119,7 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         ));
     }
 
-    // BR-001: chardetng runs BEFORE UTF-8 check to prevent silent mojibake
+    // chardetng runs BEFORE UTF-8 check to prevent silent mojibake (ADR-0013)
     let mut detector = EncodingDetector::new(Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
     let encoding = detector.guess(None, Utf8Detection::Allow);
@@ -140,10 +140,10 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         }
     }
 
-    // FR-007: chardetng inconclusive or had errors; try strict UTF-8.
+    // chardetng inconclusive or had errors; try strict UTF-8.
     // Note: with `Utf8Detection::Allow`, chardetng already guesses UTF-8 for any
     // valid-UTF-8 bytes, so this branch is unreachable in practice; it remains as a
-    // defensive backstop for the documented detection priority (FR-007).
+    // defensive backstop for the documented detection priority (ADR-0013).
     if let Ok(s) = str::from_utf8(bytes) {
         return Ok(DecodeResult {
             text: s.to_owned(),
@@ -152,7 +152,7 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         });
     }
 
-    // FR-008: All paths failed; include retry hint with chardetng's best guess
+    // All paths failed; include retry hint with chardetng's best guess (ADR-0013)
     Err(GitHubError::NonUtf8(format!(
         "File encoding could not be decoded. Retry with --encoding {}. \
         Use --encoding to specify the encoding (e.g., --encoding shift_jis, --encoding euc-jp).",
