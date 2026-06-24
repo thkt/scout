@@ -35,7 +35,7 @@ The acceptance criteria asked for: `ScoutBuilder` + the four trait abstractions,
 
 Chosen: `Arc<dyn Trait>` fields with a `ScoutBuilder` test seam.
 
-Three of the four proposed traits live in dedicated modules: `clock::Clock` (`SystemClock` / `FixedClock(u64)`), `rng::Rng` (`FastrandRng` / `SeededRng(Mutex<fastrand::Rng>)`), and `token_source::TokenSource` (`GhCliSource` / `StaticTokenSource(Option<Redacted>)`). The fourth, `DnsResolver`, is deferred (see *Deferred concerns* below).
+Three of the four proposed traits live in dedicated modules: `clock::Clock` (`SystemClock` / `FixedClock(u64)`), `rng::Rng` (`FastrandRng` / `SeededRng(Mutex<fastrand::Rng>)`), and `token_source::TokenSource` (`GhCliSource` / `StaticTokenSource(Option<Redacted>)`). The fourth, `DnsResolver`, is deferred (see _Deferred concerns_ below).
 
 `Scout` holds `clock: Arc<dyn Clock>`, `rng: Arc<dyn Rng>`, and `token_source: Arc<dyn TokenSource>`. These are forwarded into `GitHubClient` on first `Scout::github()` call (`OnceCell` lazy init), so non-GitHub commands (`search`, `fetch`, `research`) never pay the `gh auth token` cost.
 
@@ -106,3 +106,22 @@ Skip `ScoutBuilder` entirely; add `#[cfg(test)] fn for_test()` and `#[cfg(test)]
 - The `DnsResolver` follow-up issue lands. Re-evaluate whether to keep generic-style traits for "always single-implementation in production" cases or push everything to `Arc<dyn ...>` for uniformity.
 - A second async runtime besides tokio is added (currently unforeseen). The `Send + Sync` bounds on `Clock` / `Rng` / `TokenSource` were chosen for tokio compatibility; another runtime may require revisiting `Send` strategy.
 - `Scout` accumulates a fifth `Arc<dyn Trait>` field beyond `clock` / `rng` / `token_source` / future `dns`. At that point, default-derived `ScoutBuilder` (e.g. via a private `Default` impl on the trait collection) may pay for itself.
+
+## Addendum (2026-06-24): arg-vs-stdin 解決順と stdin の単一消費
+
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 12) で、CLI positional の値解決 (引数優先・stdin fallback・stdin の単一消費) が `resolve_input` / `StdinResolver` の docstring とテストにのみ pin され ADR 化されていないと判定された。本 ADR が扱う Scout 構築層の入力 seam に隣接するため、ADR-0012 の Addendum 方針に倣い決定本文は変えずここに転記する。実装は `src/tools/params.rs:8-29` (`resolve_input`) と `src/tools.rs:98-144` (`StdinResolver`) が真実源。
+
+### per-arg 解決順 (`resolve_input`)
+
+各 positional は次の優先で確定する。
+
+| 入力                             | 結果                                                       |
+| -------------------------------- | ---------------------------------------------------------- |
+| 明示引数 (値が `-` 以外)         | その引数値を採用 (stdin は読まない)                        |
+| 引数省略 または `-` + stdin あり | stdin を trim して採用 (空・whitespace のみは「無し」扱い) |
+| 引数省略 + stdin が TTY          | `Missing {label}` の usage error (exit 64、ADR-0002)       |
+| `-` または引数省略 + stdin が空  | `No {label} provided` の usage error                       |
+
+### stdin の単一消費 (`StdinResolver`)
+
+stdin は 1 回だけ読み、最初に stdin を要する引数が内容を消費する (`StdinState`: `NotPiped` / `Available` / `Consumed`)。消費後に別の引数が stdin を要求すると `Consumed` 分岐で usage error にする (例: `repo-read - README.md` で repository を stdin から取った後に path も `-` を要求するケース)。これにより「1 つの pipe 入力が複数引数へ二重供給される」曖昧さを排し、どの引数が stdin を受けたかを決定的にする。テストは `[T-S002]` (引数が stdin に優先)、`[T-S003]` (引数省略で stdin 採用)、`[T-S004]` (`-` は TTY でも stdin)、`[T-S005]` (TTY + 引数無しで fail-fast)、`[T-S006]`/`[T-S007]` (空 stdin で error)、`[T-S008]` (stdin は trim) が pin する。

@@ -336,6 +336,18 @@ fn extract_target(
     Some((first, messages))
 }
 
+/// Render a resolved Slack permalink as YAML-frontmatter + body, the stable
+/// output schema agent consumers parse.
+///
+/// Frontmatter keys are emitted in a fixed order: `workspace`, `channel`,
+/// `author`, `ts`, then `context_messages` only when `replies` is non-empty
+/// (omitted, not zero, so a parser feature-detects threads via key presence),
+/// then `url`. Every frontmatter value flows through `escape_yaml`, and every
+/// body segment through `neutralize_yaml_markers`, so a message whose text
+/// contains a line `---` or `key: value` cannot break out of the body and forge
+/// frontmatter the consumer would trust (output-injection defense, ADR-0014).
+/// Reply blocks are separated by a `---` line and prefix the author (and `ts`
+/// when present) before the neutralized text.
 fn format_slack_output(
     slack_url: &SlackUrl,
     channel_name: &str,
