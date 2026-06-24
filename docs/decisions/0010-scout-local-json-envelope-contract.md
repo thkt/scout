@@ -45,16 +45,16 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 `src/envelope.rs:201-206` の `is_retryable` は `matches!(self, TempFailure | Timeout)` のみ true を返す。各 variant の retryable 判定:
 
-| ErrorCode | Retryable | Rationale |
-| --------- | --------- | --------- |
-| `UsageError` (64) | false | caller 入力 fix が必要 (token rotation 等) |
-| `DataError` (65) | false | URL / data の差し替え必要 |
-| `NotFound` (66) | false | resource 不在、retry で解決しない |
-| `Internal` (70) | **false** | scout-side invariant violation、bug fix が必要。retry は scout のバグを mask する |
-| `IoError` (74) | false | external tool / IO failure、root cause fix が必要 |
-| `TempFailure` (75) | **true** | server-side transient (5xx, rate limit) |
-| `Timeout` (124) | **true** | transport timeout、retry で解決可能 |
-| `Unknown` (104) | **false** | classification 漏れ。`true` だと未知 cause で blind retry になり caller を巻き込む |
+| ErrorCode          | Retryable | Rationale                                                                          |
+| ------------------ | --------- | ---------------------------------------------------------------------------------- |
+| `UsageError` (64)  | false     | caller 入力 fix が必要 (token rotation 等)                                         |
+| `DataError` (65)   | false     | URL / data の差し替え必要                                                          |
+| `NotFound` (66)    | false     | resource 不在、retry で解決しない                                                  |
+| `Internal` (70)    | **false** | scout-side invariant violation、bug fix が必要。retry は scout のバグを mask する  |
+| `IoError` (74)     | false     | external tool / IO failure、root cause fix が必要                                  |
+| `TempFailure` (75) | **true**  | server-side transient (5xx, rate limit)                                            |
+| `Timeout` (124)    | **true**  | transport timeout、retry で解決可能                                                |
+| `Unknown` (104)    | **false** | classification 漏れ。`true` だと未知 cause で blind retry になり caller を巻き込む |
 
 `Unknown=false` を採用した理由: `Unknown` の rate 上昇は classification 設計の verification signal として機能する。`true` を返すと caller が blind retry し、signal が消える。
 
@@ -62,13 +62,13 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 `src/envelope.rs:228-236` の serialization 規約:
 
-| Field | Serialization | Why |
-| ----- | ------------- | --- |
-| `code` | always | parser の枝分かれ根拠 (`code === "RATE_LIMIT"`) |
-| `message` | always | human-readable explanation、empty string 含む |
-| `retryable` | always | parser の retry 判定根拠 (`retryable === true`) |
-| `next_step` | `skip_serializing_if = "Option::is_none"` | optional hint、`null` を avoid (parser の `if "next_step" in payload`) |
-| `candidates` | `skip_serializing_if = "Vec::is_empty"` | optional alternatives、`[]` も省略 |
+| Field        | Serialization                             | Why                                                                    |
+| ------------ | ----------------------------------------- | ---------------------------------------------------------------------- |
+| `code`       | always                                    | parser の枝分かれ根拠 (`code === "RATE_LIMIT"`)                        |
+| `message`    | always                                    | human-readable explanation、empty string 含む                          |
+| `retryable`  | always                                    | parser の retry 判定根拠 (`retryable === true`)                        |
+| `next_step`  | `skip_serializing_if = "Option::is_none"` | optional hint、`null` を avoid (parser の `if "next_step" in payload`) |
+| `candidates` | `skip_serializing_if = "Vec::is_empty"`   | optional alternatives、`[]` も省略                                     |
 
 `code` / `message` / `retryable` の always emit と `next_step` / `candidates` の skip-if-empty は **意図的な分岐**:
 
@@ -81,10 +81,10 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 `src/envelope.rs:211-218` の `notes: Vec<String>` は常時 `[]` 出力 (`skip_serializing_if` なし)、`degraded_reasons: Vec<DegradedReason>` は `skip_serializing_if = "Vec::is_empty"`。
 
-| Field | Serialization | Rule basis |
-| ----- | ------------- | ---------- |
-| `notes` | always (`[]` when empty) | ADR-0065 で defined 済の original field、parser は `.notes.length` を常に読める前提 |
-| `degraded_reasons` | skip-if-empty | ADR-0003 で post-hoc 追加された additive field、parser は `if "degraded_reasons" in payload` で feature-detect |
+| Field              | Serialization            | Rule basis                                                                                                     |
+| ------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `notes`            | always (`[]` when empty) | ADR-0065 で defined 済の original field、parser は `.notes.length` を常に読める前提                            |
+| `degraded_reasons` | skip-if-empty            | ADR-0003 で post-hoc 追加された additive field、parser は `if "degraded_reasons" in payload` で feature-detect |
 
 新規 additive field 追加時の rule:
 
@@ -161,13 +161,13 @@ code-side migration (`per ADR-0065` → 各 scout-local ADR ref 更新) は foll
 
 ### Reassessment Triggers
 
-| Trigger | アクション |
-| ------- | ---------- |
-| 新規 `ErrorCode` variant が追加され、その retryable 判定が `TempFailure | Timeout` mapping に収まらない | Rule 1 table 拡張、`is_retryable()` の `match` arm 追加 |
-| 新規 field 追加で omit policy の判断が必要 | Rule 2/3 table に新規 row 追加、`always emit` / `skip-if-empty` の判断軸を記録 |
-| `data` 配下に新規 array field 追加 | Rule 4 に従い `[]`-never-`null` test を追加 |
-| `Unknown` rate が caller logs で持続的に上昇 | classification design を audit、`Unknown` をさらに分類できないか検討 (新規 ErrorCode variant 化) |
-| `data.foo: null` の表現が真に必要な case が発生 | Rule 4 に `Option<NonEmptyVec<T>>` 等の例外 pattern を追加 |
+| Trigger                                                                 | アクション                                                                                       |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| 新規 `ErrorCode` variant が追加され、その retryable 判定が `TempFailure | Timeout` mapping に収まらない                                                                    | Rule 1 table 拡張、`is_retryable()` の `match` arm 追加 |
+| 新規 field 追加で omit policy の判断が必要                              | Rule 2/3 table に新規 row 追加、`always emit` / `skip-if-empty` の判断軸を記録                   |
+| `data` 配下に新規 array field 追加                                      | Rule 4 に従い `[]`-never-`null` test を追加                                                      |
+| `Unknown` rate が caller logs で持続的に上昇                            | classification design を audit、`Unknown` をさらに分類できないか検討 (新規 ErrorCode variant 化) |
+| `data.foo: null` の表現が真に必要な case が発生                         | Rule 4 に `Option<NonEmptyVec<T>>` 等の例外 pattern を追加                                       |
 
 ### 参照
 
@@ -178,3 +178,17 @@ code-side migration (`per ADR-0065` → 各 scout-local ADR ref 更新) は foll
 - `docs/audit/2026-05-19-undocumented-decisions.md` (本 ADR の根拠 audit、Candidate A = envelope E-03/E-04/E-05 + README P-A/P-D)
 - `src/envelope.rs:201-236` (実装 site)
 - `README.md` L158, L314 (公開契約の declared form)
+
+## Addendum (2026-06-24): research の `sources` と `fetched_pages` の cardinality 非対称
+
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 16) で、research の `data` 配下 array 間の cardinality 関係がコードにのみ pin され、Rule 4 (`[]`-never-`null`) では語られていないと判定された。Rule 4 を補う転記として追記する。実装は `src/search/engine.rs:55-122` (`fetch_sources`) と `:169-177` (`format_sources`) が真実源。
+
+`research` の envelope は同じ `data` に 3 つの array を載せるが、要素数は同数ではない。
+
+| field           | 内容                                                   | 件数                                      |
+| --------------- | ------------------------------------------------------ | ----------------------------------------- |
+| `sources`       | Brave 検索結果の全件 (title + url、未 fetch)           | 検索が返した全件                          |
+| `fetched_pages` | `sources` の先頭 `depth` 件を fetch して成功したページ | `take(depth)` のうち成功分 (depth 1..=10) |
+| `failed_urls`   | 先頭 `depth` 件のうち fetch 失敗した URL + 理由        | `take(depth)` のうち失敗分                |
+
+`fetch_sources` は `sources.iter().take(depth)` のみ fetch するため、不変条件は `len(fetched_pages) + len(failed_urls) <= depth <= len(sources)` となる。consumer は `sources` と `fetched_pages` を同じ index で対応づけてはならない (`sources[i]` が `fetched_pages[i]` に対応する保証は無い。`fetched_pages` は成功分のみを元の取得順に並べ替えて詰める)。3 array はいずれも Rule 4 に従い空時 `[]` を返す。新規 array field を `data` に足す際は、件数が他 array と独立しうる場合この非対称を本節に追記する。
