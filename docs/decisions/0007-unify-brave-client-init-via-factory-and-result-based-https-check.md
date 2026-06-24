@@ -14,17 +14,17 @@ decision-makers: thkt (project owner)
 
 ## Decision Drivers
 
-* `unsafe_code = "forbid"` blocks `std::env::set_var` in unit tests; production env path is otherwise untestable.
-* HTTPS enforcement is dead code in `cargo test`; FN-MX-002 surfaces the gap.
-* ADR-0005 fixes Brave as the single search backend; avoid over-abstracting for hypothetical second backends.
-* Critic-design verdict on Approach A (`BraveConfig` struct) and Approach C (HTTPS mock infrastructure): both weakened by half-fixes or scope inversion against medium-severity findings.
+- `unsafe_code = "forbid"` blocks `std::env::set_var` in unit tests; production env path is otherwise untestable.
+- HTTPS enforcement is dead code in `cargo test`; FN-MX-002 surfaces the gap.
+- ADR-0005 fixes Brave as the single search backend; avoid over-abstracting for hypothetical second backends.
+- Critic-design verdict on Approach A (`BraveConfig` struct) and Approach C (HTTPS mock infrastructure): both weakened by half-fixes or scope inversion against medium-severity findings.
 
 ## Considered Options
 
-* Hybrid B+: factory parameter for env DI + `validate_https` returns `Result` + per-client `skip_https_check` flag (chosen).
-* Approach A: introduce `BraveConfig` struct with unified constructor and a `for_wiremock` escape hatch.
-* Approach B (pure): only add `from_env_with<F>`; leave `assert_https` and `with_base_url` untouched.
-* Approach C: convert all wiremock tests to HTTPS via rustls + self-signed cert.
+- Hybrid B+: factory parameter for env DI + `validate_https` returns `Result` + per-client `skip_https_check` flag (chosen).
+- Approach A: introduce `BraveConfig` struct with unified constructor and a `for_wiremock` escape hatch.
+- Approach B (pure): only add `from_env_with<F>`; leave `assert_https` and `with_base_url` untouched.
+- Approach C: convert all wiremock tests to HTTPS via rustls + self-signed cert.
 
 ## Decision Outcome
 
@@ -32,11 +32,11 @@ Chosen option: "Hybrid B+", because it closes both findings with a small, locali
 
 ### Consequences
 
-* Good, because the HTTPS check is no longer silently disabled by `cfg!(test)`; it runs in every test that doesn't explicitly opt out.
-* Good, because the env-reading path is testable via injectable closures, matching the `from_env_with` pattern recommended in `rules/frameworks/rust/LANG.md`.
-* Good, because the test-only bypass is now an explicit per-client flag set only by `with_base_url`; it cannot accidentally apply to a production-path client.
-* Good, because `validate_https` becomes a pure function whose logic is directly unit-testable without wiremock.
-* Bad, because `BraveError` gains an `InsecureBaseUrl` variant that, given the constant `API_BASE`, will never fire on the production path. The variant exists to make the test-path validation observable; this is accepted cost.
+- Good, because the HTTPS check is no longer silently disabled by `cfg!(test)`; it runs in every test that doesn't explicitly opt out.
+- Good, because the env-reading path is testable via injectable closures, matching the `from_env_with` pattern recommended in `rules/frameworks/rust/LANG.md`.
+- Good, because the test-only bypass is now an explicit per-client flag set only by `with_base_url`; it cannot accidentally apply to a production-path client.
+- Good, because `validate_https` becomes a pure function whose logic is directly unit-testable without wiremock.
+- Bad, because `BraveError` gains an `InsecureBaseUrl` variant that, given the constant `API_BASE`, will never fire on the production path. The variant exists to make the test-path validation observable; this is accepted cost.
 
 ### Confirmation
 
@@ -46,42 +46,42 @@ Chosen option: "Hybrid B+", because it closes both findings with a small, locali
 
 ### Hybrid B+ (chosen)
 
-`from_env_with<F>(http, get_var: F)` adopts the LANG.md factory-parameter pattern; production `from_env` delegates to it with `std::env::var`. `assert_https` becomes `validate_https(&str) -> Result<(), BraveError>`. `send_request` calls it via `?` unless `self.skip_https_check` is set, which only `with_base_url` (cfg(test)) does.
+`from_env_with<F>(http, get_var: F)` adopts the LANG.md factory-parameter pattern; production `from_env` delegates to it with `std::env::var`. `assert_https` becomes the generic `validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E>` (`src/redacted.rs:37`), so each caller injects its own error variant; `BraveClient` supplies `|| BraveError::InsecureBaseUrl` (`src/brave/client.rs:227`). `send_request` gates the call through the per-client `should_check_https()` helper (`src/brave/client.rs:210-219`), which returns `false` only when `skip_https_check` is set, and only `with_base_url` (cfg(test)) sets it.
 
-* Good, because both findings are closed with one cohesive change.
-* Good, because wiremock churn is zero; the new flag isolates the bypass to a single constructor.
-* Bad, because the bypass still exists, narrowly scoped. It is intentional: wiremock cannot serve HTTPS without infrastructure expansion outside the scope of RC-02.
+- Good, because both findings are closed with one cohesive change.
+- Good, because wiremock churn is zero; the new flag isolates the bypass to a single constructor.
+- Bad, because the bypass still exists, narrowly scoped. It is intentional: wiremock cannot serve HTTPS without infrastructure expansion outside the scope of RC-02.
 
 ### Approach A: `BraveConfig` struct with `for_wiremock` escape hatch
 
 A new struct holds `api_key` and `base_url`; `new()` validates both; `for_wiremock` (cfg(test)) skips HTTPS.
 
-* Good, because the construction surface becomes one type.
-* Bad, because `for_wiremock` is the same bypass renamed; FN-MX-002 survives behind a new door.
-* Bad, because `InsecureBaseUrl` variant is still dead in production but with no testable production scenario.
+- Good, because the construction surface becomes one type.
+- Bad, because `for_wiremock` is the same bypass renamed; FN-MX-002 survives behind a new door.
+- Bad, because `InsecureBaseUrl` variant is still dead in production but with no testable production scenario.
 
 ### Approach B (pure factory, no HTTPS fix)
 
 Only `from_env_with<F>` is added.
 
-* Good, because the change is minimal.
-* Bad, because FN-MX-002 (HTTPS untested) remains open; audit re-opens.
+- Good, because the change is minimal.
+- Bad, because FN-MX-002 (HTTPS untested) remains open; audit re-opens.
 
 ### Approach C: HTTPS wiremock infrastructure
 
 rustls + self-signed cert across `brave/client.rs` (~8), `slack.rs` (~4), `github.rs` (~8) wiremock sites.
 
-* Good, because every test path goes through real HTTPS.
-* Bad, because 20+ test rewrites scope-creep into Slack and GitHub.
-* Bad, because the cost of HTTPS mock infrastructure exceeds the medium severity of FN-MX-002.
+- Good, because every test path goes through real HTTPS.
+- Bad, because 20+ test rewrites scope-creep into Slack and GitHub.
+- Bad, because the cost of HTTPS mock infrastructure exceeds the medium severity of FN-MX-002.
 
 ## More Information
 
 ### Deferred concerns
 
-* FN-MC-010 (CLI test for legacy `GEMINI_API_KEY` regression) is dropped: the Gemini code path was removed in the v2.0.0 migration, so there is no regression to guard. The old env var is now ignored as any other unknown variable would be.
+- FN-MC-010 (CLI test for legacy `GEMINI_API_KEY` regression) is dropped: the Gemini code path was removed in the v2.0.0 migration, so there is no regression to guard. The old env var is now ignored as any other unknown variable would be.
 
 ### Reassessment Triggers
 
-* `BraveError::InsecureBaseUrl` proves to be dead code over six months. Re-evaluate whether the validation belongs at construction time instead of request time.
-* A second HTTP backend is added (currently forbidden by ADR-0005). The `skip_https_check` flag would need to generalize, at which point a `BraveConfig`-style struct becomes worth its weight.
+- `BraveError::InsecureBaseUrl` proves to be dead code over six months. Re-evaluate whether the validation belongs at construction time instead of request time.
+- A second HTTP backend is added (currently forbidden by ADR-0005). The `skip_https_check` flag would need to generalize, at which point a `BraveConfig`-style struct becomes worth its weight.
