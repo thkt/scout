@@ -94,9 +94,11 @@ field コメントに contract を追記、ADR は作らない。
 
 ### 参照ファイル
 
-- `src/tools.rs:128-137` (dual HTTP client 定義)
-- `src/fetch.rs:528-612` (manual redirect loop, `download` function)
-- `src/fetch.rs:466-488` (CDP `Fetch.RequestPaused` interceptor)
+ADR 制定時の行参照は `fetch.rs` 分割 (commit `a7a7a4f`、後述 Addendum (2026-06-24): Decision Outcome ドリフト 参照) で移動したため、現行位置に更新済み。
+
+- `src/tools.rs:160-163` (dual HTTP client `http` / `fetch_http` の field 定義)、`src/tools/builder.rs:57-76` (`build_default_clients`、`fetch_http` に `Policy::none()`)
+- `src/fetch/download.rs:22` (`download` function、per-hop SSRF check を伴う manual redirect 経路)
+- `src/fetch/cdp.rs:264` (CDP `EventRequestPaused` listener、protocol 上は `Fetch.RequestPaused`)、`src/fetch/cdp/launch.rs:85-113` (`check_browser_request` subrequest 判定)
 - `docs/audit/2026-05-13-undocumented-decisions.md` (本 ADR の根拠 audit)
 
 ## Addendum (2026-06-24): blocklist 構成と CDP subrequest scheme の列挙
@@ -128,3 +130,26 @@ IPv6 の IPv4 埋め込みは `to_ipv4` (`to_ipv4_mapped` ではない) で unwr
 | 上記以外 (`file:` / `ftp:` / `gopher:` ほか) | 分類不能として warn + block (catch-all で fail closed)        |
 
 `ws` / `wss` を http(s) へ写してから検査するのは、WebSocket が内部サービスへ到達しうるため SSRF allowlist を同じ blocklist で適用するため。テストは `[T-F047]` が scheme ごとの allow/block を pin する。
+
+## Addendum (2026-06-24): Decision Outcome ドリフト (module split 実施済み + URL 軸型強制の追加)
+
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、DRIFT 側流し #260) で、本 ADR の Decision Outcome「Newtype 化と split は trigger 条件 (incident or 規模超過) まで保留する」が現状コードと乖離していると判定された。決定本文 (Option B 採用) は当時の lightweight な判断として保持し、保留としていた 2 点が trigger 発火ではない要因で先行実施された事実を以下に記録する。
+
+### module split は可読性要因で実施済み (trigger 未発火)
+
+`fetch.rs` は commit `a7a7a4f` (`refactor(fetch): split fetch.rs below 400 lines`) で `src/fetch/{ssrf,cdp,download,converter,extractor}.rs` 等へ分割され、本体は ADR 制定時の 1456 行から 400 行へ縮小した。Reassessment Triggers の「`fetch.rs` 行数 > 2000」「`#[cfg(feature = "js-rendering")]` 累積行数 > plain path」のいずれも発火していない。分割の動機は trigger 条件ではなく可読性で、commit message (`split fetch.rs below 400 lines`) が本体行数の削減を主目的として明示する。さらに `cdp` サブツリーは testability/coverage invariant に従い `cdp/{proxy,transport}.rs` へ 4-way split されている (`docs/audit/2026-06-24-020601-adr-gaps.md` finding #11、stream-generic ロジックを offline 100% でテストし OS-I/O を transport tier に隔離して diff-coverage gate から除外)。Option B の「現状構造維持」は incident や規模超過ではなく可読性主導の選択で上書きされたと読み替える。当時懸念した「fallback heuristic と orchestrator の文脈分断」は、`thin-extract` heuristic が `src/fetch/extractor.rs` に locality を保って収まることで実害化しなかった。
+
+### URL 軸の型強制 (`ValidatedUrl`) が追加済み
+
+commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL logs (issue #100)`) で `ValidatedUrl` newtype (`src/fetch/ssrf.rs:88-102`) が導入された。これは async な `ssrf_check` (前述 Addendum の sync 段 `validate_url_sync` を内包し、続けて connect-time の IP guard を適用する gate) のみが構築でき、downstream (`download` / `reqwest::Client::get`) が `&ValidatedUrl` を受け取ることで「全 fetch path が SSRF check を通過した URL のみを扱う」ことを型で強制する。
+
+この型強制は Option A が想定した `SsrfSafeClient` とは別軸である。Option A の newtype は client 選択 (`http` か `fetch_http` か) を型で縛る client 単位の抽象で、これは現状も未導入である。`ValidatedUrl` は URL 単位の検証済みマーカーで、enforcement の軸が異なる。
+
+軸は異なるが、本 ADR が Option B の Consequences として記録した「Bad, because 型強制ではないので contract 違反は code review にのみ依存」は部分的に不正確になった。現状の正確な切り分けは次のとおり。
+
+| SSRF contract の構成要素                             | 現状の enforcement                                           |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| user URL が SSRF check を通過したか                  | `ValidatedUrl` 型で強制 (`ssrf_check` 以外で構築不能)        |
+| user URL 経路で `fetch_http` (`Policy::none()`) 選択 | 型では未強制、Implementation Guidelines + code review に依存 |
+
+監査 finding #13 はこの `ValidatedUrl` を Option B 違反 (DRIFT) として /adrift へ流したが、上記のとおり Option A の client 軸 newtype 採用ではなく別軸の URL 軸型強制であるため、status は accepted を維持する。本節はその「なぜ Option A 採用ではないか」を pin し、後続の /adrift・/census が同じ判定を再フラグするのを防ぐ。
