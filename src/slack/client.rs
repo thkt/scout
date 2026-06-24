@@ -67,6 +67,15 @@ pub(crate) struct SlackClient {
 
 const API_BASE: &str = "https://slack.com/api";
 
+/// Slack User OAuth token strings begin with `xoxp-`; bot (`xoxb-`), app-level
+/// (`xapp-`), workflow (`xwfp-`), and config tokens do not. scout requires a
+/// user token so the channels, threads, and users it resolves match the human's
+/// own workspace visibility (a bot token only sees channels its app was added
+/// to). `from_env_with` rejects any other prefix up front instead of letting it
+/// fail later with an opaque API error (issue #261). Verified against
+/// <https://api.slack.com/concepts/token-types#user> (2026-06).
+const USER_TOKEN_PREFIX: &str = "xoxp-";
+
 /// Cap for `conversations.replies` page size. Slack's default is undocumented
 /// and threads can grow into the thousands on incident channels; making the
 /// limit explicit bounds the JSON payload that `api_get_once` buffers in
@@ -125,6 +134,9 @@ impl SlackClient {
     {
         let raw = get_var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
         let token = Redacted::new(&raw).ok_or(SlackError::TokenNotSet)?;
+        if !token.expose().starts_with(USER_TOKEN_PREFIX) {
+            return Err(SlackError::TokenWrongType);
+        }
         Ok(Self::new(http, token, max_retries))
     }
 
