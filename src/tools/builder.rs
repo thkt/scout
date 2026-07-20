@@ -1,16 +1,17 @@
 //! `ScoutBuilder`: the dependency-injection seam for constructing `Scout`.
 
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Client;
 use reqwest::redirect::Policy;
+use reqwest::{Client, Proxy};
 use tokio::sync::{OnceCell, watch};
 use tracing::warn;
 
 use crate::brave::client::BraveClient;
 use crate::clock::{Clock, SystemClock};
-use crate::fetch::{DnsResolver, SsrfResolver, TokioDnsResolver};
+use crate::fetch::{DnsResolver, EgressMode, SsrfResolver, TokioDnsResolver, detect_egress_mode};
 #[cfg(test)]
 use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
@@ -40,6 +41,10 @@ pub(crate) struct ScoutBuilder {
     rng: Arc<dyn Rng>,
     token_source: Arc<dyn TokenSource>,
     dns: Arc<dyn DnsResolver>,
+    /// Egress mode detected from the environment in `from_env`. Shapes
+    /// `fetch_http` (via `build_default_clients`) and is copied into `Scout` so
+    /// `fetch` can pass it to `fetch_page`. `for_test` defaults to `Direct`.
+    egress: EgressMode,
     cancel: watch::Sender<bool>,
     config: RuntimeConfig,
     /// Pre-initialize `Scout.github` (`OnceCell`) with a test client pointed at
@@ -57,20 +62,38 @@ pub(crate) struct ScoutBuilder {
 /// Build the two `reqwest::Client`s shared between production and test paths
 /// (redirect-limited + redirect-none). Extracted so `from_env` and `for_test`
 /// stay in sync — drift here would change SSRF / timeout posture asymmetrically.
-fn build_default_clients() -> Result<(Client, Client), ScoutError> {
+///
+/// `egress` shapes only `fetch_http`; the redirect-limited `http` client (Brave,
+/// GitHub, Slack) is identical in both modes. In `Direct` mode `fetch_http`
+/// carries the ADR-0012 connect-time `SsrfResolver` guard. In `Proxied` mode it
+/// instead routes every request through `Proxy::all` and drops that guard: the
+/// proxy (not scout) resolves and dials, and the guard would block the
+/// loopback/private proxy address itself. `ssrf_check` still rejects literal
+/// private/loopback targets per hop, so dropping the guard does not open SSRF to
+/// a caller-supplied URL.
+fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutError> {
     let http = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(Policy::limited(MAX_REDIRECTS))
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
-    let fetch_http = Client::builder()
+
+    let fetch_builder = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
-        .redirect(Policy::none())
-        // ADR-0012: re-validate connect-time IPs to close the DNS-rebind TOCTOU
-        // gap left by the `ssrf_check` pre-flight (which reqwest re-resolves).
-        .dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver)))
+        .redirect(Policy::none());
+    let fetch_builder = match egress {
+        // `Proxy::all`: route every scheme through the forward proxy.
+        // https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all
+        EgressMode::Proxied(url) => fetch_builder.proxy(
+            Proxy::all(url).map_err(|e| ScoutError::io_error(format!("proxy init failed: {e}")))?,
+        ),
+        EgressMode::Direct => {
+            fetch_builder.dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver)))
+        }
+    };
+    let fetch_http = fetch_builder
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
     Ok((http, fetch_http))
@@ -82,7 +105,10 @@ impl ScoutBuilder {
     /// match production behavior; tests override via `with_*`.
     pub(crate) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
-        let (http, fetch_http) = build_default_clients()?;
+        // Detect the proxy env once here so `build_default_clients` shapes
+        // `fetch_http` to match and `Scout` carries the same mode into `fetch`.
+        let egress = detect_egress_mode(&env::vars().collect());
+        let (http, fetch_http) = build_default_clients(&egress)?;
         let brave = BraveClient::from_env(http.clone(), config.max_retries)
             .inspect_err(|e| warn!("Brave client not available: {e}"))
             .ok();
@@ -94,6 +120,7 @@ impl ScoutBuilder {
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(GhCliSource),
             dns: Arc::new(TokioDnsResolver),
+            egress,
             cancel: watch::channel(false).0,
             config,
             #[cfg(test)]
@@ -110,7 +137,8 @@ impl ScoutBuilder {
     /// appropriate.
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        let (http, fetch_http) = build_default_clients().expect("test client init");
+        let (http, fetch_http) =
+            build_default_clients(&EgressMode::Direct).expect("test client init");
         Self {
             http,
             fetch_http,
@@ -119,6 +147,7 @@ impl ScoutBuilder {
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(GhCliSource),
             dns: Arc::new(TokioDnsResolver),
+            egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
             config: RuntimeConfig::default(),
             github_endpoint: None,
@@ -147,6 +176,18 @@ impl ScoutBuilder {
     #[cfg(test)]
     pub(crate) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
         self.dns = dns;
+        self
+    }
+
+    /// Override the egress mode `build()` installs into `Scout.egress` so a test
+    /// can drive the Proxied `fetch` path without setting process-wide proxy env.
+    /// Pair with `with_fetch_http` (a proxied, guard-free client, as production
+    /// `build_default_clients` builds for `Proxied`) since `for_test`'s default
+    /// `fetch_http` is the `Direct` guard-carrying client. Mirrors the other
+    /// `with_*` setters.
+    #[cfg(test)]
+    pub(crate) fn with_egress(mut self, egress: EgressMode) -> Self {
+        self.egress = egress;
         self
     }
 
@@ -234,6 +275,7 @@ impl ScoutBuilder {
             rng: self.rng,
             token_source: self.token_source,
             dns: self.dns,
+            egress: self.egress,
         }
     }
 }

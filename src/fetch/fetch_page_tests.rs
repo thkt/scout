@@ -1,5 +1,7 @@
+use super::ssrf::EgressMode;
 use super::*;
-use crate::test_support::{no_redirect_client, try_spawn_mock_server};
+use crate::test_support::{no_redirect_client, spawn_forward_proxy, try_spawn_mock_server};
+use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -160,5 +162,76 @@ async fn t010_js_flag_errors_when_feature_disabled() {
     assert!(
         matches!(&result, Err(FetchError::BrowserNotFound(msg)) if msg.contains("js-rendering")),
         "expected BrowserNotFound error with feature hint, got: {result:?}"
+    );
+}
+
+/// [T-010] with a proxy configured, fetch_page returns the page body for a public-domain URL routed through a local forward proxy while the DNS resolver is never consulted
+#[tokio::test]
+async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_domain_url_routed_through_a_local_forward_proxy_while_the_dns_resolver_is_never_consulted()
+ {
+    // Rich body (no <script>, >100 visible chars) so `is_js_dependent` /
+    // `is_thin_extract` stay false and the CDP fallback never fires.
+    let body = "<html><body><h1>Proxied Article</h1><p>proxied body content long \
+        enough to clear the thin-body and thin-extract thresholds so the JS \
+        rendering fallback path is never taken in this proxied fetch test.</p>\
+        </body></html>";
+    let Some((proxy_url, handle)) = spawn_forward_proxy(body) else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    // Mirrors what ScoutBuilder builds in Proxied mode: an explicit `Proxy::all`
+    // and NO `SsrfResolver` connect-time guard (which by design blocks loopback,
+    // where the local proxy listens). `Proxy::all` per
+    // https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+
+    // `FailingDnsResolver` errors the instant it is consulted. Proxied egress
+    // must skip scout's DNS pre-check, so success here proves the resolver was
+    // never called; a regression to Direct would surface as
+    // `FetchError::DnsResolution`.
+    let resolver: Arc<dyn DnsResolver> = Arc::new(FailingDnsResolver(
+        "resolver must not be consulted in Proxied mode".to_owned(),
+    ));
+    let (cancel, _) = watch::channel(false);
+    let opts = FetchOptions {
+        egress: EgressMode::Proxied(proxy_url.clone()),
+        ..Default::default()
+    };
+    let result = fetch_page(&client, "http://example.com/page", opts, resolver, &cancel).await;
+
+    let _ = handle.join();
+    let page = result.expect("proxied fetch of a public URL should succeed");
+    assert!(
+        page.markdown().contains("proxied body content"),
+        "proxied fetch should return the page body, got: {:?}",
+        page.markdown()
+    );
+}
+
+/// [T-011] with a proxy configured, fetch_page to a literal loopback URL is blocked before any request reaches the proxy
+#[tokio::test]
+async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked_before_any_request_reaches_the_proxy()
+ {
+    // Proxied egress skips scout's DNS pre-check, but `validate_url_sync` still
+    // rejects a literal loopback host in every mode (it runs before the Proxied
+    // early-return in `ssrf_check`). The proxy points at a dead port: were the
+    // literal block absent, the request would reach the proxy and fail as a
+    // connection error (`FetchError::Http`), so asserting `InternalHost` proves
+    // the block fired before any request left scout.
+    let client = no_redirect_client();
+    let resolver: Arc<dyn DnsResolver> = Arc::new(TokioDnsResolver);
+    let (cancel, _) = watch::channel(false);
+    let opts = FetchOptions {
+        egress: EgressMode::Proxied("http://127.0.0.1:9".to_owned()),
+        ..Default::default()
+    };
+    let result = fetch_page(&client, "http://127.0.0.1/secret", opts, resolver, &cancel).await;
+    assert!(
+        matches!(result, Err(FetchError::InternalHost)),
+        "loopback URL must be blocked before reaching the proxy, got: {result:?}"
     );
 }

@@ -2,11 +2,11 @@
 
 # scout
 
-Web調査とGitHubリポジトリ探索 — 人間とAIエージェントのどちらでも使えます。読むのは要約ではなく、ソースそのものです。
+Web 調査と GitHub リポジトリ探索 — 人間と AI エージェントのどちらでも使えます。読むのは要約ではなく、ソースそのものです。
 
 ## 課題
 
-Next.js App Routerの認証方式を調べたい場合に、どのような課題があるでしょうか。
+Next.js App Router の認証方式を調べたい場合に、どのような課題があるでしょうか。
 
 | 方法      | 手順                                    | 結果                                                    |
 | --------- | --------------------------------------- | ------------------------------------------------------- |
@@ -36,7 +36,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
   - [Auth.js](https://authjs.dev/...)
 ```
 
-`search` はBrave Searchから取得した生のURLを返し、`research` は上位Nページをクリーン Markdownで取得します。一次ソースとの間にLLMの要約レイヤーは入りません。
+`search` は Brave Search から取得した生の URL を返し、`research` は上位 N ページをクリーン Markdown で取得します。一次ソースとの間に LLM の要約レイヤーは入りません。
 
 ## scoutを使うべき場面（と使わなくていい場面）
 
@@ -80,7 +80,7 @@ export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch`
 
 ### チューニング
 
-ビルトインのタイムアウトとリトライ予算を上書きできます。不正な値はリクエストを送る前に終了コード64（使い方エラー）で失敗します。
+ビルトインのタイムアウトとリトライ予算を上書きできます。不正な値はリクエストを送る前に終了コード 64（使い方エラー）で失敗します。
 
 | 環境変数                      | デフォルト | 範囲   | 効果                                                                    |
 | ----------------------------- | ---------- | ------ | ----------------------------------------------------------------------- |
@@ -92,7 +92,7 @@ export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch`
 
 ### オプション: JSレンダリング（SPA対応）
 
-`fetch` はJS依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレスChrome（CDP）でレンダリングします。Chrome/Chromiumのローカルインストールと `js-rendering` featureが必要です。
+`fetch` は JS 依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレス Chrome（CDP）でレンダリングします。Chrome/Chromium のローカルインストールと `js-rendering` feature が必要です。
 
 ```sh
 cargo install --path . --features js-rendering
@@ -113,19 +113,19 @@ cargo install --path . --features js-rendering
 - `scout repo-overview owner/repo` — リポジトリ概要
 ```
 
-`CLAUDE.md` に記載すると、Claude Codeは `WebFetch` や `WebSearch` の代わりに `scout` コマンドを使うようになります。MCP設定は不要です。
+`CLAUDE.md` に記載すると、Claude Code は `WebFetch` や `WebSearch` の代わりに `scout` コマンドを使うようになります。MCP 設定は不要です。
 
 ## コマンド
 
-すべてのコマンドはクエリ/URL/リポジトリを位置引数・パイプ入力・対話的stdin（`-`）のいずれかで受け取れます（例: `echo "クエリ" | scout search`、`scout search -`）。
+すべてのコマンドはクエリ/URL/リポジトリを位置引数・パイプ入力・対話的 stdin（`-`）のいずれかで受け取れます（例: `echo "クエリ" | scout search`、`scout search -`）。
 
-任意のコマンドに `--json` を付けると、Markdownの代わりに1行JSONエンベロープが返ります。`jq` パイプラインやAIエージェントへの構造化データ受け渡しに便利です。成功時の出力はstdout、エラー時のJSONエンベロープはstderrへ出力されます。
+任意のコマンドに `--json` を付けると、Markdown の代わりに 1 行 JSON エンベロープが返ります。`jq` パイプラインや AI エージェントへの構造化データ受け渡しに便利です。成功時の出力は stdout、エラー時の JSON エンベロープは stderr へ出力されます。
 
 バージョン確認は `scout --version`（または `-V`）、ヘルプは `scout --help` / `scout <command> --help` で表示できます。
 
 ### `scout search` — ソースURLを返すWeb検索
 
-Brave Search APIで検索し、1行1URLでstdoutに出力します。Markdown装飾・要約・回答は含まれません。結果を `scout fetch`（あるいはエージェント側のツール）に渡して実際のソースを読みます。
+Brave Search API で検索し、1 行 1URL で stdout に出力します。Markdown 装飾・要約・回答は含まれません。結果を `scout fetch`（あるいはエージェント側のツール）に渡して実際のソースを読みます。
 
 ```sh
 scout search "Next.js server actions security"
@@ -142,11 +142,11 @@ scout search "Rust async runtime" | head -3 | xargs -I _ scout fetch _
 | ------------ | --------------------------------------------------------------------------------------------------------------- |
 | `-l, --lang` | `ja`、`en`、または `auto`（デフォルト）— Braveの `search_lang` パラメータにマップ（クエリ文字列は書き換えない） |
 
-JSONエンベロープ: `data = {query, sources}`、各 `sources[i] = {url, title, description}`。`description` は検索エンジンのスニペット（LLM要約ではなく、Brave側で生成されたもの）。0件結果時は `sources: []`（`null` ではなく空配列）。
+JSON エンベロープ: `data = {query, sources}`、各 `sources[i] = {url, title, description}`。`description` は検索エンジンのスニペット（LLM 要約ではなく、Brave 側で生成されたもの）。0 件結果時は `sources: []`（`null` ではなく空配列）。
 
 ### `scout research` — 複数ソース深掘り調査
 
-BraveでWeb検索し、上位Nページを取得してレポートにまとめます。ページ全文とURLリストを返します。`search` がURL一覧のみ返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
+Brave で Web 検索し、上位 N ページを取得してレポートにまとめます。ページ全文と URL リストを返します。`search` が URL 一覧のみ返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
@@ -157,11 +157,11 @@ scout research "Rust async runtime comparison" --depth 5 --lang ja
 | `-d, --depth` | 取得するページ数（1〜10、デフォルト3）                                  |
 | `-l, --lang`  | `ja`、`en`、または `auto`（デフォルト）— Braveの `search_lang` にマップ |
 
-JSONエンベロープ: `data = {query, sources, fetched_pages, failed_urls}`。配列フィールドは空のときも `[]`（`null` ではない）。
+JSON エンベロープ: `data = {query, sources, fetched_pages, failed_urls}`。配列フィールドは空のときも `[]`（`null` ではない）。
 
 ### `scout fetch` — WebページをMarkdownに変換
 
-ページをダウンロードし、Readabilityで本文を抽出してMarkdownに変換します。`js-rendering` feature有効時、JS依存ページ（SPA）は自動検出しヘッドレスChrome（CDP）でレンダリングします。LLMは介在しません。
+ページをダウンロードし、Readability で本文を抽出して Markdown に変換します。`js-rendering` feature 有効時、JS 依存ページ（SPA）は自動検出しヘッドレス Chrome（CDP）でレンダリングします。LLM は介在しません。
 
 ```sh
 scout fetch https://react.dev/blog/2024/12/05/react-19
@@ -172,9 +172,9 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 | `--js`  | CDP経由のJSレンダリングを強制（`js-rendering` feature + Chrome必要） |
 | `--raw` | Readabilityをスキップしてページ全体を変換                            |
 
-ページのメタデータ（タイトル/著者/日付）はYAMLフロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
+ページのメタデータ（タイトル/著者/日付）は YAML フロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
-**Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式のURLを検出し、HTMLスクレイピングではなくSlack Web APIへルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuthトークン、`xoxp-…`）が必要です。
+**Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式の URL を検出し、HTML スクレイピングではなく Slack Web API へルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuth トークン、`xoxp-…`）が必要です。
 
 ### `scout repo-tree` — リモートファイル一覧
 
@@ -223,9 +223,9 @@ scout repo-read owner/repo legacy.txt --encoding shift_jis
 scout repo-overview denoland/deno
 ```
 
-リポジトリのメタデータ、README、オープンなIssue/PR、最近のリリース。リポジトリの存在確認後、残りを並列取得します。
+リポジトリのメタデータ、README、オープンな Issue/PR、最近のリリース。リポジトリの存在確認後、残りを並列取得します。
 
-全GitHubコマンドは `owner/repo`、フルURL（`https://github.com/denoland/deno`）、`.git`付きURLを受け付けます。
+全 GitHub コマンドは `owner/repo`、フル URL（`https://github.com/denoland/deno`）、`.git`付き URL を受け付けます。
 
 ## 仕組み
 
@@ -242,7 +242,7 @@ scout repo-overview denoland/deno
 URL検証 → DNS事前チェック → ダウンロード → リダイレクト後再チェック → Readability → Markdown
 ```
 
-プライベート/ループバックIPはDNS解決とリダイレクトの両段階でブロックし、エラーメッセージ中のクレデンシャルも除去します。注意: SSRF防御はユーザーがURL入力を制御するローカルCLI用途向けです。信頼できないURLを受け付けるサービスに組み込む場合、DNSチェックと接続間のTOCTOUギャップを塞ぐ追加対策（DNS pinning等）が別途必要です。
+リテラルなプライベート/ループバック IP は URL 検証時と各リダイレクトホップで、全モード共通に拒否します。既定の直接接続モードでは、scout 自身がホストを解決・接続し、接続時の IP を再検証することで、事前チェックと実接続の間の DNS リバインディングの穴を塞ぎます。標準のプロキシ環境変数（`HTTPS_PROXY` / `HTTP_PROXY`）が設定されている場合は、そのプロキシ経由で fetch します。この場合もリテラルなプライベート/ループバック宛先は各ホップで拒否し続けますが、scout 自身の DNS 解決は行わず、名前解決に基づく防御（DNS リバインディングを含む）はプロキシの egress control へ委譲します。エラーメッセージ中のクレデンシャルは除去します。サイズ上限は Limitations を参照してください。
 
 ## アーキテクチャ
 
@@ -288,7 +288,7 @@ src/
 
 ## v2への移行ガイド
 
-scout v2.0.0は検索バックエンドをGemini GroundingからBrave Search APIに切り替えました。env var・出力フォーマット・JSONスキーマすべてが変更されています（破壊的変更）。
+scout v2.0.0 は検索バックエンドを Gemini Grounding から Brave Search API に切り替えました。env var・出力フォーマット・JSON スキーマすべてが変更されています（破壊的変更）。
 
 **環境変数**
 
@@ -301,7 +301,7 @@ scout v2.0.0は検索バックエンドをGemini GroundingからBrave Search API
 
 **`scout search` の出力**
 
-v1はGeminiが合成した回答と `**Sources:**` Markdownリストを返していましたが、v2は装飾なしの生URLを1行ずつ出力します。
+v1 は Gemini が合成した回答と `**Sources:**` Markdown リストを返していましたが、v2 は装飾なしの生 URL を 1 行ずつ出力します。
 
 ```diff
 - Claude, developed by Anthropic, offers robust capabilities...
@@ -312,24 +312,24 @@ v1はGeminiが合成した回答と `**Sources:**` Markdownリストを返して
 + https://docs.anthropic.com/...
 ```
 
-Sourcesは実際の到達先URL（Googleのリダイレクト経由ではない）になります。
+Sources は実際の到達先 URL（Google のリダイレクト経由ではない）になります。
 
 **`scout research` の出力**
 
-`## Search Result` セクション（Geminiが生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）と `## Sources`（URLリスト）は維持されます。
+`## Search Result` セクション（Gemini が生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）と `## Sources`（URL リスト）は維持されます。
 
 `research` は Brave Search 自体が retry 後も失敗した場合に hard-fail しなくなりました。代わりに degraded report（`data.sources: []`、fetched pages なし）を返し、`degraded_reasons` に `BraveSearchFailed` を追加するため、呼び出し側はエラーメッセージを parse せずに検索段階の失敗を検知できます。
 
 **`--json` スキーマ**
 
-- `data.answer` は廃止（v1ではGeminiの回答を載せていた）
-- `data.sources[i]` は `{url, title, description}` の3フィールド（v1は `{url, title}` の2フィールド）。`description` はBrave検索エンジンのスニペットで、LLM要約ではない
+- `data.answer` は廃止（v1 では Gemini の回答を載せていた）
+- `data.sources[i]` は `{url, title, description}` の 3 フィールド（v1 は `{url, title}` の 2 フィールド）。`description` は Brave 検索エンジンのスニペットで、LLM 要約ではない
 - `data.fetched_pages` と `data.failed_urls`（research のみ）は形は変わらず、空のときも `[]` を返す（`null` にはならない）
 
 **削除**
 
-- `Lang::apply_to_query`: クエリ末尾に `(日本語で回答)` / `(answer in English)` を追記する動作は廃止。`--lang ja/en` はBraveの `search_lang` パラメータにマップされ、クエリ文字列自体は変更されません
-- `--lang auto` のバイリンガル展開: 日本語入力に対する英語クエリの追加発行は廃止。両方必要な場合は呼び出し側で2回 `scout` を実行してください
+- `Lang::apply_to_query`: クエリ末尾に `(日本語で回答)` / `(answer in English)` を追記する動作は廃止。`--lang ja/en` は Brave の `search_lang` パラメータにマップされ、クエリ文字列自体は変更されません
+- `--lang auto` のバイリンガル展開: 日本語入力に対する英語クエリの追加発行は廃止。両方必要な場合は呼び出し側で 2 回 `scout` を実行してください
 
 ## 制限事項
 

@@ -1,6 +1,7 @@
 //! SSRF defense-in-depth: URL validation and DNS pre-check.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -16,6 +17,43 @@ use tracing::warn;
 use super::FetchError;
 
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Egress routing decided from the environment: direct connection or via an
+/// HTTP(S) proxy at the given URL. Mirrors the proxy env vars reqwest users
+/// expect (see [`detect_egress_mode`]).
+///
+/// `ScoutBuilder::from_env` detects the mode once via [`detect_egress_mode`],
+/// builds `fetch_http` to match (proxied client vs. connect-time SSRF guard),
+/// and carries the mode to `fetch_page` through `FetchOptions.egress`.
+/// `ssrf_check` takes `&EgressMode` to gate its DNS pre-check, which `Proxied`
+/// skips (the proxy resolves and dials, not scout).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) enum EgressMode {
+    #[default]
+    Direct,
+    Proxied(String),
+}
+
+/// Detect the egress mode from an environment map (data in, data out — never
+/// reads process env, so callers control the inputs and tests stay pure).
+///
+/// Reads the same proxy vars reqwest users set. Precedence as pinned by the
+/// egress test scenarios: `HTTPS_PROXY` before `HTTP_PROXY`, uppercase before
+/// lowercase, first match wins; absence yields [`EgressMode::Direct`]. The case
+/// order (upper before lower) is a chosen convention: reqwest 0.13's env-var
+/// precedence is undocumented on
+/// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> (verified
+/// unreachable this session) and no test pins the case order — unverified.
+/// A present-but-empty value yields `Proxied("")` here; reqwest treats empty as
+/// unset — out of scope for the four scenarios, noted for the reqwest wiring.
+pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
+    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Some(url) = env.get(key) {
+            return EgressMode::Proxied(url.clone());
+        }
+    }
+    EgressMode::Direct
+}
 
 /// Object-safe boxed future returned by [`DnsResolver::lookup`].
 pub(crate) type DnsLookupFuture<'a> =
@@ -110,13 +148,27 @@ impl fmt::Display for ValidatedUrl {
 pub(crate) async fn ssrf_check(
     raw: &str,
     resolver: &dyn DnsResolver,
+    mode: &EgressMode,
 ) -> Result<ValidatedUrl, FetchError> {
+    // `validate_url_sync` is unconditional in every mode: the scheme allowlist
+    // and the literal private-IP / loopback / blocked-suffix rejection guard the
+    // URL itself, independent of who does the DNS. Only the resolver.lookup
+    // pre-check below is mode-gated.
     let parsed = validate_url_sync(raw).map_err(|e| {
         if matches!(e, FetchError::InternalHost) {
             warn!(url = %redact_url_credentials(raw), "blocked fetch to internal/private host");
         }
         e
     })?;
+
+    // Proxied egress skips the local DNS pre-check: scout does not resolve or
+    // dial the host — the proxy does — so a local lookup validates addresses
+    // scout never connects to and can wrongly reject hosts only the proxy can
+    // resolve. Literal-IP/suffix rejection above still applies on this URL and,
+    // via the download redirect loop, on every hop.
+    if matches!(mode, EgressMode::Proxied(_)) {
+        return Ok(ValidatedUrl(parsed));
+    }
 
     if let Some(url::Host::Domain(domain)) = parsed.host() {
         let port = parsed
@@ -288,3 +340,6 @@ impl DnsResolver for FailingDnsResolver {
 
 #[cfg(test)]
 mod dns_tests;
+
+#[cfg(test)]
+mod egress_tests;

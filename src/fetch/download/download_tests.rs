@@ -51,6 +51,7 @@ async fn download_success_returns_html() {
         &validated(&format!("{}/page", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await
     .unwrap();
@@ -88,6 +89,7 @@ async fn download_flags_decode_uncertain_for_undecodable_body() {
         &validated(&format!("{}/mojibake", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await
     .unwrap();
@@ -126,6 +128,7 @@ async fn download_recovers_mislabeled_multibyte_without_uncertain() {
         &validated(&format!("{}/sjis", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await
     .unwrap();
@@ -163,7 +166,8 @@ async fn download_non_success_returns_status_error() {
             &client,
             &validated(&format!("{}/404", server.uri())),
             MAX_REDIRECTS,
-            &public_resolver()
+            &public_resolver(),
+            &ssrf::EgressMode::Direct,
         )
         .await,
         Err(FetchError::Status(404))
@@ -173,7 +177,8 @@ async fn download_non_success_returns_status_error() {
             &client,
             &validated(&format!("{}/500", server.uri())),
             MAX_REDIRECTS,
-            &public_resolver()
+            &public_resolver(),
+            &ssrf::EgressMode::Direct,
         )
         .await,
         Err(FetchError::Status(500))
@@ -199,6 +204,7 @@ async fn download_too_large_body_rejected() {
         &validated(&format!("{}/huge", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(matches!(result, Err(FetchError::TooLarge)));
@@ -226,6 +232,7 @@ async fn download_rejects_non_html_content_type() {
         &validated(&format!("{}/binary", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(
@@ -254,6 +261,7 @@ async fn redirect_to_private_ip_blocked() {
         &validated(&format!("{}/redir", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(
@@ -284,6 +292,7 @@ async fn redirect_to_dns_private_ip_blocked() {
         &validated(&format!("{}/redir", server.uri())),
         MAX_REDIRECTS,
         &private_resolver,
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(
@@ -312,6 +321,7 @@ async fn too_many_redirects_returns_error() {
         &validated(&format!("{}/redir", server.uri())),
         0, // max_redirects = 0
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(
@@ -344,6 +354,7 @@ async fn redirect_cap_exceeded_emits_calibration_warn() {
         &validated(&format!("{}/redir", server.uri())),
         0, // max_redirects = 0
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(matches!(result, Err(FetchError::TooManyRedirects(0))));
@@ -371,6 +382,7 @@ async fn redirect_missing_location_header_returns_error() {
         &validated(&format!("{}/bad-redir", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await;
     assert!(
@@ -407,6 +419,7 @@ async fn download_transparently_decodes_gzip_response() {
         &validated(&format!("{}/gz", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await
     .unwrap();
@@ -444,6 +457,7 @@ async fn download_transparently_decodes_deflate_response() {
         &validated(&format!("{}/df", server.uri())),
         MAX_REDIRECTS,
         &public_resolver(),
+        &ssrf::EgressMode::Direct,
     )
     .await
     .unwrap();
@@ -451,5 +465,34 @@ async fn download_transparently_decodes_deflate_response() {
     assert!(
         body.contains("hello"),
         "deflate body should be transparently decompressed, got: {body:?}"
+    );
+}
+
+/// [T-008] proxied mode blocks a redirect hop whose Location is a literal private-IP URL
+#[tokio::test]
+async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_ip_url() {
+    let Some(server) = try_spawn_mock_server("fetch::download").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/redir"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1/secret"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = no_redirect_client();
+    let result = download(
+        &client,
+        &validated(&format!("{}/redir", server.uri())),
+        MAX_REDIRECTS,
+        &public_resolver(),
+        &ssrf::EgressMode::Proxied("http://proxy.example:8080".to_owned()),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(FetchError::InternalHost)),
+        "proxied mode must block a redirect hop to a literal private IP, got: {result:?}"
     );
 }

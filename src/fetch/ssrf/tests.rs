@@ -74,3 +74,64 @@ fn validate_url_allows_cgn_boundary_neighbors() {
         );
     }
 }
+
+/// [T-005] proxied mode validates a public-domain URL without consulting the DNS resolver (FailingDnsResolver still returns Ok)
+#[tokio::test]
+async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_resolver_failingdnsresolver_still_returns_ok()
+ {
+    let resolver = FailingDnsResolver("lookup failed".into());
+    let result = ssrf_check(
+        "https://example.com/page",
+        &resolver,
+        &EgressMode::Proxied("http://proxy.example:8080".to_owned()),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "proxied mode must skip the DNS pre-check and validate the public domain, got: {result:?}"
+    );
+}
+
+/// [T-006] proxied mode rejects a literal private-IP URL with InternalHost
+#[tokio::test]
+async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
+    let resolver = FailingDnsResolver("lookup failed".into());
+    let result = ssrf_check(
+        "http://127.0.0.1/secret",
+        &resolver,
+        &EgressMode::Proxied("http://proxy.example:8080".to_owned()),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(FetchError::InternalHost)),
+        "proxied mode must still reject a literal private IP, got: {result:?}"
+    );
+}
+
+/// [T-007] proxied mode rejects a localhost-domain URL with InternalHost
+#[tokio::test]
+async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
+    let resolver = FailingDnsResolver("lookup failed".into());
+    let result = ssrf_check(
+        "http://localhost/secret",
+        &resolver,
+        &EgressMode::Proxied("http://proxy.example:8080".to_owned()),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(FetchError::InternalHost)),
+        "proxied mode must still reject a localhost domain, got: {result:?}"
+    );
+}
+
+/// [T-009] direct mode still returns DnsResolution when the resolver fails (pre-check behavior unchanged)
+#[tokio::test]
+async fn direct_mode_still_returns_dnsresolution_when_the_resolver_fails_pre_check_behavior_unchanged()
+ {
+    let resolver = FailingDnsResolver("lookup failed".into());
+    let result = ssrf_check("https://example.com/page", &resolver, &EgressMode::Direct).await;
+    assert!(
+        matches!(result, Err(FetchError::DnsResolution(_))),
+        "direct mode must still run the DNS pre-check, got: {result:?}"
+    );
+}

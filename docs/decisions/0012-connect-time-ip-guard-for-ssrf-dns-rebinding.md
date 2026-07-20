@@ -30,6 +30,8 @@ decision-makers: thkt (project owner)
 
 Chosen option: 方式 Y'。`SsrfResolver` (reqwest `Resolve` 実装) を共有 HTTP client 構築箇所の reqwest `ClientBuilder::dns_resolver` で `fetch_http` client に注入し (src/tools/builder.rs:73)、connect 時に解決→`is_private_ip` 検証→private なら reject する。`ssrf_check` pre-flight は維持し `ValidatedUrl` 型契約と `InternalHost` (sysexits 65) UX を保つ。
 
+この方式 Y' の connect 時 guard は、scout 自身が host を解決し dial する Direct 経路の防御である。scout を forward proxy 配下で動かす Proxied 経路 (proxy env 設定時) では、scout が解決も dial もせず guard が dial 先の proxy address を private と判定してしまうため、この guard を外し名前解決由来の防御を proxy の egress control へ委譲する。この reqwest 経路の carve-out は ADR-0023 で決定し、本 ADR には後述の Addendum で記録する。literal private/loopback 検査は両経路とも scout 側で維持する。
+
 方式 Y' は connector が実際に dial するアドレスで private 判定するため rebind を原理的に閉じる。方式 X は「検証済みのその IP に connect する」性質に security value がない (constraint が問うのは private か否かだけで、それは dial するアドレスで検証すれば足りる) 一方、マップの lifecycle・並行競合・host-key 不一致による正当 host の誤ブロックを足すため却下。方式 Z は ADR-0001 が記録した単一 `fetch_http` invariant を破壊し、redirect 先 host が client 構築時に未知のため却下。方式 B は OUTCOME Constraint を緩める方向で、クラウド実行の AI エージェントに metadata 露出を残すため却下。
 
 CDP 経路の非対称: chromium 経路 (js-rendering feature、default 無効の opt-in) は connect 時 guard が効かない。chromium が独自に解決・connect するため、`check_browser_request` (src/fetch/cdp/launch.rs) の resolve 時 `ssrf_check` のみが効き、rebind 穴は残る。今回スコープ外とし別 issue で追跡する。OUTCOME Constraint にこの非対称を carve-out として明記する。
@@ -61,7 +63,7 @@ reqwest `Resolve` 実装を `fetch_http` に注入 + `ssrf_check` pre-flight 維
 `ssrf_check` 検証済み host→IP を `Arc<RwLock<HashMap>>` に記録し reqwest が読む。
 
 - Good, because DNS 解決が 1 回で済む
-- Bad, because 「検証済みのその IP に connect」は security value ゼロ (private 判定だけが要件)
+- Bad, because「検証済みのその IP に connect」は security value ゼロ (private 判定だけが要件)
 - Bad, because マップ lifecycle・並行競合・host-key 不一致 (case/trailing-dot/punycode) による正当 host の誤ブロックを足す
 
 ### 方式 Z (per-request client)
@@ -97,6 +99,7 @@ reqwest `Resolve` 実装を `fetch_http` に注入 + `ssrf_check` pre-flight 維
 - ADR-0001 (SSRF contract と dual client invariant)、ADR-0009 (`DnsResolver` trait)
 - SOW / Spec: `.claude/workspace/planning/2026-05-30-ssrf-connect-ip-guard/`
 - CDP carve-out: 本 ADR の Addendum (issue #201) で解消済み
+- reqwest Proxied carve-out: 本 ADR の Addendum (ADR-0023) で記録済み
 
 ## Addendum: CDP 経路の carve-out 解消 (issue #201, 2026-06-16)
 
@@ -124,3 +127,20 @@ rebind 回帰テスト (Spec T-201-1/T-201-4): proxy へ public-at-preflight/pri
 
 - issue #201 (本 Addendum の対象)、#193 (本 ADR 本体)、#203 (js-rendering を release で有効化)
 - 一次ソース確認・設計: `.claude/workspace/planning/2026-06-16-201-cdp-socks5-proxy/`
+
+## Addendum: reqwest 経路の Proxied carve-out (ADR-0023, 2026-07-21)
+
+本 ADR 本体の方式 Y' (connect 時 IP guard) は、scout 自身が host を解決し dial する Direct 経路の防御である。scout を forward proxy 配下で動かす運用 (`HTTPS_PROXY` / `HTTP_PROXY` などの proxy env 設定時) の carve-out を ADR-0023 で決定し、ここに記録する。
+
+### 決定
+
+`detect_egress_mode` が proxy env を検出すると `EgressMode::Proxied(url)` となり、`build_default_clients` は `fetch_http` を `Proxy::all(url)` 経由で組み、方式 Y' の `SsrfResolver` connect 時 guard を外す。guard は scout が dial する先である loopback/private な proxy address 自体を private と判定しブロックしてしまうためである。`ssrf_check` も Proxied では DNS 事前チェック (`resolver.lookup`) を skip する (scout が解決も dial もしないため、到達しない address の検証は proxy でしか解決できない正当 host を誤ブロックする)。
+
+### 防御の分担
+
+literal 検査 (`validate_url_sync`: scheme allowlist + literal private/loopback IP / blocked-suffix reject) は両経路とも scout 側で全 hop 維持する。名前解決に基づく防御 (DNS rebind を含む) は、Direct では方式 Y' の connect 時 guard が塞ぎ、Proxied では proxy の egress control へ委譲する。Proxied を選ぶ運用者が proxy 側 egress policy に rebind 防御責務を負う。OUTCOME Constraint の reqwest 経路文言もこの Direct/Proxied 分担へ更新済み。
+
+### 参照
+
+- ADR-0023 (本 carve-out の決定本体)、branch `fix/ssrf-proxy-env`
+- `src/fetch/ssrf.rs` (`EgressMode`, `detect_egress_mode`, `ssrf_check` の mode gate)、`src/tools/builder.rs` (`build_default_clients` の mode 分岐)
