@@ -9,7 +9,9 @@ mod extractor;
 mod ssrf;
 
 use ssrf::ssrf_check;
-pub(crate) use ssrf::{DnsResolver, RedactedLogUrl, SsrfResolver, TokioDnsResolver};
+pub(crate) use ssrf::{
+    DnsResolver, EgressMode, RedactedLogUrl, SsrfResolver, TokioDnsResolver, detect_egress_mode,
+};
 #[cfg(test)]
 pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 
@@ -30,13 +32,20 @@ use reqwest::Client;
 use cdp::fetch_with_cdp;
 use tracing::{debug, info, warn};
 
-/// Options for [`fetch_page`] that control rendering and output.
-#[derive(Debug, Clone, Copy, Default)]
+/// Options for [`fetch_page`] that control rendering, output, and egress.
+///
+/// Not `Copy`: `egress`'s `Proxied` variant owns a `String`, so callers move or
+/// clone the whole `FetchOptions`.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
     pub js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
     pub raw: bool,
+    /// Egress routing for this fetch. `Direct` (the default) runs scout's DNS
+    /// pre-check and dials the host directly; `Proxied` skips the pre-check and
+    /// routes via the configured HTTP proxy (which resolves and dials instead).
+    pub egress: EgressMode,
 }
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
@@ -176,7 +185,13 @@ pub(crate) async fn fetch_page(
     //
     // The returned `ValidatedUrl` is the only constructor for SSRF-checked URLs;
     // `download` requires `&ValidatedUrl` so the redirect loop cannot bypass it.
-    let validated = ssrf_check(url, resolver.as_ref()).await?;
+    // `opts.egress` selects the mode: `Direct` runs the DNS pre-check because
+    // scout resolves and dials the host itself; `Proxied` skips the pre-check
+    // (the proxy resolves and dials) while `ssrf_check` still rejects literal
+    // private/loopback hosts. `download` re-checks every redirect hop under the
+    // same mode.
+    let egress = &opts.egress;
+    let validated = ssrf_check(url, resolver.as_ref(), egress).await?;
 
     // `decode_uncertain` flags a body neither the server charset label nor
     // reliability-gated detection could decode cleanly (issue #241). It is
@@ -184,10 +199,10 @@ pub(crate) async fn fetch_page(
     // browser re-decodes the page from its own response handling.
     #[cfg(feature = "js-rendering")]
     let (final_url, mut html, mut decode_uncertain) =
-        download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
+        download(client, &validated, MAX_REDIRECTS, resolver.as_ref(), egress).await?;
     #[cfg(not(feature = "js-rendering"))]
     let (final_url, html, decode_uncertain) =
-        download(client, &validated, MAX_REDIRECTS, resolver.as_ref()).await?;
+        download(client, &validated, MAX_REDIRECTS, resolver.as_ref(), egress).await?;
 
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");

@@ -5,7 +5,7 @@ use reqwest::Client;
 use reqwest::header::LOCATION;
 use tracing::{debug, warn};
 
-use super::ssrf::{DnsResolver, RedactedLogUrl, ValidatedUrl, ssrf_check};
+use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
 use super::{FetchError, MAX_RESPONSE_BYTES};
 use crate::charset::is_reliable_detection;
 use crate::retry::read_body_capped;
@@ -24,6 +24,7 @@ pub(super) async fn download(
     url: &ValidatedUrl,
     max_redirects: usize,
     resolver: &dyn DnsResolver,
+    mode: &EgressMode,
 ) -> Result<(ValidatedUrl, String, bool), FetchError> {
     let mut current_url = url.clone();
 
@@ -44,7 +45,7 @@ pub(super) async fn download(
             let base = url::Url::parse(current_url.as_str())?;
             let next_url = base.join(location)?.to_string();
 
-            let next_validated = ssrf_check(&next_url, resolver).await?;
+            let next_validated = ssrf_check(&next_url, resolver, mode).await?;
 
             debug!(
                 from = %RedactedLogUrl(current_url.as_str()),

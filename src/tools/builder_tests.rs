@@ -1,10 +1,12 @@
 use super::*;
 use crate::clock::FixedClock;
 use crate::envelope::{DegradedReason, ErrorCode};
-use crate::fetch::{FailingDnsResolver, StaticDnsResolver};
+use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
 use crate::rng::SeededRng;
-use crate::test_support::try_spawn_mock_server;
+use crate::test_support::{spawn_forward_proxy, try_spawn_mock_server};
 use crate::token_source::StaticTokenSource;
+use reqwest::Proxy;
+use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -599,5 +601,59 @@ async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatt
     assert!(
         preamble.contains("Thread truncated") && preamble.contains("User lookups"),
         "both cap notes must join into one preamble blockquote: {preamble}"
+    );
+}
+
+/// [T-SB006] `with_egress(Proxied)` drives the `Scout::fetch` → `fetch_page`
+/// egress plumbing end-to-end: a public-domain fetch routes through a local
+/// forward proxy and returns the body, while the injected `FailingDnsResolver`
+/// is never consulted (Proxied skips scout's DNS pre-check). This exercises the
+/// `with_egress` seam and proves `query.rs` forwards `Scout.egress` into
+/// `FetchOptions.egress`. It complements the fetch_page-level T-010/T-011: those
+/// pin the proxied client shape, this pins the builder → query wiring that
+/// produces it. A regression to `Direct` would consult the resolver and surface
+/// as a `DnsResolution` error instead of the body.
+#[tokio::test]
+async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
+    // Rich body (no <script>, >100 visible chars) so `is_js_dependent` /
+    // `is_thin_extract` stay false and the CDP fallback never fires.
+    let body = "<html><body><h1>Proxied Article</h1><p>proxied body content long \
+        enough to clear the thin-body and thin-extract thresholds so the JS \
+        rendering fallback path is never taken in this proxied fetch test.</p>\
+        </body></html>";
+    let Some((proxy_url, handle)) = spawn_forward_proxy(body) else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    // Mirror what production `build_default_clients` builds for Proxied: a
+    // proxied, guard-free client (no `SsrfResolver`, which by design blocks the
+    // loopback proxy). `for_test`'s default `fetch_http` is the Direct
+    // guard-carrying client, so it must be replaced via `with_fetch_http`.
+    let fetch_http = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let scout = ScoutBuilder::for_test()
+        .with_fetch_http(fetch_http)
+        .with_egress(EgressMode::Proxied(proxy_url.clone()))
+        .with_dns(Arc::new(FailingDnsResolver(
+            "resolver must not be consulted in Proxied mode".into(),
+        )))
+        .build();
+
+    let result = scout
+        .fetch(FetchParams {
+            url: Some("http://example.com/page".into()),
+            js: false,
+            raw: false,
+        })
+        .await;
+    let _ = handle.join();
+    let output = result.expect("proxied fetch of a public URL should succeed");
+    assert!(
+        output.markdown().contains("proxied body content"),
+        "proxied fetch must return the page body via the proxy, got: {}",
+        output.markdown()
     );
 }

@@ -249,7 +249,7 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → Post-redirect recheck → Readability → Markdown
 ```
 
-Private/loopback IPs blocked at URL validation, DNS, and each redirect hop. Post-redirect recheck kept as defense-in-depth. Credentials redacted from errors. See Limitations for size caps. Note: SSRF defense is designed for local CLI use where the user controls URL input. If embedding scout in a service that accepts untrusted URLs, additional measures (e.g., DNS pinning) are required to close the TOCTOU gap between DNS check and connection.
+Literal private/loopback IPs are rejected at URL validation and on every redirect hop, in every mode. In the default direct-connection mode, scout resolves and dials the host itself and re-checks the connect-time IP, closing the DNS-rebinding gap between the pre-check and the actual connection. When a standard proxy environment variable (`HTTPS_PROXY` / `HTTP_PROXY`) is set, scout instead routes fetches through that proxy: it keeps rejecting literal private/loopback targets on every hop but skips its own DNS resolution and delegates name-resolution defenses (DNS rebinding included) to the proxy's egress control. Credentials are redacted from errors. See Limitations for size caps.
 
 **Search** — `GET https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` auth. The response's `web.results[]` is mapped 1:1 to `{url, title, description}` and emitted verbatim.
 

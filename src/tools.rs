@@ -29,8 +29,8 @@ use params::resolve_input;
 use crate::brave::client::{BraveClient, BraveError};
 use crate::clock::Clock;
 use crate::envelope::CommandOutput;
-use crate::fetch::DnsResolver;
 use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
+use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
 use crate::markdown::{shift_headings, truncate_with_note};
 use crate::rng::Rng;
@@ -193,6 +193,11 @@ pub struct Scout {
     /// `Scout` so tests can swap a scripted resolver before any real DNS
     /// lookup runs.
     dns: Arc<dyn DnsResolver>,
+    /// Egress mode detected once at construction (`ScoutBuilder::from_env`) and
+    /// forwarded into every `fetch` via `FetchOptions.egress`. `Proxied` makes
+    /// `fetch_page` skip the DNS pre-check and route through the proxy that
+    /// `fetch_http` was built with; `Direct` keeps scout resolving and dialing.
+    egress: EgressMode,
 }
 
 impl Scout {

@@ -109,7 +109,13 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsRes
         warn!(url = %RedactedLogUrl(url), "SSRF: blocked browser subrequest with unrecognized scheme");
         return false;
     };
-    ssrf::ssrf_check(&check_url, resolver).await.is_ok()
+    // Direct: the CDP path routes chromium egress through scout's loopback
+    // SOCKS5 proxy (ADR-0021), but this subrequest allowlist check runs in
+    // scout's own process, which resolves directly — so the DNS pre-check
+    // applies as in a direct fetch.
+    ssrf::ssrf_check(&check_url, resolver, &ssrf::EgressMode::Direct)
+        .await
+        .is_ok()
 }
 
 /// Grace period between SIGTERM and SIGKILL when reaping the chromium pgroup.

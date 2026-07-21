@@ -55,6 +55,7 @@ impl Scout {
         let opts = FetchOptions {
             js: params.js,
             raw: params.raw,
+            egress: self.egress.clone(),
         };
         let fetch_timeout = self.config.fetch_timeout;
         let result = timeout(

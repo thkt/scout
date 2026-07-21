@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test]
 async fn ssrf_blocks_dns_resolving_to_private_ip() {
     let resolver = StaticDnsResolver::single("127.0.0.1");
-    let result = ssrf_check("https://evil.com/secret", &resolver).await;
+    let result = ssrf_check("https://evil.com/secret", &resolver, &EgressMode::Direct).await;
     assert!(matches!(result, Err(FetchError::InternalHost)));
 }
 
@@ -12,7 +12,7 @@ async fn ssrf_blocks_dns_resolving_to_private_ip() {
 #[tokio::test]
 async fn ssrf_allows_dns_resolving_to_public_ip() {
     let resolver = StaticDnsResolver::single("8.8.8.8");
-    let result = ssrf_check("https://example.com/page", &resolver).await;
+    let result = ssrf_check("https://example.com/page", &resolver, &EgressMode::Direct).await;
     assert!(result.is_ok());
 }
 
@@ -20,7 +20,7 @@ async fn ssrf_allows_dns_resolving_to_public_ip() {
 #[tokio::test]
 async fn ssrf_returns_error_on_dns_failure() {
     let resolver = FailingDnsResolver("lookup failed".into());
-    let result = ssrf_check("https://example.com/page", &resolver).await;
+    let result = ssrf_check("https://example.com/page", &resolver, &EgressMode::Direct).await;
     assert!(matches!(result, Err(FetchError::DnsResolution(_))));
 }
 
@@ -28,7 +28,7 @@ async fn ssrf_returns_error_on_dns_failure() {
 #[tokio::test]
 async fn ssrf_skips_dns_for_ip_literals() {
     let resolver = StaticDnsResolver(vec![]);
-    let result = ssrf_check("https://8.8.8.8/page", &resolver).await;
+    let result = ssrf_check("https://8.8.8.8/page", &resolver, &EgressMode::Direct).await;
     assert!(result.is_ok());
 }
 
@@ -41,7 +41,7 @@ async fn ssrf_skips_dns_for_ip_literals() {
 #[tokio::test]
 async fn ssrf_rejects_empty_dns_response() {
     let resolver = StaticDnsResolver(vec![]);
-    let result = ssrf_check("https://evil.com/secret", &resolver).await;
+    let result = ssrf_check("https://evil.com/secret", &resolver, &EgressMode::Direct).await;
     assert!(
         matches!(result, Err(FetchError::DnsResolution(_))),
         "empty DNS response must fail closed, got: {result:?}"

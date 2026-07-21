@@ -115,6 +115,42 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
     Some((format!("http://{addr}"), handle))
 }
 
+/// One-shot forward proxy: binds loopback, accepts exactly one connection,
+/// drains the absolute-form request line reqwest sends an HTTP proxy
+/// (`GET http://example.com/... HTTP/1.1`), and replies with a canned
+/// `200 OK` HTML body regardless of the requested target. Mirrors
+/// `spawn_close_delimited_body_server`; used to prove `fetch_page` in Proxied
+/// egress mode routes through the proxy without consulting scout's DNS
+/// resolver. `body` is returned verbatim, Content-Length framed.
+///
+/// Returns `None` when loopback bind is unavailable so callers can early-return
+/// in restricted environments, matching `spawn_close_delimited_body_server`.
+pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let addr = listener.local_addr().ok()?;
+    let body = body.to_owned();
+    let handle = thread::spawn(move || {
+        // Single-shot: the test makes exactly one proxied request, so a failed
+        // accept is a test-environment fault — panic loudly rather than hang
+        // the joining test on a silent return.
+        let (mut stream, _) = listener.accept().expect("accept proxied connection");
+        // Drain the request so the write below is the response, not racing an
+        // unread request buffer. The request-target form is ignored: a forward
+        // proxy that always returns the same body makes absolute- vs origin-form
+        // irrelevant here.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+        // stream drops here → connection closes after the framed body.
+    });
+    Some((format!("http://{addr}"), handle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
