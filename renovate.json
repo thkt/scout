@@ -1,4 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>thkt/renovate-config"]
+  "extends": ["github>thkt/renovate-config"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Cargo\\.toml$/"],
+      "matchStrings": ["rust-version\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "rust",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver-coerced"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["rust"],
+      "addLabels": ["dependencies", "rust"],
+      "commitMessageTopic": "rust-version (MSRV)"
+    }
+  ]
 }
