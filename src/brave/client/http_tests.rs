@@ -53,7 +53,7 @@ async fn search_emits_info_dispatch_and_complete_events() {
     );
 }
 
-/// [T-001] BraveClient sends query unmodified with q parameter
+/// [T-BC001] BraveClient sends query unmodified with q parameter
 #[tokio::test]
 async fn search_sends_query_unmodified() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -72,7 +72,7 @@ async fn search_sends_query_unmodified() {
     assert_eq!(result[0].url, "https://example.com");
 }
 
-/// [T-002] BraveClient includes search_lang=ja when Lang::Ja maps to "ja"
+/// [T-BC002] BraveClient includes search_lang=ja when Lang::Ja maps to "ja"
 #[tokio::test]
 async fn search_includes_search_lang_ja() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -90,7 +90,7 @@ async fn search_includes_search_lang_ja() {
     assert!(result.is_ok(), "expected Ok, got: {result:?}");
 }
 
-/// [T-003] BraveClient includes search_lang=en when Lang::En maps to "en"
+/// [T-BC003] BraveClient includes search_lang=en when Lang::En maps to "en"
 #[tokio::test]
 async fn search_includes_search_lang_en() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -108,7 +108,7 @@ async fn search_includes_search_lang_en() {
     assert!(result.is_ok(), "expected Ok, got: {result:?}");
 }
 
-/// [T-004] BraveClient omits search_lang when None is provided
+/// [T-BC004] BraveClient omits search_lang when None is provided
 #[tokio::test]
 async fn search_omits_search_lang_for_auto() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -126,7 +126,7 @@ async fn search_omits_search_lang_for_auto() {
     assert!(result.is_ok(), "expected Ok, got: {result:?}");
 }
 
-/// [T-005] BraveClient sends X-Subscription-Token header with api key
+/// [T-BC005] BraveClient sends X-Subscription-Token header with api key
 #[tokio::test]
 async fn search_sends_subscription_token_header() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -143,7 +143,7 @@ async fn search_sends_subscription_token_header() {
     assert!(result.is_ok(), "expected Ok, got: {result:?}");
 }
 
-/// [T-006] search recovers when 429 transient response is followed by 200
+/// [T-BC006] search recovers when 429 transient response is followed by 200
 #[tokio::test]
 async fn search_retries_after_429_then_succeeds() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -168,7 +168,7 @@ async fn search_retries_after_429_then_succeeds() {
     assert_eq!(result.len(), 1);
 }
 
-/// [T-007] search returns RateLimited when 429 persists across retries
+/// [T-BC007] search returns RateLimited when 429 persists across retries
 #[tokio::test]
 async fn search_429_persistent_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -187,7 +187,7 @@ async fn search_429_persistent_returns_rate_limited() {
     );
 }
 
-/// [T-008] search returns Unauthorized without retry on 401
+/// [T-BC008] search returns Unauthorized without retry on 401
 #[tokio::test]
 async fn search_401_returns_unauthorized() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -207,7 +207,7 @@ async fn search_401_returns_unauthorized() {
     );
 }
 
-/// [T-026] (unit / FR-019)
+/// [T-BC026] (unit / FR-019)
 /// Setup: wiremock always returns HTTP 403.
 /// Action: `client.search("foo", None)` is invoked.
 /// Expected: returns `BraveError::Unauthorized`; no retry (mock call count = 1)
@@ -231,7 +231,7 @@ async fn search_403_returns_unauthorized() {
     );
 }
 
-/// [T-023] search returns ServerError(503) after retries on persistent 503
+/// [T-BC023] search returns ServerError(503) after retries on persistent 503
 #[tokio::test]
 async fn search_503_persistent_returns_server_error() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -278,7 +278,7 @@ async fn search_oversized_body_returns_too_large() {
     );
 }
 
-/// [T-024] search returns ParseJson error when response body is malformed JSON
+/// [T-BC024] search returns ParseJson error when response body is malformed JSON
 #[tokio::test]
 async fn search_malformed_json_returns_parse_error() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -339,8 +339,7 @@ async fn search_logs_warn_on_parse_failure() {
     );
 }
 
-// T-RC001: from_env_with_returns_api_key_not_set_when_closure_errs
-/// FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
+/// [T-RC001] FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
 /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
 /// env path that `from_env` delegates to.
 #[test]
@@ -354,8 +353,7 @@ fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     );
 }
 
-// T-RC002: from_env_with_rejects_whitespace_only_key
-/// FR-003: closure returning a whitespace-only string must be trimmed and rejected
+/// [T-RC002] FR-003: closure returning a whitespace-only string must be trimmed and rejected
 /// as `ApiKeyNotSet` (parity with the previous `trim().is_empty()` check in
 /// `from_env`).
 #[test]
@@ -368,8 +366,7 @@ fn from_env_with_rejects_whitespace_only_key() {
     );
 }
 
-// T-RC003: from_env_with_constructs_client_with_api_base_and_exposed_key
-/// FR-001 / FR-003: closure returning a real key must yield `Ok(client)` whose
+/// [T-RC003] FR-001 / FR-003: closure returning a real key must yield `Ok(client)` whose
 /// `api_key` round-trips through `Redacted::expose()` and whose `base_url` equals
 /// the constant `API_BASE`.
 #[test]
@@ -382,8 +379,7 @@ fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
     assert_eq!(client.base_url, API_BASE);
 }
 
-// T-RC006: from_env_with_does_not_set_skip_https_check
-/// FR-010: production constructor path must not enable the test-only HTTPS bypass.
+/// [T-RC006] FR-010: production constructor path must not enable the test-only HTTPS bypass.
 /// `skip_https_check` is a `#[cfg(test)]` field; under `cargo test` it exists and
 /// must be `false` when the client comes from `from_env_with`.
 #[test]

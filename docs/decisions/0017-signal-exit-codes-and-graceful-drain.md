@@ -8,11 +8,11 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-scout は shell script・エージェント・orchestration から起動され、中断時に呼び出し側へ意味のある終了コードを返す必要がある。SIGINT (Ctrl-C) と SIGTERM (shell timeout / `kill` 既定) を区別できれば、呼び出し側は retry とタイムアウト失敗を出し分けられる。
+scout は shell script・エージェント・orchestration から起動され、中断時に呼び出し側へ意味のある終了コードを返す必要がある。SIGINT (Ctrl-C) と SIGTERM (shell timeout/`kill` 既定) を区別できれば、呼び出し側は retry とタイムアウト失敗を出し分けられる。
 
 さらに `js-rendering` 経路は chromium subprocess を起動するため、中断時に `browser.close()` を呼ばずに即終了すると Helper/Renderer プロセスが orphan する (issue #121)。よって中断時は in-flight 処理を一定時間 drain してから終了する必要がある。
 
-scout は SIGINT→130 / SIGTERM→143 (POSIX 128+signo) を返し、`SHUTDOWN_DRAIN_TIMEOUT = 7s` で in-flight command を drain するが、この signal→exit-code 対応と graceful drain 方針が ADR として記録されていない。
+scout は SIGINT→130/SIGTERM→143 (POSIX 128+signo) を返し、`SHUTDOWN_DRAIN_TIMEOUT = 7s` で in-flight command を drain するが、この signal→exit-code 対応と graceful drain 方針が ADR として記録されていない。
 
 ## Decision Drivers
 
@@ -45,7 +45,7 @@ Option B は chromium subprocess を ppid=1 へ orphan させ OS reaper に clea
 
 ### Confirmation
 
-`src/signals.rs` の `[T-S001/T-S002]` が `Sigint.exit_code() == 130` / `Sigterm.exit_code() == 143` を assert する。`src/lib.rs` の `[T-DRV001]` は `start_paused` で 7s を自動進行させ、`drive(pending, ready(SIGINT))` が `Interrupted(Sigint)` (exit 130) を返すこと、`[T-DRV002]` は中断で cancel handle が通知されること、`[T-DRV003]` は command 先行完了時に cancel が通知されないことを検証する。`[T-H000]` は `--help` が sysexits + 130/143 と "Interrupted by SIGINT/SIGTERM" を含むことを assert し、コード追加時の更新漏れを検出する。
+`src/signals.rs` の `[T-SIG001]`/`[T-SIG002]` が `Sigint.exit_code() == 130`/`Sigterm.exit_code() == 143` を assert する。`src/lib.rs` の `[T-DRV001]` は `start_paused` で 7s を自動進行させ、`drive(pending, ready(SIGINT))` が `Interrupted(Sigint)` (exit 130) を返すこと、`[T-DRV002]` は中断で cancel handle が通知されること、`[T-DRV003]` は command 先行完了時に cancel が通知されないことを検証する。`[T-H000]` は `--help` が sysexits + 130/143 と "Interrupted by SIGINT/SIGTERM" を含むことを assert し、コード追加時の更新漏れを検出する。
 
 ## Pros and Cons of the Options
 

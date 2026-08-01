@@ -71,28 +71,26 @@ pub(crate) async fn wait_for_signal() -> InterruptSignal {
 mod tests {
     use super::*;
 
-    // T-S001: sigint_exit_code_is_130
-    // POSIX convention: 128 + signal number (SIGINT = 2 → 130).
+    /// [T-SIG001] SIGINT maps to 130 per the POSIX 128 + signal number convention
     #[test]
     fn sigint_exit_code_is_130() {
         assert_eq!(InterruptSignal::Sigint.exit_code(), 130);
     }
 
-    // T-S002: sigterm_exit_code_is_143
-    // POSIX convention: 128 + signal number (SIGTERM = 15 → 143).
+    /// [T-SIG002] SIGTERM maps to 143 per the POSIX 128 + signal number convention
     #[cfg(unix)]
     #[test]
     fn sigterm_exit_code_is_143() {
         assert_eq!(InterruptSignal::Sigterm.exit_code(), 143);
     }
 
-    // T-S005: sigint_display_is_sigint
+    /// [T-SIG003] Sigint renders as the signal name "SIGINT"
     #[test]
     fn sigint_display_is_sigint() {
         assert_eq!(InterruptSignal::Sigint.to_string(), "SIGINT");
     }
 
-    // T-S006: sigterm_display_is_sigterm
+    /// [T-SIG004] Sigterm renders as the signal name "SIGTERM"
     #[cfg(unix)]
     #[test]
     fn sigterm_display_is_sigterm() {

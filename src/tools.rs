@@ -75,7 +75,7 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
             STDIN_READ_TIMEOUT.as_secs()
         ))
     })?
-    .map_err(|e| ScoutError::user_error(format!("Failed to read stdin: {e}")))?;
+    .map_err(|e| ScoutError::user_error(format!("failed to read stdin: {e}")))?;
     let trimmed = buf.trim();
     Ok(if trimmed.is_empty() {
         None
@@ -115,7 +115,7 @@ impl StdinResolver {
                 format!("stdin already read — cannot use `-` for {label}")
             } else {
                 format!(
-                    "No {label} provided. Pass {placeholder} as an argument (stdin was already read by the previous argument)"
+                    "no {label} provided. Pass {placeholder} as an argument (stdin was already read by the previous argument)"
                 )
             };
             return Err(ScoutError::user_error(msg));

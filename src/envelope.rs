@@ -194,7 +194,7 @@ impl ErrorCode {
     /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
     /// governed by ADR-0010 (scout-local). `Timeout` (124) follows GNU coreutils
     /// `timeout` and `Unknown` (104) is the PJ extension for unclassifiable
-    /// failures (per ADR-0011 Classification Priority Table 退避 slot).
+    /// failures (the fall-through slot of ADR-0011's Classification Priority Table).
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE

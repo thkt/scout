@@ -50,6 +50,25 @@ fn version_exits_zero() {
     );
 }
 
+// T-C013: version_points_coding_agents_at_help
+#[test]
+fn version_points_coding_agents_at_help() {
+    let output = scout()
+        .arg("--version")
+        .output()
+        .expect("scout --version failed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("coding agent") && stderr.contains("--help"),
+        "version should point a coding agent at help on stderr, got:\n{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("coding agent"),
+        "the hint must stay off stdout so the version line remains parseable, got:\n{stdout}"
+    );
+}
+
 // T-C003: search_without_api_key_exits_64
 #[test]
 fn search_without_api_key_exits_64() {

@@ -216,13 +216,27 @@ fn render_json_error(err: &ScoutError) -> String {
     })
 }
 
+/// Points a coding agent at scout's own help output. An agent often runs
+/// `--version` and nothing else before invoking a command, so the version
+/// output is where the pointer has to live for it to be seen at all. Emitted
+/// through the same tracing path as every other scout log, which puts it on
+/// stderr and leaves the version line on stdout parseable. `init_tracing`
+/// pins `scout=info` last, so no `RUST_LOG` value silences it; a caller that
+/// wants it gone redirects stderr.
+const AGENT_HELP_HINT: &str = "If you are a coding agent, run `scout --help` and `scout <command> --help` before answering questions about scout or troubleshooting its errors. The help output is authoritative for the installed version.";
+
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
 /// stay on stdout per clap convention; usage errors route through the JSON
 /// envelope when `--json` was passed in argv.
 fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     use clap::error::ErrorKind;
     match err.kind() {
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+        ErrorKind::DisplayVersion => {
+            let _ = err.print();
+            tracing::info!("{AGENT_HELP_HINT}");
+            ExitCode::SUCCESS
+        }
+        ErrorKind::DisplayHelp => {
             let _ = err.print();
             ExitCode::SUCCESS
         }

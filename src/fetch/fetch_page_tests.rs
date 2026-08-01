@@ -64,7 +64,7 @@ async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
     );
 }
 
-/// [T-003] fetch_blocks_dns_rebind_at_connect_time
+/// [T-F072] fetch_blocks_dns_rebind_at_connect_time
 ///
 /// ADR-0012 contract pin: the pre-flight `ssrf_check` resolver returns a public
 /// IP (passing pre-flight), while the `fetch_http` client's injected
@@ -165,7 +165,7 @@ async fn t010_js_flag_errors_when_feature_disabled() {
     );
 }
 
-/// [T-010] with a proxy configured, fetch_page returns the page body for a public-domain URL routed through a local forward proxy while the DNS resolver is never consulted
+/// [T-F073] with a proxy configured, fetch_page returns the page body for a public-domain URL routed through a local forward proxy while the DNS resolver is never consulted
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_domain_url_routed_through_a_local_forward_proxy_while_the_dns_resolver_is_never_consulted()
  {
@@ -212,7 +212,7 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     );
 }
 
-/// [T-011] with a proxy configured, fetch_page to a literal loopback URL is blocked before any request reaches the proxy
+/// [T-F074] with a proxy configured, fetch_page to a literal loopback URL is blocked before any request reaches the proxy
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked_before_any_request_reaches_the_proxy()
  {

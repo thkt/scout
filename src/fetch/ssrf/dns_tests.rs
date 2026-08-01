@@ -48,7 +48,7 @@ async fn ssrf_rejects_empty_dns_response() {
     );
 }
 
-/// [T-001] ssrf_resolver_blocks_connect_to_private_ip
+/// [T-FS016] ssrf_resolver_blocks_connect_to_private_ip
 ///
 /// The connect-time resolver (ADR-0012) must reject a host that resolves to a
 /// private IP and emit the `"blocked connect to private IP"` warn, which
@@ -66,7 +66,7 @@ async fn ssrf_resolver_blocks_connect_to_private_ip() {
     assert!(logs_contain("blocked connect to private IP"));
 }
 
-/// [T-002] ssrf_resolver_allows_connect_to_public_ip
+/// [T-FS017] ssrf_resolver_allows_connect_to_public_ip
 ///
 /// A host resolving to a public IP passes through, and the resolved address is
 /// returned for reqwest to dial.

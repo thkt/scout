@@ -73,8 +73,7 @@ mod tests {
         assert_eq!(secret.expose(), "abc");
     }
 
-    // T-RC007: validate_https_is_generic_over_caller_error_type
-    /// FR-004 / FR-005: `validate_https` rejects any input that does not begin
+    /// [T-RC007] FR-004 / FR-005: `validate_https` rejects any input that does not begin
     /// with `https://` (plain `http://`, empty string) and accepts a real
     /// `https://` URL. The error variant is whatever the closure constructs,
     /// so each backend plugs in its own type. The closure runs only on

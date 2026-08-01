@@ -96,7 +96,7 @@ where
 mod tests {
     use super::*;
 
-    /// [T-TS001] resolve_from_env_or_gh short-circuits to the GITHUB_TOKEN
+    /// [T-TOK001] resolve_from_env_or_gh short-circuits to the GITHUB_TOKEN
     /// value when the env reader returns one, without falling through to the
     /// gh CLI subprocess.
     #[tokio::test]
@@ -111,7 +111,7 @@ mod tests {
         );
     }
 
-    /// [T-TS002] Empty/whitespace env values must not register as "set"; the
+    /// [T-TOK002] Empty/whitespace env values must not register as "set"; the
     /// resolver falls through to the next candidate in the chain.
     #[tokio::test]
     async fn resolve_from_env_or_gh_skips_whitespace_env() {
