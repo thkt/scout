@@ -156,7 +156,9 @@ pub async fn run() -> ExitCode {
 
     // Pre-scan argv so a clap parse error (which exits before `cli.json` is
     // populated) still routes through the JSON envelope path when requested.
-    let json_mode_pre = env::args().any(|a| a == "--json");
+    // `args_os` rather than `args`: the latter panics on a non-UTF-8 argument,
+    // which would abort with 101 before clap can classify it as a usage error.
+    let json_mode_pre = env::args_os().any(|a| a == "--json");
 
     let cli = match Cli::try_parse() {
         Ok(c) => c,
@@ -182,7 +184,7 @@ pub async fn run() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", write_failure_line(&e, json_mode));
                     ExitCode::from(ErrorCode::IoError.exit_code())
                 }
             }
@@ -225,6 +227,32 @@ fn render_json_error(err: &ScoutError) -> String {
 /// wants it gone redirects stderr.
 const AGENT_HELP_HINT: &str = "If you are a coding agent, run `scout --help` and `scout <command> --help` before answering questions about scout or troubleshooting its errors. The help output is authoritative for the installed version.";
 
+/// One-line JSON envelope for a failure with no `ScoutError` behind it — a clap
+/// parse error, or an stdout write that failed. `retryable` comes from the code
+/// rather than being restated here, so the mapping lives only in [`ErrorCode`].
+fn bare_error_line(code: ErrorCode, message: String) -> String {
+    to_json_line(&ErrorEnvelope {
+        error: ErrorPayload {
+            code,
+            message,
+            next_step: None,
+            candidates: Vec::new(),
+            retryable: code.is_retryable(),
+        },
+    })
+}
+
+/// Render an stdout write failure for stderr. Under `--json` it has to be an
+/// envelope: the flag tells callers every error on stderr is parseable, and a
+/// bare line here would be the one place that promise breaks.
+fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
+    if json_mode {
+        bare_error_line(ErrorCode::IoError, err.to_string())
+    } else {
+        format!("error: {err}")
+    }
+}
+
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
 /// stay on stdout per clap convention; usage errors route through the JSON
 /// envelope when `--json` was passed in argv.
@@ -242,15 +270,8 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
         }
         _ => {
             if json_mode {
-                let line = to_json_line(&ErrorEnvelope {
-                    error: ErrorPayload {
-                        code: ErrorCode::UsageError,
-                        message: err.to_string().trim().to_owned(),
-                        next_step: None,
-                        candidates: Vec::new(),
-                        retryable: false,
-                    },
-                });
+                let line =
+                    bare_error_line(ErrorCode::UsageError, err.to_string().trim().to_owned());
                 eprintln!("{line}");
             } else {
                 let _ = err.print();
@@ -281,8 +302,8 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        CommandOutput, InterruptSignal, Outcome, ScoutError, drive, init_tracing,
-        render_json_success, write_output,
+        CommandOutput, ErrorCode, InterruptSignal, Outcome, ScoutError, bare_error_line, drive,
+        init_tracing, render_json_success, write_failure_line, write_output,
     };
 
     /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
@@ -404,6 +425,53 @@ mod tests {
         let mut w = BrokenPipeWriter;
         let err = write_output(&mut w, "hello").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    /// [T-W004] under `--json` a stdout write failure is reported as an envelope
+    ///
+    /// The flag promises every error on stderr is a JSON envelope, so a caller
+    /// parsing stderr must not receive a bare line for this path.
+    #[test]
+    fn write_failure_is_an_envelope_under_json() {
+        let err = io::Error::from(io::ErrorKind::StorageFull);
+        let line = write_failure_line(&err, true);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("write failure must be valid JSON under --json");
+        assert_eq!(parsed["error"]["code"], "IO_ERROR");
+        assert_eq!(parsed["error"]["retryable"], false);
+    }
+
+    /// [T-W005] without `--json` a stdout write failure stays a plain line
+    #[test]
+    fn write_failure_is_a_plain_line_without_json() {
+        let err = io::Error::from(io::ErrorKind::StorageFull);
+        let line = write_failure_line(&err, false);
+        assert!(
+            line.starts_with("error: "),
+            "plain mode keeps the human-readable prefix, got: {line}"
+        );
+    }
+
+    /// [T-W006] the bare-error envelope derives `retryable` from the code
+    ///
+    /// Restating it at the call site is how the two drift: `TempFailure` is
+    /// retryable and `UsageError` is not, and only `ErrorCode` should say so.
+    #[test]
+    fn bare_error_line_derives_retryable_from_the_code() {
+        for (code, expected) in [
+            (ErrorCode::UsageError, false),
+            (ErrorCode::IoError, false),
+            (ErrorCode::TempFailure, true),
+            (ErrorCode::Timeout, true),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&bare_error_line(code, "boom".to_owned()))
+                    .expect("valid JSON");
+            assert_eq!(
+                parsed["error"]["retryable"], expected,
+                "retryable for {code:?} should follow ErrorCode::is_retryable"
+            );
+        }
     }
 
     /// [T-H000] root --help contains sysexits Exit codes and Environment sections

@@ -166,11 +166,17 @@ fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     out.push('\n');
 }
 
+/// Unlike the two sections above, this one is emitted even when empty: a
+/// report that found nothing has to be distinguishable from one whose sections
+/// went missing, so ADR-0005 marks the zero-result case explicitly rather than
+/// dropping the heading. `search` takes the opposite contract (ADR-0020 pins it
+/// to true empty output) because its consumers read it line by line.
 fn format_sources(sources: &[SearchResult], out: &mut String) {
+    out.push_str("## Sources\n\n");
     if sources.is_empty() {
+        out.push_str("(no results)\n");
         return;
     }
-    out.push_str("## Sources\n\n");
     for source in sources {
         let _ = writeln!(out, "- {}", md_link(&source.title, &source.url));
     }

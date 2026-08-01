@@ -2,9 +2,47 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::clock::FixedClock;
+use crate::envelope::ErrorCode;
 use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
+
+/// [T-GH021] get_contents on a directory reports the path shape, not a decode fault
+///
+/// The contents endpoint answers with a JSON array for a directory, which the
+/// file-shaped struct cannot parse. Left as `Decode`, that reaches the caller as
+/// INTERNAL (70) — telling an agent scout has a bug when it passed a directory,
+/// which is the natural next step after `repo-tree`.
+#[tokio::test]
+async fn get_contents_on_a_directory_is_a_data_error_not_internal() {
+    let Some(server) = try_spawn_mock_server("github::get_contents_dir").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/contents/src"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"name": "lib.rs", "path": "src/lib.rs", "sha": "abc", "type": "file"},
+            {"name": "main.rs", "path": "src/main.rs", "sha": "def", "type": "file"},
+        ])))
+        .mount(&server)
+        .await;
+
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+    let err = client
+        .get_contents("owner", "repo", "src", None)
+        .await
+        .expect_err("a directory path cannot yield file contents");
+
+    assert!(
+        matches!(err, GitHubError::PathIsDirectory(ref p) if p == "src"),
+        "expected PathIsDirectory carrying the path, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::DataError,
+        "a directory path is caller input, not a scout-side invariant violation"
+    );
+}
 
 /// [T-GH001] get_json maps 404 responses to NotFound error
 #[tokio::test]

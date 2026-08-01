@@ -77,6 +77,31 @@ fn format_report_includes_sections() {
     assert!(text.contains("[A](https://a.com)"));
 }
 
+/// [T-SE013] a zero-result run still emits the Sources section, marked `(no results)`
+///
+/// DR-0005 fixes this as the zero-result contract: without the marker, a report
+/// with nothing found is byte-identical to one whose sections were dropped by a
+/// formatting fault, so a markdown reader cannot tell the two apart. This is
+/// deliberately the opposite of `search`, which DR-0020 pins to true empty output.
+#[test]
+fn format_report_marks_zero_results_in_sources() {
+    let report = ResearchReport {
+        fetched_pages: vec![],
+        failed_urls: vec![],
+        sources: vec![],
+    };
+
+    let text = format_report(&report, "nothing matches this");
+    assert!(
+        text.contains("## Sources"),
+        "Sources section should be present even with no results, got:\n{text}"
+    );
+    assert!(
+        text.contains("(no results)"),
+        "zero results should be marked, got:\n{text}"
+    );
+}
+
 /// [T-SE010] a source URL with a non-http scheme is not emitted as a clickable link
 #[test]
 fn format_report_neutralizes_javascript_source_url() {

@@ -30,6 +30,9 @@ pub(crate) enum GitHubError {
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    #[error("'{0}' is a directory, not a file")]
+    PathIsDirectory(String),
+
     #[error("Invalid line range: '{0}'. Use formats like '1-80', '50-', or '100' (first N lines).")]
     InvalidLineRange(String),
 
@@ -70,6 +73,8 @@ impl GitHubError {
                 .with_hint("Use a branch name, tag, or commit SHA"),
             Self::InvalidPath(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Use a path within the repository"),
+            Self::PathIsDirectory(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use `scout repo-tree` to list a directory, or pass a file path"),
             Self::InvalidLineRange(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Use format like '1-80', '50-', or '100' (first N lines)"),
             Self::InvalidPattern(_) => Classification::new(ErrorCode::DataError)

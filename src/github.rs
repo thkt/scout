@@ -29,7 +29,8 @@ pub(crate) use helpers::{
     validate_path, validate_ref,
 };
 use types::{
-    BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
+    BlobResponse, ContentsPayload, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo,
+    TreeResponse,
 };
 
 pub(crate) use errors::GitHubError;
@@ -244,6 +245,12 @@ impl GitHubClient {
         .await
     }
 
+    /// The contents endpoint answers with an object for a file and an array for
+    /// a directory, so the response shape carries the answer to "was this path a
+    /// file?". Deserializing into the file struct alone turns a directory into a
+    /// `Decode` error, which classifies as a scout-side bug (70) — wrong for what
+    /// is ordinary caller input, `repo-tree` being the step that hands directory
+    /// paths to the user in the first place.
     pub async fn get_contents(
         &self,
         owner: &str,
@@ -251,12 +258,17 @@ impl GitHubClient {
         path: &str,
         ref_: Option<&str>,
     ) -> Result<ContentsResponse, GitHubError> {
-        let path = encode_path(path);
+        let encoded = encode_path(path);
         let query = ref_
             .map(|r| format!("?ref={}", encode_path(r)))
             .unwrap_or_default();
-        self.get_json(&format!("/repos/{owner}/{repo}/contents/{path}{query}"))
-            .await
+        match self
+            .get_json(&format!("/repos/{owner}/{repo}/contents/{encoded}{query}"))
+            .await?
+        {
+            ContentsPayload::File(contents) => Ok(contents),
+            ContentsPayload::Directory(_) => Err(GitHubError::PathIsDirectory(path.to_owned())),
+        }
     }
 
     pub async fn get_blob(
