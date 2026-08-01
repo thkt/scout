@@ -282,8 +282,12 @@ fn resolve_messages(messages: &[Message], users: &HashMap<String, String>) -> Ve
     let mut resolved = Vec::with_capacity(messages.len());
     for msg in messages {
         let author = match &msg.user {
+            // An empty value is a failed resolution, not a name — the same rule
+            // `substitute_mentions` applies to this map. Without the filter the
+            // frontmatter carries `author: ""` and no log says the lookup missed.
             Some(uid) => users
                 .get(uid.as_str())
+                .filter(|name| !name.is_empty())
                 .cloned()
                 .unwrap_or_else(|| uid.clone()),
             None => {

@@ -157,6 +157,19 @@ impl GitHubClient {
         .await
     }
 
+    /// How long to wait before retrying a rate-limited response.
+    ///
+    /// GitHub states the wait two ways — `Retry-After` on some rate limits,
+    /// `x-ratelimit-reset` on others — and guarantees neither for a given
+    /// status, so both statuses consult both headers. `Retry-After` wins when
+    /// present: it is an explicit instruction, while the reset timestamp only
+    /// says when the window rolls over. Returning `None` leaves the caller on
+    /// jittered backoff.
+    fn rate_limit_delay(&self, headers: &HeaderMap) -> Option<u64> {
+        parse_retry_after(headers, self.clock.as_ref())
+            .or_else(|| secs_until_ratelimit_reset(headers, self.clock.as_ref()))
+    }
+
     async fn get_json_once<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
         debug!(path, "github API request");
         let response = self.request(path)?.send().await?;
@@ -181,7 +194,7 @@ impl GitHubClient {
             }
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
-                let retry_after = parse_retry_after(response.headers(), self.clock.as_ref());
+                let retry_after = self.rate_limit_delay(response.headers());
                 warn!(retry_after_secs = retry_after, "GitHub API rate limited");
                 Err(GitHubError::RateLimited { retry_after })
             }
@@ -196,8 +209,7 @@ impl GitHubClient {
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let retry_after =
-                    secs_until_ratelimit_reset(response.headers(), self.clock.as_ref());
+                let retry_after = self.rate_limit_delay(response.headers());
                 match remaining {
                     Some(r) if r > 0 => {
                         let message =

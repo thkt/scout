@@ -78,6 +78,39 @@ async fn get_json_429_returns_rate_limited() {
     assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
 }
 
+/// [T-GH022] a 429 without Retry-After still derives the wait from x-ratelimit-reset
+///
+/// GitHub sends `Retry-After` on some rate limits and `x-ratelimit-reset` on
+/// others and guarantees neither for a given status, so reading only one of them
+/// per status left the 429 path with no wait time at all — falling back to
+/// jittered backoff while the server had stated when the window reopens.
+#[tokio::test]
+async fn get_json_429_without_retry_after_uses_ratelimit_reset() {
+    let Some(server) = try_spawn_mock_server("github::http_429_reset").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(429).insert_header("x-ratelimit-reset", "1000300"))
+        .mount(&server)
+        .await;
+
+    // `get_json_once`, not `get_json`: the retry loop honors the returned delay,
+    // so driving the full loop here would sleep for the window under test.
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri())
+        .with_clock(Arc::new(FixedClock(1_000_000)));
+    let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+    assert!(
+        matches!(
+            result,
+            Err(GitHubError::RateLimited {
+                retry_after: Some(300)
+            })
+        ),
+        "expected the 300s window from x-ratelimit-reset, got: {result:?}"
+    );
+}
+
 /// [T-GH003] get_json maps 403 with zero remaining to RateLimited error
 #[tokio::test]
 async fn get_json_403_with_zero_remaining_returns_rate_limited() {

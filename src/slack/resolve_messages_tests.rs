@@ -63,3 +63,18 @@ fn t015_unknown_user_id_kept_as_author() {
 
     assert_eq!(resolved[0].author, "UXXX");
 }
+
+/// [T-SK067] resolve_messages treats an empty resolved name as a miss
+///
+/// Same rule as [T-SK063] on the mention path, which shares this map: an empty
+/// value is a failed resolution, not a name. Rendering it as the author would
+/// emit `author: ""` with nothing in the logs to say the lookup came up short.
+#[test]
+fn empty_resolved_name_falls_back_to_the_user_id() {
+    let messages = vec![make_msg(Some("U123"), "text", Some("1000.000"))];
+    let users = HashMap::from([("U123".to_owned(), String::new())]);
+
+    let resolved = resolve_messages(&messages, &users);
+
+    assert_eq!(resolved[0].author, "U123");
+}
