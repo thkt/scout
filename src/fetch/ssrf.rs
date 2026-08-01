@@ -44,11 +44,12 @@ pub(crate) enum EgressMode {
 /// precedence is undocumented on
 /// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> (verified
 /// unreachable this session) and no test pins the case order — unverified.
-/// A present-but-empty value yields `Proxied("")` here; reqwest treats empty as
-/// unset — out of scope for the four scenarios, noted for the reqwest wiring.
+/// A present-but-empty value counts as unset, matching reqwest: `Proxy::all("")`
+/// is a relative-URL parse error, so treating it as `Proxied("")` would fail
+/// client construction and take down every command, not just proxied fetches.
 pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
     for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
-        if let Some(url) = env.get(key) {
+        if let Some(url) = env.get(key).filter(|u| !u.trim().is_empty()) {
             return EgressMode::Proxied(url.clone());
         }
     }
@@ -209,7 +210,11 @@ fn is_blocked_host(parsed: &url::Url) -> bool {
         Some(url::Host::Ipv4(v4)) => is_private_ip(IpAddr::V4(v4)),
         Some(url::Host::Ipv6(v6)) => is_private_ip(IpAddr::V6(v6)),
         Some(url::Host::Domain(domain)) => {
+            // `url` keeps the FQDN trailing dot in the host, so `localhost.`
+            // and `svc.internal.` reach here undotted-suffix-matched unless it
+            // is stripped first. Both forms resolve to the same host.
             let lower = domain.to_ascii_lowercase();
+            let lower = lower.strip_suffix('.').unwrap_or(&lower);
             lower == "localhost"
                 || lower.ends_with(".localhost")
                 || lower.ends_with(".local")
