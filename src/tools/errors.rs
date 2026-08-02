@@ -59,6 +59,29 @@ impl Classification {
         Self::new(ErrorCode::Timeout).with_hint(HINT_RETRY_DELAY)
     }
 
+    /// The ADR-0003 HTTP-status table, in one place.
+    ///
+    /// Three backends used to re-derive it from raw status integers, and they
+    /// had drifted: a GitHub 408 answered DataError instead of TempFailure, a
+    /// Brave 404 answered DataError instead of NotFound. A backend that needs a
+    /// different code for a status — not just a different hint — adds its own arm
+    /// ahead of the delegating one, which makes the deviation visible; ADR-0003
+    /// requires such a reclassification to say so in a doc comment.
+    ///
+    /// Hints stay with the caller: the table decides the code, and only the
+    /// backend knows what to tell the user about its own service.
+    pub(crate) fn from_http_status(status: u16) -> Self {
+        match status {
+            500..=599 | 408 | 429 => Self::transient_retry(),
+            404 => Self::new(ErrorCode::NotFound),
+            401 | 403 => Self::new(ErrorCode::UsageError),
+            400..=499 => Self::new(ErrorCode::DataError),
+            // 退避: 1xx/3xx reaching an error path is not a status this table
+            // describes, so it becomes the signal rather than a guess.
+            _ => Self::new(ErrorCode::Unknown),
+        }
+    }
+
     /// Where a `reqwest::Error` lands in the ADR-0011 priority table.
     ///
     /// One rule about one foreign type, so it lives once: every backend that

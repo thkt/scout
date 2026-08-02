@@ -86,21 +86,11 @@ impl BraveError {
             Self::Unauthorized => Classification::new(ErrorCode::UsageError).with_hint(
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body, URL parse failure, or insecure base URL)
+            // Priority 2: DATA_ERROR (URL parse failure or insecure base URL)
             Self::ParseUrl(_) | Self::InsecureBaseUrl => Classification::new(ErrorCode::DataError),
-            Self::Api { code, .. } if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } => Classification::transient_retry(),
-            Self::Server(_) => Classification::transient_retry(),
-            // `classify_response` turns a 5xx into `Server` before `Api` is ever
-            // built, so this arm is unreachable from the wire — it stays because
-            // [T-BRC00x] constructs `Api { code: 5xx }` directly to pin that a
-            // server-class code is TempFailure whichever variant carries it.
-            Self::Api { code, .. } if (500..=599).contains(code) => {
-                Classification::transient_retry()
-            }
+            Self::Server(code) => Classification::from_http_status(*code),
             // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — schema drift is a scout-side invariant;
@@ -109,8 +99,8 @@ impl BraveError {
             // on `web/search`), classified the same as schema drift because
             // it signals the API surface drifted and retry will not recover.
             Self::ParseJson(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Unknown — Api codes that did not match 4xx or 5xx
-            Self::Api { .. } => Classification::new(ErrorCode::Unknown),
+            // Every remaining status follows the ADR-0003 table.
+            Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }
 }

@@ -36,6 +36,13 @@ pub(crate) enum SlackError {
     /// A non-2xx status that is not 429. The body is whatever the responder
     /// produced — a gateway's HTML error page, say — so it is never a Slack
     /// API envelope and must not reach the JSON parse.
+    ///
+    /// ADR-0003 requires an API-specific reclassification to say so here: this
+    /// variant does NOT follow the shared HTTP-status table. Slack reports its
+    /// own failures as `ok: false` inside a 200 body, so any non-2xx came from
+    /// something between scout and Slack. Reading such a status as Slack's
+    /// answer would report a gateway's 404 as a missing resource; every status
+    /// is treated as a transient intermediary fault instead.
     #[error("Slack API returned HTTP {0}")]
     Server(u16),
 

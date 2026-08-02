@@ -82,9 +82,6 @@ impl GitHubError {
             Self::NonUtf8(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
-            Self::Api { code, .. } if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
             // Priority 3: NOT_FOUND
             Self::NotFound(_) => Classification::new(ErrorCode::NotFound)
                 .with_hint("Check that the repository or path exists, and that you have access"),
@@ -98,16 +95,13 @@ impl GitHubError {
                 }),
             // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
             Self::Network(re) => Classification::from_reqwest(re),
-            Self::Api { code, .. } if (500..=599).contains(code) => {
-                Classification::transient_retry()
-            }
             // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
             // response that overran the byte cap (issue #186; peer to
             // BraveError::ResponseTooLarge). Non-retriable: a retry would refetch
             // the same oversized body.
             Self::Decode(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
-            Self::Api { .. } => Classification::new(ErrorCode::Unknown),
+            // Every remaining status follows the ADR-0003 table.
+            Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }
 }

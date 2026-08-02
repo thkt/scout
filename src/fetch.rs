@@ -119,20 +119,13 @@ impl FetchError {
             // server-side redirect loop or caller URL mistake — both caller-fixable.
             Self::TooManyRedirects(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL has too many redirects; check for a redirect loop"),
-            // Priority 1: USAGE_ERROR (specific HTTP codes before 4xx fallback)
-            Self::Status(401 | 403) => Classification::new(ErrorCode::UsageError)
+            // The ADR-0003 table decides the code; these two arms add the hint
+            // only fetch can give, so they sit ahead of the delegating one.
+            Self::Status(code @ (401 | 403)) => Classification::from_http_status(*code)
                 .with_hint("URL requires authentication that scout does not support"),
-            // Priority 3: NOT_FOUND
-            Self::Status(404) => Classification::new(ErrorCode::NotFound)
+            Self::Status(code @ 404) => Classification::from_http_status(*code)
                 .with_hint("Check that the URL is correct and the resource exists"),
-            // Priority 4: TEMP_FAILURE
-            Self::Status(408 | 429) => Classification::transient_retry(),
-            // Priority 2: DATA_ERROR (4xx body)
-            Self::Status(code) if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
-            // Priority 4: TEMP_FAILURE (5xx and other unmatched)
-            Self::Status(_) => Classification::transient_retry(),
+            Self::Status(code) => Classification::from_http_status(*code),
             // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
             Self::Timeout(_) => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE (non-Status variants)
