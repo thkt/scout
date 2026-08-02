@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+
 use tracing::warn;
 
 use crate::brave::client::BraveError;

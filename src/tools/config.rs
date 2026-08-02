@@ -32,10 +32,15 @@ const ENV_MAX_RETRIES: &str = "SCOUT_MAX_RETRIES";
 
 const TIMEOUT_MIN_SECS: u64 = 1;
 const TIMEOUT_MAX_SECS: u64 = 600;
-/// Upper bound on the retry count. `10` was picked so a misconfigured
-/// agent cannot starve scout by chaining requests; combined with the
-/// default 1s+ backoff this caps the worst-case retry wall-clock around
-/// 30s before the surrounding `*_TOOL_TIMEOUT` cuts in.
+/// Upper bound on the retry count, so a misconfigured agent cannot starve scout
+/// by chaining requests.
+///
+/// The cap does not bound wall-clock on its own: `jittered_backoff` doubles from
+/// `INITIAL_BACKOFF_MS` and each sleep is capped at `MAX_RETRY_AFTER_SECS` (300),
+/// so ten retries can sleep for roughly 800s in total. What cuts a run short is
+/// the surrounding per-command budget — `fetch_timeout`, `research_timeout`,
+/// `slack_timeout`, `github_timeout` — each overridable via its `SCOUT_*_SECS`
+/// variable and itself capped at `TIMEOUT_MAX_SECS`.
 const RETRIES_CAP: u32 = 10;
 
 /// Runtime tuning loaded from `SCOUT_*` env vars. Each field has a

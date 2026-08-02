@@ -2,7 +2,7 @@
 
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use reqwest::Client;
-use reqwest::header::LOCATION;
+use reqwest::header::{CONTENT_TYPE, LOCATION, USER_AGENT};
 use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
@@ -31,7 +31,7 @@ pub(super) async fn download(
     for _hop in 0..=max_redirects {
         let response = client
             .get(current_url.as_str())
-            .header("User-Agent", crate::USER_AGENT)
+            .header(USER_AGENT, crate::USER_AGENT)
             .send()
             .await?;
 
@@ -61,7 +61,7 @@ pub(super) async fn download(
         }
 
         let mut charset = None;
-        match response.headers().get("content-type") {
+        match response.headers().get(CONTENT_TYPE) {
             None => {
                 debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
             }

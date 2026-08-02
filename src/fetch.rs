@@ -17,20 +17,19 @@ pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 
 use std::sync::Arc;
 
+use reqwest::Client;
+use tokio::sync::watch;
+use tracing::{debug, info, warn};
+
 use crate::envelope::ErrorCode;
 use crate::retry::is_transient_network;
 use crate::tools::Classification;
 
-use tokio::sync::watch;
-
+#[cfg(feature = "js-rendering")]
+use cdp::fetch_with_cdp;
 use converter::{FetchResult, to_fetch_result};
 use download::download;
 use extractor::{extract_article, extract_raw};
-use reqwest::Client;
-
-#[cfg(feature = "js-rendering")]
-use cdp::fetch_with_cdp;
-use tracing::{debug, info, warn};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
 ///

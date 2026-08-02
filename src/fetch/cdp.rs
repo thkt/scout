@@ -227,17 +227,12 @@ pub(super) async fn fetch_with_cdp_with(
     result
 }
 
-/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
+/// Open a page, navigate to `url`, and return the rendered HTML.
 ///
-/// Synchronous so the caller captures `pgid` before any timeout can drop the
-/// future and orphan the group. The pgid equals the chromium child's pid (the
-/// call uses `process_group(0)`, which means "make the child the leader of a
-/// new group whose id is its pid"). scout retains the `Child` so the kernel
-/// can reap the parent after we kill the group.
-///
-/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
-/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
-/// hand the resulting WebSocket URL to `Browser::connect` instead.
+/// Every subrequest the page issues is intercepted through `Fetch.RequestPaused`
+/// and run past `resolver` before it is allowed to continue, so a page cannot
+/// reach an internal address by way of a resource it loads. Borrows the browser
+/// so the caller keeps ownership and can still tear it down after a timeout.
 #[cfg(feature = "js-rendering")]
 async fn cdp_navigate(
     browser: &mut chromiumoxide::Browser,
