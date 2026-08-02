@@ -103,7 +103,6 @@ pub(crate) fn format_tree(
     out
 }
 
-/// Format a comprehensive repository overview with metadata, README, issues, PRs, and releases.
 pub(crate) fn format_overview(
     repo: &RepoInfo,
     readme: Option<&str>,
@@ -155,8 +154,7 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
     out.push_str("## README\n\n");
     if content.len() > MAX_README_BYTES {
         // Not reusing truncate_with_note because shift_headings must run
-        // between truncation and note addition — but the note itself is the
-        // same one, so it comes from the same place.
+        // between truncation and note addition.
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
         let end = content[..boundary]
             .rfind('\n')

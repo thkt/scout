@@ -34,7 +34,6 @@ pub(crate) struct DecodeResult {
 
 /// Decode a base64-encoded string into raw bytes.
 ///
-/// This is the first half of the old `decode_content`: base64 → bytes.
 /// Encoding detection is handled separately by `decode_bytes`.
 pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
     // GitHub wraps base64 at 60 chars, but base64 v0.22 has no whitespace-tolerant

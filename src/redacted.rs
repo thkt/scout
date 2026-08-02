@@ -75,9 +75,7 @@ mod tests {
 
     /// [T-RC007] FR-004 / FR-005: `validate_https` rejects any input that does not begin
     /// with `https://` (plain `http://`, empty string) and accepts a real
-    /// `https://` URL. The error variant is whatever the closure constructs,
-    /// so each backend plugs in its own type. The closure runs only on
-    /// failure; a passing URL never instantiates the error.
+    /// `https://` URL.
     #[test]
     fn validate_https_is_generic_over_caller_error_type() {
         #[derive(Debug, PartialEq, Eq)]

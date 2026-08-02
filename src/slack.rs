@@ -184,8 +184,7 @@ struct MessagesBody {
 
 impl MessagesBody {
     /// The non-empty `next_cursor` to fetch the following page, if Slack
-    /// signalled more results. Returns `None` when `has_more` is false or the
-    /// cursor is absent/empty, so the pagination loop terminates.
+    /// signalled more results.
     fn next_cursor(&self) -> Option<&str> {
         if !self.has_more {
             return None;

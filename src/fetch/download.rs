@@ -125,15 +125,8 @@ struct DecodedBody {
 }
 
 /// Decode a response body label-first, recovering mislabeled multi-byte content
-/// via chardetng before giving up (issue #241).
-///
-/// 1. Decode with the server charset label (default utf-8). A clean decode
-///    (`had_errors == false`) is returned as-is, not uncertain.
-/// 2. On a lossy or unknown-label decode, fall back to reliability-gated
-///    detection: a multi-byte encoding that decodes cleanly is trusted and the
-///    recovered text is returned, not uncertain.
-/// 3. If neither succeeds, return the lossy UTF-8 best effort with
-///    `uncertain = true`.
+/// via chardetng before giving up (issue #241). Detection-recovered text is
+/// returned as trusted, not uncertain.
 fn decode_body(bytes: &[u8], charset: Option<&str>) -> DecodedBody {
     let label = charset.unwrap_or("utf-8");
     match encoding_rs::Encoding::for_label(label.as_bytes()) {

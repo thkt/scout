@@ -110,8 +110,6 @@ impl ScoutBuilder {
     /// match production behavior; tests override via `with_*`.
     pub(crate) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
-        // Detect the proxy env once here so `build_default_clients` shapes
-        // `fetch_http` to match and `Scout` carries the same mode into `fetch`.
         let egress = detect_egress_mode(&env::vars().collect());
         let (http, fetch_http) = build_default_clients(&egress)?;
         let brave = BraveClient::from_env(http.clone(), config.max_retries)

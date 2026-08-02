@@ -282,8 +282,6 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     }
 }
 
-/// Print error to stderr (JSON envelope when `--json`, plain `error: <msg>` otherwise)
-/// and return the appropriate `ExitCode`.
 fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
     if json_mode {
         let line = render_json_error(err);

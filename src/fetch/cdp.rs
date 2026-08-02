@@ -96,11 +96,9 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Resolve the browser binary, then render via CDP. Production entry: thin
-/// wrapper over `fetch_with_cdp_with`. Binary discovery runs per call (no
-/// process-global cache) so the path stays injectable for tests (issue #227,
-/// the #191 DI seam pattern). The discovery cost (a few `which` probes, ~1-5 ms)
-/// is negligible against the ~2 s chromium render that follows.
+/// Resolve the browser binary, then render via CDP. Binary discovery runs per
+/// call (no process-global cache) so the path stays injectable for tests
+/// (issue #227, the #191 DI seam pattern).
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,

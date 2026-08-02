@@ -21,7 +21,6 @@ impl Clock for SystemClock {
     }
 }
 
-/// Test clock that always returns the configured second.
 #[cfg(test)]
 pub(crate) struct FixedClock(pub u64);
 

@@ -241,8 +241,7 @@ pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
             warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
         }
     }
-    // Reap so the kernel can release the parent slot. `Ok(Err)` means waitpid
-    // itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
+    // `Ok(Err)` means waitpid itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
     // means the 2s budget elapsed before chromium exited, which is the zombie
     // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
     // honest (issue #152).
@@ -257,8 +256,6 @@ pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
     }
 }
 
-/// Locate a chromium-family binary: try each name in `path_commands` via the
-/// shell's lookup, then each entry in `known_paths`, else [`BrowserError::NotFound`].
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 fn resolve_browser_binary_from(
     path_commands: &[&str],

@@ -83,7 +83,6 @@ impl Degradation {
         &self.notes
     }
 
-    /// Consume and return the underlying vectors.
     pub fn into_parts(self) -> (Vec<String>, Vec<DegradedReason>) {
         (self.notes, self.reasons)
     }
@@ -140,8 +139,7 @@ impl CommandOutput {
         self.markdown
     }
 
-    /// Consume self into a [`SuccessEnvelope`]. Moves `data`, `notes`, and
-    /// `degraded_reasons` without cloning.
+    /// Consume self into a [`SuccessEnvelope`].
     pub(crate) fn into_envelope(self) -> SuccessEnvelope {
         SuccessEnvelope {
             data: self.data,
