@@ -66,7 +66,7 @@ fn t015_unknown_user_id_kept_as_author() {
 
 /// [T-SK067] resolve_messages treats an empty resolved name as a miss
 ///
-/// Same rule as [T-SK063] on the mention path, which shares this map: an empty
+/// Same rule as T-SK063 on the mention path, which shares this map: an empty
 /// value is a failed resolution, not a name. Rendering it as the author would
 /// emit `author: ""` with nothing in the logs to say the lookup came up short.
 #[test]

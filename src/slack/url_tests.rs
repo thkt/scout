@@ -68,7 +68,7 @@ parent body
     assert_eq!(output, expected);
 }
 
-/// [T-SK015] an untrusted message body starting with `---` cannot inject a YAML
+/// [T-SK070] an untrusted message body starting with `---` cannot inject a YAML
 /// document boundary into scout's frontmatter output (a naive multi-document YAML
 /// reader splits on bare `---`/`...` lines; the body must contribute none).
 #[test]
@@ -96,7 +96,7 @@ fn body_cannot_inject_yaml_document_marker() {
     );
 }
 
-/// [T-SK016] a reply author's untrusted display name (user-settable) cannot inject
+/// [T-SK071] a reply author's untrusted display name (user-settable) cannot inject
 /// a YAML document marker into the body either
 #[test]
 fn reply_author_cannot_inject_yaml_document_marker() {

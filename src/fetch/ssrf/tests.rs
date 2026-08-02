@@ -82,7 +82,7 @@ fn validate_url_allows_cgn_boundary_neighbors() {
     }
 }
 
-/// [T-005] proxied mode validates a public-domain URL without consulting the DNS resolver (FailingDnsResolver still returns Ok)
+/// [T-FS018] proxied mode validates a public-domain URL without consulting the DNS resolver (FailingDnsResolver still returns Ok)
 #[tokio::test]
 async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_resolver_failingdnsresolver_still_returns_ok()
  {
@@ -99,7 +99,7 @@ async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_r
     );
 }
 
-/// [T-006] proxied mode rejects a literal private-IP URL with InternalHost
+/// [T-FS019] proxied mode rejects a literal private-IP URL with InternalHost
 #[tokio::test]
 async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
     let resolver = FailingDnsResolver("lookup failed".into());
@@ -115,7 +115,7 @@ async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
     );
 }
 
-/// [T-007] proxied mode rejects a localhost-domain URL with InternalHost
+/// [T-FS020] proxied mode rejects a localhost-domain URL with InternalHost
 #[tokio::test]
 async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
     let resolver = FailingDnsResolver("lookup failed".into());
@@ -131,7 +131,7 @@ async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
     );
 }
 
-/// [T-009] direct mode still returns DnsResolution when the resolver fails (pre-check behavior unchanged)
+/// [T-FS021] direct mode still returns DnsResolution when the resolver fails (pre-check behavior unchanged)
 #[tokio::test]
 async fn direct_mode_still_returns_dnsresolution_when_the_resolver_fails_pre_check_behavior_unchanged()
  {

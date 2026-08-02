@@ -531,7 +531,7 @@ mod tests {
         );
     }
 
-    /// [T-H001] root --help exposes SCOUT_* tuning env vars (issue #120).
+    /// [T-H010] root --help exposes SCOUT_* tuning env vars (issue #120).
     /// AI agents discover override knobs by reading --help; missing entries
     /// would force agents to read the source.
     #[test]

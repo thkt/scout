@@ -53,7 +53,7 @@ async fn run_repo_tree_times_out_on_slow_github() {
 
 /// [T-TS021] run() wraps repo-read in the outer github_timeout
 ///
-/// Companion to [T-TS020]: the guard is applied per dispatch arm in `run()`, so
+/// Companion to T-TS020: the guard is applied per dispatch arm in `run()`, so
 /// repo-read needs its own coverage of that arm (issue #185).
 #[tokio::test]
 async fn run_repo_read_times_out_on_slow_github() {
@@ -88,7 +88,7 @@ async fn run_repo_read_times_out_on_slow_github() {
 
 /// [T-TS022] run() wraps repo-overview in the outer github_timeout
 ///
-/// Companion to [T-TS020]: per-arm coverage of the repo-overview dispatch arm
+/// Companion to T-TS020: per-arm coverage of the repo-overview dispatch arm
 /// in `run()` (issue #185).
 #[tokio::test]
 async fn run_repo_overview_times_out_on_slow_github() {

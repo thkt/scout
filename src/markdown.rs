@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(out, "x (https://a.com ## Injected)");
     }
 
-    /// [T-MD011] truncate_with_note returns input unchanged when under limit
+    /// [T-MD019] truncate_with_note returns input unchanged when under limit
     #[test]
     fn truncate_with_note_short_input_unchanged() {
         assert_eq!(truncate_with_note("hello", 100), "hello");

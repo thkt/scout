@@ -35,8 +35,8 @@ impl WebSearchResponse {
     }
 }
 
-// Test ID convention:
-//   T-BT### = Brave Types module-internal tests (serde deserialization coverage).
+// T-BT### = Brave Types module-internal tests (serde deserialization coverage).
+// See `crate::test_support` for the id convention itself.
 #[cfg(test)]
 mod tests {
     use super::*;

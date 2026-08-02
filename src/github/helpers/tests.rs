@@ -288,7 +288,7 @@ fn filter_excludes_commit_entries() {
     assert_eq!(filtered[0].path, "src/main.rs");
 }
 
-/// [T-GHH023] extract_error_message pulls the message field from GitHub JSON payloads
+/// [T-GHH026] extract_error_message pulls the message field from GitHub JSON payloads
 #[test]
 fn extract_error_message_from_json() {
     assert_eq!(

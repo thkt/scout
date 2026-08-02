@@ -26,7 +26,7 @@ async fn blocks_ssrf_to_localhost() {
     assert!(matches!(result, Err(FetchError::InternalHost)));
 }
 
-/// [T-F052] fetch_does_not_log_userinfo_credentials_on_blocked_url
+/// [T-F076] fetch_does_not_log_userinfo_credentials_on_blocked_url
 ///
 /// Adversarial: even when SSRF blocks the fetch, the `warn!` line emitted
 /// by `ssrf_check` MUST flow through `redact_url_credentials` so no
