@@ -31,6 +31,25 @@ fn public_resolver() -> ssrf::StaticDnsResolver {
     ssrf::StaticDnsResolver::single("8.8.8.8")
 }
 
+/// `download` against a wiremock path with every argument at its default: no
+/// redirects, the standard hop cap, a resolver that answers public, direct
+/// egress. A test that varies one of those calls `download` directly, so the
+/// variation stays visible at the call site.
+async fn download_default(
+    uri: &str,
+    path: &str,
+) -> Result<(ValidatedUrl, String, bool), FetchError> {
+    let client = no_redirect_client();
+    download(
+        &client,
+        &validated(&format!("{uri}{path}")),
+        MAX_REDIRECTS,
+        &public_resolver(),
+        &ssrf::EgressMode::Direct,
+    )
+    .await
+}
+
 /// [T-F009] download_success_returns_html
 #[tokio::test]
 async fn download_success_returns_html() {
@@ -45,16 +64,7 @@ async fn download_success_returns_html() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let (final_url, html, _uncertain) = download(
-        &client,
-        &validated(&format!("{}/page", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await
-    .unwrap();
+    let (final_url, html, _uncertain) = download_default(&server.uri(), "/page").await.unwrap();
 
     assert!(final_url.as_str().contains("/page"));
     assert!(html.contains("hello"));
@@ -83,16 +93,7 @@ async fn download_flags_decode_uncertain_for_undecodable_body() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let (_final_url, html, uncertain) = download(
-        &client,
-        &validated(&format!("{}/mojibake", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await
-    .unwrap();
+    let (_final_url, html, uncertain) = download_default(&server.uri(), "/mojibake").await.unwrap();
 
     assert!(uncertain, "undecodable body must set decode_uncertain");
     assert!(
@@ -122,16 +123,7 @@ async fn download_recovers_mislabeled_multibyte_without_uncertain() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let (_final_url, html, uncertain) = download(
-        &client,
-        &validated(&format!("{}/sjis", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await
-    .unwrap();
+    let (_final_url, html, uncertain) = download_default(&server.uri(), "/sjis").await.unwrap();
 
     assert!(
         !uncertain,
@@ -160,27 +152,12 @@ async fn download_non_success_returns_status_error() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
     assert!(matches!(
-        download(
-            &client,
-            &validated(&format!("{}/404", server.uri())),
-            MAX_REDIRECTS,
-            &public_resolver(),
-            &ssrf::EgressMode::Direct,
-        )
-        .await,
+        download_default(&server.uri(), "/404").await,
         Err(FetchError::Status(404))
     ));
     assert!(matches!(
-        download(
-            &client,
-            &validated(&format!("{}/500", server.uri())),
-            MAX_REDIRECTS,
-            &public_resolver(),
-            &ssrf::EgressMode::Direct,
-        )
-        .await,
+        download_default(&server.uri(), "/500").await,
         Err(FetchError::Status(500))
     ));
 }
@@ -198,15 +175,7 @@ async fn download_too_large_body_rejected() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let result = download(
-        &client,
-        &validated(&format!("{}/huge", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await;
+    let result = download_default(&server.uri(), "/huge").await;
     assert!(matches!(result, Err(FetchError::TooLarge)));
 }
 
@@ -226,15 +195,7 @@ async fn download_rejects_non_html_content_type() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let result = download(
-        &client,
-        &validated(&format!("{}/binary", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await;
+    let result = download_default(&server.uri(), "/binary").await;
     assert!(
         matches!(result, Err(FetchError::UnsupportedContentType(ref ct)) if ct == "application/pdf"),
         "got: {result:?}"
@@ -255,15 +216,7 @@ async fn redirect_to_private_ip_blocked() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let result = download(
-        &client,
-        &validated(&format!("{}/redir", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await;
+    let result = download_default(&server.uri(), "/redir").await;
     assert!(
         matches!(result, Err(FetchError::InternalHost)),
         "redirect to 127.0.0.1 should be blocked, got: {result:?}"
@@ -376,15 +329,7 @@ async fn redirect_missing_location_header_returns_error() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let result = download(
-        &client,
-        &validated(&format!("{}/bad-redir", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await;
+    let result = download_default(&server.uri(), "/bad-redir").await;
     assert!(
         matches!(result, Err(FetchError::RedirectMissingLocation)),
         "missing Location header should error, got: {result:?}"
@@ -413,16 +358,7 @@ async fn download_transparently_decodes_gzip_response() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let (_final_url, body, _uncertain) = download(
-        &client,
-        &validated(&format!("{}/gz", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await
-    .unwrap();
+    let (_final_url, body, _uncertain) = download_default(&server.uri(), "/gz").await.unwrap();
 
     assert!(
         body.contains("hello"),
@@ -451,16 +387,7 @@ async fn download_transparently_decodes_deflate_response() {
         .mount(&server)
         .await;
 
-    let client = no_redirect_client();
-    let (_final_url, body, _uncertain) = download(
-        &client,
-        &validated(&format!("{}/df", server.uri())),
-        MAX_REDIRECTS,
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await
-    .unwrap();
+    let (_final_url, body, _uncertain) = download_default(&server.uri(), "/df").await.unwrap();
 
     assert!(
         body.contains("hello"),

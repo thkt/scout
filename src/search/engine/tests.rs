@@ -61,12 +61,12 @@ fn make_source(url: &str, title: &str) -> SearchResult {
 #[test]
 fn format_report_includes_sections() {
     let report = ResearchReport {
-        fetched_pages: vec![],
         failed_urls: vec![FailedUrl {
             url: "https://fail.com".into(),
             reason: "timeout".into(),
         }],
         sources: vec![make_source("https://a.com", "A")],
+        ..Default::default()
     };
 
     let text = format_report(&report, "test query");
@@ -115,11 +115,7 @@ fn partition_by_rank_orders_failures_like_pages() {
 /// deliberately the opposite of `search`, which DR-0020 pins to true empty output.
 #[test]
 fn format_report_marks_zero_results_in_sources() {
-    let report = ResearchReport {
-        fetched_pages: vec![],
-        failed_urls: vec![],
-        sources: vec![],
-    };
+    let report = ResearchReport::default();
 
     let text = format_report(&report, "nothing matches this");
     assert!(
@@ -136,9 +132,8 @@ fn format_report_marks_zero_results_in_sources() {
 #[test]
 fn format_report_neutralizes_javascript_source_url() {
     let report = ResearchReport {
-        fetched_pages: vec![],
-        failed_urls: vec![],
         sources: vec![make_source("javascript:alert(1)", "Evil")],
+        ..Default::default()
     };
 
     let text = format_report(&report, "q");
@@ -156,9 +151,8 @@ fn format_report_neutralizes_javascript_source_url() {
 #[test]
 fn format_report_omits_search_result_header() {
     let report = ResearchReport {
-        fetched_pages: vec![],
-        failed_urls: vec![],
         sources: vec![make_source("https://a.com", "A")],
+        ..Default::default()
     };
 
     let text = format_report(&report, "test");
@@ -177,8 +171,7 @@ fn format_report_includes_fetched_pages() {
             "# Example Page\n\n## Section\n\nSome content here.".into(),
             false,
         )],
-        failed_urls: vec![],
-        sources: vec![],
+        ..Default::default()
     };
 
     let text = format_report(&report, "test");
@@ -212,8 +205,7 @@ fn format_report_prepends_decode_uncertain_note() {
             )
             .with_decode_uncertain(true),
         ],
-        failed_urls: vec![],
-        sources: vec![],
+        ..Default::default()
     };
 
     let text = format_report(&report, "test");
@@ -240,8 +232,7 @@ fn format_report_truncates_long_pages() {
             long_content,
             false,
         )],
-        failed_urls: vec![],
-        sources: vec![],
+        ..Default::default()
     };
 
     let text = format_report(&report, "test");
@@ -256,11 +247,7 @@ fn format_report_truncates_long_pages() {
 /// [T-SE007] format_report sanitizes newline characters in the heading
 #[test]
 fn format_report_sanitizes_query_newlines() {
-    let report = ResearchReport {
-        fetched_pages: vec![],
-        failed_urls: vec![],
-        sources: vec![],
-    };
+    let report = ResearchReport::default();
 
     let text = format_report(&report, "line1\nline2");
     assert!(text.contains("# Research: line1 line2"));

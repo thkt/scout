@@ -1,13 +1,9 @@
-use std::sync::Arc;
-
-use reqwest::redirect::Policy;
 use serde::ser::Error as _;
 
 use super::query::to_data_value;
 use super::test_helpers::*;
 use super::*;
 use crate::envelope::ErrorCode;
-use crate::fetch::StaticDnsResolver;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path};
@@ -493,23 +489,12 @@ async fn fetch_returns_ok_for_reachable_page() {
         .await;
 
     let addr = *server.address();
-    // Guard-free client: `.resolve()` maps the test host to the loopback wiremock
-    // socket. No `SsrfResolver` is installed, so the loopback connect proceeds.
-    let fetch_http = reqwest::Client::builder()
-        .redirect(Policy::none())
-        .resolve("scout-test.example", addr)
-        .build()
-        .unwrap();
-    let scout = ScoutBuilder::for_test()
-        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
-        .with_fetch_http(fetch_http)
-        .build();
+    let scout = scout_reaching(addr);
 
-    let params = super::params::FetchParams {
-        url: Some(format!("http://scout-test.example:{}/page", addr.port())),
-        js: false,
-        raw: false,
-    };
+    let params = super::params::FetchParams::for_test(&format!(
+        "http://scout-test.example:{}/page",
+        addr.port()
+    ));
     let output = scout.fetch(params).await.expect("fetch should succeed");
 
     let data = output.data();
@@ -555,21 +540,12 @@ async fn fetch_flags_decode_uncertain_for_undecodable_body() {
         .await;
 
     let addr = *server.address();
-    let fetch_http = reqwest::Client::builder()
-        .redirect(Policy::none())
-        .resolve("scout-test.example", addr)
-        .build()
-        .unwrap();
-    let scout = ScoutBuilder::for_test()
-        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
-        .with_fetch_http(fetch_http)
-        .build();
+    let scout = scout_reaching(addr);
 
-    let params = super::params::FetchParams {
-        url: Some(format!("http://scout-test.example:{}/page", addr.port())),
-        js: false,
-        raw: false,
-    };
+    let params = super::params::FetchParams::for_test(&format!(
+        "http://scout-test.example:{}/page",
+        addr.port()
+    ));
     let output = scout.fetch(params).await.expect("fetch should succeed");
 
     assert!(

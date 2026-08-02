@@ -1,6 +1,11 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::redirect::Policy;
+
 use super::*;
+use crate::fetch::StaticDnsResolver;
 
 pub(super) fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
     ScoutBuilder::for_test()
@@ -32,4 +37,24 @@ pub(super) fn scout_lazy(brave_uri: &str) -> Scout {
 
 pub(super) fn scout_with_brave(brave_uri: &str) -> Scout {
     scout_with_github(brave_uri, "http://localhost:0")
+}
+
+/// A `Scout` that can reach a loopback wiremock at `addr` without the SSRF
+/// contract being switched off.
+///
+/// `.resolve()` points the test host at the wiremock socket, and the client is
+/// built without `SsrfResolver` so the loopback connect is allowed to proceed —
+/// the pre-flight still runs, against a resolver that answers with a public
+/// address. Installing the guard instead would block loopback, and dropping the
+/// pre-flight would stop testing the path under test.
+pub(super) fn scout_reaching(addr: SocketAddr) -> Scout {
+    let fetch_http = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .expect("test client builds");
+    ScoutBuilder::for_test()
+        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
+        .with_fetch_http(fetch_http)
+        .build()
 }

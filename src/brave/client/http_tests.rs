@@ -263,7 +263,7 @@ async fn search_oversized_body_returns_too_large() {
         return;
     };
     // 1 MiB + 1 byte trips the cap regardless of pre-check vs chunk path.
-    let body = vec![b'x'; (1024 * 1024) + 1];
+    let body = vec![b'x'; MAX_API_RESPONSE_BYTES + 1];
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
         .expect(1)

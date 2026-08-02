@@ -322,11 +322,7 @@ async fn fetch_leaves_github_uninitialized() {
 
     let s = scout_lazy(&server.uri());
     let _result = s
-        .fetch(FetchParams {
-            url: Some(format!("{}/page", server.uri())),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(&format!("{}/page", server.uri())))
         .await;
 
     assert!(

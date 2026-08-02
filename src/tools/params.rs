@@ -81,6 +81,20 @@ pub struct FetchParams {
     pub raw: bool,
 }
 
+#[cfg(test)]
+impl FetchParams {
+    /// A plain fetch of `url` with both flags off — what every test that is not
+    /// about `js` or `raw` wants. Named rather than `Default` so a test that
+    /// does care about a flag has to set it visibly.
+    pub(crate) fn for_test(url: &str) -> Self {
+        Self {
+            url: Some(url.to_owned()),
+            js: false,
+            raw: false,
+        }
+    }
+}
+
 #[derive(Args)]
 #[command(after_help = "\
 Examples:
