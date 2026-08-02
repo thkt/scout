@@ -2,12 +2,13 @@
 //! YAML output formatting. The token-bearing HTTP client lives in [`client`].
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::envelope::ErrorCode;
-use crate::fetch::converter::{escape_yaml, neutralize_yaml_markers};
+use crate::fetch::converter::{neutralize_yaml_markers, write_yaml_str};
 use crate::tools::Classification;
 
 mod client;
@@ -374,17 +375,16 @@ fn format_slack_output(
     replies: &[ResolvedMessage],
 ) -> String {
     let mut out = String::from("---\n");
-    out.push_str(&format!(
-        "workspace: \"{}\"\n",
-        escape_yaml(&slack_url.workspace)
-    ));
-    out.push_str(&format!("channel: \"{}\"\n", escape_yaml(channel_name)));
-    out.push_str(&format!("author: \"{}\"\n", escape_yaml(&first.author)));
-    out.push_str(&format!("ts: \"{}\"\n", escape_yaml(&slack_url.ts)));
+    write_yaml_str(&mut out, "workspace", &slack_url.workspace);
+    write_yaml_str(&mut out, "channel", channel_name);
+    write_yaml_str(&mut out, "author", &first.author);
+    write_yaml_str(&mut out, "ts", &slack_url.ts);
     if !replies.is_empty() {
-        out.push_str(&format!("context_messages: {}\n", replies.len()));
+        // Numeric, so it is written unquoted — the one key here that is not a
+        // string scalar, rather than a fifth look-alike.
+        let _ = writeln!(out, "context_messages: {}", replies.len());
     }
-    out.push_str(&format!("url: \"{}\"\n", escape_yaml(&slack_url.raw_url)));
+    write_yaml_str(&mut out, "url", &slack_url.raw_url);
     out.push_str("---\n\n");
 
     out.push_str(&neutralize_yaml_markers(&first.text));

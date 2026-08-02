@@ -88,8 +88,6 @@ impl GitHubError {
             // Priority 3: NOT_FOUND
             Self::NotFound(_) => Classification::new(ErrorCode::NotFound)
                 .with_hint("Check that the repository or path exists, and that you have access"),
-            // Priority 4: TIMEOUT (request timeout via reqwest builder)
-            Self::Network(re) if re.is_timeout() => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { retry_after } => Classification::new(ErrorCode::TempFailure)
                 .with_hint(match retry_after {
@@ -98,7 +96,8 @@ impl GitHubError {
                     ),
                     None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
                 }),
-            Self::Network(_) => Classification::transient_network(),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Network(re) => Classification::from_reqwest(re),
             Self::Api { code, .. } if (500..=599).contains(code) => {
                 Classification::transient_retry()
             }

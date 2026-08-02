@@ -91,15 +91,18 @@ impl BraveError {
             Self::Api { code, .. } if (400..500).contains(code) => {
                 Classification::new(ErrorCode::DataError)
             }
-            // Priority 4: TIMEOUT
-            Self::Network(re) if re.is_timeout() => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } => Classification::transient_retry(),
             Self::Server(_) => Classification::transient_retry(),
-            Self::Network(_) => Classification::transient_network(),
+            // `classify_response` turns a 5xx into `Server` before `Api` is ever
+            // built, so this arm is unreachable from the wire — it stays because
+            // [T-BRC00x] constructs `Api { code: 5xx }` directly to pin that a
+            // server-class code is TempFailure whichever variant carries it.
             Self::Api { code, .. } if (500..=599).contains(code) => {
                 Classification::transient_retry()
             }
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — schema drift is a scout-side invariant;
             // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
             // body is an upstream invariant violation (Brave returning >1 MiB
@@ -240,7 +243,6 @@ impl BraveClient {
             .get(url)
             .header("X-Subscription-Token", self.api_key.expose())
             .header("Accept", "application/json")
-            .header("User-Agent", crate::USER_AGENT)
             .timeout(REQUEST_TIMEOUT)
             .send()
             .await?;

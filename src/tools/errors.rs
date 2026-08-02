@@ -7,6 +7,7 @@ use crate::brave::client::BraveError;
 use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
 use crate::github;
+use crate::retry::is_transient_network;
 use crate::slack::SlackError;
 
 /// Reusable next_step hints so transient/network errors stay consistent.
@@ -56,6 +57,31 @@ impl Classification {
     /// backoff than for rate-limit / 5xx failures.
     pub(crate) fn timeout_retry() -> Self {
         Self::new(ErrorCode::Timeout).with_hint(HINT_RETRY_DELAY)
+    }
+
+    /// Where a `reqwest::Error` lands in the ADR-0011 priority table.
+    ///
+    /// One rule about one foreign type, so it lives once: every backend that
+    /// wraps a `reqwest::Error` asks the same two questions in the same order.
+    /// The order is load-bearing — `is_transient_network` also answers true for
+    /// timeouts, and ADR-0002 splits those into their own code, so the timeout
+    /// check has to come first.
+    ///
+    /// Anything neither timeout nor transient is `Unknown`, not `TempFailure`:
+    /// a rising `Unknown` rate is the signal ADR-0011 wants when the
+    /// classification misses a case, and calling an unrecognized transport
+    /// failure retryable buries it instead.
+    pub(crate) fn from_reqwest(e: &reqwest::Error) -> Self {
+        // Priority 4: TIMEOUT
+        if e.is_timeout() {
+            return Self::timeout_retry();
+        }
+        // Priority 4: TEMP_FAILURE
+        if is_transient_network(e) {
+            return Self::transient_network();
+        }
+        // 退避: unclassifiable transport failure
+        Self::new(ErrorCode::Unknown)
     }
 }
 

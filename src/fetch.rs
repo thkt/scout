@@ -22,7 +22,6 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::envelope::ErrorCode;
-use crate::retry::is_transient_network;
 use crate::tools::Classification;
 
 #[cfg(feature = "js-rendering")]
@@ -139,15 +138,10 @@ impl FetchError {
             // Priority 4: TEMP_FAILURE (non-Status variants)
             Self::DnsResolution(_) => Classification::new(ErrorCode::TempFailure)
                 .with_hint("Check the URL's domain name and your DNS resolver"),
-            // `is_transient_network` covers connect, timeout, and mid-stream
-            // body drop (issue #113), but ADR-0002 splits timeout into 124.
-            // Check `is_timeout()` first.
-            Self::Http(re) if re.is_timeout() => Classification::timeout_retry(),
-            Self::Http(re) if is_transient_network(re) => Classification::transient_network(),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Http(re) => Classification::from_reqwest(re),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),
-            // Unknown — reqwest errors that do not match transient network patterns
-            Self::Http(_) => Classification::new(ErrorCode::Unknown),
         }
     }
 }

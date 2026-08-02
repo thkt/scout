@@ -2,7 +2,7 @@
 
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use reqwest::Client;
-use reqwest::header::{CONTENT_TYPE, LOCATION, USER_AGENT};
+use reqwest::header::{CONTENT_TYPE, LOCATION};
 use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
@@ -19,6 +19,10 @@ use crate::retry::read_body_capped;
 ///
 /// `&ValidatedUrl` here closes that gap at the type level — the manual
 /// redirect loop cannot accept an unchecked URL.
+///
+/// The client is also expected to carry scout's User-Agent as a default header.
+/// `build_default_clients` sets it for both production clients; a hand-built
+/// client passed in by a test will send requests without one.
 pub(super) async fn download(
     client: &Client,
     url: &ValidatedUrl,
@@ -29,11 +33,7 @@ pub(super) async fn download(
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
-        let response = client
-            .get(current_url.as_str())
-            .header(USER_AGENT, crate::USER_AGENT)
-            .send()
-            .await?;
+        let response = client.get(current_url.as_str()).send().await?;
 
         if response.status().is_redirection() {
             let location = response

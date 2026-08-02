@@ -191,15 +191,26 @@ pub(crate) async fn ssrf_check(
             )));
         }
 
-        for ip in addrs {
-            if is_private_ip(ip) {
-                warn!(host = %domain, ip = %ip, "DNS resolves to private IP");
-                return Err(FetchError::InternalHost);
-            }
+        if first_blocked_ip("preflight", domain, &addrs).is_some() {
+            return Err(FetchError::InternalHost);
         }
     }
 
     Ok(ValidatedUrl(parsed))
+}
+
+/// Fail-closed check over a resolved address set: if any address is private, the
+/// whole connection is refused — the public members are never dialed, because a
+/// host that answers with both is exactly the rebind shape ADR-0012 blocks.
+///
+/// Returns the offending address so callers that name it in an error can, and
+/// logs the block here so all three stages report it identically. `stage`
+/// distinguishes them: `preflight` (before the request), `connect` (reqwest's
+/// resolver), `proxy` (the CDP SOCKS5 hop).
+pub(crate) fn first_blocked_ip(stage: &'static str, host: &str, ips: &[IpAddr]) -> Option<IpAddr> {
+    let blocked = ips.iter().copied().find(|ip| is_private_ip(*ip))?;
+    warn!(stage, host = %host, ip = %blocked, "blocked connect to private IP");
+    Some(blocked)
 }
 
 pub(crate) fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
@@ -303,15 +314,15 @@ impl Resolve for SsrfResolver {
             let host = name.as_str();
             // Port 0: reqwest substitutes the scheme default before dialing.
             let ips = inner.lookup(host, 0).await?;
-            let mut addrs = Vec::with_capacity(ips.len());
-            for ip in ips {
-                if is_private_ip(ip) {
-                    warn!(host = %host, ip = %ip, "blocked connect to private IP");
-                    return Err(format!("blocked connect to private IP {ip}").into());
-                }
-                addrs.push(SocketAddr::new(ip, 0));
+            if let Some(ip) = first_blocked_ip("connect", host, &ips) {
+                return Err(format!("blocked connect to private IP {ip}").into());
             }
-            let addrs: Addrs = Box::new(addrs.into_iter());
+            let addrs: Addrs = Box::new(
+                ips.into_iter()
+                    .map(|ip| SocketAddr::new(ip, 0))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
             Ok(addrs)
         })
     }

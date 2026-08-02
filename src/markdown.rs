@@ -70,6 +70,15 @@ pub(crate) fn sanitize_heading(s: &str) -> Cow<'_, str> {
         .collect()
 }
 
+/// The note appended wherever output is cut at a byte cap.
+///
+/// Callers that cannot use [`truncate_with_note`] — because they transform the
+/// text between the cut and the note — still emit this exact wording, so the
+/// two halves cannot drift into two different messages.
+pub(crate) fn truncation_note(shown: usize, total: usize) -> String {
+    format!("\n\n(truncated: showing {shown} / {total} bytes)")
+}
+
 /// Truncate a string at a char boundary and append a byte-count note.
 ///
 /// Returns the input borrowed if it fits within `max_bytes`.
@@ -80,8 +89,7 @@ pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
     let total = s.len();
     let end = s.floor_char_boundary(max_bytes);
     let mut out = s[..end].to_string();
-    use std::fmt::Write;
-    let _ = write!(out, "\n\n(truncated: showing {end} / {total} bytes)");
+    out.push_str(&truncation_note(end, total));
     Cow::Owned(out)
 }
 

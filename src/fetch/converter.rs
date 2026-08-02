@@ -85,14 +85,14 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     let mut fm = String::from("---\n");
 
     if let Some(title) = &article.title {
-        let _ = writeln!(fm, "title: \"{}\"", escape_yaml(title));
+        write_yaml_str(&mut fm, "title", title);
     }
     // "byline" is the Readability/journalism term; mapped to "author" for YAML frontmatter
     if let Some(author) = &article.byline {
-        let _ = writeln!(fm, "author: \"{}\"", escape_yaml(author));
+        write_yaml_str(&mut fm, "author", author);
     }
     if let Some(date) = &article.published_time {
-        let _ = writeln!(fm, "date: \"{}\"", escape_yaml(date));
+        write_yaml_str(&mut fm, "date", date);
     }
 
     fm.push_str("---\n\n");
@@ -138,6 +138,17 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
         .strip_prefix("---")
         .or_else(|| line.strip_prefix("..."))?;
     (token.is_empty() || token.starts_with([' ', '\t', '\r'])).then_some(token)
+}
+
+/// Write one frontmatter key whose value is a string.
+///
+/// The double quotes and [`escape_yaml`] are one contract, not two steps:
+/// `escape_yaml`'s escape set is exactly what a double-quoted YAML scalar needs,
+/// so emitting the quotes without the escape (or the reverse) is how a value
+/// containing `"` or a newline breaks out of the block. Keeping them in one
+/// place means a call site cannot do half of it.
+pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
+    let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(value));
 }
 
 pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {

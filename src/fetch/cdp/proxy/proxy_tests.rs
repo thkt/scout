@@ -1,5 +1,5 @@
 //! SOCKS5 SSRF proxy tests. All offline: rejection cases close before any dial,
-//! and the one validation-pass case (T-201-3) exercises `all_ips_public`
+//! and the one validation-pass case (T-201-3) exercises `first_blocked_ip`
 //! directly so no real upstream connection is attempted (full-tunnel success is
 //! covered by the chromium e2e, T-201-7).
 
@@ -13,7 +13,7 @@ use tokio::task::yield_now;
 use tracing_test::traced_test;
 
 use super::transport::dial_and_tunnel;
-use super::{all_ips_public, handle_conn, spawn_ssrf_proxy};
+use super::{first_blocked_ip, handle_conn, spawn_ssrf_proxy};
 use crate::fetch::ssrf::{DnsResolver, StaticDnsResolver};
 
 /// SOCKS5 no-auth greeting: VER=5, one method (no-auth).
@@ -102,14 +102,14 @@ async fn t201_2_ipv4_literal_loopback_replies_not_allowed() {
 }
 
 /// T-201-3: a domain resolving to a single public IP passes validation: no block
-/// reply, no block log. Exercises `all_ips_public` directly so no real dial is
+/// reply, no block log. Exercises `first_blocked_ip` directly so no real dial is
 /// attempted (the equivalence class "all public" maps to "allowed").
 #[tokio::test]
 #[traced_test]
 async fn t201_3_public_resolution_passes_validation() {
     let public: IpAddr = "93.184.216.34".parse().unwrap();
 
-    assert!(all_ips_public("example.test", &[public]));
+    assert!(first_blocked_ip("proxy", "example.test", &[public]).is_none());
     assert!(
         !logs_contain("blocked connect to private IP"),
         "a public IP must not log a block"

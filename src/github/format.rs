@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
-use crate::markdown::{escape_md_inline, md_link, shift_headings};
+use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note};
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -155,18 +155,15 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
     out.push_str("## README\n\n");
     if content.len() > MAX_README_BYTES {
         // Not reusing truncate_with_note because shift_headings must run
-        // between truncation and note addition.
+        // between truncation and note addition — but the note itself is the
+        // same one, so it comes from the same place.
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
         let end = content[..boundary]
             .rfind('\n')
             .map(|p| p + 1)
             .unwrap_or(boundary);
         out.push_str(&shift_headings(&content[..end], 2));
-        let _ = write!(
-            out,
-            "\n\n(truncated: showing {end} / {} bytes)",
-            content.len()
-        );
+        out.push_str(&truncation_note(end, content.len()));
     } else {
         out.push_str(&shift_headings(content, 2));
     }

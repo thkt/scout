@@ -134,7 +134,6 @@ impl GitHubClient {
             .http
             .get(&url)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token.expose()));
