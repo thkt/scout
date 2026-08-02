@@ -70,11 +70,7 @@ async fn scout_builder_with_dns_blocks_fetch_via_injected_private_ip() {
     );
 
     let result = scout
-        .fetch(FetchParams {
-            url: Some("https://example.com/page".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test("https://example.com/page"))
         .await;
     let err = result.expect_err("injected private IP must trip SSRF check");
     assert_eq!(
@@ -99,11 +95,7 @@ async fn scout_builder_with_dns_propagates_resolver_failure() {
     let scout = ScoutBuilder::for_test().with_dns(injected).build();
 
     let result = scout
-        .fetch(FetchParams {
-            url: Some("https://example.com/page".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test("https://example.com/page"))
         .await;
     let err = result.expect_err("injected resolver failure must surface as error");
     assert!(
@@ -184,11 +176,9 @@ async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
         .build();
 
     let result = scout
-        .fetch(FetchParams {
-            url: Some("https://team.slack.com/archives/C123/p1773819598273499".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://team.slack.com/archives/C123/p1773819598273499",
+        ))
         .await;
     let output =
         result.expect("injected slack endpoint must serve fetch_slack without SLACK_TOKEN");
@@ -236,13 +226,9 @@ async fn fetch_slack_thread_page_cap_sets_degraded_reason_and_preamble() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some(
-                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
-            ),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001",
+        ))
         .await
         .expect("a truncated thread still resolves the target on page 1");
 
@@ -295,11 +281,9 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
         .await
         .expect("a mass-mention message resolves");
 
@@ -340,11 +324,9 @@ async fn fetch_slack_output_truncation_sets_degraded_reason() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
         .await
         .expect("an oversized message still resolves, truncated");
 
@@ -399,13 +381,9 @@ async fn fetch_slack_thread_cap_note_survives_output_truncation() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some(
-                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
-            ),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001",
+        ))
         .await
         .expect("an oversized truncated thread still resolves");
 
@@ -443,11 +421,9 @@ async fn fetch_slack_without_caps_stays_undegraded() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
         .await
         .expect("a healthy message resolves");
 
@@ -497,11 +473,9 @@ async fn fetch_slack_users_at_cap_boundary_stays_undegraded() {
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
         .await
         .expect("a message mentioning exactly the cap resolves");
 
@@ -564,13 +538,9 @@ async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatt
         .with_slack_endpoint(&server.uri())
         .build();
     let output = scout
-        .fetch(FetchParams {
-            url: Some(
-                "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001".into(),
-            ),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001?thread_ts=1000.000001",
+        ))
         .await
         .expect("a capped reply-bearing thread resolves the target on page 1");
 
@@ -643,11 +613,7 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
         .build();
 
     let result = scout
-        .fetch(FetchParams {
-            url: Some("http://example.com/page".into()),
-            js: false,
-            raw: false,
-        })
+        .fetch(FetchParams::for_test("http://example.com/page"))
         .await;
     let _ = handle.join();
     let output = result.expect("proxied fetch of a public URL should succeed");

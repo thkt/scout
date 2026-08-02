@@ -50,6 +50,46 @@ fn version_exits_zero() {
     );
 }
 
+// T-C013: version_points_coding_agents_at_help
+#[test]
+fn version_points_coding_agents_at_help() {
+    let output = scout()
+        .arg("--version")
+        .output()
+        .expect("scout --version failed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("coding agent") && stderr.contains("--help"),
+        "version should point a coding agent at help on stderr, got:\n{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("coding agent"),
+        "the hint must stay off stdout so the version line remains parseable, got:\n{stdout}"
+    );
+}
+
+// T-C014: non_utf8_argument_is_a_usage_error_not_a_panic
+#[cfg(unix)]
+#[test]
+fn non_utf8_argument_is_a_usage_error_not_a_panic() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let output = scout()
+        .arg("fetch")
+        .arg(OsStr::from_bytes(b"\xff"))
+        .output()
+        .expect("scout fetch failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "a non-UTF-8 argument is caller input, so it belongs on the usage-error \
+         path, not an abort; got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // T-C003: search_without_api_key_exits_64
 #[test]
 fn search_without_api_key_exits_64() {

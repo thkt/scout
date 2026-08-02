@@ -48,6 +48,13 @@ fn validate_url_rejects_internal_hosts() {
         "http://0.255.255.255/test",
         "http://evil.in-addr.arpa/ptr",
         "http://test.home.arpa/local",
+        // FQDN form: `url` keeps the trailing dot in the host, so a suffix
+        // comparison against the raw domain misses these.
+        "http://localhost./secret",
+        "http://evil.localhost./secret",
+        "http://svc.internal./config",
+        "http://printer.local./status",
+        "http://evil.in-addr.arpa./ptr",
     ] {
         assert!(
             matches!(validate_url_sync(url), Err(FetchError::InternalHost)),

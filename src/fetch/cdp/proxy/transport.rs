@@ -74,8 +74,7 @@ async fn accept_loop(
             Err(e) => {
                 // Transient accept failures (EMFILE/ENFILE/ECONNABORTED) must not
                 // kill the proxy for the whole session: a dead proxy means every
-                // later chromium subrequest fails closed. Log, back off briefly to
-                // avoid busy-spin on a sustained fault, then retry.
+                // later chromium subrequest fails closed.
                 warn!(error = %e, "SOCKS5 proxy accept failed; retrying");
                 sleep(ACCEPT_RETRY_BACKOFF).await;
             }

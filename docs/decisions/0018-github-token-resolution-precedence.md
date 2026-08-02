@@ -8,7 +8,7 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-scout の GitHub 経路は認証に bearer token を使う。供給源は複数あり (環境変数 `GITHUB_TOKEN` / `GH_TOKEN`、`gh auth token` subprocess の stdout)、どれを優先するかが曖昧だと CI とローカルで別のトークンが選ばれ再現性が壊れる。さらに `gh auth token` は外部プロセスで、認証失敗時に stderr へトークンや認証情報を echo する実装があるため、その stderr を素通しすると secret が scout の log へ漏れる。
+scout の GitHub 経路は認証に bearer token を使う。供給源は複数あり (環境変数 `GITHUB_TOKEN`/`GH_TOKEN`、`gh auth token` subprocess の stdout)、どれを優先するかが曖昧だと CI とローカルで別のトークンが選ばれ再現性が壊れる。さらに `gh auth token` は外部プロセスで、認証失敗時に stderr へトークンや認証情報を echo する実装があるため、その stderr を素通しすると secret が scout の log へ漏れる。
 
 scout は `src/token_source.rs` で `GITHUB_TOKEN` → `GH_TOKEN` → `gh auth token` の固定優先順で解決し、subprocess の stderr を読まず stdout のみ採用し、`TOKEN_RESOLVE_TIMEOUT = 5s` で `gh` の hang を打ち切り、得たトークンを `Redacted` (ADR-0015) に載せる。この優先順・leak 抑制・timeout が ADR として記録されていない。
 
@@ -17,7 +17,7 @@ scout は `src/token_source.rs` で `GITHUB_TOKEN` → `GH_TOKEN` → `gh auth t
 - CI とローカルで同じ解決順を保証し再現性を確保する (`gh` 慣習に合わせ `GITHUB_TOKEN` を最優先)
 - `gh auth token` subprocess が stderr へ吐く secret を scout の出力へ漏らさない
 - `gh` が認証プロンプトや network で hang した場合に scout 全体を止めない
-- 解決したトークンは Redacted (ADR-0015) に載せ Debug / log 漏洩を防ぐ
+- 解決したトークンは Redacted (ADR-0015) に載せ Debug/log 漏洩を防ぐ
 
 ## Considered Options
 
@@ -36,14 +36,14 @@ Option B は `gh` 慣習 (`GITHUB_TOKEN` 最優先) に反し CI の明示 env �
 - Good, because env 最優先で CI が明示トークンを確実に使え、ローカルは `gh auth` を継承できる
 - Good, because subprocess stderr を読まず warn でも withhold するため、`gh` がそこへ吐く secret が漏れない
 - Good, because 5s timeout と `kill_on_drop` が `gh` の認証プロンプト hang から scout を守る
-- Good, because Redacted 格納で解決後のトークンが Debug / panic message に出ない (ADR-0015)
+- Good, because Redacted 格納で解決後のトークンが Debug/panic message に出ない (ADR-0015)
 - Bad, because stderr を捨てるため `gh` の有用な診断 (期限切れ・scope 不足) も失われ、未認証としか分からない
 - Bad, because 空/whitespace env を未設定扱いするため、誤って空にした env が黙って次 source へ流れる
 - Bad, because `gh` バイナリ不在・非 PATH 環境では subprocess が即失敗し未認証になる (env 併用で回避可能)
 
 ### Confirmation
 
-`src/token_source.rs` のテストが解決順を pin する。`[T-TS001]` は env reader が `GITHUB_TOKEN` を返すと subprocess へ落ちずその値で短絡することを assert する。`[T-TS002]` は `GITHUB_TOKEN` が whitespace のみのとき未設定扱いで次候補 `GH_TOKEN` へ落ちることを assert する。`TokenSource` trait は `StaticTokenSource` で subprocess 無しにテストでき、production の `GhCliSource` だけが実 `gh` を起動する。`gh` の出力契約が変わった際はこれらが回帰を検出する。
+`src/token_source.rs` のテストが解決順を pin する。`[T-TOK001]` は env reader が `GITHUB_TOKEN` を返すと subprocess へ落ちずその値で短絡することを assert する。`[T-TOK002]` は `GITHUB_TOKEN` が whitespace のみのとき未設定扱いで次候補 `GH_TOKEN` へ落ちることを assert する。`TokenSource` trait は `StaticTokenSource` で subprocess 無しにテストでき、production の `GhCliSource` だけが実 `gh` を起動する。`gh` の出力契約が変わった際はこれらが回帰を検出する。
 
 ## Pros and Cons of the Options
 
@@ -85,8 +85,8 @@ subprocess を先に試し env を fallback にする。
 
 ### 参照
 
-- `src/token_source.rs:15` (`TOKEN_RESOLVE_TIMEOUT`)、`:26-93` (`GhCliSource` / `resolve_from_env_or_gh`)
+- `src/token_source.rs:15` (`TOKEN_RESOLVE_TIMEOUT`)、`:26-93` (`GhCliSource`/`resolve_from_env_or_gh`)
 - `src/github.rs` (`Auth resolution order` コメント、未認証時の rate limit ヒント)
 - ADR-0015 (Redacted。解決トークンの carrier)
-- ADR-0019 (env-var fail-fast / timeout 規約と整合)
+- ADR-0019 (env-var fail-fast/timeout 規約と整合)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit)

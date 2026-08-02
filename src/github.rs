@@ -29,7 +29,8 @@ pub(crate) use helpers::{
     validate_path, validate_ref,
 };
 use types::{
-    BlobResponse, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeResponse,
+    BlobResponse, ContentsPayload, ContentsResponse, IssueInfo, PullInfo, ReleaseInfo, RepoInfo,
+    TreeResponse,
 };
 
 pub(crate) use errors::GitHubError;
@@ -133,7 +134,6 @@ impl GitHubClient {
             .http
             .get(&url)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", crate::USER_AGENT)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token.expose()));
@@ -150,10 +150,22 @@ impl GitHubClient {
                 GitHubError::RateLimited { retry_after } => *retry_after,
                 _ => None,
             },
-            || GitHubError::RateLimited { retry_after: None },
             self.rng.as_ref(),
         )
         .await
+    }
+
+    /// How long to wait before retrying a rate-limited response.
+    ///
+    /// GitHub states the wait two ways — `Retry-After` on some rate limits,
+    /// `x-ratelimit-reset` on others — and guarantees neither for a given
+    /// status, so both statuses consult both headers. `Retry-After` wins when
+    /// present: it is an explicit instruction, while the reset timestamp only
+    /// says when the window rolls over. Returning `None` leaves the caller on
+    /// jittered backoff.
+    fn rate_limit_delay(&self, headers: &HeaderMap) -> Option<u64> {
+        parse_retry_after(headers, self.clock.as_ref())
+            .or_else(|| secs_until_ratelimit_reset(headers, self.clock.as_ref()))
     }
 
     async fn get_json_once<T: DeserializeOwned>(&self, path: &str) -> Result<T, GitHubError> {
@@ -180,7 +192,7 @@ impl GitHubClient {
             }
             404 => Err(GitHubError::NotFound(path.to_owned())),
             429 => {
-                let retry_after = parse_retry_after(response.headers(), self.clock.as_ref());
+                let retry_after = self.rate_limit_delay(response.headers());
                 warn!(retry_after_secs = retry_after, "GitHub API rate limited");
                 Err(GitHubError::RateLimited { retry_after })
             }
@@ -195,8 +207,7 @@ impl GitHubClient {
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let retry_after =
-                    secs_until_ratelimit_reset(response.headers(), self.clock.as_ref());
+                let retry_after = self.rate_limit_delay(response.headers());
                 match remaining {
                     Some(r) if r > 0 => {
                         let message =
@@ -244,6 +255,12 @@ impl GitHubClient {
         .await
     }
 
+    /// The contents endpoint answers with an object for a file and an array for
+    /// a directory, so the response shape carries the answer to "was this path a
+    /// file?". Deserializing into the file struct alone turns a directory into a
+    /// `Decode` error, which classifies as a scout-side bug (70) — wrong for what
+    /// is ordinary caller input, `repo-tree` being the step that hands directory
+    /// paths to the user in the first place.
     pub async fn get_contents(
         &self,
         owner: &str,
@@ -251,12 +268,17 @@ impl GitHubClient {
         path: &str,
         ref_: Option<&str>,
     ) -> Result<ContentsResponse, GitHubError> {
-        let path = encode_path(path);
+        let encoded = encode_path(path);
         let query = ref_
             .map(|r| format!("?ref={}", encode_path(r)))
             .unwrap_or_default();
-        self.get_json(&format!("/repos/{owner}/{repo}/contents/{path}{query}"))
-            .await
+        match self
+            .get_json(&format!("/repos/{owner}/{repo}/contents/{encoded}{query}"))
+            .await?
+        {
+            ContentsPayload::File(contents) => Ok(contents),
+            ContentsPayload::Directory(_) => Err(GitHubError::PathIsDirectory(path.to_owned())),
+        }
     }
 
     pub async fn get_blob(

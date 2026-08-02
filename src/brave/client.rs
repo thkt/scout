@@ -86,28 +86,21 @@ impl BraveError {
             Self::Unauthorized => Classification::new(ErrorCode::UsageError).with_hint(
                 "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
             ),
-            // Priority 2: DATA_ERROR (4xx body, URL parse failure, or insecure base URL)
+            // Priority 2: DATA_ERROR (URL parse failure or insecure base URL)
             Self::ParseUrl(_) | Self::InsecureBaseUrl => Classification::new(ErrorCode::DataError),
-            Self::Api { code, .. } if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
-            // Priority 4: TIMEOUT
-            Self::Network(re) if re.is_timeout() => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } => Classification::transient_retry(),
-            Self::Server(_) => Classification::transient_retry(),
-            Self::Network(_) => Classification::transient_network(),
-            Self::Api { code, .. } if (500..=599).contains(code) => {
-                Classification::transient_retry()
-            }
+            Self::Server(code) => Classification::from_http_status(*code),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — schema drift is a scout-side invariant;
             // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
             // body is an upstream invariant violation (Brave returning >1 MiB
             // on `web/search`), classified the same as schema drift because
             // it signals the API surface drifted and retry will not recover.
             Self::ParseJson(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Unknown — Api codes that did not match 4xx or 5xx
-            Self::Api { .. } => Classification::new(ErrorCode::Unknown),
+            // Every remaining status follows the ADR-0003 table.
+            Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }
 }
@@ -240,7 +233,6 @@ impl BraveClient {
             .get(url)
             .header("X-Subscription-Token", self.api_key.expose())
             .header("Accept", "application/json")
-            .header("User-Agent", crate::USER_AGENT)
             .timeout(REQUEST_TIMEOUT)
             .send()
             .await?;
@@ -342,7 +334,6 @@ impl SearchClient for BraveClient {
                 BraveError::RateLimited { retry_after } => *retry_after,
                 _ => None,
             },
-            || BraveError::RateLimited { retry_after: None },
             self.rng.as_ref(),
         )
         .await?;

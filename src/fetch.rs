@@ -17,20 +17,18 @@ pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 
 use std::sync::Arc;
 
-use crate::envelope::ErrorCode;
-use crate::retry::is_transient_network;
-use crate::tools::Classification;
-
-use tokio::sync::watch;
-
-use converter::{FetchResult, to_fetch_result};
-use download::download;
-use extractor::{extract_article, extract_raw};
 use reqwest::Client;
+use tokio::sync::watch;
+use tracing::{debug, info, warn};
+
+use crate::envelope::ErrorCode;
+use crate::tools::Classification;
 
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
-use tracing::{debug, info, warn};
+use converter::{FetchResult, to_fetch_result};
+use download::download;
+use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
 ///
@@ -121,34 +119,22 @@ impl FetchError {
             // server-side redirect loop or caller URL mistake — both caller-fixable.
             Self::TooManyRedirects(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL has too many redirects; check for a redirect loop"),
-            // Priority 1: USAGE_ERROR (specific HTTP codes before 4xx fallback)
-            Self::Status(401 | 403) => Classification::new(ErrorCode::UsageError)
+            // The ADR-0003 table decides the code; these two arms add the hint
+            // only fetch can give, so they sit ahead of the delegating one.
+            Self::Status(code @ (401 | 403)) => Classification::from_http_status(*code)
                 .with_hint("URL requires authentication that scout does not support"),
-            // Priority 3: NOT_FOUND
-            Self::Status(404) => Classification::new(ErrorCode::NotFound)
+            Self::Status(code @ 404) => Classification::from_http_status(*code)
                 .with_hint("Check that the URL is correct and the resource exists"),
-            // Priority 4: TEMP_FAILURE
-            Self::Status(408 | 429) => Classification::transient_retry(),
-            // Priority 2: DATA_ERROR (4xx body)
-            Self::Status(code) if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
-            // Priority 4: TEMP_FAILURE (5xx and other unmatched)
-            Self::Status(_) => Classification::transient_retry(),
+            Self::Status(code) => Classification::from_http_status(*code),
             // Priority 4: TIMEOUT (transport timeout — long-backoff retry advised)
             Self::Timeout(_) => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE (non-Status variants)
             Self::DnsResolution(_) => Classification::new(ErrorCode::TempFailure)
                 .with_hint("Check the URL's domain name and your DNS resolver"),
-            // `is_transient_network` covers connect, timeout, and mid-stream
-            // body drop (issue #113), but ADR-0002 splits timeout into 124.
-            // Check `is_timeout()` first.
-            Self::Http(re) if re.is_timeout() => Classification::timeout_retry(),
-            Self::Http(re) if is_transient_network(re) => Classification::transient_network(),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Http(re) => Classification::from_reqwest(re),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),
-            // Unknown — reqwest errors that do not match transient network patterns
-            Self::Http(_) => Classification::new(ErrorCode::Unknown),
         }
     }
 }
@@ -318,16 +304,25 @@ const SPA_ROOT_IDS: &[&str] = &[
     r#"id="__nuxt""#,
 ];
 
+/// Case-insensitive substring search over raw bytes, for HTML tag names — which
+/// are case-insensitive, unlike the attribute values in [`SPA_ROOT_IDS`].
+fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn is_js_dependent(html: &str) -> bool {
     if !has_thin_body(html) {
         return false;
     }
-    html.contains("<script") || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
+    contains_ignore_ascii_case(html.as_bytes(), b"<script")
+        || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
 }
 
 fn has_thin_body(html: &str) -> bool {
-    let lower = html.as_bytes();
-    let body_start = lower
+    let bytes = html.as_bytes();
+    let body_start = bytes
         .windows(5)
         .position(|w| w.eq_ignore_ascii_case(b"<body"));
     let body = if let Some(start) = body_start {
@@ -335,7 +330,7 @@ fn has_thin_body(html: &str) -> bool {
             .find('>')
             .map(|i| start + i + 1)
             .unwrap_or(start);
-        let body_end = lower[after_tag..]
+        let body_end = bytes[after_tag..]
             .windows(7)
             .position(|w| w.eq_ignore_ascii_case(b"</body>"))
             .map(|i| after_tag + i)

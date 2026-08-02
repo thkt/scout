@@ -2,12 +2,13 @@
 //! YAML output formatting. The token-bearing HTTP client lives in [`client`].
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::envelope::ErrorCode;
-use crate::fetch::converter::{escape_yaml, neutralize_yaml_markers};
+use crate::fetch::converter::{neutralize_yaml_markers, write_yaml_str};
 use crate::tools::Classification;
 
 mod client;
@@ -31,6 +32,19 @@ pub(crate) enum SlackError {
 
     #[error("Slack API rate limit exceeded")]
     RateLimited { retry_after: Option<u64> },
+
+    /// A non-2xx status that is not 429. The body is whatever the responder
+    /// produced — a gateway's HTML error page, say — so it is never a Slack
+    /// API envelope and must not reach the JSON parse.
+    ///
+    /// ADR-0003 requires an API-specific reclassification to say so here: this
+    /// variant does NOT follow the shared HTTP-status table. Slack reports its
+    /// own failures as `ok: false` inside a 200 body, so any non-2xx came from
+    /// something between scout and Slack. Reading such a status as Slack's
+    /// answer would report a gateway's 404 as a missing resource; every status
+    /// is treated as a transient intermediary fault instead.
+    #[error("Slack API returned HTTP {0}")]
+    Server(u16),
 
     #[error("Slack request failed: {0}")]
     Network(String),
@@ -84,7 +98,7 @@ impl SlackError {
                 _ => Classification::new(ErrorCode::UsageError),
             },
             // Priority 4: TEMP_FAILURE
-            Self::RateLimited { .. } => Classification::transient_retry(),
+            Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
             Self::Network(_) => Classification::transient_network(),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
@@ -170,8 +184,7 @@ struct MessagesBody {
 
 impl MessagesBody {
     /// The non-empty `next_cursor` to fetch the following page, if Slack
-    /// signalled more results. Returns `None` when `has_more` is false or the
-    /// cursor is absent/empty, so the pagination loop terminates.
+    /// signalled more results.
     fn next_cursor(&self) -> Option<&str> {
         if !self.has_more {
             return None;
@@ -282,8 +295,12 @@ fn resolve_messages(messages: &[Message], users: &HashMap<String, String>) -> Ve
     let mut resolved = Vec::with_capacity(messages.len());
     for msg in messages {
         let author = match &msg.user {
+            // An empty value is a failed resolution, not a name — the same rule
+            // `substitute_mentions` applies to this map. Without the filter the
+            // frontmatter carries `author: ""` and no log says the lookup missed.
             Some(uid) => users
                 .get(uid.as_str())
+                .filter(|name| !name.is_empty())
                 .cloned()
                 .unwrap_or_else(|| uid.clone()),
             None => {
@@ -330,16 +347,17 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
 
 /// Extract the message matching `target_ts` from `messages`, returning it and
 /// the remaining messages in their original order.
+///
+/// The match is by ts for a channel fetch too, not just within a thread:
+/// `conversations.history` is probed with `latest` as an *upper* bound, so a ts
+/// that no longer exists answers with the preceding message instead of an empty
+/// list. Returning `None` lets the caller report a miss, rather than rendering a
+/// neighbour's author and body under the ts the caller asked for.
 fn extract_target(
     mut messages: Vec<ResolvedMessage>,
     target_ts: &str,
-    is_thread: bool,
 ) -> Option<(ResolvedMessage, Vec<ResolvedMessage>)> {
-    let idx = if is_thread {
-        messages.iter().position(|m| m.ts == target_ts)?
-    } else {
-        0
-    };
+    let idx = messages.iter().position(|m| m.ts == target_ts)?;
     let first = messages.remove(idx);
     Some((first, messages))
 }
@@ -362,20 +380,17 @@ fn format_slack_output(
     first: &ResolvedMessage,
     replies: &[ResolvedMessage],
 ) -> String {
-    let escape = escape_yaml;
-
     let mut out = String::from("---\n");
-    out.push_str(&format!(
-        "workspace: \"{}\"\n",
-        escape(&slack_url.workspace)
-    ));
-    out.push_str(&format!("channel: \"{}\"\n", escape(channel_name)));
-    out.push_str(&format!("author: \"{}\"\n", escape(&first.author)));
-    out.push_str(&format!("ts: \"{}\"\n", escape(&slack_url.ts)));
+    write_yaml_str(&mut out, "workspace", &slack_url.workspace);
+    write_yaml_str(&mut out, "channel", channel_name);
+    write_yaml_str(&mut out, "author", &first.author);
+    write_yaml_str(&mut out, "ts", &slack_url.ts);
     if !replies.is_empty() {
-        out.push_str(&format!("context_messages: {}\n", replies.len()));
+        // Numeric, so it is written unquoted — the one key here that is not a
+        // string scalar, rather than a fifth look-alike.
+        let _ = writeln!(out, "context_messages: {}", replies.len());
     }
-    out.push_str(&format!("url: \"{}\"\n", escape(&slack_url.raw_url)));
+    write_yaml_str(&mut out, "url", &slack_url.raw_url);
     out.push_str("---\n\n");
 
     out.push_str(&neutralize_yaml_markers(&first.text));

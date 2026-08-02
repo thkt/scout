@@ -30,6 +30,9 @@ pub(crate) enum GitHubError {
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    #[error("'{0}' is a directory, not a file")]
+    PathIsDirectory(String),
+
     #[error("Invalid line range: '{0}'. Use formats like '1-80', '50-', or '100' (first N lines).")]
     InvalidLineRange(String),
 
@@ -70,6 +73,8 @@ impl GitHubError {
                 .with_hint("Use a branch name, tag, or commit SHA"),
             Self::InvalidPath(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Use a path within the repository"),
+            Self::PathIsDirectory(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("Use `scout repo-tree` to list a directory, or pass a file path"),
             Self::InvalidLineRange(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Use format like '1-80', '50-', or '100' (first N lines)"),
             Self::InvalidPattern(_) => Classification::new(ErrorCode::DataError)
@@ -77,14 +82,9 @@ impl GitHubError {
             Self::NonUtf8(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("Pass --encoding to decode non-UTF-8 files (e.g., shift_jis)"),
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
-            Self::Api { code, .. } if (400..500).contains(code) => {
-                Classification::new(ErrorCode::DataError)
-            }
             // Priority 3: NOT_FOUND
             Self::NotFound(_) => Classification::new(ErrorCode::NotFound)
                 .with_hint("Check that the repository or path exists, and that you have access"),
-            // Priority 4: TIMEOUT (request timeout via reqwest builder)
-            Self::Network(re) if re.is_timeout() => Classification::timeout_retry(),
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { retry_after } => Classification::new(ErrorCode::TempFailure)
                 .with_hint(match retry_after {
@@ -93,17 +93,15 @@ impl GitHubError {
                     ),
                     None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
                 }),
-            Self::Network(_) => Classification::transient_network(),
-            Self::Api { code, .. } if (500..=599).contains(code) => {
-                Classification::transient_retry()
-            }
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
             // response that overran the byte cap (issue #186; peer to
             // BraveError::ResponseTooLarge). Non-retriable: a retry would refetch
             // the same oversized body.
             Self::Decode(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Unknown — Api codes that did not match 4xx or 5xx (e.g., 1xx/3xx leak)
-            Self::Api { .. } => Classification::new(ErrorCode::Unknown),
+            // Every remaining status follows the ADR-0003 table.
+            Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }
 }

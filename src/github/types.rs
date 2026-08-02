@@ -1,3 +1,4 @@
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 /// Repository metadata from `GET /repos/{owner}/{repo}`.
@@ -53,6 +54,18 @@ pub(crate) struct TreeEntry {
 pub(crate) struct ContentsResponse {
     pub sha: String,
     pub content: Option<String>,
+}
+
+/// Either shape the contents endpoint can answer with. A file yields an object,
+/// a directory a listing array; `untagged` picks by shape, so a body matching
+/// neither still surfaces as a decode failure rather than being misread as one
+/// of the two. The listing's contents are not modeled — `repo-tree` is what
+/// reads directories, and here the shape alone answers "was this a file?".
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub(crate) enum ContentsPayload {
+    File(ContentsResponse),
+    Directory(IgnoredAny),
 }
 
 /// Response from `GET /repos/{owner}/{repo}/git/blobs/{sha}`.

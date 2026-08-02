@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
-use crate::markdown::{escape_md_inline, md_link, shift_headings};
+use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note};
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -103,7 +103,6 @@ pub(crate) fn format_tree(
     out
 }
 
-/// Format a comprehensive repository overview with metadata, README, issues, PRs, and releases.
 pub(crate) fn format_overview(
     repo: &RepoInfo,
     readme: Option<&str>,
@@ -162,11 +161,7 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
             .map(|p| p + 1)
             .unwrap_or(boundary);
         out.push_str(&shift_headings(&content[..end], 2));
-        let _ = write!(
-            out,
-            "\n\n(truncated: showing {end} / {} bytes)",
-            content.len()
-        );
+        out.push_str(&truncation_note(end, content.len()));
     } else {
         out.push_str(&shift_headings(content, 2));
     }

@@ -65,8 +65,6 @@ fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
     }
 }
 
-/// Fallback when dom_smoothie fails to parse the HTML.
-///
 /// Scans the bytes case-insensitively in place rather than lowercasing the whole
 /// document, which would copy up to the full (multi-MB) input on the warm path.
 fn extract_title_from_html(html: &str) -> Option<String> {

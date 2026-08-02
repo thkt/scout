@@ -44,11 +44,12 @@ pub(crate) enum EgressMode {
 /// precedence is undocumented on
 /// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> (verified
 /// unreachable this session) and no test pins the case order — unverified.
-/// A present-but-empty value yields `Proxied("")` here; reqwest treats empty as
-/// unset — out of scope for the four scenarios, noted for the reqwest wiring.
+/// A present-but-empty value counts as unset, matching reqwest: `Proxy::all("")`
+/// is a relative-URL parse error, so treating it as `Proxied("")` would fail
+/// client construction and take down every command, not just proxied fetches.
 pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
     for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
-        if let Some(url) = env.get(key) {
+        if let Some(url) = env.get(key).filter(|u| !u.trim().is_empty()) {
             return EgressMode::Proxied(url.clone());
         }
     }
@@ -131,6 +132,15 @@ impl ValidatedUrl {
         self.0.as_str()
     }
 
+    /// Resolve `relative` against this URL, for following a `Location` header.
+    /// Reuses the parse [`ssrf_check`] already did — resolving from `as_str()`
+    /// would re-parse a string that came out of a `url::Url` in the first place,
+    /// adding an error branch nothing can reach. The result is a plain `Url`, so
+    /// the caller still has to run it back through `ssrf_check`.
+    pub(crate) fn join(&self, relative: &str) -> Result<url::Url, url::ParseError> {
+        self.0.join(relative)
+    }
+
     /// Bypasses SSRF validation. Test-only — production code must go through
     /// [`ssrf_check`] so the type system enforces the SSRF contract.
     #[cfg(test)]
@@ -181,15 +191,26 @@ pub(crate) async fn ssrf_check(
             )));
         }
 
-        for ip in addrs {
-            if is_private_ip(ip) {
-                warn!(host = %domain, ip = %ip, "DNS resolves to private IP");
-                return Err(FetchError::InternalHost);
-            }
+        if first_blocked_ip("preflight", domain, &addrs).is_some() {
+            return Err(FetchError::InternalHost);
         }
     }
 
     Ok(ValidatedUrl(parsed))
+}
+
+/// Fail-closed check over a resolved address set: if any address is private, the
+/// whole connection is refused — the public members are never dialed, because a
+/// host that answers with both is exactly the rebind shape ADR-0012 blocks.
+///
+/// Returns the offending address so callers that name it in an error can, and
+/// logs the block here so all three stages report it identically. `stage`
+/// distinguishes them: `preflight` (before the request), `connect` (reqwest's
+/// resolver), `proxy` (the CDP SOCKS5 hop).
+pub(crate) fn first_blocked_ip(stage: &'static str, host: &str, ips: &[IpAddr]) -> Option<IpAddr> {
+    let blocked = ips.iter().copied().find(|ip| is_private_ip(*ip))?;
+    warn!(stage, host = %host, ip = %blocked, "blocked connect to private IP");
+    Some(blocked)
 }
 
 pub(crate) fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
@@ -209,7 +230,11 @@ fn is_blocked_host(parsed: &url::Url) -> bool {
         Some(url::Host::Ipv4(v4)) => is_private_ip(IpAddr::V4(v4)),
         Some(url::Host::Ipv6(v6)) => is_private_ip(IpAddr::V6(v6)),
         Some(url::Host::Domain(domain)) => {
+            // `url` keeps the FQDN trailing dot in the host, so `localhost.`
+            // and `svc.internal.` reach here undotted-suffix-matched unless it
+            // is stripped first. Both forms resolve to the same host.
             let lower = domain.to_ascii_lowercase();
+            let lower = lower.strip_suffix('.').unwrap_or(&lower);
             lower == "localhost"
                 || lower.ends_with(".localhost")
                 || lower.ends_with(".local")
@@ -289,15 +314,15 @@ impl Resolve for SsrfResolver {
             let host = name.as_str();
             // Port 0: reqwest substitutes the scheme default before dialing.
             let ips = inner.lookup(host, 0).await?;
-            let mut addrs = Vec::with_capacity(ips.len());
-            for ip in ips {
-                if is_private_ip(ip) {
-                    warn!(host = %host, ip = %ip, "blocked connect to private IP");
-                    return Err(format!("blocked connect to private IP {ip}").into());
-                }
-                addrs.push(SocketAddr::new(ip, 0));
+            if let Some(ip) = first_blocked_ip("connect", host, &ips) {
+                return Err(format!("blocked connect to private IP {ip}").into());
             }
-            let addrs: Addrs = Box::new(addrs.into_iter());
+            let addrs: Addrs = Box::new(
+                ips.into_iter()
+                    .map(|ip| SocketAddr::new(ip, 0))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
             Ok(addrs)
         })
     }

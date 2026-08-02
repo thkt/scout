@@ -1,12 +1,13 @@
 //! Browser binary discovery and Chrome process lifecycle for CDP rendering.
 
-#[cfg(feature = "js-rendering")]
-use nix::unistd::Pid;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
+
+#[cfg(feature = "js-rendering")]
+use nix::unistd::Pid;
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "js-rendering")]
@@ -124,6 +125,17 @@ pub(crate) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsRes
 #[cfg(feature = "js-rendering")]
 const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 
+/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
+///
+/// Synchronous so the caller captures `pgid` before any timeout can drop the
+/// future and orphan the group. The pgid equals the chromium child's pid (the
+/// call uses `process_group(0)`, which means "make the child the leader of a
+/// new group whose id is its pid"). scout retains the `Child` so the kernel
+/// can reap the parent after we kill the group.
+///
+/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
+/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
+/// hand the resulting WebSocket URL to `Browser::connect` instead.
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
@@ -229,8 +241,7 @@ pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
             warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
         }
     }
-    // Reap so the kernel can release the parent slot. `Ok(Err)` means waitpid
-    // itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
+    // `Ok(Err)` means waitpid itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
     // means the 2s budget elapsed before chromium exited, which is the zombie
     // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
     // honest (issue #152).
@@ -245,7 +256,6 @@ pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
     }
 }
 
-/// Borrows browser so the caller retains ownership for cleanup on timeout.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 fn resolve_browser_binary_from(
     path_commands: &[&str],

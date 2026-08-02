@@ -142,7 +142,7 @@ fn extract_target_picks_reply_from_thread() {
         msg("1001.000000", "reply-1"),
         msg("1002.000000", "reply-2"),
     ];
-    let (first, rest) = extract_target(messages, "1001.000000", true).unwrap();
+    let (first, rest) = extract_target(messages, "1001.000000").unwrap();
     assert_eq!(first.ts, "1001.000000");
     assert_eq!(rest.len(), 2);
     assert_eq!(rest[0].ts, "1000.000000");
@@ -153,16 +153,31 @@ fn extract_target_picks_reply_from_thread() {
 #[test]
 fn extract_target_returns_none_when_ts_missing() {
     let messages = vec![msg("1000.000000", "parent"), msg("1001.000000", "reply-1")];
-    assert!(extract_target(messages, "9999.999999", true).is_none());
+    assert!(extract_target(messages, "9999.999999").is_none());
 }
 
-/// [T-SK011] extract_target ignores ts for non-thread messages and picks first
+/// [T-SK011] extract_target matches by ts for a single-message channel fetch
 #[test]
-fn extract_target_ignores_ts_for_non_thread() {
+fn extract_target_matches_ts_for_non_thread() {
     let messages = vec![msg("1000.000000", "author")];
-    let (first, rest) = extract_target(messages, "9999.999999", false).unwrap();
+    let (first, rest) = extract_target(messages, "1000.000000").unwrap();
     assert_eq!(first.ts, "1000.000000");
     assert!(rest.is_empty());
+}
+
+/// [T-SK069] a channel fetch whose returned message is not the requested ts is a miss
+///
+/// `conversations.history` is probed with `latest` as an upper bound, so a
+/// deleted or absent ts yields the *previous* message rather than an empty list.
+/// Taking index 0 unconditionally rendered that neighbour's author and body under
+/// the requested ts, which the frontmatter then asserts as fact.
+#[test]
+fn extract_target_rejects_a_neighbour_returned_for_a_missing_ts() {
+    let messages = vec![msg("1000.000000", "earlier-author")];
+    assert!(
+        extract_target(messages, "1500.000000").is_none(),
+        "a message with a different ts is not the requested one"
+    );
 }
 
 /// [T-SK012] parse_slack_url rejects URLs outside *.slack.com

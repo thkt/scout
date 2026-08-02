@@ -43,10 +43,9 @@ fn mock_extract_retry_after(e: &MockErr) -> Option<u64> {
     }
 }
 
-// T-R001: retries_once_then_succeeds_with_retry_after_delay
-// FR-001 + FR-002: first call fails with RateLimited{retry_after: Some(1)},
-// second call succeeds. Helper must retry exactly once, sleep ~1s
-// (server-supplied, no jitter on the RateLimited path), and return Ok.
+/// [T-R001] FR-001 + FR-002: first call fails with RateLimited{retry_after: Some(1)},
+/// second call succeeds. Helper must retry exactly once, sleep ~1s
+/// (server-supplied, no jitter on the RateLimited path), and return Ok.
 #[tokio::test(start_paused = true)]
 async fn retries_once_then_succeeds_with_retry_after_delay() {
     let attempts = AtomicUsize::new(0);
@@ -64,7 +63,6 @@ async fn retries_once_then_succeeds_with_retry_after_delay() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -86,12 +84,11 @@ async fn retries_once_then_succeeds_with_retry_after_delay() {
     );
 }
 
-// T-R002: applies_jittered_backoff_when_extractor_returns_none
-// FR-002: non-RateLimited transient error always returns None from the
-// extractor. Helper exhausts 1 + max_retries (=3 attempts when
-// max_retries=2, 2 sleeps) using jittered exponential backoff. Total
-// elapsed must fall within the backoff envelope: half + jitter for
-// attempt 0 + attempt 1.
+/// [T-R002] FR-002: non-RateLimited transient error always returns None from the
+/// extractor. Helper exhausts 1 + max_retries (=3 attempts when
+/// max_retries=2, 2 sleeps) using jittered exponential backoff. Total
+/// elapsed must fall within the backoff envelope: half + jitter for
+/// attempt 0 + attempt 1.
 #[tokio::test(start_paused = true)]
 async fn applies_jittered_backoff_when_extractor_returns_none() {
     let attempts = AtomicUsize::new(0);
@@ -105,7 +102,6 @@ async fn applies_jittered_backoff_when_extractor_returns_none() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -127,10 +123,9 @@ async fn applies_jittered_backoff_when_extractor_returns_none() {
     );
 }
 
-// T-R003: does_not_retry_when_retry_after_exceeds_cap
-// FR-002 + cap validation rule: RateLimited{retry_after: Some(500)} is
-// above MAX_RETRY_AFTER_SECS (300). is_retriable returns false, the
-// helper must propagate the error after exactly one invocation.
+/// [T-R003] FR-002 + cap validation rule: RateLimited{retry_after: Some(500)} is
+/// above MAX_RETRY_AFTER_SECS (300). is_retriable returns false, the
+/// helper must propagate the error after exactly one invocation.
 #[tokio::test(start_paused = true)]
 async fn does_not_retry_when_retry_after_exceeds_cap() {
     let attempts = AtomicUsize::new(0);
@@ -143,7 +138,6 @@ async fn does_not_retry_when_retry_after_exceeds_cap() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -156,11 +150,10 @@ async fn does_not_retry_when_retry_after_exceeds_cap() {
     );
 }
 
-// T-R006: max_retries_zero_runs_once_without_retry
-// Issue #120: `SCOUT_MAX_RETRIES=0` must disable retries entirely.
-// The contract is "N retries on top of the original attempt", so 0
-// means a single attempt with no sleep — the user-visible inverse of
-// the default (=2 → 3 attempts).
+/// [T-R006] Issue #120: `SCOUT_MAX_RETRIES=0` must disable retries entirely.
+/// The contract is "N retries on top of the original attempt", so 0
+/// means a single attempt with no sleep — the user-visible inverse of
+/// the default (=2 → 3 attempts).
 #[tokio::test(start_paused = true)]
 async fn max_retries_zero_runs_once_without_retry() {
     let attempts = AtomicUsize::new(0);
@@ -174,7 +167,6 @@ async fn max_retries_zero_runs_once_without_retry() {
         0,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -191,10 +183,9 @@ async fn max_retries_zero_runs_once_without_retry() {
     );
 }
 
-// T-R007: jittered_backoff_is_deterministic_with_seeded_rng
-// Same seed → identical sample, proving the Rng seam threads through to
-// jittered_backoff. The envelope check guards the half + jitter formula
-// (attempt=0 → half=500, jitter ∈ [0,500), result ∈ [500,1000)).
+/// [T-R007] Same seed → identical sample, proving the Rng seam threads through to
+/// jittered_backoff. The envelope check guards the half + jitter formula
+/// (attempt=0 → half=500, jitter ∈ [0,500), result ∈ [500,1000)).
 #[test]
 fn jittered_backoff_is_deterministic_with_seeded_rng() {
     let first = jittered_backoff(0, &SeededRng::new(42));
@@ -206,14 +197,13 @@ fn jittered_backoff_is_deterministic_with_seeded_rng() {
     );
 }
 
-// T-R008: backoff_is_capped_at_max_retry_after
-// Issue #185: the `None` arm of `retry_after_or_backoff` (exponential
-// backoff) had no ceiling, so a high `SCOUT_MAX_RETRIES` could produce a
-// single multi-minute sleep (attempt 9 → up to ~512s) that overruns the
-// surrounding tool timeout. The cap must match the `Some` arm's
-// `MAX_RETRY_AFTER_SECS`. attempt=10 has `half = 512s >= 300s`, so the
-// floor of the jitter envelope already exceeds the cap — the result is
-// exactly the cap regardless of the rng sample.
+/// [T-R014] Issue #185: the `None` arm of `retry_after_or_backoff` (exponential
+/// backoff) had no ceiling, so a high `SCOUT_MAX_RETRIES` could produce a
+/// single multi-minute sleep (attempt 9 → up to ~512s) that overruns the
+/// surrounding tool timeout. The cap must match the `Some` arm's
+/// `MAX_RETRY_AFTER_SECS`. attempt=10 has `half = 512s >= 300s`, so the
+/// floor of the jitter envelope already exceeds the cap — the result is
+/// exactly the cap regardless of the rng sample.
 #[test]
 fn backoff_is_capped_at_max_retry_after() {
     let cap = Duration::from_secs(MAX_RETRY_AFTER_SECS);
@@ -236,12 +226,11 @@ fn backoff_is_capped_at_max_retry_after() {
     );
 }
 
-// T-R004: is_transient_network_recognizes_mid_stream_body_drop
-// Issue #113: reqwest 0.13 surfaces a mid-stream body drop as
-// `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
-// source chain. is_transient_network must classify this as transient
-// so the retry loop attempts recovery; left untreated it falls into
-// GitHubError::Decode → Internal(70), retryable=false.
+/// [T-R004] Issue #113: reqwest 0.13 surfaces a mid-stream body drop as
+/// `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
+/// source chain. is_transient_network must classify this as transient
+/// so the retry loop attempts recovery; left untreated it falls into
+/// GitHubError::Decode → Internal(70), retryable=false.
 #[tokio::test]
 async fn is_transient_network_recognizes_mid_stream_body_drop() {
     let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
@@ -264,11 +253,10 @@ async fn is_transient_network_recognizes_mid_stream_body_drop() {
     let _ = handle.join();
 }
 
-// T-R005: is_transient_network_rejects_schema_fail
-// Counterpart to T-R004. A 2xx with malformed JSON also returns
-// `is_decode() == true` but the source chain is a serde_json::Error,
-// not an io::Error. is_transient_network must keep returning false
-// so the error stays on the Decode → Internal(70) non-retry path.
+/// [T-R005] Counterpart to T-R004. A 2xx with malformed JSON also returns
+/// `is_decode() == true` but the source chain is a serde_json::Error,
+/// not an io::Error. is_transient_network must keep returning false
+/// so the error stays on the Decode → Internal(70) non-retry path.
 #[tokio::test]
 async fn is_transient_network_rejects_schema_fail() {
     let Some(server) = try_spawn_mock_server("retry::is_transient_network_schema").await else {
@@ -297,19 +285,17 @@ fn headers_with_retry_after(value: &str) -> HeaderMap {
     h
 }
 
-// T-R008: parse_retry_after_accepts_integer_seconds
-// RFC 9110 §10.2.4 form 1: delay-seconds. Clock is irrelevant here;
-// FixedClock(0) proves no clock arithmetic sneaks into the integer branch.
+/// [T-R008] RFC 9110 §10.2.4 form 1: delay-seconds. Clock is irrelevant here;
+/// FixedClock(0) proves no clock arithmetic sneaks into the integer branch.
 #[test]
 fn parse_retry_after_accepts_integer_seconds() {
     let headers = headers_with_retry_after("120");
     assert_eq!(parse_retry_after(&headers, &FixedClock(0)), Some(120));
 }
 
-// T-R009: parse_retry_after_accepts_http_date
-// RFC 9110 §10.2.4 form 2: HTTP-date. "Wed, 21 Oct 2015 07:28:00 GMT" =
-// 1_445_412_480 unix seconds. FixedClock(1_445_412_180) is 300s earlier,
-// so the returned delay must be 300 (target_secs - clock.now_secs()).
+/// [T-R009] RFC 9110 §10.2.4 form 2: HTTP-date. "Wed, 21 Oct 2015 07:28:00 GMT" =
+/// 1_445_412_480 unix seconds. FixedClock(1_445_412_180) is 300s earlier,
+/// so the returned delay must be 300 (target_secs - clock.now_secs()).
 #[test]
 fn parse_retry_after_accepts_http_date() {
     let headers = headers_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT");
@@ -319,9 +305,8 @@ fn parse_retry_after_accepts_http_date() {
     );
 }
 
-// T-R010: parse_retry_after_clamps_past_http_date_to_zero
-// If the HTTP-date is already in the past, saturating_sub clamps to 0
-// (caller will treat as "retry now") rather than returning None.
+/// [T-R010] If the HTTP-date is already in the past, saturating_sub clamps to 0
+/// (caller will treat as "retry now") rather than returning None.
 #[test]
 fn parse_retry_after_clamps_past_http_date_to_zero() {
     let headers = headers_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT");
@@ -331,33 +316,31 @@ fn parse_retry_after_clamps_past_http_date_to_zero() {
     );
 }
 
-// T-R011: parse_retry_after_returns_none_for_garbage
-// Neither integer nor RFC-822/850/asctime date: drop and let caller fall
-// back to jittered backoff.
+/// [T-R011] Neither integer nor RFC-822/850/asctime date: drop and let caller fall
+/// back to jittered backoff.
 #[test]
 fn parse_retry_after_returns_none_for_garbage() {
     let headers = headers_with_retry_after("definitely not a date");
     assert_eq!(parse_retry_after(&headers, &FixedClock(0)), None);
 }
 
-// T-R012: parse_retry_after_returns_none_when_header_absent
+/// [T-R012] An absent Retry-After header yields None, same as an unparseable one
 #[test]
 fn parse_retry_after_returns_none_when_header_absent() {
     let headers = HeaderMap::new();
     assert_eq!(parse_retry_after(&headers, &FixedClock(0)), None);
 }
 
-// T-R013: read_body_capped_rejects_close_delimited_oversized_body
-// Issue #219: every existing `too_large` test drives wiremock's
-// `set_body_bytes`, which always emits an honest Content-Length, so they
-// exercise only the pre-check path (retry.rs:64-69). The chunk loop
-// (retry.rs:75-79) is the defense-in-depth guard for upstreams that omit
-// Content-Length (compression → `content_length() == None`, chunked or
-// close-delimited transfer); before this test it had zero coverage. A
-// close-delimited response (no Content-Length, EOF-terminated body) forces
-// `content_length() == None`, so the chunk loop — not the pre-check — must
-// be what rejects the oversized body. CAP is tiny to keep the transfer
-// cheap; the branch under test is identical regardless of cap size.
+/// [T-R013] Issue #219: every existing `too_large` test drives wiremock's
+/// `set_body_bytes`, which always emits an honest Content-Length, so they
+/// exercise only the pre-check path (retry.rs:64-69). The chunk loop
+/// (retry.rs:75-79) is the defense-in-depth guard for upstreams that omit
+/// Content-Length (compression → `content_length() == None`, chunked or
+/// close-delimited transfer); before this test it had zero coverage. A
+/// close-delimited response (no Content-Length, EOF-terminated body) forces
+/// `content_length() == None`, so the chunk loop — not the pre-check — must
+/// be what rejects the oversized body. CAP is tiny to keep the transfer
+/// cheap; the branch under test is identical regardless of cap size.
 #[tokio::test]
 async fn read_body_capped_rejects_close_delimited_oversized_body() {
     const CAP: usize = 16;

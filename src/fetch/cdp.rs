@@ -96,11 +96,9 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Resolve the browser binary, then render via CDP. Production entry: thin
-/// wrapper over `fetch_with_cdp_with`. Binary discovery runs per call (no
-/// process-global cache) so the path stays injectable for tests (issue #227,
-/// the #191 DI seam pattern). The discovery cost (a few `which` probes, ~1-5 ms)
-/// is negligible against the ~2 s chromium render that follows.
+/// Resolve the browser binary, then render via CDP. Binary discovery runs per
+/// call (no process-global cache) so the path stays injectable for tests
+/// (issue #227, the #191 DI seam pattern).
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,
@@ -227,17 +225,12 @@ pub(super) async fn fetch_with_cdp_with(
     result
 }
 
-/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
+/// Open a page, navigate to `url`, and return the rendered HTML.
 ///
-/// Synchronous so the caller captures `pgid` before any timeout can drop the
-/// future and orphan the group. The pgid equals the chromium child's pid (the
-/// call uses `process_group(0)`, which means "make the child the leader of a
-/// new group whose id is its pid"). scout retains the `Child` so the kernel
-/// can reap the parent after we kill the group.
-///
-/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
-/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
-/// hand the resulting WebSocket URL to `Browser::connect` instead.
+/// Every subrequest the page issues is intercepted through `Fetch.RequestPaused`
+/// and run past `resolver` before it is allowed to continue, so a page cannot
+/// reach an internal address by way of a resource it loads. Borrows the browser
+/// so the caller keeps ownership and can still tear it down after a timeout.
 #[cfg(feature = "js-rendering")]
 async fn cdp_navigate(
     browser: &mut chromiumoxide::Browser,
@@ -268,7 +261,6 @@ async fn cdp_navigate(
     let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
     let intercept_page = page.clone();
     let interceptor = tokio::spawn(async move {
-        let mut intercept_err_tx = Some(intercept_err_tx);
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, resolver.as_ref()).await;
@@ -287,11 +279,9 @@ async fn cdp_navigate(
                     .await
                     .map(|_| ())
             };
-            if let Err(e) = exec_result
-                && let Some(tx) = intercept_err_tx.take()
-            {
+            if let Err(e) = exec_result {
                 // Receiver dropped (= navigation already completed) is harmless; ignore.
-                let _ = tx.send(CdpInterceptError::Execute(e));
+                let _ = intercept_err_tx.send(CdpInterceptError::Execute(e));
                 break;
             }
         }

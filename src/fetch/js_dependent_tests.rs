@@ -12,6 +12,24 @@ fn all_spa_frameworks_detected() {
     }
 }
 
+/// [T-F075] an uppercase `<SCRIPT>` tag is detected like its lowercase form
+///
+/// HTML tag names are case-insensitive and `has_thin_body` already matches them
+/// that way, so a shell written with uppercase tags passed the thin-body gate and
+/// then failed the script check. The exposed window is body text of roughly 50-99
+/// visible bytes — under BODY_TEXT_THRESHOLD but over EXTRACT_TEXT_THRESHOLD, so
+/// the post-extraction fallback misses it too — and any such page under `--raw`,
+/// where that second gate is off entirely.
+#[test]
+fn uppercase_script_tag_is_detected() {
+    let html = r#"<html><HEAD><SCRIPT src="bundle.js"></SCRIPT></HEAD>
+        <BODY><div class="app"></div></BODY></html>"#;
+    assert!(
+        is_js_dependent(html),
+        "tag case must not decide whether the page needs JS rendering"
+    );
+}
+
 /// [T-F021] normal_html_not_detected
 #[test]
 fn normal_html_not_detected() {

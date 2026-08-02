@@ -104,14 +104,15 @@ pub(crate) struct Cli {
 /// (e.g., integration tests that exercise `lib::run` more than once) — the
 /// installed subscriber from the first call is reused.
 fn init_tracing() {
-    use tracing_subscriber::filter::Directive;
     let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                "scout=info"
-                    .parse()
-                    .unwrap_or_else(|_| Directive::from(tracing::Level::INFO)),
+                // A literal in `target=level` form; `expect` so a future edit
+                // that breaks the syntax fails loudly. The former fallback
+                // dropped the target, widening the filter from scout to every
+                // crate at INFO.
+                "scout=info".parse().expect("static directive is valid"),
             ),
         )
         .try_init();
@@ -156,7 +157,9 @@ pub async fn run() -> ExitCode {
 
     // Pre-scan argv so a clap parse error (which exits before `cli.json` is
     // populated) still routes through the JSON envelope path when requested.
-    let json_mode_pre = env::args().any(|a| a == "--json");
+    // `args_os` rather than `args`: the latter panics on a non-UTF-8 argument,
+    // which would abort with 101 before clap can classify it as a usage error.
+    let json_mode_pre = env::args_os().any(|a| a == "--json");
 
     let cli = match Cli::try_parse() {
         Ok(c) => c,
@@ -182,7 +185,7 @@ pub async fn run() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", write_failure_line(&e, json_mode));
                     ExitCode::from(ErrorCode::IoError.exit_code())
                 }
             }
@@ -216,27 +219,60 @@ fn render_json_error(err: &ScoutError) -> String {
     })
 }
 
+/// Points a coding agent at scout's own help output. An agent often runs
+/// `--version` and nothing else before invoking a command, so the version
+/// output is where the pointer has to live for it to be seen at all. Emitted
+/// through the same tracing path as every other scout log, which puts it on
+/// stderr and leaves the version line on stdout parseable. `init_tracing`
+/// pins `scout=info` last, so no `RUST_LOG` value silences it; a caller that
+/// wants it gone redirects stderr.
+const AGENT_HELP_HINT: &str = "If you are a coding agent, run `scout --help` and `scout <command> --help` before answering questions about scout or troubleshooting its errors. The help output is authoritative for the installed version.";
+
+/// One-line JSON envelope for a failure with no `ScoutError` behind it — a clap
+/// parse error, or an stdout write that failed. `retryable` comes from the code
+/// rather than being restated here, so the mapping lives only in [`ErrorCode`].
+fn bare_error_line(code: ErrorCode, message: String) -> String {
+    to_json_line(&ErrorEnvelope {
+        error: ErrorPayload {
+            code,
+            message,
+            next_step: None,
+            candidates: Vec::new(),
+            retryable: code.is_retryable(),
+        },
+    })
+}
+
+/// Render an stdout write failure for stderr. Under `--json` it has to be an
+/// envelope: the flag tells callers every error on stderr is parseable, and a
+/// bare line here would be the one place that promise breaks.
+fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
+    if json_mode {
+        bare_error_line(ErrorCode::IoError, err.to_string())
+    } else {
+        format!("error: {err}")
+    }
+}
+
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
 /// stay on stdout per clap convention; usage errors route through the JSON
 /// envelope when `--json` was passed in argv.
 fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     use clap::error::ErrorKind;
     match err.kind() {
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+        ErrorKind::DisplayVersion => {
+            let _ = err.print();
+            tracing::info!("{AGENT_HELP_HINT}");
+            ExitCode::SUCCESS
+        }
+        ErrorKind::DisplayHelp => {
             let _ = err.print();
             ExitCode::SUCCESS
         }
         _ => {
             if json_mode {
-                let line = to_json_line(&ErrorEnvelope {
-                    error: ErrorPayload {
-                        code: ErrorCode::UsageError,
-                        message: err.to_string().trim().to_owned(),
-                        next_step: None,
-                        candidates: Vec::new(),
-                        retryable: false,
-                    },
-                });
+                let line =
+                    bare_error_line(ErrorCode::UsageError, err.to_string().trim().to_owned());
                 eprintln!("{line}");
             } else {
                 let _ = err.print();
@@ -246,8 +282,6 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     }
 }
 
-/// Print error to stderr (JSON envelope when `--json`, plain `error: <msg>` otherwise)
-/// and return the appropriate `ExitCode`.
 fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
     if json_mode {
         let line = render_json_error(err);
@@ -267,8 +301,8 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        CommandOutput, InterruptSignal, Outcome, ScoutError, drive, init_tracing,
-        render_json_success, write_output,
+        CommandOutput, ErrorCode, InterruptSignal, Outcome, ScoutError, bare_error_line, drive,
+        init_tracing, render_json_success, write_failure_line, write_output,
     };
 
     /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
@@ -390,6 +424,53 @@ mod tests {
         let mut w = BrokenPipeWriter;
         let err = write_output(&mut w, "hello").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    /// [T-W004] under `--json` a stdout write failure is reported as an envelope
+    ///
+    /// The flag promises every error on stderr is a JSON envelope, so a caller
+    /// parsing stderr must not receive a bare line for this path.
+    #[test]
+    fn write_failure_is_an_envelope_under_json() {
+        let err = io::Error::from(io::ErrorKind::StorageFull);
+        let line = write_failure_line(&err, true);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("write failure must be valid JSON under --json");
+        assert_eq!(parsed["error"]["code"], "IO_ERROR");
+        assert_eq!(parsed["error"]["retryable"], false);
+    }
+
+    /// [T-W005] without `--json` a stdout write failure stays a plain line
+    #[test]
+    fn write_failure_is_a_plain_line_without_json() {
+        let err = io::Error::from(io::ErrorKind::StorageFull);
+        let line = write_failure_line(&err, false);
+        assert!(
+            line.starts_with("error: "),
+            "plain mode keeps the human-readable prefix, got: {line}"
+        );
+    }
+
+    /// [T-W006] the bare-error envelope derives `retryable` from the code
+    ///
+    /// Restating it at the call site is how the two drift: `TempFailure` is
+    /// retryable and `UsageError` is not, and only `ErrorCode` should say so.
+    #[test]
+    fn bare_error_line_derives_retryable_from_the_code() {
+        for (code, expected) in [
+            (ErrorCode::UsageError, false),
+            (ErrorCode::IoError, false),
+            (ErrorCode::TempFailure, true),
+            (ErrorCode::Timeout, true),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&bare_error_line(code, "boom".to_owned()))
+                    .expect("valid JSON");
+            assert_eq!(
+                parsed["error"]["retryable"], expected,
+                "retryable for {code:?} should follow ErrorCode::is_retryable"
+            );
+        }
     }
 
     /// [T-H000] root --help contains sysexits Exit codes and Environment sections

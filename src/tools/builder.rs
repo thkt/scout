@@ -72,7 +72,11 @@ pub(crate) struct ScoutBuilder {
 /// private/loopback targets per hop, so dropping the guard does not open SSRF to
 /// a caller-supplied URL.
 fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutError> {
+    // The User-Agent rides on the client rather than on each request: attaching
+    // it per call site is how Slack ended up sending none at all. A call site
+    // that needs a different value can still override the default per request.
     let http = Client::builder()
+        .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(Policy::limited(MAX_REDIRECTS))
@@ -80,6 +84,7 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
 
     let fetch_builder = Client::builder()
+        .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(Policy::none());
@@ -105,8 +110,6 @@ impl ScoutBuilder {
     /// match production behavior; tests override via `with_*`.
     pub(crate) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
-        // Detect the proxy env once here so `build_default_clients` shapes
-        // `fetch_http` to match and `Scout` carries the same mode into `fetch`.
         let egress = detect_egress_mode(&env::vars().collect());
         let (http, fetch_http) = build_default_clients(&egress)?;
         let brave = BraveClient::from_env(http.clone(), config.max_retries)

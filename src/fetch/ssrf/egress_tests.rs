@@ -41,6 +41,32 @@ fn detects_direct_when_no_proxy_env_var_is_present() {
     assert_eq!(detect_egress_mode(&env), EgressMode::Direct);
 }
 
+/// [T-005] treats a present-but-empty proxy value as unset, as reqwest does
+///
+/// `Proxy::all("")` is a relative-URL parse error, so returning `Proxied("")`
+/// here would fail client construction and abort every command at startup.
+#[test]
+fn treats_a_present_but_empty_proxy_value_as_unset() {
+    let env = HashMap::from([
+        ("HTTPS_PROXY".to_owned(), String::new()),
+        ("HTTP_PROXY".to_owned(), "   ".to_owned()),
+    ]);
+    assert_eq!(detect_egress_mode(&env), EgressMode::Direct);
+}
+
+/// [T-006] falls through an empty value to the next candidate that has one
+#[test]
+fn falls_through_an_empty_value_to_the_next_candidate() {
+    let env = HashMap::from([
+        ("HTTPS_PROXY".to_owned(), String::new()),
+        ("HTTP_PROXY".to_owned(), "http://proxy.http:8080".to_owned()),
+    ]);
+    assert_eq!(
+        detect_egress_mode(&env),
+        EgressMode::Proxied("http://proxy.http:8080".to_owned()),
+    );
+}
+
 /// [T-004] detects Proxied from lowercase https_proxy when uppercase forms are absent
 #[test]
 fn detects_proxied_from_lowercase_https_proxy_when_uppercase_forms_are_absent() {

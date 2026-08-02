@@ -188,7 +188,6 @@ impl SlackClient {
                 SlackError::RateLimited { retry_after } => *retry_after,
                 _ => None,
             },
-            || SlackError::RateLimited { retry_after: None },
             self.rng.as_ref(),
         )
         .await
@@ -222,6 +221,16 @@ impl SlackClient {
         if resp.status() == 429 {
             warn!(retry_after_secs = retry_after, "Slack API rate limited");
             return Err(SlackError::RateLimited { retry_after });
+        }
+
+        // Slack reports its own failures as `error` strings inside a 200 body, so
+        // any other non-2xx came from something between scout and Slack. Its body
+        // is not an API envelope, and letting it reach the JSON parse turned a
+        // gateway hiccup into Decode -> Internal(70), which never retries.
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            warn!(status, "Slack API returned a non-success status");
+            return Err(SlackError::Server(status));
         }
 
         let bytes = read_body_capped(
@@ -473,8 +482,8 @@ impl SlackClient {
 
         let resolved = resolve_messages(&fetched.messages, &users);
 
-        let (first, resolved) = extract_target(resolved, &slack_url.ts, fetched.is_thread)
-            .ok_or_else(|| SlackError::Api {
+        let (first, resolved) =
+            extract_target(resolved, &slack_url.ts).ok_or_else(|| SlackError::Api {
                 error: format!("message {} not found in thread", slack_url.ts),
             })?;
         let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
@@ -496,7 +505,7 @@ impl SlackClient {
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        SlackError::Network(_) | SlackError::Timeout(_) => true,
+        SlackError::Network(_) | SlackError::Timeout(_) | SlackError::Server(_) => true,
         _ => false,
     }
 }

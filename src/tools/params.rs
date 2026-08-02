@@ -15,14 +15,14 @@ pub(super) fn resolve_input(
     match value {
         Some(v) if v != "-" => Ok(v),
         None if stdin_is_terminal => Err(ScoutError::user_error(format!(
-            "Missing {label}. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
+            "missing {label}. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
         ))),
         _ => stdin
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_owned())
             .ok_or_else(|| {
                 ScoutError::user_error(format!(
-                    "No {label} provided. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
+                    "no {label} provided. Pass {placeholder}, pipe it via stdin, or use `-` to read stdin interactively"
                 ))
             }),
     }
@@ -79,6 +79,19 @@ pub struct FetchParams {
     /// Skip Readability extraction and convert entire page
     #[arg(long)]
     pub raw: bool,
+}
+
+#[cfg(test)]
+impl FetchParams {
+    /// Named rather than `Default` so a test that cares about `js` or `raw` has to
+    /// set the flag visibly.
+    pub(crate) fn for_test(url: &str) -> Self {
+        Self {
+            url: Some(url.to_owned()),
+            js: false,
+            raw: false,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -338,8 +351,8 @@ mod tests {
         let result = resolve_input(None, None, true, "query", "<QUERY>");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("Missing query"),
-            "error should contain 'Missing query', got: {err}"
+            err.contains("missing query"),
+            "error should contain 'missing query', got: {err}"
         );
         assert!(
             err.contains("Pass <QUERY>"),
@@ -355,25 +368,25 @@ mod tests {
         );
     }
 
-    /// [T-S006] empty stdin → error with "No X provided" canonical message
+    /// [T-S006] empty stdin → error with "no X provided" canonical message
     #[test]
     fn empty_stdin_returns_no_provided_error() {
         let result = resolve_input(None, Some("   "), false, "query", "<QUERY>");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("No query provided"),
-            "error should contain 'No query provided', got: {err}"
+            err.contains("no query provided"),
+            "error should contain 'no query provided', got: {err}"
         );
     }
 
-    /// [T-S007] `-` with empty stdin → same "No X provided" error
+    /// [T-S007] `-` with empty stdin → same "no X provided" error
     #[test]
     fn dash_with_empty_stdin_returns_error() {
         let result = resolve_input(Some("-".into()), Some(""), true, "url", "<URL>");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("No url provided"),
-            "error should contain 'No url provided', got: {err}"
+            err.contains("no url provided"),
+            "error should contain 'no url provided', got: {err}"
         );
     }
 

@@ -210,3 +210,87 @@ async fn fetch_error_http_connection_refused_is_transient() {
         scout_err
     );
 }
+
+/// [T-ER033] every backend sends a reqwest error that is neither timeout nor
+/// transient to Unknown(104), not TempFailure(75)
+///
+/// A rising `Unknown` rate is the signal ADR-0011 asks for when the
+/// classification has missed a case; calling an unrecognized transport failure
+/// retryable buries it instead. github and brave used to blanket-map this to
+/// TempFailure, each in its own arm — the shared `Classification::from_reqwest`
+/// is what keeps the three answers the same from here on.
+#[tokio::test]
+async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
+    use reqwest::Client;
+
+    use wiremock::matchers::method;
+    use wiremock::{Mock, ResponseTemplate};
+
+    use crate::brave::client::BraveError;
+    use crate::envelope::ErrorCode;
+    use crate::github::GitHubError;
+    use crate::retry::is_transient_network;
+    use crate::test_support::try_spawn_mock_server;
+
+    // A body-decode failure: the request itself succeeded, so this is neither a
+    // timeout nor a connect-level fault.
+    let Some(server) = try_spawn_mock_server("errors::unclassifiable").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let resp = Client::new()
+        .get(server.uri())
+        .send()
+        .await
+        .expect("mock server responds");
+    let reqwest_err = resp
+        .json::<serde_json::Value>()
+        .await
+        .expect_err("body is not JSON");
+
+    assert!(!reqwest_err.is_timeout(), "fixture must not be a timeout");
+    assert!(
+        !is_transient_network(&reqwest_err),
+        "fixture must not be transient: {reqwest_err}"
+    );
+
+    assert_eq!(
+        FetchError::Http(reqwest_err).classify().kind,
+        ErrorCode::Unknown
+    );
+
+    for (label, kind) in [
+        ("github", {
+            let e = Client::new()
+                .get(server.uri())
+                .send()
+                .await
+                .expect("send")
+                .json::<serde_json::Value>()
+                .await
+                .expect_err("not json");
+            GitHubError::Network(e).classify().kind
+        }),
+        ("brave", {
+            let e = Client::new()
+                .get(server.uri())
+                .send()
+                .await
+                .expect("send")
+                .json::<serde_json::Value>()
+                .await
+                .expect_err("not json");
+            BraveError::Network(e).classify().kind
+        }),
+    ] {
+        assert_eq!(
+            kind,
+            ErrorCode::Unknown,
+            "{label} should report an unclassifiable transport failure as Unknown"
+        );
+    }
+}

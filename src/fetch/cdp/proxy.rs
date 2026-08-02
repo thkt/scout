@@ -25,9 +25,9 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
 
-use crate::fetch::ssrf::{DnsResolver, is_private_ip};
+use crate::fetch::ssrf::{DnsResolver, first_blocked_ip};
 
 #[cfg(test)]
 mod proxy_tests;
@@ -102,7 +102,7 @@ where
     };
 
     // 4. Validate fail-closed before any dial.
-    if !all_ips_public(&host_label, &ips) {
+    if first_blocked_ip("proxy", &host_label, &ips).is_some() {
         return send_reply(&mut stream, REP_NOT_ALLOWED).await;
     }
 
@@ -168,19 +168,6 @@ where
     stream.read_exact(&mut port_buf).await?;
     let port = u16::from_be_bytes(port_buf);
     Ok(Some((target, port)))
-}
-
-/// Fail-closed validation mirroring `SsrfResolver`: returns `true` only when
-/// every resolved IP is public. A single private IP rejects the whole
-/// connection and logs the blocked address.
-fn all_ips_public(host: &str, ips: &[IpAddr]) -> bool {
-    for &ip in ips {
-        if is_private_ip(ip) {
-            warn!(host = %host, ip = %ip, "blocked connect to private IP");
-            return false;
-        }
-    }
-    true
 }
 
 /// Send a SOCKS5 reply with `BND.ADDR = 0.0.0.0:0` (RFC 1928 § 6). The bound

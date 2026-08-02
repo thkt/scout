@@ -153,6 +153,63 @@ fn slack_space_message_not_found_classifies_as_not_found() {
     assert_eq!(err.exit_code(), 66, "expected EX_NOINPUT (66)");
 }
 
+/// [T-ER034] every backend answers the ADR-0003 status table the same way
+///
+/// The table was re-derived per backend and had already drifted: a GitHub 408
+/// reported DataError(65, retryable=false) instead of TempFailure, and a Brave
+/// 404 reported DataError instead of NotFound. `Classification::from_http_status`
+/// is now the one copy; this pins each row against the DR so the next divergence
+/// fails here rather than in a caller's exit-code branch.
+#[test]
+fn http_status_table_is_answered_identically_across_backends() {
+    use crate::brave::client::BraveError;
+    use crate::github::GitHubError;
+
+    for (status, expected) in [
+        (500, ErrorCode::TempFailure),
+        (503, ErrorCode::TempFailure),
+        (408, ErrorCode::TempFailure),
+        (429, ErrorCode::TempFailure),
+        (404, ErrorCode::NotFound),
+        (401, ErrorCode::UsageError),
+        (403, ErrorCode::UsageError),
+        (400, ErrorCode::DataError),
+        (422, ErrorCode::DataError),
+        (301, ErrorCode::Unknown),
+    ] {
+        assert_eq!(
+            Classification::from_http_status(status).kind,
+            expected,
+            "ADR-0003 table: HTTP {status}"
+        );
+        assert_eq!(
+            GitHubError::Api {
+                code: status,
+                message: "x".into()
+            }
+            .classify()
+            .kind,
+            expected,
+            "github should follow the table for HTTP {status}"
+        );
+        assert_eq!(
+            BraveError::Api {
+                code: status,
+                message: "x".into()
+            }
+            .classify()
+            .kind,
+            expected,
+            "brave should follow the table for HTTP {status}"
+        );
+        assert_eq!(
+            FetchError::Status(status).classify().kind,
+            expected,
+            "fetch should follow the table for HTTP {status}"
+        );
+    }
+}
+
 /// [T-ER023] ADR-0011 priority 2 wins over priority 5 for Api 4xx codes.
 /// Prior to the priority rule reflection, `GitHubError::Api { code: 4xx }` and
 /// `BraveError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).

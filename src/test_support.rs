@@ -16,6 +16,25 @@ pub(crate) fn no_redirect_client() -> Client {
     Client::builder().redirect(Policy::none()).build().unwrap()
 }
 
+/// Mount a `users.info` responder that resolves every lookup to a name.
+///
+/// The body is the one shape `UserBody` / `UserDetail` accept, so it lives in
+/// one place: a change to that deserializer has to change this fixture, and
+/// twelve copies of it would each have to be found.
+pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(server)
+        .await;
+}
+
 static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Spawn a wiremock server, returning `None` if loopback bind is unavailable.

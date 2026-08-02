@@ -15,11 +15,11 @@ pub(crate) struct SearchResult {
 /// Top-level Brave Web Search API response.
 ///
 /// The Brave API returns many top-level fields; scout consumes only `web.results[]`.
-/// Unknown fields are silently dropped by serde; `#[serde(default)]` on `web` lets
-/// us treat responses that omit the field entirely as empty results.
+/// Unknown fields are silently dropped by serde. A missing or null `web` becomes
+/// `None` because the field is `Option`, and [`Self::into_results`] maps that to
+/// an empty result list.
 #[derive(Debug, Deserialize)]
 pub(crate) struct WebSearchResponse {
-    #[serde(default)]
     pub(crate) web: Option<WebSearch>,
 }
 
@@ -37,7 +37,6 @@ impl WebSearchResponse {
 
 // Test ID convention:
 //   T-BT### = Brave Types module-internal tests (serde deserialization coverage).
-//   Spec-traced behavioral scenarios use bare T-NNN (see Spec test scenarios).
 #[cfg(test)]
 mod tests {
     use super::*;

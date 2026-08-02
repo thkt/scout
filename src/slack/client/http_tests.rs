@@ -1,9 +1,25 @@
 use super::*;
-use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
+use crate::envelope::ErrorCode;
+use crate::test_support::{
+    mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
+};
 use reqwest::Client;
 use tracing_test::traced_test;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
+
+/// A permalink in the fixed test workspace, with `raw_url` derived from `ts` the
+/// way a real permalink is — so the two cannot be typed out of agreement.
+fn slack_url(ts: &str, thread_ts: Option<&str>) -> SlackUrl {
+    let p = ts.replace('.', "");
+    SlackUrl {
+        workspace: "acme".into(),
+        channel: "C1".into(),
+        ts: ts.into(),
+        thread_ts: thread_ts.map(Into::into),
+        raw_url: format!("https://acme.slack.com/archives/C1/p{p}"),
+    }
+}
 
 /// [T-SK001] HTTP 429 response maps to SlackError::RateLimited
 #[tokio::test]
@@ -23,6 +39,42 @@ async fn api_get_once_429_returns_rate_limited() {
         result,
         Err(SlackError::RateLimited { retry_after: None })
     ));
+}
+
+/// [T-SK068] a 5xx gateway page is a transient server error, not a decode fault
+///
+/// Only 429 was branched on, so an HTML error page from a proxy or gateway
+/// reached the JSON parse and surfaced as `Decode` — Internal (70), never
+/// retried. The peer backends both retry the same condition.
+#[tokio::test]
+async fn api_get_once_502_returns_a_retriable_server_error() {
+    let Some(server) = try_spawn_mock_server("slack::http_502").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(
+            ResponseTemplate::new(502).set_body_string("<html><body>502 Bad Gateway</body></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a 502 body is not a Slack API response");
+    assert!(
+        matches!(err, SlackError::Server(502)),
+        "expected Server(502), got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::TempFailure,
+        "a gateway failure is transient, not a scout-side bug"
+    );
+    assert!(
+        is_retriable(&err),
+        "a transient server error must reach the retry loop"
+    );
 }
 
 /// [T-SK002] HTTP 429 with Retry-After header preserves header value
@@ -126,7 +178,7 @@ async fn api_get_once_oversized_body_returns_decode() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    let body = vec![b'x'; (1024 * 1024) + 1];
+    let body = vec![b'x'; MAX_API_RESPONSE_BYTES + 1];
     Mock::given(method("GET"))
         .and(path("/test.method"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
@@ -259,13 +311,7 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
         .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: target_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000500".into(),
-    };
+    let url = slack_url(target_ts, Some(parent_ts));
     let out = client
         .fetch_message(&url)
         .await
@@ -313,13 +359,7 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: "1000.000001".into(),
-        thread_ts: None,
-        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
-    };
+    let url = slack_url("1000.000001", None);
     let outcome = client
         .fetch_message(&url)
         .await
@@ -377,23 +417,10 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
         .await;
     // Any looked-up user resolves to a name, so a resolved author cannot leave
     // its raw ID in the output.
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
-    };
+    let url = slack_url(parent_ts, Some(parent_ts));
     let out = client
         .fetch_message(&url)
         .await
@@ -455,23 +482,10 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
-    };
+    let url = slack_url(parent_ts, Some(parent_ts));
     let outcome = client
         .fetch_message(&url)
         .await
@@ -516,23 +530,10 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
-    };
+    let url = slack_url(parent_ts, Some(parent_ts));
     let outcome = client
         .fetch_message(&url)
         .await
@@ -587,23 +588,10 @@ async fn fetch_message_link_with_replies_fetches_thread() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: None,
-        raw_url: "https://acme.slack.com/archives/C1/p1000000001".into(),
-    };
+    let url = slack_url(parent_ts, None);
     let out = client
         .fetch_message(&url)
         .await
@@ -650,23 +638,10 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000000".into(),
-    };
+    let url = slack_url(parent_ts, Some(parent_ts));
     let out = client
         .fetch_message(&url)
         .await
@@ -736,23 +711,10 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "user": {"real_name": "Someone"}
-        })))
-        .mount(&server)
-        .await;
+    mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let url = SlackUrl {
-        workspace: "acme".into(),
-        channel: "C1".into(),
-        ts: parent_ts.into(),
-        thread_ts: Some(parent_ts.into()),
-        raw_url: "https://acme.slack.com/archives/C1/p1000000000".into(),
-    };
+    let url = slack_url(parent_ts, Some(parent_ts));
     let out = client
         .fetch_message(&url)
         .await

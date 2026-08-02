@@ -2,9 +2,47 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::clock::FixedClock;
+use crate::envelope::ErrorCode;
 use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
+
+/// [T-GH021] get_contents on a directory reports the path shape, not a decode fault
+///
+/// The contents endpoint answers with a JSON array for a directory, which the
+/// file-shaped struct cannot parse. Left as `Decode`, that reaches the caller as
+/// INTERNAL (70) — telling an agent scout has a bug when it passed a directory,
+/// which is the natural next step after `repo-tree`.
+#[tokio::test]
+async fn get_contents_on_a_directory_is_a_data_error_not_internal() {
+    let Some(server) = try_spawn_mock_server("github::get_contents_dir").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo/contents/src"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"name": "lib.rs", "path": "src/lib.rs", "sha": "abc", "type": "file"},
+            {"name": "main.rs", "path": "src/main.rs", "sha": "def", "type": "file"},
+        ])))
+        .mount(&server)
+        .await;
+
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+    let err = client
+        .get_contents("owner", "repo", "src", None)
+        .await
+        .expect_err("a directory path cannot yield file contents");
+
+    assert!(
+        matches!(err, GitHubError::PathIsDirectory(ref p) if p == "src"),
+        "expected PathIsDirectory carrying the path, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::DataError,
+        "a directory path is caller input, not a scout-side invariant violation"
+    );
+}
 
 /// [T-GH001] get_json maps 404 responses to NotFound error
 #[tokio::test]
@@ -38,6 +76,39 @@ async fn get_json_429_returns_rate_limited() {
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
     assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
+}
+
+/// [T-GH022] a 429 without Retry-After still derives the wait from x-ratelimit-reset
+///
+/// GitHub sends `Retry-After` on some rate limits and `x-ratelimit-reset` on
+/// others and guarantees neither for a given status, so reading only one of them
+/// per status left the 429 path with no wait time at all — falling back to
+/// jittered backoff while the server had stated when the window reopens.
+#[tokio::test]
+async fn get_json_429_without_retry_after_uses_ratelimit_reset() {
+    let Some(server) = try_spawn_mock_server("github::http_429_reset").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(429).insert_header("x-ratelimit-reset", "1000300"))
+        .mount(&server)
+        .await;
+
+    // `get_json_once`, not `get_json`: the retry loop honors the returned delay,
+    // so driving the full loop here would sleep for the window under test.
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri())
+        .with_clock(Arc::new(FixedClock(1_000_000)));
+    let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+    assert!(
+        matches!(
+            result,
+            Err(GitHubError::RateLimited {
+                retry_after: Some(300)
+            })
+        ),
+        "expected the 300s window from x-ratelimit-reset, got: {result:?}"
+    );
 }
 
 /// [T-GH003] get_json maps 403 with zero remaining to RateLimited error

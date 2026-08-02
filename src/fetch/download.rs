@@ -2,7 +2,7 @@
 
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use reqwest::Client;
-use reqwest::header::LOCATION;
+use reqwest::header::{CONTENT_TYPE, LOCATION};
 use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
@@ -19,6 +19,10 @@ use crate::retry::read_body_capped;
 ///
 /// `&ValidatedUrl` here closes that gap at the type level — the manual
 /// redirect loop cannot accept an unchecked URL.
+///
+/// The client is also expected to carry scout's User-Agent as a default header.
+/// `build_default_clients` sets it for both production clients; a hand-built
+/// client passed in by a test will send requests without one.
 pub(super) async fn download(
     client: &Client,
     url: &ValidatedUrl,
@@ -29,11 +33,7 @@ pub(super) async fn download(
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
-        let response = client
-            .get(current_url.as_str())
-            .header("User-Agent", crate::USER_AGENT)
-            .send()
-            .await?;
+        let response = client.get(current_url.as_str()).send().await?;
 
         if response.status().is_redirection() {
             let location = response
@@ -42,8 +42,7 @@ pub(super) async fn download(
                 .and_then(|v| v.to_str().ok())
                 .ok_or(FetchError::RedirectMissingLocation)?;
 
-            let base = url::Url::parse(current_url.as_str())?;
-            let next_url = base.join(location)?.to_string();
+            let next_url = current_url.join(location)?.to_string();
 
             let next_validated = ssrf_check(&next_url, resolver, mode).await?;
 
@@ -62,7 +61,7 @@ pub(super) async fn download(
         }
 
         let mut charset = None;
-        match response.headers().get("content-type") {
+        match response.headers().get(CONTENT_TYPE) {
             None => {
                 debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
             }
@@ -126,15 +125,8 @@ struct DecodedBody {
 }
 
 /// Decode a response body label-first, recovering mislabeled multi-byte content
-/// via chardetng before giving up (issue #241).
-///
-/// 1. Decode with the server charset label (default utf-8). A clean decode
-///    (`had_errors == false`) is returned as-is, not uncertain.
-/// 2. On a lossy or unknown-label decode, fall back to reliability-gated
-///    detection: a multi-byte encoding that decodes cleanly is trusted and the
-///    recovered text is returned, not uncertain.
-/// 3. If neither succeeds, return the lossy UTF-8 best effort with
-///    `uncertain = true`.
+/// via chardetng before giving up (issue #241). Detection-recovered text is
+/// returned as trusted, not uncertain.
 fn decode_body(bytes: &[u8], charset: Option<&str>) -> DecodedBody {
     let label = charset.unwrap_or("utf-8");
     match encoding_rs::Encoding::for_label(label.as_bytes()) {
@@ -194,7 +186,10 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
 }
 
 fn check_content_type(content_type: &str) -> Result<(), FetchError> {
-    let mime = content_type.split(';').next().unwrap_or("").trim();
+    let mime = content_type
+        .split_once(';')
+        .map_or(content_type, |(mime, _params)| mime)
+        .trim();
     if !mime.is_empty()
         && !mime.starts_with("text/")
         && mime != "application/xhtml+xml"
