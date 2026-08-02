@@ -268,7 +268,6 @@ async fn cdp_navigate(
     let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
     let intercept_page = page.clone();
     let interceptor = tokio::spawn(async move {
-        let mut intercept_err_tx = Some(intercept_err_tx);
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, resolver.as_ref()).await;
@@ -287,11 +286,9 @@ async fn cdp_navigate(
                     .await
                     .map(|_| ())
             };
-            if let Err(e) = exec_result
-                && let Some(tx) = intercept_err_tx.take()
-            {
+            if let Err(e) = exec_result {
                 // Receiver dropped (= navigation already completed) is harmless; ignore.
-                let _ = tx.send(CdpInterceptError::Execute(e));
+                let _ = intercept_err_tx.send(CdpInterceptError::Execute(e));
                 break;
             }
         }

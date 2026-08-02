@@ -10,9 +10,9 @@ use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient, PerPage};
 
-use super::errors::{parse_repo_param, unwrap_or_degraded};
+use super::errors::unwrap_or_degraded;
 use super::params::{RepoOverviewParams, RepoReadParams, RepoTreeParams};
-use super::{Scout, ScoutError, StdinResolver, StdinState, read_stdin, resolve_stdin_arg, typo};
+use super::{Scout, ScoutError, StdinResolver, read_stdin, resolve_stdin_arg, typo};
 
 const OVERVIEW_ITEMS: PerPage = PerPage::new(5);
 const OVERVIEW_RELEASES: PerPage = PerPage::new(3);
@@ -24,11 +24,18 @@ impl Scout {
     ) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        let (owner, repo) = parse_repo_param(&repository)?;
+        let (owner, repo) = github::parse_repo(&repository)?;
 
         info!(repository = %repository, "repo_tree");
 
         let github = self.github().await;
+
+        // Static rejections come first, as in `repo_read`: resolving the default
+        // branch is a network round-trip and a rate-limit unit, and an invalid
+        // `--path` is knowable without either.
+        if let Some(ref p) = params.path {
+            github::validate_path(p)?;
+        }
 
         let ref_ = match params.ref_ {
             Some(r) => {
@@ -37,10 +44,6 @@ impl Scout {
             }
             None => github.get_repo(owner, repo).await?.default_branch,
         };
-
-        if let Some(ref p) = params.path {
-            github::validate_path(p)?;
-        }
 
         let tree = github.get_tree(owner, repo, &ref_).await?;
 
@@ -74,17 +77,11 @@ impl Scout {
                 || (!is_terminal && (params.repository.is_none() || params.path.is_none())),
         )
         .await?;
-        let mut resolver = StdinResolver {
-            is_terminal,
-            state: match content {
-                Some(s) => StdinState::Available(s),
-                None => StdinState::NotPiped,
-            },
-        };
+        let mut resolver = StdinResolver::with_content(is_terminal, content);
         let repository = resolver.resolve(params.repository, "repository", "<OWNER/REPO>")?;
         let path = resolver.resolve(params.path, "path", "<FILE_PATH>")?;
 
-        let (owner, repo) = parse_repo_param(&repository)?;
+        let (owner, repo) = github::parse_repo(&repository)?;
 
         info!(repository = %repository, path = %path, "repo_read");
 
@@ -157,7 +154,7 @@ impl Scout {
     ) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        let (owner, repo) = parse_repo_param(&repository)?;
+        let (owner, repo) = github::parse_repo(&repository)?;
 
         info!(repository = %repository, "repo_overview");
 

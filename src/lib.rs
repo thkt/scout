@@ -104,14 +104,15 @@ pub(crate) struct Cli {
 /// (e.g., integration tests that exercise `lib::run` more than once) — the
 /// installed subscriber from the first call is reused.
 fn init_tracing() {
-    use tracing_subscriber::filter::Directive;
     let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                "scout=info"
-                    .parse()
-                    .unwrap_or_else(|_| Directive::from(tracing::Level::INFO)),
+                // A literal in `target=level` form; `expect` so a future edit
+                // that breaks the syntax fails loudly. The former fallback
+                // dropped the target, widening the filter from scout to every
+                // crate at INFO.
+                "scout=info".parse().expect("static directive is valid"),
             ),
         )
         .try_init();

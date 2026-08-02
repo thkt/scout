@@ -131,7 +131,9 @@ impl StdinResolver {
         Ok(result)
     }
 
-    #[cfg(test)]
+    /// The one place `Option<String>` maps onto [`StdinState`]. Keeping it here
+    /// rather than at the call site means adding or renaming a variant touches a
+    /// single mapping.
     fn with_content(is_terminal: bool, content: Option<String>) -> Self {
         Self {
             is_terminal,

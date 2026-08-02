@@ -194,7 +194,10 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
 }
 
 fn check_content_type(content_type: &str) -> Result<(), FetchError> {
-    let mime = content_type.split(';').next().unwrap_or("").trim();
+    let mime = content_type
+        .split_once(';')
+        .map_or(content_type, |(mime, _params)| mime)
+        .trim();
     if !mime.is_empty()
         && !mime.starts_with("text/")
         && mime != "application/xhtml+xml"

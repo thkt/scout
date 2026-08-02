@@ -184,10 +184,6 @@ impl ScoutError {
     }
 }
 
-pub(super) fn parse_repo_param(repository: &str) -> Result<(&str, &str), ScoutError> {
-    github::parse_repo(repository).map_err(ScoutError::from)
-}
-
 // `From<XxxError>` impls delegate to each backend's `classify()` so the
 // ADR-0011 priority decision stays exhaustiveness-checked next to the variant.
 impl From<github::GitHubError> for ScoutError {

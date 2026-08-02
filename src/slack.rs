@@ -373,20 +373,18 @@ fn format_slack_output(
     first: &ResolvedMessage,
     replies: &[ResolvedMessage],
 ) -> String {
-    let escape = escape_yaml;
-
     let mut out = String::from("---\n");
     out.push_str(&format!(
         "workspace: \"{}\"\n",
-        escape(&slack_url.workspace)
+        escape_yaml(&slack_url.workspace)
     ));
-    out.push_str(&format!("channel: \"{}\"\n", escape(channel_name)));
-    out.push_str(&format!("author: \"{}\"\n", escape(&first.author)));
-    out.push_str(&format!("ts: \"{}\"\n", escape(&slack_url.ts)));
+    out.push_str(&format!("channel: \"{}\"\n", escape_yaml(channel_name)));
+    out.push_str(&format!("author: \"{}\"\n", escape_yaml(&first.author)));
+    out.push_str(&format!("ts: \"{}\"\n", escape_yaml(&slack_url.ts)));
     if !replies.is_empty() {
         out.push_str(&format!("context_messages: {}\n", replies.len()));
     }
-    out.push_str(&format!("url: \"{}\"\n", escape(&slack_url.raw_url)));
+    out.push_str(&format!("url: \"{}\"\n", escape_yaml(&slack_url.raw_url)));
     out.push_str("---\n\n");
 
     out.push_str(&neutralize_yaml_markers(&first.text));
