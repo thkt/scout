@@ -30,19 +30,21 @@ pub(crate) enum DegradedReason {
 
 impl DegradedReason {
     /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
-    /// to build the `"Could not fetch {label} ({e})"` message. The four
-    /// fetch-style variants (three `*FetchFailed` plus `BraveSearchFailed`)
-    /// that flow through that helper get a meaningful label; the rest build
-    /// their note text at their callsite and never reach `label()`, so they
-    /// share the generic `"resource"` fallback that only keeps the match
-    /// exhaustive (`ReadabilityFallback` and the three Slack cap variants).
+    /// to build the `"Could not fetch {label} ({e})"` message.
+    ///
+    /// Only the three GitHub `*FetchFailed` variants reach it: the helper takes
+    /// a `Result<_, GitHubError>`, so a failure from any other backend cannot be
+    /// passed to it. Every other variant builds its note text at the call site —
+    /// `BraveSearchFailed` included, which pushes `"Brave search failed: {e}"`
+    /// from `tools::query` — and lands on the generic `"resource"` arm, which
+    /// exists only to keep the match exhaustive.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::IssuesFetchFailed => "issues",
             Self::PullsFetchFailed => "pull requests",
             Self::ReleasesFetchFailed => "releases",
-            Self::BraveSearchFailed => "Brave search",
-            Self::ReadmeFetchFailed
+            Self::BraveSearchFailed
+            | Self::ReadmeFetchFailed
             | Self::ReadmeBlobFetchFailed
             | Self::ReadmeDecodeFailed
             | Self::UrlFetchFailed

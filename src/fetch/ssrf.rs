@@ -132,6 +132,15 @@ impl ValidatedUrl {
         self.0.as_str()
     }
 
+    /// Resolve `relative` against this URL, for following a `Location` header.
+    /// Reuses the parse [`ssrf_check`] already did — resolving from `as_str()`
+    /// would re-parse a string that came out of a `url::Url` in the first place,
+    /// adding an error branch nothing can reach. The result is a plain `Url`, so
+    /// the caller still has to run it back through `ssrf_check`.
+    pub(crate) fn join(&self, relative: &str) -> Result<url::Url, url::ParseError> {
+        self.0.join(relative)
+    }
+
     /// Bypasses SSRF validation. Test-only — production code must go through
     /// [`ssrf_check`] so the type system enforces the SSRF contract.
     #[cfg(test)]

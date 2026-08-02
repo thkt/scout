@@ -17,8 +17,8 @@ ADR-0002 の table は exit code 値のみで domain mapping を扱わず、JSON
 
 ## Decision Drivers
 
-- exit code + JSON `--json` mode は CLI script / agent のメタ判断 source of truth
-- Slack 5xx / GitHub 5xx の retryability は CLI script の retry/fail-fast 判断に直結
+- exit code + JSON `--json` mode は CLI script/agent のメタ判断 source of truth
+- Slack 5xx/GitHub 5xx の retryability は CLI script の retry/fail-fast 判断に直結
 - partial failure (`repo_overview` で readme は取れたが issues は失敗等) を programmatic 通知できないと自動化価値が下がる
 
 ## Considered Options
@@ -56,11 +56,13 @@ Chosen option: Option A, because public CLI contract として一貫した class
 >
 > **Note (2026-05-13, follow-up implementation)**: 残り scope を additive route で実装完了。実装した variants は callsite から逆算した 8 種類 (`IssuesFetchFailed`, `PullsFetchFailed`, `ReleasesFetchFailed`, `ReadmeFetchFailed`, `ReadmeBlobFetchFailed`, `ReadmeDecodeFailed`, `UrlFetchFailed`, `ReadabilityFallback`)。当初挙げた `ReadmeMissing` は `resolve_readme` 実装が 404 を silent 扱い (notes 追加なし) としていたため variant 化せず、README 系は failure mode で 3 種に分割。JSON schema 変更は additive (`degraded_reasons` field を `skip_serializing_if = "Vec::is_empty"` で追加) なので Cargo `version = "1.0.0"` → `"1.1.0"` の minor bump。既存 caller (`notes` の `Vec<String>` 構造を見る) は無影響。
 >
-> **Note (2026-05-19, post-ADR-0005 update)**: ADR-0005 (Brave Search switch, 2026-05-15) に伴い `BraveSearchFailed` variant 追加で **計 9 variants**。`unwrap_or_degraded` 経由で meaningful label を持つのは `*FetchFailed` の 3 つに加えて `BraveSearchFailed` の合計 4 variants。命名規約 (`*FetchFailed`) の例外として `BraveSearchFailed` は Brave API endpoint 機能名 (search) に倣う。発見元 audit: `docs/audit/2026-05-19-undocumented-decisions.md` E-06。
+> **Note (2026-05-19, post-ADR-0005 update)**: ADR-0005 (Brave Search switch, 2026-05-15) に伴い `BraveSearchFailed` variant 追加で**計 9 variants**。`unwrap_or_degraded` 経由で meaningful label を持つのは `*FetchFailed` の 3 つに加えて `BraveSearchFailed` の合計 4 variants。命名規約 (`*FetchFailed`) の例外として `BraveSearchFailed` は Brave API endpoint 機能名 (search) に倣う。発見元 audit: `docs/audit/2026-05-19-undocumented-decisions.md` E-06。
 >
-> **Note (2026-06-17, post-issue-#222 update)**: `fetch_slack` の cap/truncate を degradation channel に接続するため Slack 用 3 variant 追加 (`SlackThreadTruncated`, `SlackUsersCapped`, `SlackOutputTruncated`) で **計 12 variants**。この 3 つは `fetch_slack` が callsite で note text を直接構築するため `unwrap_or_degraded` を経由せず、`label()` は exhaustive match 用の placeholder。よって `unwrap_or_degraded` 経由で meaningful label を持つのは引き続き 4 variants で不変。追加は serde additive (新 variant は `degraded_reasons` の skip-if-empty で feature-detect 可能) のため既存 JSON consumer に無影響。発見元: issue #222 実装時の docs drift 確認。
+> **Note (2026-06-17, post-issue-#222 update)**: `fetch_slack` の cap/truncate を degradation channel に接続するため Slack 用 3 variant 追加 (`SlackThreadTruncated`, `SlackUsersCapped`, `SlackOutputTruncated`) で**計 12 variants**。この 3 つは `fetch_slack` が callsite で note text を直接構築するため `unwrap_or_degraded` を経由せず、`label()` は exhaustive match 用の placeholder。よって `unwrap_or_degraded` 経由で meaningful label を持つのは引き続き 4 variants で不変。追加は serde additive (新 variant は `degraded_reasons` の skip-if-empty で feature-detect 可能) のため既存 JSON consumer に無影響。発見元: issue #222 実装時の docs drift 確認。
 >
-> **Note (2026-06-17, post-issue-#241 update)**: `scout fetch` が charset mislabel/unsupported 時に mojibake を exit 0 で silent 返却する fail-silent を解消するため `DecodeUncertain` variant 追加で **計 13 variants**。label-first decode が had_errors を出し、かつ chardetng の reliability gate (multi-byte のみ信頼) が detection を拒否した場合に、best-effort lossy body (`String::from_utf8_lossy`) を exit 0 のまま返しつつ `DECODE_UNCERTAIN` を degraded_reasons に立てる。multi-byte の mislabel (例: Shift_JIS を utf-8 ラベル) は detection で復元され uncertain を立てない。`FetchError` に decode variant は追加せず exit 65 も使わない (issue #241 で degraded signal 中心の設計を選択)。この variant は `fetch` callsite (`src/tools/query.rs`) が note text を直接構築するため `unwrap_or_degraded` を経由せず、`label()` は exhaustive match 用の placeholder ("resource")。よって `unwrap_or_degraded` 経由で meaningful label を持つのは引き続き 4 variants で不変。追加は serde additive のため既存 JSON consumer に無影響。発見元: issue #241。
+> **Note (2026-06-17, post-issue-#241 update)**: `scout fetch` が charset mislabel/unsupported 時に mojibake を exit 0 で silent 返却する fail-silent を解消するため `DecodeUncertain` variant 追加で**計 13 variants**。label-first decode が had_errors を出し、かつ chardetng の reliability gate (multi-byte のみ信頼) が detection を拒否した場合に、best-effort lossy body (`String::from_utf8_lossy`) を exit 0 のまま返しつつ `DECODE_UNCERTAIN` を degraded_reasons に立てる。multi-byte の mislabel (例: Shift_JIS を utf-8 ラベル) は detection で復元され uncertain を立てない。`FetchError` に decode variant は追加せず exit 65 も使わない (issue #241 で degraded signal 中心の設計を選択)。この variant は `fetch` callsite (`src/tools/query.rs`) が note text を直接構築するため `unwrap_or_degraded` を経由せず、`label()` は exhaustive match 用の placeholder ("resource")。よって `unwrap_or_degraded` 経由で meaningful label を持つのは引き続き 4 variants で不変。追加は serde additive のため既存 JSON consumer に無影響。発見元: issue #241。
+>
+> **Note (2026-08-02, drift correction)**: 上の 3 つの Note が「`unwrap_or_degraded` 経由で meaningful label を持つのは 4 variants」と記載しているが、実際は `*FetchFailed` の 3 つのみ。`unwrap_or_degraded` の引数は `Result<Vec<T>, github::GitHubError>` であり、Brave の失敗はこの型で表現できないため helper に渡せない。`BraveSearchFailed` は導入時 (cf32ebf) から `src/tools/query.rs` の callsite が note text (`"Brave search failed: {e}"`) を直接構築しており、`label()` の `"Brave search"` arm は一度も到達していなかった。当該 arm は `"resource"` 群へ統合済み。variant 総数 13 と JSON schema は不変。
 >
 > **README 404 silent の意図的選択**: 「README が存在しない repo」は scout として degraded ではない (overview は他フィールドだけで成立)。404 を silent にすることで `degraded` flag を「abnormal なときだけ立てる」契約に保つ。代わりに JSON consumer は `data.readme` が null か否かで「README の有無」を直接判別可能 (404 と fetch error の区別は `degraded_reasons` の `ReadmeFetchFailed` の有無で行う)。403 等の non-404 4xx は `ReadmeFetchFailed` で集約しており、status code 別の細分は当面 scope 外。
 
@@ -73,7 +75,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 
 ### Confirmation
 
-- 各 error source (Slack / GitHub / Fetch / Gemini) で HTTP status → ErrorCode mapping unit test
+- 各 error source (Slack/GitHub/Fetch/Gemini) で HTTP status → ErrorCode mapping unit test
 - `repo_overview` partial failure path で `--json` 出力に `degraded` フィールドが含まれることの integration test
 - T-ER001a/b/c, T-ER002, T-ER003 は ADR-0002 (exit code values) と本 ADR (mapping rule) の両方で binding。両 ADR ref を doc コメントに記載
 
@@ -95,7 +97,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 ### Option C: 全 error type を JSON union で expose
 
 - Good, because 完全な error type 情報を caller に提供
-- Bad, because JSON schema が複雑化、agent / script の処理コスト増
+- Bad, because JSON schema が複雑化、agent/script の処理コスト増
 - Bad, because internal error type のリーク (encapsulation 違反)
 
 ## More Information
@@ -105,7 +107,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 - 各 `ErrorCode` バリアントの construction site で本 ADR の mapping table を参照
 - `unwrap_or_note` を `unwrap_or_degraded` に rename 済み (`src/tools/errors.rs` `unwrap_or_degraded`)。`DegradedReason` を受け取り、`Degradation::push` 経由で `(notes[i], reasons[i])` の pair invariant を保ったまま統一的に蓄積する形に refactor 済み
 - `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 12 variants、上記 Note 2026-06-17 post-issue-#222 update を参照)
-- ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 error type の `classify()` メソッド (`src/slack.rs:56-94`, `src/github/errors.rs:58-108`) の match arm 順序と `// Priority N` コメントで明示する。各 `From<...>` 実装は `e.classify()` に委譲する (`src/tools/errors.rs:191-217`)。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool / IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script / agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
+- ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 error type の `classify()` メソッド (`src/slack.rs:56-94`, `src/github/errors.rs:58-108`) の match arm 順序と `// Priority N` コメントで明示する。各 `From<...>` 実装は `e.classify()` に委譲する (`src/tools/errors.rs:191-217`)。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool/IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script/agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
 
 ### Reassessment Triggers
 
@@ -122,5 +124,5 @@ Chosen option: Option A, because public CLI contract として一貫した class
 - `docs/decisions/0011-scout-local-classification-priority-policy.md` (Classification Priority portion を scout-local 化、本 ADR が参照する 5 段 ranking の現行 source of truth)
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (全 portion supersede 済 meta ADR、historical reference)
 - `docs/audit/2026-05-13-undocumented-decisions-part2.md` (本 ADR の根拠 audit、Candidate #7 + #8)
-- `src/tools/errors.rs` (`From<SlackError>` priority-2 集約 + `unwrap_or_degraded` 実装), `src/envelope.rs` (`Degradation` / `DegradedReason` typed enum) — implementation sites (audit 時点の違反は resolved 済み、historical record は `docs/audit/2026-05-13-undocumented-decisions-part2.md` を参照)
+- `src/tools/errors.rs` (`From<SlackError>` priority-2 集約 + `unwrap_or_degraded` 実装), `src/envelope.rs` (`Degradation`/`DegradedReason` typed enum) — implementation sites (audit 時点の違反は resolved 済み、historical record は `docs/audit/2026-05-13-undocumented-decisions-part2.md` を参照)
 - `docs/audit/2026-05-14-adr-drift.md` (PR #94 後の追従 audit)

@@ -121,37 +121,34 @@ async fn retry_with<T, E, F, Fut>(
     max_retries: u32,
     is_retriable: impl Fn(&E) -> bool,
     delay_for: impl Fn(&E, u32) -> Duration,
-    fallback_err: impl FnOnce() -> E,
 ) -> Result<T, E>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T, E>>,
     E: fmt::Display,
 {
-    let mut last_err = None;
-    for attempt in 0..=max_retries {
+    // The last attempt returns its own error rather than stashing it, so there
+    // is no path out of the loop that has to invent one.
+    for attempt in 0..max_retries {
         match operation().await {
             Ok(v) => return Ok(v),
             Err(e) if is_retriable(&e) => {
-                if attempt < max_retries {
-                    let delay = delay_for(&e, attempt);
-                    // warn (not debug) because retries are recoverable anomalies;
-                    // the error field surfaces the underlying failure without
-                    // requiring RUST_LOG=debug.
-                    warn!(
-                        attempt = attempt + 1,
-                        delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-                        error = %e,
-                        "retrying after transient error"
-                    );
-                    sleep(delay).await;
-                }
-                last_err = Some(e);
+                let delay = delay_for(&e, attempt);
+                // warn (not debug) because retries are recoverable anomalies;
+                // the error field surfaces the underlying failure without
+                // requiring RUST_LOG=debug.
+                warn!(
+                    attempt = attempt + 1,
+                    delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    error = %e,
+                    "retrying after transient error"
+                );
+                sleep(delay).await;
             }
             Err(e) => return Err(e),
         }
     }
-    Err(last_err.unwrap_or_else(fallback_err))
+    operation().await
 }
 
 /// Parse `Retry-After`. RFC 9110 §10.2.4 allows two forms: an integer delay
@@ -209,7 +206,6 @@ pub(crate) async fn retry_with_rate_limit<T, E, F, Fut>(
     max_retries: u32,
     is_retriable: impl Fn(&E) -> bool,
     extract_retry_after: impl Fn(&E) -> Option<u64>,
-    fallback_err: impl FnOnce() -> E,
     rng: &dyn Rng,
 ) -> Result<T, E>
 where
@@ -217,13 +213,9 @@ where
     Fut: Future<Output = Result<T, E>>,
     E: fmt::Display,
 {
-    retry_with(
-        operation,
-        max_retries,
-        is_retriable,
-        |e, attempt| retry_after_or_backoff(extract_retry_after(e), attempt, rng),
-        fallback_err,
-    )
+    retry_with(operation, max_retries, is_retriable, |e, attempt| {
+        retry_after_or_backoff(extract_retry_after(e), attempt, rng)
+    })
     .await
 }
 

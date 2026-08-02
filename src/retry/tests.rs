@@ -63,7 +63,6 @@ async fn retries_once_then_succeeds_with_retry_after_delay() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -103,7 +102,6 @@ async fn applies_jittered_backoff_when_extractor_returns_none() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -140,7 +138,6 @@ async fn does_not_retry_when_retry_after_exceeds_cap() {
         2,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;
@@ -170,7 +167,6 @@ async fn max_retries_zero_runs_once_without_retry() {
         0,
         mock_is_retriable,
         mock_extract_retry_after,
-        || MockErr::Other,
         &FastrandRng,
     )
     .await;

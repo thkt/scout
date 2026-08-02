@@ -42,8 +42,7 @@ pub(super) async fn download(
                 .and_then(|v| v.to_str().ok())
                 .ok_or(FetchError::RedirectMissingLocation)?;
 
-            let base = url::Url::parse(current_url.as_str())?;
-            let next_url = base.join(location)?.to_string();
+            let next_url = current_url.join(location)?.to_string();
 
             let next_validated = ssrf_check(&next_url, resolver, mode).await?;
 

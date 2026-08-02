@@ -188,7 +188,6 @@ impl SlackClient {
                 SlackError::RateLimited { retry_after } => *retry_after,
                 _ => None,
             },
-            || SlackError::RateLimited { retry_after: None },
             self.rng.as_ref(),
         )
         .await

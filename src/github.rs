@@ -151,7 +151,6 @@ impl GitHubClient {
                 GitHubError::RateLimited { retry_after } => *retry_after,
                 _ => None,
             },
-            || GitHubError::RateLimited { retry_after: None },
             self.rng.as_ref(),
         )
         .await
