@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-FS001] validate_url_accepts_valid
+/// [T-FS001]
 #[test]
 fn validate_url_accepts_valid() {
     for url in [
@@ -13,7 +13,7 @@ fn validate_url_accepts_valid() {
     }
 }
 
-/// [T-FS002] validate_url_rejects_bad_scheme
+/// [T-FS002]
 #[test]
 fn validate_url_rejects_bad_scheme() {
     for url in ["ftp://example.com", "file:///tmp/test", "not-a-url"] {
@@ -21,7 +21,7 @@ fn validate_url_rejects_bad_scheme() {
     }
 }
 
-/// [T-FS003] validate_url_rejects_internal_hosts
+/// [T-FS003]
 #[test]
 fn validate_url_rejects_internal_hosts() {
     for url in [
@@ -63,7 +63,7 @@ fn validate_url_rejects_internal_hosts() {
     }
 }
 
-/// [T-FS012] validate_url_allows_cgn_boundary_neighbors
+/// [T-FS012]
 ///
 /// CGN block is 100.64.0.0/10 (100.64.0.0–100.127.255.255). T-FS003 covers
 /// the inside of the range; this test guards the fence-post on both ends so
@@ -82,7 +82,7 @@ fn validate_url_allows_cgn_boundary_neighbors() {
     }
 }
 
-/// [T-005] proxied mode validates a public-domain URL without consulting the DNS resolver (FailingDnsResolver still returns Ok)
+/// [T-FS018]
 #[tokio::test]
 async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_resolver_failingdnsresolver_still_returns_ok()
  {
@@ -99,7 +99,7 @@ async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_r
     );
 }
 
-/// [T-006] proxied mode rejects a literal private-IP URL with InternalHost
+/// [T-FS019]
 #[tokio::test]
 async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
     let resolver = FailingDnsResolver("lookup failed".into());
@@ -115,7 +115,7 @@ async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
     );
 }
 
-/// [T-007] proxied mode rejects a localhost-domain URL with InternalHost
+/// [T-FS020]
 #[tokio::test]
 async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
     let resolver = FailingDnsResolver("lookup failed".into());
@@ -131,7 +131,7 @@ async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
     );
 }
 
-/// [T-009] direct mode still returns DnsResolution when the resolver fails (pre-check behavior unchanged)
+/// [T-FS021]
 #[tokio::test]
 async fn direct_mode_still_returns_dnsresolution_when_the_resolver_fails_pre_check_behavior_unchanged()
  {

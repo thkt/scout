@@ -11,7 +11,7 @@ fn parse_standard_url() {
     assert!(parsed.thread_ts.is_none());
 }
 
-/// [T-SK006] parse_slack_url extracts thread_ts from parent permalink
+/// [T-SK006]
 #[test]
 fn parse_parent_permalink_with_thread_ts() {
     let url = "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
@@ -21,7 +21,7 @@ fn parse_parent_permalink_with_thread_ts() {
     assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
 }
 
-/// [T-SK007] Reply permalink carries distinct ts and thread_ts
+/// [T-SK007]
 #[test]
 fn parse_reply_permalink_has_different_ts_and_thread_ts() {
     let url = "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1234567890.123456&cid=C123";
@@ -30,7 +30,7 @@ fn parse_reply_permalink_has_different_ts_and_thread_ts() {
     assert_eq!(parsed.thread_ts.as_deref(), Some("1234567890.123456"));
 }
 
-/// [T-SK008] format_slack_output uses targeted reply as primary message
+/// [T-SK008]
 #[test]
 fn format_output_uses_reply_as_primary_when_targeted() {
     let slack_url = parse_slack_url(
@@ -68,7 +68,7 @@ parent body
     assert_eq!(output, expected);
 }
 
-/// [T-SK015] an untrusted message body starting with `---` cannot inject a YAML
+/// [T-SK070] an untrusted message body starting with `---` cannot inject a YAML
 /// document boundary into scout's frontmatter output (a naive multi-document YAML
 /// reader splits on bare `---`/`...` lines; the body must contribute none).
 #[test]
@@ -96,7 +96,7 @@ fn body_cannot_inject_yaml_document_marker() {
     );
 }
 
-/// [T-SK016] a reply author's untrusted display name (user-settable) cannot inject
+/// [T-SK071] a reply author's untrusted display name (user-settable) cannot inject
 /// a YAML document marker into the body either
 #[test]
 fn reply_author_cannot_inject_yaml_document_marker() {
@@ -149,14 +149,14 @@ fn extract_target_picks_reply_from_thread() {
     assert_eq!(rest[1].ts, "1002.000000");
 }
 
-/// [T-SK010] extract_target returns None when target ts not present
+/// [T-SK010]
 #[test]
 fn extract_target_returns_none_when_ts_missing() {
     let messages = vec![msg("1000.000000", "parent"), msg("1001.000000", "reply-1")];
     assert!(extract_target(messages, "9999.999999").is_none());
 }
 
-/// [T-SK011] extract_target matches by ts for a single-message channel fetch
+/// [T-SK011]
 #[test]
 fn extract_target_matches_ts_for_non_thread() {
     let messages = vec![msg("1000.000000", "author")];
@@ -165,7 +165,7 @@ fn extract_target_matches_ts_for_non_thread() {
     assert!(rest.is_empty());
 }
 
-/// [T-SK069] a channel fetch whose returned message is not the requested ts is a miss
+/// [T-SK069]
 ///
 /// `conversations.history` is probed with `latest` as an upper bound, so a
 /// deleted or absent ts yields the *previous* message rather than an empty list.
@@ -186,7 +186,7 @@ fn parse_rejects_non_slack_url() {
     assert!(parse_slack_url("https://example.com/page").is_none());
 }
 
-/// [T-SK013] parse_slack_url rejects paths outside /archives
+/// [T-SK013]
 #[test]
 fn parse_rejects_non_archives_path() {
     assert!(parse_slack_url("https://team.slack.com/messages/C123/p111111222222333").is_none());

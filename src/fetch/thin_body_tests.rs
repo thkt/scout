@@ -1,20 +1,20 @@
 use super::*;
 
-/// [T-F027] style_content_excluded_from_visible_text
+/// [T-F027]
 #[test]
 fn style_content_excluded_from_visible_text() {
     let html = "<html><body><style>.big{font-size:9999px;color:red;margin:0 auto;padding:10px 20px 30px 40px}</style><p>hi</p></body></html>";
     assert!(has_thin_body(html));
 }
 
-/// [T-F028] uppercase_script_tag_excluded
+/// [T-F028]
 #[test]
 fn uppercase_script_tag_excluded() {
     let html = "<html><body><SCRIPT>var x = 'lots of javascript code that should be ignored by the parser';</SCRIPT><p>hi</p></body></html>";
     assert!(has_thin_body(html));
 }
 
-/// [T-F029] uppercase_body_tag_found
+/// [T-F029]
 #[test]
 fn uppercase_body_tag_found() {
     let content = "x".repeat(200);
@@ -38,7 +38,7 @@ fn just_below_threshold_is_thin() {
     assert!(has_thin_body(&html));
 }
 
-/// [T-F032] whitespace_only_body_is_thin
+/// [T-F032]
 #[test]
 fn whitespace_only_body_is_thin() {
     let html = "<html><body>   \n\t  \n   </body></html>";

@@ -50,7 +50,7 @@ async fn download_default(
     .await
 }
 
-/// [T-F009] download_success_returns_html
+/// [T-F009]
 #[tokio::test]
 async fn download_success_returns_html() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -135,7 +135,7 @@ async fn download_recovers_mislabeled_multibyte_without_uncertain() {
     );
 }
 
-/// [T-F010] download_non_success_returns_status_error
+/// [T-F010]
 #[tokio::test]
 async fn download_non_success_returns_status_error() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -162,7 +162,7 @@ async fn download_non_success_returns_status_error() {
     ));
 }
 
-/// [T-F011] download_too_large_body_rejected
+/// [T-F011]
 #[tokio::test]
 async fn download_too_large_body_rejected() {
     let oversized = "x".repeat(MAX_RESPONSE_BYTES + 1);
@@ -179,7 +179,7 @@ async fn download_too_large_body_rejected() {
     assert!(matches!(result, Err(FetchError::TooLarge)));
 }
 
-/// [T-F012] download_rejects_non_html_content_type
+/// [T-F012]
 #[tokio::test]
 async fn download_rejects_non_html_content_type() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -202,7 +202,7 @@ async fn download_rejects_non_html_content_type() {
     );
 }
 
-/// [T-F013] redirect_to_private_ip_blocked
+/// [T-F013]
 #[tokio::test]
 async fn redirect_to_private_ip_blocked() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -223,7 +223,9 @@ async fn redirect_to_private_ip_blocked() {
     );
 }
 
-/// [T-F014] redirect_to_dns_private_ip_blocked
+/// [T-F014] a redirect to a public-looking host is blocked when DNS resolves it
+/// to a private IP — the case T-F013 (literal IP in Location) cannot reach, which
+/// is why this test injects a resolver and calls `download` directly.
 #[tokio::test]
 async fn redirect_to_dns_private_ip_blocked() {
     let private_resolver = ssrf::StaticDnsResolver::single("10.0.0.1");
@@ -254,7 +256,7 @@ async fn redirect_to_dns_private_ip_blocked() {
     );
 }
 
-/// [T-F015] too_many_redirects_returns_error
+/// [T-F015]
 #[tokio::test]
 async fn too_many_redirects_returns_error() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -317,7 +319,7 @@ async fn redirect_cap_exceeded_emits_calibration_warn() {
     assert!(logs_contain("final_url"));
 }
 
-/// [T-F016] redirect_missing_location_header_returns_error
+/// [T-F016]
 #[tokio::test]
 async fn redirect_missing_location_header_returns_error() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -366,10 +368,10 @@ async fn download_transparently_decodes_gzip_response() {
     );
 }
 
-/// [T-F059] download_transparently_decodes_deflate_response (issue #202): pins a
-/// second enabled codec beyond gzip. `Content-Encoding: deflate` carries
-/// zlib-wrapped data; reqwest's `deflate` feature must transparently decompress
-/// it rather than hand the raw bytes to the charset decoder.
+/// [T-F059] (issue #202) Pins a second enabled codec beyond gzip.
+/// `Content-Encoding: deflate` carries zlib-wrapped data; reqwest's `deflate`
+/// feature must transparently decompress it rather than hand the raw bytes to
+/// the charset decoder.
 #[tokio::test]
 async fn download_transparently_decodes_deflate_response() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
@@ -395,7 +397,7 @@ async fn download_transparently_decodes_deflate_response() {
     );
 }
 
-/// [T-008] proxied mode blocks a redirect hop whose Location is a literal private-IP URL
+/// [T-008]
 #[tokio::test]
 async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_ip_url() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {

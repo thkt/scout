@@ -76,7 +76,7 @@ pub(super) fn closest_matches<'a>(
 mod tests {
     use super::*;
 
-    /// [T-TY001] osa_distance: identical strings have distance 0
+    /// [T-TY001]
     #[test]
     fn identical_strings_have_distance_zero() {
         assert_eq!(osa_distance("README.md", "README.md"), 0);
@@ -90,14 +90,14 @@ mod tests {
         assert_eq!(osa_distance("hello", ""), 5);
     }
 
-    /// [T-TY003] osa_distance: single transposition counts as 1
+    /// [T-TY003]
     #[test]
     fn transposition_counts_as_one() {
         assert_eq!(osa_distance("REDAME", "README"), 1);
         assert_eq!(osa_distance("ab", "ba"), 1);
     }
 
-    /// [T-TY004] osa_distance: substitution counts as 1
+    /// [T-TY004]
     #[test]
     fn substitution_counts_as_one() {
         assert_eq!(osa_distance("kitten", "sitten"), 1);
@@ -120,7 +120,7 @@ mod tests {
         assert!(!matches.contains(&"src/main.rs".to_owned()));
     }
 
-    /// [T-TY007] closest_matches: empty pool returns empty
+    /// [T-TY007]
     #[test]
     fn closest_matches_empty_pool_returns_empty() {
         let pool: Vec<&str> = vec![];
@@ -128,7 +128,7 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    /// [T-TY008] closest_matches: all-too-far returns empty
+    /// [T-TY008]
     #[test]
     fn closest_matches_all_too_far_returns_empty() {
         let pool = ["totally-different.txt", "completely-unrelated.json"];

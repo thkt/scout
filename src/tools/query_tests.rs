@@ -9,7 +9,7 @@ use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-009] search returns plain URL list with no markdown decoration
+/// [T-009]
 #[tokio::test]
 async fn search_returns_plain_url_list() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -373,7 +373,7 @@ fn collect_research_degradations_pushes_decode_uncertain() {
     );
 }
 
-/// [T-TS003] fetch_output_shifts_headings
+/// [T-TS003]
 #[test]
 fn fetch_output_shifts_headings() {
     let result = FetchResult::for_test(
@@ -386,7 +386,7 @@ fn fetch_output_shifts_headings() {
     assert!(output.contains("#### Section"), "h2 should shift to h4");
 }
 
-/// [T-TS004] fetch_output_shifts_headings_with_raw_fallback
+/// [T-TS004]
 #[test]
 fn fetch_output_shifts_headings_with_raw_fallback() {
     let result = FetchResult::for_test(
@@ -402,7 +402,7 @@ fn fetch_output_shifts_headings_with_raw_fallback() {
     assert!(output.contains("### Raw Title"), "h1 should shift to h3");
 }
 
-/// [T-TS005] fetch_output_truncates_long_content
+/// [T-TS005]
 #[test]
 fn fetch_output_truncates_long_content() {
     let result = FetchResult::for_test(
@@ -440,7 +440,7 @@ impl serde::Serialize for FailingSerialize {
     }
 }
 
-/// [T-TDV001] to_data_value returns the serialized JSON value on success.
+/// [T-TDV001]
 #[test]
 fn to_data_value_serializes_owned_value() {
     let value = to_data_value(&serde_json::json!({"k": "v"}), "test value").unwrap();

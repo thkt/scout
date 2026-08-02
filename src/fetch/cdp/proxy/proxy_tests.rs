@@ -61,10 +61,10 @@ fn rep_code(reply: &[u8]) -> u8 {
     reply[3]
 }
 
-/// T-201-1: CONNECT to a domain that resolves to the IMDS link-local address is
-/// rejected with REP 0x02 and logs the blocked address. This is the DNS-rebind
-/// regression (acceptance criterion 1): a public pre-flight cannot save a
-/// connect-time private resolution because the proxy validates the dial IP.
+/// T-201-1: pins the DNS-rebind regression (acceptance criterion 1) — a public
+/// pre-flight cannot save a connect-time private resolution because the proxy
+/// validates the dial IP. The fixture is the IMDS link-local address, which
+/// `is_private_ip` catches on a branch separate from RFC1918.
 #[tokio::test]
 #[traced_test]
 async fn t201_1_rebind_to_imds_replies_not_allowed_and_logs() {
@@ -150,8 +150,7 @@ async fn t201_5_bind_command_replies_cmd_not_supported() {
     assert_eq!(rep_code(&reply), 0x07);
 }
 
-/// T-201-6: a non-SOCKS5 greeting (VER 0x04) closes the connection without a
-/// reply and without panicking.
+/// T-201-6
 #[tokio::test]
 async fn t201_6_non_socks5_greeting_closes_silently() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
@@ -168,9 +167,7 @@ async fn t201_6_non_socks5_greeting_closes_silently() {
     );
 }
 
-/// T-201-9: a wrong version byte in the request stage (after a valid greeting)
-/// closes the connection without a SOCKS5 reply. The greeting's method reply
-/// ([0x05, 0x00]) is the only thing written back.
+/// T-201-9
 #[tokio::test]
 async fn t201_9_request_stage_version_mismatch_closes_after_method_reply() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));

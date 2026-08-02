@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-F052] parse_ws_url_extracts_first_matching_line
+/// [T-F052]
 #[tokio::test]
 async fn parse_ws_url_extracts_first_matching_line() {
     let stderr = b"[chromium] starting up\n\
@@ -12,7 +12,7 @@ async fn parse_ws_url_extracts_first_matching_line() {
     assert_eq!(url, "ws://127.0.0.1:54321/devtools/browser/abc-123");
 }
 
-/// [T-F053] parse_ws_url_skips_unrelated_lines_until_match
+/// [T-F053]
 #[tokio::test]
 async fn parse_ws_url_skips_unrelated_lines_until_match() {
     let stderr = b"[8765:0x110000000] preference manifest unparseable\n\
@@ -25,7 +25,7 @@ async fn parse_ws_url_skips_unrelated_lines_until_match() {
     assert_eq!(url, "ws://localhost:1234/devtools/browser/xyz");
 }
 
-/// [T-F054] parse_ws_url_eof_before_match_errors
+/// [T-F054]
 #[tokio::test]
 async fn parse_ws_url_eof_before_match_errors() {
     let stderr = b"chromium crashed before opening port\n";
@@ -39,9 +39,7 @@ async fn parse_ws_url_eof_before_match_errors() {
     );
 }
 
-/// [T-F055] parse_ws_url_rejects_non_browser_devtools_url
-///
-/// chromium also prints `DevTools listening on ws://.../page/<id>` for
+/// [T-F055] chromium also prints `DevTools listening on ws://.../page/<id>` for
 /// per-page debuggers — we must only accept the browser-level URL.
 #[tokio::test]
 async fn parse_ws_url_rejects_non_browser_devtools_url() {

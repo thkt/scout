@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-BRC001] ApiKeyNotSet classifies as UsageError with BRAVE_SEARCH_API_KEY hint.
+/// [T-BRC001]
 #[test]
 fn api_key_not_set_is_usage_error_with_key_hint() {
     let c = BraveError::ApiKeyNotSet.classify();
@@ -14,7 +14,7 @@ fn api_key_not_set_is_usage_error_with_key_hint() {
     );
 }
 
-/// [T-BRC002] Unauthorized classifies as UsageError with a Brave dashboard hint.
+/// [T-BRC002]
 #[test]
 fn unauthorized_is_usage_error_with_dashboard_hint() {
     let c = BraveError::Unauthorized.classify();
@@ -108,7 +108,7 @@ fn temp_failure_variants_are_degradable() {
 
 /// [T-BRC008] is_degradable is false for config, data, internal, and Unknown
 /// variants. The `Api { code: 304 }` case pins the classify-derived behavior
-/// against [T-BRC006]: an Unknown status propagates rather than degrading.
+/// against T-BRC006: an Unknown status propagates rather than degrading.
 #[test]
 fn non_temp_failure_variants_are_not_degradable() {
     let cases: Vec<BraveError> = vec![

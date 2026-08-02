@@ -11,7 +11,7 @@ fn make_msg(user: Option<&str>, text: &str, ts: Option<&str>) -> Message {
 }
 
 #[traced_test]
-/// [T-SK026] resolve_messages logs debug and falls back to "(no author)" when user is None
+/// [T-SK026]
 #[test]
 fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
     let messages = vec![make_msg(None, "hello", Some("1000.000"))];
@@ -25,7 +25,7 @@ fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
 }
 
 #[traced_test]
-/// [T-SK027] resolve_messages logs warn and falls back to empty ts when missing
+/// [T-SK027]
 #[test]
 fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
     let messages = vec![make_msg(Some("U1"), "hi", None)];
@@ -39,7 +39,7 @@ fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
 }
 
 #[traced_test]
-/// [T-SK028] resolve_messages resolves both author and mention via user map
+/// [T-SK028]
 #[test]
 fn t014_mention_resolved_and_user_mapped() {
     let messages = vec![make_msg(Some("U1"), "cc <@U2>", Some("1000.000"))];
@@ -53,7 +53,7 @@ fn t014_mention_resolved_and_user_mapped() {
     assert_eq!(resolved[0].ts, "1000.000");
 }
 
-/// [T-SK029] resolve_messages keeps unknown user id as the author label
+/// [T-SK029]
 #[test]
 fn t015_unknown_user_id_kept_as_author() {
     let messages = vec![make_msg(Some("UXXX"), "text", Some("1000.000"))];
@@ -66,7 +66,7 @@ fn t015_unknown_user_id_kept_as_author() {
 
 /// [T-SK067] resolve_messages treats an empty resolved name as a miss
 ///
-/// Same rule as [T-SK063] on the mention path, which shares this map: an empty
+/// Same rule as T-SK063 on the mention path, which shares this map: an empty
 /// value is a failed resolution, not a name. Rendering it as the author would
 /// emit `author: ""` with nothing in the logs to say the lookup came up short.
 #[test]

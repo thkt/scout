@@ -53,7 +53,7 @@ async fn search_emits_info_dispatch_and_complete_events() {
     );
 }
 
-/// [T-BC001] BraveClient sends query unmodified with q parameter
+/// [T-BC001]
 #[tokio::test]
 async fn search_sends_query_unmodified() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -278,7 +278,7 @@ async fn search_oversized_body_returns_too_large() {
     );
 }
 
-/// [T-BC024] search returns ParseJson error when response body is malformed JSON
+/// [T-BC024]
 #[tokio::test]
 async fn search_malformed_json_returns_parse_error() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -353,9 +353,8 @@ fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     );
 }
 
-/// [T-RC002] FR-003: closure returning a whitespace-only string must be trimmed and rejected
-/// as `ApiKeyNotSet` (parity with the previous `trim().is_empty()` check in
-/// `from_env`).
+/// [T-RC002] FR-003: whitespace-only keys stay rejected — parity with the previous
+/// `trim().is_empty()` check in `from_env`.
 #[test]
 fn from_env_with_rejects_whitespace_only_key() {
     let result =
@@ -366,9 +365,7 @@ fn from_env_with_rejects_whitespace_only_key() {
     );
 }
 
-/// [T-RC003] FR-001 / FR-003: closure returning a real key must yield `Ok(client)` whose
-/// `api_key` round-trips through `Redacted::expose()` and whose `base_url` equals
-/// the constant `API_BASE`.
+/// [T-RC003] FR-001 / FR-003.
 #[test]
 fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
     let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {

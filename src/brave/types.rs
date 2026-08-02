@@ -35,8 +35,8 @@ impl WebSearchResponse {
     }
 }
 
-// Test ID convention:
-//   T-BT### = Brave Types module-internal tests (serde deserialization coverage).
+// T-BT### = Brave Types module-internal tests (serde deserialization coverage).
+// See `crate::test_support` for the id convention itself.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(results[0].description, "snippet");
     }
 
-    /// [T-BT002] WebSearchResponse tolerates missing description
+    /// [T-BT002]
     #[test]
     fn tolerates_missing_description() {
         let body = r#"{
@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(results[0].description, "");
     }
 
-    /// [T-BT003] WebSearchResponse returns empty vec when web field absent
+    /// [T-BT003]
     #[test]
     fn empty_results_when_web_absent() {
         let body = r#"{}"#;

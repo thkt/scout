@@ -129,10 +129,9 @@ fn temp_failure_errors_have_exit_code_75() {
     }
 }
 
-/// [T-ER027] Timeout errors are retryable, surface exit 124 (GNU coreutils
-/// `timeout`) independent from TempFailure(75). The split lets caller
-/// scripts apply a longer retry backoff than for rate-limit / 5xx since
-/// timeouts imply an unknown counterparty load condition.
+/// [T-ER027] Exit 124 (GNU coreutils `timeout`) is split from TempFailure(75) so
+/// caller scripts can apply a longer retry backoff than for rate-limit / 5xx; a
+/// timeout implies an unknown counterparty load condition.
 #[test]
 fn timeout_errors_have_exit_code_124() {
     let cases: Vec<ScoutError> = vec![
@@ -171,7 +170,7 @@ fn non_transient_errors_are_not_retryable() {
 
 // TcpListener::drop is synchronous, so the port is immediately closed
 // with no async shutdown race (unlike MockServer).
-/// [T-ER009] Connection-refused FetchError::Http maps to transient ScoutError
+/// [T-ER009]
 #[tokio::test]
 async fn fetch_error_http_connection_refused_is_transient() {
     use reqwest::Client;

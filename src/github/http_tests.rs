@@ -44,7 +44,7 @@ async fn get_contents_on_a_directory_is_a_data_error_not_internal() {
     );
 }
 
-/// [T-GH001] get_json maps 404 responses to NotFound error
+/// [T-GH001]
 #[tokio::test]
 async fn get_json_404_returns_not_found() {
     let Some(server) = try_spawn_mock_server("github::get_json_404").await else {
@@ -61,7 +61,7 @@ async fn get_json_404_returns_not_found() {
     assert!(matches!(result, Err(GitHubError::NotFound(_))));
 }
 
-/// [T-GH002] get_json maps 429 responses to RateLimited error
+/// [T-GH002]
 #[tokio::test]
 async fn get_json_429_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -111,7 +111,7 @@ async fn get_json_429_without_retry_after_uses_ratelimit_reset() {
     );
 }
 
-/// [T-GH003] get_json maps 403 with zero remaining to RateLimited error
+/// [T-GH003]
 #[tokio::test]
 async fn get_json_403_with_zero_remaining_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -173,31 +173,28 @@ async fn get_json_403_with_missing_remaining_returns_rate_limited() {
     assert!(matches!(result, Err(GitHubError::RateLimited { .. })));
 }
 
-/// [T-GH011a] PerPage::new preserves boundary values 1 and 100 through Display.
+/// [T-GH011a]
 #[test]
 fn per_page_new_preserves_boundary_values() {
     assert_eq!(super::PerPage::new(1).to_string(), "1");
     assert_eq!(super::PerPage::new(100).to_string(), "100");
 }
 
-/// [T-GH011b] PerPage::new panics on 0 (ADR-0004 Rule 2; 0 is
-/// implementation-defined behavior in GitHub API)
+/// [T-GH011b] ADR-0004 Rule 2; GitHub API's per_page=0 behavior is implementation-defined (empty array or default)
 #[test]
 #[should_panic(expected = "PerPage must be 1..=100")]
 fn per_page_new_panics_on_zero() {
     let _ = super::PerPage::new(0);
 }
 
-/// [T-GH011c] PerPage::new panics on values over 100 (ADR-0004 Rule 2)
+/// [T-GH011c] ADR-0004 Rule 2
 #[test]
 #[should_panic(expected = "PerPage must be 1..=100")]
 fn per_page_new_panics_on_over_100() {
     let _ = super::PerPage::new(101);
 }
 
-/// [T-GH018] from_env_with_source threads the injected TokenSource through
-/// to the constructed client's token field. Proves the seam reaches the
-/// constructor without spawning `gh auth token`.
+/// [T-GH018] Proves the injected `TokenSource` reaches the constructor without spawning `gh auth token`.
 #[tokio::test]
 async fn from_env_with_static_source_installs_token() {
     use crate::token_source::StaticTokenSource;
@@ -211,8 +208,8 @@ async fn from_env_with_static_source_installs_token() {
     );
 }
 
-/// [T-GH019] from_env_with_source propagates a None source so callers can
-/// simulate the unauthenticated path without env-var manipulation.
+/// [T-GH019] A None source lets callers simulate the unauthenticated path
+/// without env-var manipulation.
 #[tokio::test]
 async fn from_env_with_none_source_leaves_token_empty() {
     use crate::token_source::StaticTokenSource;
@@ -221,7 +218,7 @@ async fn from_env_with_none_source_leaves_token_empty() {
     assert!(client.token.is_none());
 }
 
-/// [T-GH006] get_json maps 500 responses to generic Api error
+/// [T-GH006]
 #[tokio::test]
 async fn get_json_500_returns_api_error() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -263,8 +260,7 @@ async fn get_json_429_with_retry_after_carries_delay() {
     ));
 }
 
-/// [T-GH008] get_json_once uses x-ratelimit-reset to compute delay on 403 rate limit.
-/// Pinned clock + reset 60s later asserts the exact subtraction result.
+/// [T-GH008] Pinned clock + reset 60s later asserts the exact subtraction result.
 #[tokio::test]
 async fn get_json_403_with_ratelimit_reset_carries_delay() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -397,9 +393,8 @@ fn secs_until_ratelimit_reset_uses_injected_clock() {
     assert_eq!(secs_until_ratelimit_reset(&headers, &clock), Some(300));
 }
 
-/// [T-GH015] secs_until_ratelimit_reset saturates to 0 when the injected
-/// clock has already passed the reset timestamp — `u64::saturating_sub`
-/// prevents an underflow that would otherwise wrap to a huge delay.
+/// [T-GH015] A plain `reset_ts - clock.now_secs()` would wrap to a huge delay
+/// here; `saturating_sub` clamps it.
 #[test]
 fn secs_until_ratelimit_reset_saturates_when_clock_past_reset() {
     use reqwest::header::HeaderValue;
@@ -409,9 +404,7 @@ fn secs_until_ratelimit_reset_saturates_when_clock_past_reset() {
     assert_eq!(secs_until_ratelimit_reset(&headers, &clock), Some(0));
 }
 
-/// [T-GH016] secs_until_ratelimit_reset returns None when the
-/// x-ratelimit-reset header is absent; production callers then fall back
-/// to jittered backoff.
+/// [T-GH016] None leaves production callers on jittered backoff.
 #[test]
 fn secs_until_ratelimit_reset_returns_none_when_header_missing() {
     let headers = HeaderMap::new();

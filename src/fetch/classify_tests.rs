@@ -1,14 +1,13 @@
 use super::*;
 
-/// [T-FEC001] BrowserNotFound classifies as UsageError.
+/// [T-FEC001]
 #[test]
 fn browser_not_found_is_usage_error() {
     let c = FetchError::BrowserNotFound("not installed".into()).classify();
     assert_eq!(c.kind, ErrorCode::UsageError);
 }
 
-/// [T-FEC002] Status(401) and Status(403) classify as UsageError
-/// (priority 1 over the priority-2 4xx fallback).
+/// [T-FEC002] priority 1 over the priority-2 4xx fallback
 #[test]
 fn status_401_403_is_usage_error_not_data_error() {
     for code in [401u16, 403] {
@@ -21,8 +20,7 @@ fn status_401_403_is_usage_error_not_data_error() {
     }
 }
 
-/// [T-FEC003] Status(404) classifies as NotFound
-/// (priority 3 over the priority-2 4xx fallback).
+/// [T-FEC003] priority 3 over the priority-2 4xx fallback
 #[test]
 fn status_404_is_not_found_not_data_error() {
     let c = FetchError::Status(404).classify();
@@ -34,8 +32,7 @@ fn status_404_is_not_found_not_data_error() {
     );
 }
 
-/// [T-FEC004] Status(408) and Status(429) classify as TempFailure
-/// (priority 4 over the priority-2 4xx fallback).
+/// [T-FEC004] priority 4 ahead of the priority-2 4xx fallback.
 #[test]
 fn status_408_429_is_temp_failure_not_data_error() {
     for code in [408u16, 429] {
@@ -44,7 +41,7 @@ fn status_408_429_is_temp_failure_not_data_error() {
     }
 }
 
-/// [T-FEC005] Other 4xx Status codes classify as DataError.
+/// [T-FEC005]
 #[test]
 fn status_other_4xx_is_data_error() {
     for code in [400u16, 410, 422, 499] {
@@ -53,7 +50,7 @@ fn status_other_4xx_is_data_error() {
     }
 }
 
-/// [T-FEC006] 5xx Status codes classify as TempFailure.
+/// [T-FEC006]
 #[test]
 fn status_5xx_is_temp_failure() {
     for code in [500u16, 502, 503, 599] {
@@ -89,7 +86,7 @@ fn timeout_is_timeout_kind() {
     assert_eq!(c.kind, ErrorCode::Timeout);
 }
 
-/// [T-FEC009] DnsResolution classifies as TempFailure with a DNS hint.
+/// [T-FEC009]
 #[test]
 fn dns_resolution_is_temp_failure_with_dns_hint() {
     let c = FetchError::DnsResolution("dns failed".into()).classify();

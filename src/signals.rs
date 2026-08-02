@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(InterruptSignal::Sigint.to_string(), "SIGINT");
     }
 
-    /// [T-SIG004] Sigterm renders as the signal name "SIGTERM"
+    /// [T-SIG004]
     #[cfg(unix)]
     #[test]
     fn sigterm_display_is_sigterm() {

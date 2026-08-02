@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-F001] extracts_charset_from_content_type
+/// [T-F001]
 #[test]
 fn extracts_charset_from_content_type() {
     assert_eq!(
@@ -17,14 +17,14 @@ fn extracts_charset_from_content_type() {
     );
 }
 
-/// [T-F002] returns_none_when_no_charset
+/// [T-F002]
 #[test]
 fn returns_none_when_no_charset() {
     assert!(extract_charset("text/html").is_none());
     assert!(extract_charset("text/plain; boundary=something").is_none());
 }
 
-/// [T-F003] decode_body_handles_utf8
+/// [T-F003]
 #[test]
 fn decode_body_handles_utf8() {
     let labeled = decode_body("こんにちは".as_bytes(), Some("utf-8"));
@@ -36,7 +36,7 @@ fn decode_body_handles_utf8() {
     assert!(!unlabeled.uncertain);
 }
 
-/// [T-F004] decode_body_handles_shift_jis
+/// [T-F004]
 #[test]
 fn decode_body_handles_shift_jis() {
     let encoding = encoding_rs::SHIFT_JIS;
@@ -46,7 +46,7 @@ fn decode_body_handles_shift_jis() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F005] decode_body_handles_euc_jp
+/// [T-F005]
 #[test]
 fn decode_body_handles_euc_jp() {
     let encoding = encoding_rs::EUC_JP;
@@ -56,7 +56,7 @@ fn decode_body_handles_euc_jp() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F006] decode_body_falls_back_to_utf8_for_unknown
+/// [T-F006]
 #[test]
 fn decode_body_falls_back_to_utf8_for_unknown() {
     let decoded = decode_body(b"hello", Some("unknown-encoding"));
@@ -88,7 +88,7 @@ fn decode_body_decodes_correctly_labeled_iso_8859_1() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F062] valid UTF-8 (labeled and unlabeled) decodes cleanly and is not uncertain
+/// [T-F062]
 #[test]
 fn decode_body_decodes_valid_utf8_clean() {
     let labeled = decode_body("hello world".as_bytes(), Some("utf-8"));
@@ -140,7 +140,7 @@ fn decode_body_recovers_multibyte_under_unknown_label() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F066] correctly labeled euc-jp decodes cleanly and is not uncertain (regression guard)
+/// [T-F066]
 #[test]
 fn decode_body_decodes_correctly_labeled_euc_jp() {
     let (bytes, _, _) = encoding_rs::EUC_JP.encode("日本語テキスト");

@@ -116,7 +116,7 @@ mod tests {
 </body>
 </html>"#;
 
-    /// [T-FX001] extracts_article_content
+    /// [T-FX001]
     #[test]
     fn extracts_article_content() {
         let result = extract_article(BLOG_HTML, None);
@@ -126,7 +126,7 @@ mod tests {
         assert!(result.byline.is_some());
     }
 
-    /// [T-FX002] raw_mode_returns_full_html
+    /// [T-FX002]
     #[test]
     fn raw_mode_returns_full_html() {
         let result = extract_raw(BLOG_HTML);
@@ -146,28 +146,28 @@ mod tests {
         assert!(result.content_html.contains("hi"));
     }
 
-    /// [T-FX004] extracts_title_from_html_tag
+    /// [T-FX004]
     #[test]
     fn extracts_title_from_html_tag() {
         let html = "<html><head><title>My Page</title></head><body></body></html>";
         assert_eq!(extract_title_from_html(html), Some("My Page".to_owned()));
     }
 
-    /// [T-FX005] title_extraction_returns_none_for_empty
+    /// [T-FX005]
     #[test]
     fn title_extraction_returns_none_for_empty() {
         let html = "<html><head><title></title></head><body></body></html>";
         assert_eq!(extract_title_from_html(html), None);
     }
 
-    /// [T-FX006] title_extraction_returns_none_when_missing
+    /// [T-FX006]
     #[test]
     fn title_extraction_returns_none_when_missing() {
         let html = "<html><head></head><body></body></html>";
         assert_eq!(extract_title_from_html(html), None);
     }
 
-    /// [T-FX007] title_extraction_handles_attributes
+    /// [T-FX007]
     #[test]
     fn title_extraction_handles_attributes() {
         let html = r#"<html><head><title lang="en">Attributed Title</title></head></html>"#;
@@ -177,7 +177,7 @@ mod tests {
         );
     }
 
-    /// [T-FX008] extracts_title_from_minimal_html
+    /// [T-FX008]
     #[test]
     fn extracts_title_from_minimal_html() {
         let html = "<html><head><title>Minimal Page</title></head><body><p>hi</p></body></html>";
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(result.title, Some("Minimal Page".to_owned()));
     }
 
-    /// [T-FX009] title_extraction_handles_multibyte
+    /// [T-FX009]
     #[test]
     fn title_extraction_handles_multibyte() {
         let html = "<html><head><title>日本語タイトル</title></head><body></body></html>";
@@ -197,7 +197,7 @@ mod tests {
         );
     }
 
-    /// [T-FX010] title_extraction_safe_with_unicode_case_expansion
+    /// [T-FX010]
     #[test]
     fn title_extraction_safe_with_unicode_case_expansion() {
         // The byte-window scan matches the uppercase <TITLE> tag without lowercasing,

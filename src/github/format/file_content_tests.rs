@@ -17,7 +17,7 @@ fn format_file_content_wraps_rust_file_in_fenced_code_block() {
     );
 }
 
-/// [T-GF027] lang_for_path returns the canonical identifier for known extensions
+/// [T-GF027]
 #[test]
 fn lang_for_path_returns_canonical_identifier_for_known_extensions() {
     // FR-002
@@ -55,7 +55,7 @@ fn lang_for_path_returns_canonical_identifier_for_known_extensions() {
     }
 }
 
-/// [T-GF028] lang_for_path returns empty string for missing or unknown extensions
+/// [T-GF028]
 #[test]
 fn lang_for_path_returns_empty_for_no_extension_and_unknown() {
     // FR-002
@@ -63,7 +63,7 @@ fn lang_for_path_returns_empty_for_no_extension_and_unknown() {
     assert_eq!(lang_for_path("file.xyz"), "", "unknown extension");
 }
 
-/// [T-GF029] fence_delimiter grows past three backticks when content contains a triple-backtick run
+/// [T-GF029]
 #[test]
 fn fence_delimiter_returns_longer_fence_when_content_has_triple_backticks() {
     // FR-003
@@ -87,7 +87,7 @@ fn fence_delimiter_returns_triple_backtick_for_plain_content() {
     assert_eq!(fence_delimiter("hello world"), "```");
 }
 
-/// [T-GF031] fence_delimiter grows past five backticks when content has a five-backtick run
+/// [T-GF031]
 #[test]
 fn fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
     // FR-003
@@ -119,7 +119,6 @@ fn format_file_content_fence_does_not_collide_with_inner_backticks() {
         .take_while(|&c| c == '`')
         .collect();
 
-    // The opening fence must not appear as a standalone line within the content body
     let content_lines = &lines[3..lines.len() - 1];
     for line in content_lines {
         assert_ne!(

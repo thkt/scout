@@ -11,26 +11,26 @@ fn article(content_html: &str, used_raw_fallback: bool) -> ExtractedArticle {
     }
 }
 
-/// [T-F033] raw_fallback_with_short_content_is_thin
+/// [T-F033]
 #[test]
 fn raw_fallback_with_short_content_is_thin() {
     assert!(is_thin_extract(&article("<p>short</p>", true)));
 }
 
-/// [T-F034] raw_fallback_with_rich_content_still_thin
+/// [T-F034]
 #[test]
 fn raw_fallback_with_rich_content_still_thin() {
     let content = format!("<p>{}</p>", "x".repeat(100));
     assert!(is_thin_extract(&article(&content, true)));
 }
 
-/// [T-F035] short_content_is_thin
+/// [T-F035]
 #[test]
 fn short_content_is_thin() {
     assert!(is_thin_extract(&article("<p>hi</p>", false)));
 }
 
-/// [T-F036] sufficient_content_is_not_thin
+/// [T-F036]
 #[test]
 fn sufficient_content_is_not_thin() {
     let content = format!("<p>{}</p>", "x".repeat(100));
@@ -51,14 +51,14 @@ fn just_below_threshold_is_thin() {
     assert!(is_thin_extract(&article(&content, false)));
 }
 
-/// [T-F039] html_tags_excluded_from_count
+/// [T-F039]
 #[test]
 fn html_tags_excluded_from_count() {
     let content = r#"<div class="very-long-class-name"><span>ab</span></div>"#;
     assert!(is_thin_extract(&article(content, false)));
 }
 
-/// [T-F040] whitespace_excluded_from_count
+/// [T-F040]
 #[test]
 fn whitespace_excluded_from_count() {
     let content = format!("<p>{}</p>", " x ".repeat(30));

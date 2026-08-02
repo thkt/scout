@@ -1,3 +1,23 @@
+//! Shared test scaffolding, and the test-id convention every test module follows.
+//!
+//! # Test ids
+//!
+//! A test carries `[T-<PREFIX><NNN>]` as the first thing in its doc comment. DRs
+//! cite those ids to name the test that pins a decision, so an id has to resolve
+//! to exactly one test:
+//!
+//! - The prefix names the subject under test (`FS` = fetch/ssrf, `SK` = slack,
+//!   `TOK` = token_source, ...), so one prefix covers several files when they
+//!   test the same thing — `SK` spans `slack/` and the `fetch <slack-url>` tests
+//!   in `tools/`. What a prefix must not do is cover two unrelated subjects:
+//!   `R` once meant both retry and the stdin resolver, which left the id
+//!   ambiguous even where the numbers differed.
+//! - Numbers are unique within their prefix, not per file.
+//!
+//! Cite another test **without** brackets: `Companion to T-TS020`. Brackets mark a
+//! definition, so a bracketed citation is indistinguishable from a second
+//! definition — by grep, and by a reader scanning for where an id lives.
+
 use std::env;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;

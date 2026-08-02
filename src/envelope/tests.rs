@@ -78,9 +78,7 @@ fn error_envelope_wraps_payload_under_error_key() {
     );
 }
 
-/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010 and
-/// emits the same one-line JSON as direct `serde_json::to_string` for an
-/// `ErrorEnvelope`.
+/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010.
 #[test]
 fn to_json_line_matches_direct_serialize() {
     let env = ErrorEnvelope {
@@ -124,7 +122,7 @@ fn success_envelope_serializes_required_fields() {
     );
 }
 
-/// [T-EN006] SuccessEnvelope surfaces degraded=true with notes
+/// [T-EN006]
 #[test]
 fn success_envelope_surfaces_degradation() {
     let env = SuccessEnvelope {
@@ -151,7 +149,7 @@ fn command_output_ok_is_not_degraded() {
     assert!(!env.degraded);
 }
 
-/// [T-EN015] CommandOutput preserves the markdown body across into_markdown
+/// [T-EN015]
 #[test]
 fn command_output_into_markdown_returns_body() {
     let out = CommandOutput::ok(String::from("md body"), serde_json::Value::Null);
@@ -176,7 +174,7 @@ fn command_output_with_degradation_is_degraded() {
     );
 }
 
-/// [T-EN009] CommandOutput::with_degradation sets degraded=false when degradation empty
+/// [T-EN009]
 #[test]
 fn command_output_with_empty_degradation_is_not_degraded() {
     let out = CommandOutput::with_degradation(

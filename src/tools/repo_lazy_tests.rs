@@ -53,7 +53,7 @@ async fn run_repo_tree_times_out_on_slow_github() {
 
 /// [T-TS021] run() wraps repo-read in the outer github_timeout
 ///
-/// Companion to [T-TS020]: the guard is applied per dispatch arm in `run()`, so
+/// Companion to T-TS020: the guard is applied per dispatch arm in `run()`, so
 /// repo-read needs its own coverage of that arm (issue #185).
 #[tokio::test]
 async fn run_repo_read_times_out_on_slow_github() {
@@ -88,7 +88,7 @@ async fn run_repo_read_times_out_on_slow_github() {
 
 /// [T-TS022] run() wraps repo-overview in the outer github_timeout
 ///
-/// Companion to [T-TS020]: per-arm coverage of the repo-overview dispatch arm
+/// Companion to T-TS020: per-arm coverage of the repo-overview dispatch arm
 /// in `run()` (issue #185).
 #[tokio::test]
 async fn run_repo_overview_times_out_on_slow_github() {
@@ -117,15 +117,13 @@ async fn run_repo_overview_times_out_on_slow_github() {
     );
 }
 
-/// [T-TS009] repo_overview: get_repo 404 -> readme/issues/pulls/releases
-/// APIs receive 0 requests.
+/// [T-TS009]
 #[tokio::test]
 async fn repo_overview_404_skips_remaining_apis() {
     let Some(server) = try_spawn_mock_server("tools::t_001").await else {
         return;
     };
 
-    // get_repo returns 404
     Mock::given(method("GET"))
         .and(path("/repos/owner/nonexistent"))
         .respond_with(ResponseTemplate::new(404))
@@ -133,7 +131,6 @@ async fn repo_overview_404_skips_remaining_apis() {
         .mount(&server)
         .await;
 
-    // All other APIs expect 0 requests
     Mock::given(method("GET"))
         .and(path("/repos/owner/nonexistent/readme"))
         .respond_with(ResponseTemplate::new(200))
@@ -255,8 +252,9 @@ async fn repo_overview_parallel_after_get_repo() {
     server.abort();
 }
 
-/// [T-TS011] scout_lazy: github OnceCell is None immediately after
-/// construction.
+/// [T-TS011] Base case of the lazy-github triple (T-TS012 / T-TS013):
+/// construction alone must not build the client, because the first
+/// `Scout::github()` touch pays a `gh auth token` subprocess (DR-0008).
 #[test]
 fn scout_lazy_github_initially_none() {
     let s = scout_lazy("http://localhost:0");
@@ -266,7 +264,7 @@ fn scout_lazy_github_initially_none() {
     );
 }
 
-/// [T-TS012] search command does not initialize the GitHub client on the success path.
+/// [T-TS012]
 #[tokio::test]
 async fn search_leaves_github_uninitialized() {
     let Some(server) = try_spawn_mock_server("tools::t_004").await else {
@@ -303,7 +301,7 @@ async fn search_leaves_github_uninitialized() {
     );
 }
 
-/// [T-TS013] fetch command does not initialize the GitHub client.
+/// [T-TS013]
 #[tokio::test]
 async fn fetch_leaves_github_uninitialized() {
     let Some(server) = try_spawn_mock_server("tools::t_005").await else {
@@ -331,7 +329,7 @@ async fn fetch_leaves_github_uninitialized() {
     );
 }
 
-/// [T-TS014] research command does not initialize the GitHub client on the success path.
+/// [T-TS014]
 /// Brave succeeds; the fetched URL is invalid (DNS failure), driving a degraded
 /// ResearchReport (Ok) without touching GitHub.
 #[tokio::test]
@@ -386,9 +384,7 @@ async fn github_returns_same_reference() {
     );
 }
 
-/// [T-TS016] github() initializes an empty OnceCell via from_env and caches
-/// the result. Exercises the lazy-init code path at mod.rs:80-84.
-///
+/// [T-TS016]
 /// from_env is infallible: it resolves token from env vars or `gh auth token`
 /// (with TOKEN_RESOLVE_TIMEOUT = 5s), then returns a client. No timeout
 /// wrapper — a hang here is a real bug, not a flaky environment.
