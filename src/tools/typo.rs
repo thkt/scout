@@ -128,7 +128,7 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    /// [T-TY008] closest_matches: all-too-far returns empty
+    /// [T-TY008]
     #[test]
     fn closest_matches_all_too_far_returns_empty() {
         let pool = ["totally-different.txt", "completely-unrelated.json"];
