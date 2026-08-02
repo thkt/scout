@@ -57,7 +57,7 @@ fn make_source(url: &str, title: &str) -> SearchResult {
     }
 }
 
-/// [T-SE003] format_report includes Sources section with shaped data
+/// [T-SE003]
 #[test]
 fn format_report_includes_sections() {
     let report = ResearchReport {
@@ -244,7 +244,7 @@ fn format_report_truncates_long_pages() {
     );
 }
 
-/// [T-SE007] format_report sanitizes newline characters in the heading
+/// [T-SE007]
 #[test]
 fn format_report_sanitizes_query_newlines() {
     let report = ResearchReport::default();

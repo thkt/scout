@@ -58,7 +58,7 @@ fn decode_bytes_with_invalid_hint_returns_non_utf8_error() {
 
 // ── Auto-detect Shift_JIS (chardetng) ──
 
-/// [T-GE004] decode_bytes without hint auto-detects Shift_JIS via chardetng
+/// [T-GE004]
 #[test]
 fn decode_bytes_without_hint_detects_shift_jis() {
     // FR-004, FR-005
@@ -74,13 +74,12 @@ fn decode_bytes_without_hint_detects_shift_jis() {
 
 // ── ASCII-heavy Shift_JIS detected before UTF-8 (BR-001) ──
 
-/// [T-GE005] decode_bytes runs chardetng before UTF-8 fallback on ASCII-heavy Shift_JIS
+/// [T-GE005]
 #[test]
 fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
     // BR-001: chardetng runs BEFORE UTF-8 check
     // Simulate a source file with English comments and Japanese string literals.
     // The ASCII portion is valid UTF-8, but the Shift_JIS bytes are not.
-    // chardetng must detect Shift_JIS before UTF-8 is tried.
     let mut bytes = Vec::new();
     // ASCII header (valid UTF-8)
     bytes.extend_from_slice(b"// Copyright 2026 Example Corp.\n");
@@ -111,7 +110,7 @@ fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
 
 // ── UTF-16 BE BOM detection ──
 
-/// [T-GE006] decode_bytes recognizes UTF-16 BE BOM and reports Bom detection source
+/// [T-GE006]
 #[test]
 fn decode_bytes_with_utf16be_bom_returns_bom_source() {
     // FR-003, BR-002
@@ -167,7 +166,7 @@ fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
 
 // ── Binary file (null bytes) returns NonUtf8 error ──
 
-/// [T-GE008] decode_bytes treats null-byte content as binary and returns NonUtf8 error
+/// [T-GE008]
 #[test]
 fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
     // Without the null-byte guard, chardetng would guess windows-1252 and return Detected with garbage text
@@ -189,7 +188,7 @@ fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
 
 // ── Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
 
-/// [T-GE009] decode_bytes rejects non-NUL random bytes that chardetng would guess as single-byte encoding
+/// [T-GE009]
 #[test]
 fn decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
     // Single-byte encoding guard: chardetng can return windows-1251, windows-1252,
@@ -280,7 +279,7 @@ fn decode_base64_with_whitespace_succeeds() {
     assert_eq!(bytes, b"hello world");
 }
 
-/// [T-GE014] decode_base64 returns GitHubError::Decode for malformed base64 input
+/// [T-GE014]
 #[test]
 fn decode_base64_invalid_input_returns_decode_error() {
     let result = decode_base64("!!!not-base64!!!");

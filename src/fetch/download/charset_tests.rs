@@ -88,7 +88,7 @@ fn decode_body_decodes_correctly_labeled_iso_8859_1() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F062] valid UTF-8 (labeled and unlabeled) decodes cleanly and is not uncertain
+/// [T-F062]
 #[test]
 fn decode_body_decodes_valid_utf8_clean() {
     let labeled = decode_body("hello world".as_bytes(), Some("utf-8"));
@@ -140,7 +140,7 @@ fn decode_body_recovers_multibyte_under_unknown_label() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F066] correctly labeled euc-jp decodes cleanly and is not uncertain (regression guard)
+/// [T-F066]
 #[test]
 fn decode_body_decodes_correctly_labeled_euc_jp() {
     let (bytes, _, _) = encoding_rs::EUC_JP.encode("日本語テキスト");

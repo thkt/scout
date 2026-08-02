@@ -1,13 +1,13 @@
 use super::*;
 
-/// [T-SK015] parse_mentions on plain text returns no spans
+/// [T-SK015]
 #[test]
 fn t001_no_mentions_returns_empty() {
     let spans = parse_mentions("hello world");
     assert!(spans.is_empty());
 }
 
-/// [T-SK016] parse_mentions captures one span with byte offsets for a single mention
+/// [T-SK016]
 #[test]
 fn t002_single_mention_returns_one_span() {
     let text = "hi <@U123> bye";
@@ -28,7 +28,7 @@ fn t003_pipe_label_extracts_user_id_only() {
     assert_eq!(spans[0].user_id, "U123");
 }
 
-/// [T-SK058] parse_mentions captures the embedded label from a pipe-labeled mention
+/// [T-SK058]
 #[test]
 fn t003b_pipe_label_captured() {
     let spans = parse_mentions("cc <@U123|alice>");
@@ -45,7 +45,7 @@ fn t003c_bare_mention_has_no_label() {
     assert_eq!(spans[0].label, None);
 }
 
-/// [T-SK060] parse_mentions normalizes an empty label to None
+/// [T-SK060]
 #[test]
 fn t003d_empty_label_normalized_to_none() {
     let spans = parse_mentions("x <@U123|>");
@@ -97,7 +97,7 @@ fn t006_multibyte_characters_correct_offsets() {
     assert_eq!(&emoji_text[spans2[0].start..spans2[0].end], "<@UEMJ>");
 }
 
-/// [T-SK021] substitute_mentions replaces known user id with display name
+/// [T-SK021]
 #[test]
 fn t007_known_user_replaced_with_display_name() {
     let cache: HashMap<String, String> = [("U100".into(), "Alice".into())].into_iter().collect();
@@ -148,8 +148,7 @@ fn t026_cache_miss_empty_label_renders_user_id() {
     assert_eq!(result, "x @U123");
 }
 
-/// [T-SK063] substitute_mentions treats an empty cache value as a miss and
-/// falls through to the embedded label
+/// [T-SK063]
 #[test]
 fn t027_empty_cache_value_falls_through_to_label() {
     let cache: HashMap<String, String> = [("U123".into(), String::new())].into_iter().collect();
@@ -157,8 +156,7 @@ fn t027_empty_cache_value_falls_through_to_label() {
     assert_eq!(result, "cc @alice");
 }
 
-/// [T-SK064] substitute_mentions prefers a resolved cache value over the
-/// embedded label
+/// [T-SK064]
 #[test]
 fn t028_cache_hit_takes_priority_over_label() {
     let cache: HashMap<String, String> = [("U123".into(), "Bob".into())].into_iter().collect();

@@ -162,7 +162,7 @@ async fn download_non_success_returns_status_error() {
     ));
 }
 
-/// [T-F011] download_too_large_body_rejected
+/// [T-F011]
 #[tokio::test]
 async fn download_too_large_body_rejected() {
     let oversized = "x".repeat(MAX_RESPONSE_BYTES + 1);
@@ -397,7 +397,7 @@ async fn download_transparently_decodes_deflate_response() {
     );
 }
 
-/// [T-008] proxied mode blocks a redirect hop whose Location is a literal private-IP URL
+/// [T-008]
 #[tokio::test]
 async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_ip_url() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {

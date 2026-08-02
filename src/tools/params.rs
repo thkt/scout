@@ -226,13 +226,13 @@ mod tests {
         assert_help_sections::<super::ResearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
-    /// [T-H004] repo-tree --help contains Examples: and Environment: sections
+    /// [T-H004]
     #[test]
     fn repo_tree_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoTreeParams>(Some("GITHUB_TOKEN"));
     }
 
-    /// [T-H005] repo-read --help contains Examples: and Environment: sections
+    /// [T-H005]
     #[test]
     fn repo_read_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoReadParams>(Some("GITHUB_TOKEN"));
@@ -292,7 +292,7 @@ mod tests {
         }
     }
 
-    /// [T-S001] optional positional arg is None when omitted from command line
+    /// [T-S001]
     #[test]
     fn optional_positional_is_none_when_omitted() {
         use clap::Parser;
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(result.unwrap(), "from_arg");
     }
 
-    /// [T-S003] ARG omitted + piped stdin → reads from stdin
+    /// [T-S003]
     #[test]
     fn stdin_used_when_arg_omitted_and_piped() {
         let result = resolve_input(None, Some("from_stdin"), false, "query", "<QUERY>");
@@ -390,7 +390,7 @@ mod tests {
         );
     }
 
-    /// [T-S008] stdin content is trimmed before use
+    /// [T-S008]
     #[test]
     fn stdin_content_is_trimmed() {
         let result = resolve_input(

@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(escape_md_link("a\n## h"), "a ## h");
     }
 
-    /// [T-MD002] escape_md_inline escapes pipes and replaces newlines
+    /// [T-MD002]
     #[test]
     fn escape_md_inline_pipes_and_newlines() {
         assert_eq!(escape_md_inline("col1 | col2"), r"col1 \| col2");
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(result, "#### H1\n##### H2\nParagraph\n###### H3");
     }
 
-    /// [T-MD007] shift_headings with zero levels is a no-op
+    /// [T-MD007]
     #[test]
     fn shift_headings_zero_is_noop() {
         let input = "# Title\nBody";
@@ -243,7 +243,7 @@ mod tests {
         );
     }
 
-    /// [T-MD010] shift_headings clamps resulting level at h6
+    /// [T-MD010]
     #[test]
     fn shift_headings_clamps_at_h6() {
         let input = "##### H5\n###### H6\n# H1";
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(out, "x (https://a.com ## Injected)");
     }
 
-    /// [T-MD019] truncate_with_note returns input unchanged when under limit
+    /// [T-MD019]
     #[test]
     fn truncate_with_note_short_input_unchanged() {
         assert_eq!(truncate_with_note("hello", 100), "hello");

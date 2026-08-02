@@ -150,8 +150,7 @@ async fn t201_5_bind_command_replies_cmd_not_supported() {
     assert_eq!(rep_code(&reply), 0x07);
 }
 
-/// T-201-6: a non-SOCKS5 greeting (VER 0x04) closes the connection without a
-/// reply and without panicking.
+/// T-201-6
 #[tokio::test]
 async fn t201_6_non_socks5_greeting_closes_silently() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));

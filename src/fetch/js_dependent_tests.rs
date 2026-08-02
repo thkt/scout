@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-F020] all_spa_frameworks_detected
+/// [T-F020]
 #[test]
 fn all_spa_frameworks_detected() {
     for id in SPA_ROOT_IDS {
@@ -30,7 +30,7 @@ fn uppercase_script_tag_is_detected() {
     );
 }
 
-/// [T-F021] normal_html_not_detected
+/// [T-F021]
 #[test]
 fn normal_html_not_detected() {
     let html = r#"<html><body><article>
@@ -40,7 +40,7 @@ fn normal_html_not_detected() {
     assert!(!is_js_dependent(html));
 }
 
-/// [T-F022] script_without_spa_pattern_but_empty_body
+/// [T-F022]
 #[test]
 fn script_without_spa_pattern_but_empty_body() {
     let html = r#"<html><head><script src="bundle.js"></script></head>
@@ -48,14 +48,14 @@ fn script_without_spa_pattern_but_empty_body() {
     assert!(is_js_dependent(html));
 }
 
-/// [T-F023] spa_pattern_without_script_but_empty_body
+/// [T-F023]
 #[test]
 fn spa_pattern_without_script_but_empty_body() {
     let html = r#"<html><body><div id="root"></div></body></html>"#;
     assert!(is_js_dependent(html));
 }
 
-/// [T-F024] rich_body_with_scripts_not_detected
+/// [T-F024]
 #[test]
 fn rich_body_with_scripts_not_detected() {
     let content = "x".repeat(200);
@@ -66,14 +66,14 @@ fn rich_body_with_scripts_not_detected() {
     assert!(!is_js_dependent(&html));
 }
 
-/// [T-F025] thin_body_without_script_or_spa_pattern_not_detected
+/// [T-F025]
 #[test]
 fn thin_body_without_script_or_spa_pattern_not_detected() {
     let html = "<html><body><p>short</p></body></html>";
     assert!(!is_js_dependent(html));
 }
 
-/// [T-F026] no_body_tag_falls_back_to_full_html
+/// [T-F026]
 #[test]
 fn no_body_tag_falls_back_to_full_html() {
     let html = r#"<div id="root"></div><script src="app.js"></script>"#;

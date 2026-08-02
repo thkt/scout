@@ -10,7 +10,7 @@ fn stdin_resolver_first_consumes_second_uses_arg() {
     assert_eq!(second, "test.txt");
 }
 
-/// [T-SR002] StdinResolver: arg wins over stdin, stdin preserved for next resolve
+/// [T-SR002]
 #[test]
 fn stdin_resolver_arg_wins_stdin_preserved() {
     let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
@@ -34,7 +34,7 @@ fn stdin_resolver_consumed_stdin_fails_second() {
     );
 }
 
-/// [T-SR005] StdinResolver: error message hints stdin was consumed, not missing
+/// [T-SR005]
 #[test]
 fn stdin_resolver_consumed_error_hints_stdin_exhausted() {
     let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));

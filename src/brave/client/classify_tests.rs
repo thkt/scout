@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-BRC001] ApiKeyNotSet classifies as UsageError with BRAVE_SEARCH_API_KEY hint.
+/// [T-BRC001]
 #[test]
 fn api_key_not_set_is_usage_error_with_key_hint() {
     let c = BraveError::ApiKeyNotSet.classify();
@@ -14,7 +14,7 @@ fn api_key_not_set_is_usage_error_with_key_hint() {
     );
 }
 
-/// [T-BRC002] Unauthorized classifies as UsageError with a Brave dashboard hint.
+/// [T-BRC002]
 #[test]
 fn unauthorized_is_usage_error_with_dashboard_hint() {
     let c = BraveError::Unauthorized.classify();

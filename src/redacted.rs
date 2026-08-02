@@ -53,20 +53,20 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "[REDACTED]");
     }
 
-    /// [T-RD002] Redacted::new rejects empty input
+    /// [T-RD002]
     #[test]
     fn new_rejects_empty_input() {
         assert!(Redacted::new("").is_none());
     }
 
-    /// [T-RD003] Redacted::new rejects whitespace-only input
+    /// [T-RD003]
     #[test]
     fn new_rejects_whitespace_only_input() {
         assert!(Redacted::new("   ").is_none());
         assert!(Redacted::new("\t\n").is_none());
     }
 
-    /// [T-RD004] Redacted::new trims surrounding whitespace from accepted input
+    /// [T-RD004]
     #[test]
     fn new_trims_surrounding_whitespace() {
         let secret = Redacted::new("  abc  ").expect("non-empty after trim");

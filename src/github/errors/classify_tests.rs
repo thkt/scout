@@ -63,7 +63,7 @@ fn data_error_variants_classify_as_data_error() {
     }
 }
 
-/// [T-GHC004] NotFound classifies as NotFound with a "check the repo/path" hint.
+/// [T-GHC004]
 #[test]
 fn not_found_is_not_found_with_hint() {
     let c = GitHubError::NotFound("/x".into()).classify();
@@ -77,7 +77,7 @@ fn not_found_is_not_found_with_hint() {
     );
 }
 
-/// [T-GHC005] RateLimited with retry_after embeds the seconds into next_step.
+/// [T-GHC005]
 #[test]
 fn rate_limited_with_retry_after_embeds_seconds() {
     let c = GitHubError::RateLimited {
@@ -94,7 +94,7 @@ fn rate_limited_with_retry_after_embeds_seconds() {
     );
 }
 
-/// [T-GHC006] RateLimited without retry_after still suggests GITHUB_TOKEN.
+/// [T-GHC006]
 #[test]
 fn rate_limited_without_retry_after_suggests_token() {
     let c = GitHubError::RateLimited { retry_after: None }.classify();

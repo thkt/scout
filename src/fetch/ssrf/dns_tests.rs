@@ -16,7 +16,7 @@ async fn ssrf_allows_dns_resolving_to_public_ip() {
     assert!(result.is_ok());
 }
 
-/// [T-FS006] ssrf_returns_error_on_dns_failure
+/// [T-FS006]
 #[tokio::test]
 async fn ssrf_returns_error_on_dns_failure() {
     let resolver = FailingDnsResolver("lookup failed".into());
@@ -24,7 +24,7 @@ async fn ssrf_returns_error_on_dns_failure() {
     assert!(matches!(result, Err(FetchError::DnsResolution(_))));
 }
 
-/// [T-FS007] ssrf_skips_dns_for_ip_literals
+/// [T-FS007]
 #[tokio::test]
 async fn ssrf_skips_dns_for_ip_literals() {
     let resolver = StaticDnsResolver(vec![]);
@@ -32,7 +32,7 @@ async fn ssrf_skips_dns_for_ip_literals() {
     assert!(result.is_ok());
 }
 
-/// [T-FS013] ssrf_rejects_empty_dns_response
+/// [T-FS013]
 ///
 /// A domain resolving to zero addresses (NOERROR + empty A/AAAA) must fail
 /// closed: the `ValidatedUrl` "DNS-checked" invariant is unmet, so the
@@ -87,7 +87,7 @@ async fn ssrf_resolver_allows_connect_to_public_ip() {
     );
 }
 
-/// [T-FS008] redact_strips_userinfo
+/// [T-FS008]
 #[test]
 fn redact_strips_userinfo() {
     let url = "https://user:password@example.com/path";
@@ -125,7 +125,7 @@ fn redacted_log_url_display_strips_userinfo() {
     assert!(formatted.contains("example.com/path"));
 }
 
-/// [T-FS014] redact_falls_back_when_unparseable
+/// [T-FS014]
 ///
 /// `url::Url::parse` rejects `file://user:pass@host/path` with `IdnaError`
 /// (file scheme has no userinfo grammar, so `user:pass@host` parses as an

@@ -393,7 +393,7 @@ mod tests {
         init_tracing();
     }
 
-    /// [T-W001] write_output appends newline when output lacks trailing newline
+    /// [T-W001]
     #[test]
     fn write_output_appends_newline_when_missing() {
         let mut buf = Vec::new();

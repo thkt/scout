@@ -52,7 +52,7 @@ fn github_not_found_has_next_step() {
     );
 }
 
-/// [T-NS004] FetchError::Status(404) has next_step about the URL
+/// [T-NS004]
 #[test]
 fn fetch_404_has_next_step() {
     let err = ScoutError::from(FetchError::Status(404));
@@ -62,7 +62,7 @@ fn fetch_404_has_next_step() {
     );
 }
 
-/// [T-NS005] BraveError::Unauthorized points users at the Brave dashboard
+/// [T-NS005]
 #[test]
 fn brave_unauthorized_separates_dashboard_hint() {
     let err = ScoutError::from(BraveError::Unauthorized);
@@ -129,7 +129,7 @@ fn slack_channel_not_found_classifies_as_not_found() {
     assert_eq!(err.error_kind(), ErrorCode::NotFound);
 }
 
-/// [T-ER022] SlackError::Api with other error codes (e.g., invalid_auth) classifies as UsageError
+/// [T-ER022]
 #[test]
 fn slack_other_api_error_classifies_as_usage_error() {
     use crate::slack::SlackError;

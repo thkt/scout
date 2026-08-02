@@ -52,8 +52,7 @@ fn t034_from_env_with_rejects_whitespace_only_token() {
     );
 }
 
-/// [T-SK035] from_env_with with a real token yields `Ok(client)` whose token
-/// round-trips through `Redacted::expose()` and whose `base_url` is `API_BASE`.
+/// [T-SK035]
 #[test]
 fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
@@ -64,10 +63,9 @@ fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
     assert_eq!(client.base_url, API_BASE);
 }
 
-/// [T-SK065] from_env_with rejects a bot token (`xoxb-…`) as `TokenWrongType`.
-/// The `SLACK_TOKEN must be a User OAuth token` contract the message promises is
-/// now enforced at construction, so a bot token can no longer pass through to
-/// fail later with an opaque API error (issue #261).
+/// [T-SK065] The `SLACK_TOKEN must be a User OAuth token` contract is now
+/// enforced at construction, so a bot token can no longer pass through to fail
+/// later with an opaque API error (issue #261).
 #[test]
 fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {

@@ -7,8 +7,7 @@ fn browser_not_found_is_usage_error() {
     assert_eq!(c.kind, ErrorCode::UsageError);
 }
 
-/// [T-FEC002] Status(401) and Status(403) classify as UsageError
-/// (priority 1 over the priority-2 4xx fallback).
+/// [T-FEC002] priority 1 over the priority-2 4xx fallback
 #[test]
 fn status_401_403_is_usage_error_not_data_error() {
     for code in [401u16, 403] {
@@ -21,8 +20,7 @@ fn status_401_403_is_usage_error_not_data_error() {
     }
 }
 
-/// [T-FEC003] Status(404) classifies as NotFound
-/// (priority 3 over the priority-2 4xx fallback).
+/// [T-FEC003] priority 3 over the priority-2 4xx fallback
 #[test]
 fn status_404_is_not_found_not_data_error() {
     let c = FetchError::Status(404).classify();

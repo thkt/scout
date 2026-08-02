@@ -10,7 +10,7 @@ fn real_resolver() -> Arc<dyn DnsResolver> {
     Arc::new(TokioDnsResolver)
 }
 
-/// [T-F017] blocks_ssrf_to_localhost
+/// [T-F017]
 #[tokio::test]
 async fn blocks_ssrf_to_localhost() {
     let client = no_redirect_client();
@@ -103,7 +103,7 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
     );
 }
 
-/// [T-F018] js_flag_attempts_rendering_on_rich_body
+/// [T-F018]
 #[tokio::test]
 async fn js_flag_attempts_rendering_on_rich_body() {
     let content = "x".repeat(200);
@@ -140,7 +140,7 @@ async fn js_flag_attempts_rendering_on_rich_body() {
     );
 }
 
-/// [T-F019] t010_js_flag_errors_when_feature_disabled
+/// [T-F019]
 #[cfg(not(feature = "js-rendering"))]
 #[tokio::test]
 async fn t010_js_flag_errors_when_feature_disabled() {
@@ -165,7 +165,7 @@ async fn t010_js_flag_errors_when_feature_disabled() {
     );
 }
 
-/// [T-F073] with a proxy configured, fetch_page returns the page body for a public-domain URL routed through a local forward proxy while the DNS resolver is never consulted
+/// [T-F073]
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_domain_url_routed_through_a_local_forward_proxy_while_the_dns_resolver_is_never_consulted()
  {
@@ -212,7 +212,7 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     );
 }
 
-/// [T-F074] with a proxy configured, fetch_page to a literal loopback URL is blocked before any request reaches the proxy
+/// [T-F074]
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked_before_any_request_reaches_the_proxy()
  {

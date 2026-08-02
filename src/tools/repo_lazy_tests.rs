@@ -329,7 +329,7 @@ async fn fetch_leaves_github_uninitialized() {
     );
 }
 
-/// [T-TS014] research command does not initialize the GitHub client on the success path.
+/// [T-TS014]
 /// Brave succeeds; the fetched URL is invalid (DNS failure), driving a degraded
 /// ResearchReport (Ok) without touching GitHub.
 #[tokio::test]

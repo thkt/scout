@@ -9,7 +9,7 @@ use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-009] search returns plain URL list with no markdown decoration
+/// [T-009]
 #[tokio::test]
 async fn search_returns_plain_url_list() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {

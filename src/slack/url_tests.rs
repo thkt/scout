@@ -11,7 +11,7 @@ fn parse_standard_url() {
     assert!(parsed.thread_ts.is_none());
 }
 
-/// [T-SK006] parse_slack_url extracts thread_ts from parent permalink
+/// [T-SK006]
 #[test]
 fn parse_parent_permalink_with_thread_ts() {
     let url = "https://team.slack.com/archives/C123/p1234567890123456?thread_ts=1234567890.123456&cid=C123";
@@ -156,7 +156,7 @@ fn extract_target_returns_none_when_ts_missing() {
     assert!(extract_target(messages, "9999.999999").is_none());
 }
 
-/// [T-SK011] extract_target matches by ts for a single-message channel fetch
+/// [T-SK011]
 #[test]
 fn extract_target_matches_ts_for_non_thread() {
     let messages = vec![msg("1000.000000", "author")];
@@ -165,7 +165,7 @@ fn extract_target_matches_ts_for_non_thread() {
     assert!(rest.is_empty());
 }
 
-/// [T-SK069] a channel fetch whose returned message is not the requested ts is a miss
+/// [T-SK069]
 ///
 /// `conversations.history` is probed with `latest` as an upper bound, so a
 /// deleted or absent ts yields the *previous* message rather than an empty list.

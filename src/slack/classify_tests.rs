@@ -98,7 +98,7 @@ fn api_other_codes_classify_as_usage_error() {
     }
 }
 
-/// [T-SLC006] RateLimited classifies as TempFailure.
+/// [T-SLC006]
 #[test]
 fn rate_limited_is_temp_failure() {
     let c = SlackError::RateLimited { retry_after: None }.classify();

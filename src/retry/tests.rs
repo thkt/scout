@@ -217,8 +217,7 @@ fn backoff_is_capped_at_max_retry_after() {
             "backoff for attempt {attempt} ({delay:?}) must not exceed {cap:?}"
         );
     }
-    // Rng-independent equality: at attempt 10 the minimum backoff (256s
-    // half + 0 jitter = 512s base... half=512s) already exceeds the cap.
+    // Rng-independent equality: at attempt 10 half (512s) already exceeds the cap.
     assert_eq!(
         retry_after_or_backoff(None, 10, &FastrandRng),
         cap,
@@ -305,8 +304,8 @@ fn parse_retry_after_accepts_http_date() {
     );
 }
 
-/// [T-R010] If the HTTP-date is already in the past, saturating_sub clamps to 0
-/// (caller will treat as "retry now") rather than returning None.
+/// [T-R010] Returns Some(0) — caller retries now — rather than None, which
+/// would fall back to jittered backoff (T-R011, T-R012).
 #[test]
 fn parse_retry_after_clamps_past_http_date_to_zero() {
     let headers = headers_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT");
@@ -324,7 +323,7 @@ fn parse_retry_after_returns_none_for_garbage() {
     assert_eq!(parse_retry_after(&headers, &FixedClock(0)), None);
 }
 
-/// [T-R012] An absent Retry-After header yields None, same as an unparseable one
+/// [T-R012] Same None as an unparseable header, not the Some(0) a past date yields.
 #[test]
 fn parse_retry_after_returns_none_when_header_absent() {
     let headers = HeaderMap::new();

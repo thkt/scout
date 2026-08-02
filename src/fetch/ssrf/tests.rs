@@ -21,7 +21,7 @@ fn validate_url_rejects_bad_scheme() {
     }
 }
 
-/// [T-FS003] validate_url_rejects_internal_hosts
+/// [T-FS003]
 #[test]
 fn validate_url_rejects_internal_hosts() {
     for url in [
@@ -63,7 +63,7 @@ fn validate_url_rejects_internal_hosts() {
     }
 }
 
-/// [T-FS012] validate_url_allows_cgn_boundary_neighbors
+/// [T-FS012]
 ///
 /// CGN block is 100.64.0.0/10 (100.64.0.0–100.127.255.255). T-FS003 covers
 /// the inside of the range; this test guards the fence-post on both ends so
@@ -99,7 +99,7 @@ async fn proxied_mode_validates_a_public_domain_url_without_consulting_the_dns_r
     );
 }
 
-/// [T-FS019] proxied mode rejects a literal private-IP URL with InternalHost
+/// [T-FS019]
 #[tokio::test]
 async fn proxied_mode_rejects_a_literal_private_ip_url_with_internalhost() {
     let resolver = FailingDnsResolver("lookup failed".into());

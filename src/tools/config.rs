@@ -218,7 +218,7 @@ mod tests {
         }
     }
 
-    /// [T-CFG001] env 未設定時はデフォルト値が使われる
+    /// [T-CFG001]
     #[test]
     fn defaults_when_no_env_set() {
         let cfg = RuntimeConfig::from_env_with(empty_env).unwrap();
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(cfg.max_retries, 2);
     }
 
-    /// [T-CFG002] SCOUT_FETCH_TIMEOUT_SECS=120 は fetch_timeout に反映され、他はデフォルト
+    /// [T-CFG002]
     #[test]
     fn fetch_timeout_override_reflects_only_fetch() {
         let cfg =
@@ -306,7 +306,7 @@ mod tests {
         );
     }
 
-    /// [T-CFG013] 範囲外 timeout (601) は UsageError
+    /// [T-CFG013]
     #[test]
     fn timeout_above_max_fails() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_RESEARCH_TIMEOUT_SECS", "601"))
@@ -372,7 +372,7 @@ mod tests {
         );
     }
 
-    /// [T-CFG020] Default impl は from_env_with(empty) と同値
+    /// [T-CFG020]
     #[test]
     fn default_matches_empty_env() {
         let from_empty = RuntimeConfig::from_env_with(empty_env).unwrap();
@@ -405,7 +405,7 @@ mod tests {
         );
     }
 
-    /// [T-CFG022] SCOUT_GITHUB_TIMEOUT_SECS の範囲外値は UsageError
+    /// [T-CFG022]
     #[test]
     fn github_timeout_out_of_range_fails() {
         let err =
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG-LOG003] SCOUT_GITHUB_TIMEOUT_SECS override が INFO event を出す
+    /// [T-CFG-LOG003]
     #[tracing_test::traced_test]
     #[test]
     fn github_timeout_override_surfaces_info_event() {

@@ -106,7 +106,7 @@ fn encode_path_encodes_special_chars() {
     assert!(encode_path("a;b").contains("%3B"));
 }
 
-/// [T-GHH008] encode_path preserves forward slashes and encodes non-ASCII bytes
+/// [T-GHH008]
 #[test]
 fn encode_path_preserves_slashes_and_encodes_non_ascii() {
     assert_eq!(encode_path("feature/my-branch"), "feature/my-branch");
@@ -179,7 +179,7 @@ fn decode_content_decodes_shift_jis_without_hint() {
     assert_eq!(result.text, "テスト");
 }
 
-/// [T-GHH016] decode_content honors an explicit EUC-JP encoding hint
+/// [T-GHH016]
 #[test]
 fn decode_content_decodes_euc_jp_with_hint() {
     // [Phase 1-B] delegate to decode_bytes: explicit encoding hint passed through

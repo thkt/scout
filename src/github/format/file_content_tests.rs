@@ -17,7 +17,7 @@ fn format_file_content_wraps_rust_file_in_fenced_code_block() {
     );
 }
 
-/// [T-GF027] lang_for_path returns the canonical identifier for known extensions
+/// [T-GF027]
 #[test]
 fn lang_for_path_returns_canonical_identifier_for_known_extensions() {
     // FR-002
@@ -87,7 +87,7 @@ fn fence_delimiter_returns_triple_backtick_for_plain_content() {
     assert_eq!(fence_delimiter("hello world"), "```");
 }
 
-/// [T-GF031] fence_delimiter grows past five backticks when content has a five-backtick run
+/// [T-GF031]
 #[test]
 fn fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
     // FR-003

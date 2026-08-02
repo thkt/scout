@@ -647,8 +647,6 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
         .await
         .expect("thread with capped author lookups resolves")
         .markdown;
-    // The first 50 authors (U000..U049) are kept, so each resolves to a name and
-    // no raw ID leaks.
     for i in 0..SLACK_MAX_USER_LOOKUPS {
         let raw = format!("U{i:03}");
         assert!(
