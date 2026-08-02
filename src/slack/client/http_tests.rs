@@ -1,4 +1,5 @@
 use super::*;
+use crate::envelope::ErrorCode;
 use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
 use reqwest::Client;
 use tracing_test::traced_test;
@@ -23,6 +24,42 @@ async fn api_get_once_429_returns_rate_limited() {
         result,
         Err(SlackError::RateLimited { retry_after: None })
     ));
+}
+
+/// [T-SK068] a 5xx gateway page is a transient server error, not a decode fault
+///
+/// Only 429 was branched on, so an HTML error page from a proxy or gateway
+/// reached the JSON parse and surfaced as `Decode` — Internal (70), never
+/// retried. The peer backends both retry the same condition.
+#[tokio::test]
+async fn api_get_once_502_returns_a_retriable_server_error() {
+    let Some(server) = try_spawn_mock_server("slack::http_502").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(
+            ResponseTemplate::new(502).set_body_string("<html><body>502 Bad Gateway</body></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a 502 body is not a Slack API response");
+    assert!(
+        matches!(err, SlackError::Server(502)),
+        "expected Server(502), got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::TempFailure,
+        "a gateway failure is transient, not a scout-side bug"
+    );
+    assert!(
+        is_retriable(&err),
+        "a transient server error must reach the retry loop"
+    );
 }
 
 /// [T-SK002] HTTP 429 with Retry-After header preserves header value

@@ -32,6 +32,12 @@ pub(crate) enum SlackError {
     #[error("Slack API rate limit exceeded")]
     RateLimited { retry_after: Option<u64> },
 
+    /// A non-2xx status that is not 429. The body is whatever the responder
+    /// produced — a gateway's HTML error page, say — so it is never a Slack
+    /// API envelope and must not reach the JSON parse.
+    #[error("Slack API returned HTTP {0}")]
+    Server(u16),
+
     #[error("Slack request failed: {0}")]
     Network(String),
 
@@ -84,7 +90,7 @@ impl SlackError {
                 _ => Classification::new(ErrorCode::UsageError),
             },
             // Priority 4: TEMP_FAILURE
-            Self::RateLimited { .. } => Classification::transient_retry(),
+            Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
             Self::Network(_) => Classification::transient_network(),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
@@ -334,16 +340,17 @@ fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {
 
 /// Extract the message matching `target_ts` from `messages`, returning it and
 /// the remaining messages in their original order.
+///
+/// The match is by ts for a channel fetch too, not just within a thread:
+/// `conversations.history` is probed with `latest` as an *upper* bound, so a ts
+/// that no longer exists answers with the preceding message instead of an empty
+/// list. Returning `None` lets the caller report a miss, rather than rendering a
+/// neighbour's author and body under the ts the caller asked for.
 fn extract_target(
     mut messages: Vec<ResolvedMessage>,
     target_ts: &str,
-    is_thread: bool,
 ) -> Option<(ResolvedMessage, Vec<ResolvedMessage>)> {
-    let idx = if is_thread {
-        messages.iter().position(|m| m.ts == target_ts)?
-    } else {
-        0
-    };
+    let idx = messages.iter().position(|m| m.ts == target_ts)?;
     let first = messages.remove(idx);
     Some((first, messages))
 }

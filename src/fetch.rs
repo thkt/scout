@@ -318,16 +318,25 @@ const SPA_ROOT_IDS: &[&str] = &[
     r#"id="__nuxt""#,
 ];
 
+/// Case-insensitive substring search over raw bytes, for HTML tag names — which
+/// are case-insensitive, unlike the attribute values in [`SPA_ROOT_IDS`].
+fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn is_js_dependent(html: &str) -> bool {
     if !has_thin_body(html) {
         return false;
     }
-    html.contains("<script") || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
+    contains_ignore_ascii_case(html.as_bytes(), b"<script")
+        || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
 }
 
 fn has_thin_body(html: &str) -> bool {
-    let lower = html.as_bytes();
-    let body_start = lower
+    let bytes = html.as_bytes();
+    let body_start = bytes
         .windows(5)
         .position(|w| w.eq_ignore_ascii_case(b"<body"));
     let body = if let Some(start) = body_start {
@@ -335,7 +344,7 @@ fn has_thin_body(html: &str) -> bool {
             .find('>')
             .map(|i| start + i + 1)
             .unwrap_or(start);
-        let body_end = lower[after_tag..]
+        let body_end = bytes[after_tag..]
             .windows(7)
             .position(|w| w.eq_ignore_ascii_case(b"</body>"))
             .map(|i| after_tag + i)

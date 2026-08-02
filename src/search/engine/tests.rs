@@ -77,6 +77,36 @@ fn format_report_includes_sections() {
     assert!(text.contains("[A](https://a.com)"));
 }
 
+/// [T-SE014] partition_by_rank restores search ranking in both report sections
+///
+/// Fetches resolve in completion order, so the outcomes arrive shuffled. Sorting
+/// only the successes left `## Failed URLs` in timeout-return order, printing the
+/// same two failures in a different order on each run.
+#[test]
+fn partition_by_rank_orders_failures_like_pages() {
+    let timeout = || fetch::FetchError::DnsResolution("no such host".into());
+    let page = |url: &str| FetchResult::for_test(url.to_owned(), "body".to_owned(), false);
+
+    let outcomes = vec![
+        (3, "https://d.example", Err(timeout())),
+        (0, "https://a.example", Ok(page("https://a.example"))),
+        (2, "https://c.example", Err(timeout())),
+        (1, "https://b.example", Ok(page("https://b.example"))),
+    ];
+
+    let (pages, failed) = partition_by_rank(outcomes);
+
+    assert_eq!(
+        pages.iter().map(FetchResult::url).collect::<Vec<_>>(),
+        ["https://a.example", "https://b.example"]
+    );
+    assert_eq!(
+        failed.iter().map(|f| f.url.as_str()).collect::<Vec<_>>(),
+        ["https://c.example", "https://d.example"],
+        "failed URLs carry search ranking too, not completion order"
+    );
+}
+
 /// [T-SE013] a zero-result run still emits the Sources section, marked `(no results)`
 ///
 /// DR-0005 fixes this as the zero-result contract: without the marker, a report
@@ -248,6 +278,7 @@ async fn research_with_mock_returns_report() {
         query: "test",
         depth: 3,
         lang: Lang::En,
+        egress: EgressMode::Direct,
     };
     let (cancel, _) = watch::channel(false);
     let report = research(&mock, &http, &req, resolver, &cancel)
@@ -281,6 +312,7 @@ async fn research_auto_lang_issues_single_call() {
         query: "型安全 TypeScript",
         depth: 3,
         lang: Lang::Auto,
+        egress: EgressMode::Direct,
     };
     let (cancel, _) = watch::channel(false);
     let _ = research(&mock, &http, &req, resolver, &cancel)
@@ -311,6 +343,7 @@ async fn research_search_failure_returns_error() {
         query: "test",
         depth: 3,
         lang: Lang::En,
+        egress: EgressMode::Direct,
     };
     let (cancel, _) = watch::channel(false);
     let err = research(&mock, &http, &req, resolver, &cancel)

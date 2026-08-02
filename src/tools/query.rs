@@ -181,6 +181,7 @@ impl Scout {
             query: &query,
             depth: params.depth,
             lang: params.lang,
+            egress: self.egress.clone(),
         };
 
         let mut degradation = Degradation::default();
