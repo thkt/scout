@@ -69,8 +69,7 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 /// - T-F051: the rendered HTML contains example.com page content.
 /// - T-F057 (issue #198): the chromium `--user-data-dir` created for the fetch
 ///   is deleted once the fetch completes, leaving no new `scout-chromium-*` dir
-///   in the temp dir. Snapshots the dir set before/after and asserts the
-///   difference is empty.
+///   in the temp dir.
 #[tokio::test]
 async fn t005_t006_cdp_renders_and_removes_profile_dir() {
     if !chrome_available() {

@@ -9,7 +9,7 @@ fn public_dns() -> StaticDnsResolver {
     StaticDnsResolver::single("93.184.216.34")
 }
 
-/// [T-F044] t004_blocks_dns_resolving_to_private_ip
+/// [T-F044]
 #[tokio::test]
 async fn t004_blocks_dns_resolving_to_private_ip() {
     let resolver = private_dns();
@@ -19,7 +19,7 @@ async fn t004_blocks_dns_resolving_to_private_ip() {
     );
 }
 
-/// [T-F045] t004_blocks_internal_ip_literal
+/// [T-F045]
 #[tokio::test]
 async fn t004_blocks_internal_ip_literal() {
     let resolver = public_dns();
@@ -29,7 +29,7 @@ async fn t004_blocks_internal_ip_literal() {
     );
 }
 
-/// [T-F046] t004_allows_public_url
+/// [T-F046]
 #[tokio::test]
 async fn t004_allows_public_url() {
     let resolver = public_dns();
@@ -39,7 +39,7 @@ async fn t004_allows_public_url() {
     );
 }
 
-/// [T-F047] t004_allows_non_network_urls
+/// [T-F047]
 #[tokio::test]
 async fn t004_allows_non_network_urls() {
     let resolver = public_dns();
@@ -56,7 +56,7 @@ async fn t004_allows_non_network_urls() {
     }
 }
 
-/// [T-F048] t004_blocks_unknown_schemes
+/// [T-F048]
 #[tokio::test]
 async fn t004_blocks_unknown_schemes() {
     let resolver = public_dns();
@@ -68,7 +68,7 @@ async fn t004_blocks_unknown_schemes() {
     }
 }
 
-/// [T-F049] t004_blocks_websocket_to_internal
+/// [T-F049]
 #[tokio::test]
 async fn t004_blocks_websocket_to_internal() {
     let resolver = public_dns();
@@ -82,7 +82,7 @@ async fn t004_blocks_websocket_to_internal() {
     );
 }
 
-/// [T-F050] t004_blocks_websocket_dns_to_private
+/// [T-F050]
 #[tokio::test]
 async fn t004_blocks_websocket_dns_to_private() {
     let resolver = private_dns();

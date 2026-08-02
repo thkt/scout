@@ -26,7 +26,7 @@ async fn blocks_ssrf_to_localhost() {
     assert!(matches!(result, Err(FetchError::InternalHost)));
 }
 
-/// [T-F076] fetch_does_not_log_userinfo_credentials_on_blocked_url
+/// [T-F076] SSRF-blocked fetch redacts userinfo credentials from the warn! log
 ///
 /// Adversarial: even when SSRF blocks the fetch, the `warn!` line emitted
 /// by `ssrf_check` MUST flow through `redact_url_credentials` so no
@@ -64,7 +64,7 @@ async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
     );
 }
 
-/// [T-F072] fetch_blocks_dns_rebind_at_connect_time
+/// [T-F072]
 ///
 /// ADR-0012 contract pin: the pre-flight `ssrf_check` resolver returns a public
 /// IP (passing pre-flight), while the `fetch_http` client's injected

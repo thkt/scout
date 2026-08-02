@@ -1,13 +1,13 @@
 use super::*;
 
-/// [T-ER012] io_error returns ErrorCode::IoError
+/// [T-ER012]
 #[test]
 fn io_error_kind_is_io_error() {
     let err = ScoutError::io_error("test");
     assert_eq!(err.error_kind(), ErrorCode::IoError);
 }
 
-/// [T-CD001] Errors default to empty candidates list
+/// [T-CD001]
 #[test]
 fn default_candidates_empty() {
     let err = ScoutError::not_found("test");
@@ -72,7 +72,7 @@ fn brave_unauthorized_separates_dashboard_hint() {
     );
 }
 
-/// [T-NS006] GitHubError::RateLimited with retry_after embeds the duration in next_step
+/// [T-NS006]
 #[test]
 fn github_rate_limited_with_retry_after_embeds_duration() {
     let err = ScoutError::from(github::GitHubError::RateLimited {
@@ -92,7 +92,7 @@ fn github_rate_limited_without_retry_after_suggests_token() {
     assert!(err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")));
 }
 
-/// [T-NS008] Display includes next_step appended to message
+/// [T-NS008]
 #[test]
 fn display_includes_next_step() {
     let err = ScoutError::user_error("Something is wrong").with_next_step("Try X");
@@ -101,7 +101,7 @@ fn display_includes_next_step() {
     assert!(display.contains("Try X"));
 }
 
-/// [T-NS009] Errors without next_step omit the hint from Display
+/// [T-NS009]
 #[test]
 fn display_omits_next_step_when_absent() {
     let err = ScoutError::io_error("io failure");
@@ -119,7 +119,7 @@ fn slack_internal_error_classifies_as_temp_failure() {
     assert_eq!(err.error_kind(), ErrorCode::TempFailure);
 }
 
-/// [T-ER021] SlackError::Api with channel_not_found classifies as NotFound (ADR-0003)
+/// [T-ER021] ADR-0003 API-specific exception, not its HTTP-status table
 #[test]
 fn slack_channel_not_found_classifies_as_not_found() {
     use crate::slack::SlackError;

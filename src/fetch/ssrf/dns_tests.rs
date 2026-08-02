@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-FS004] ssrf_blocks_dns_resolving_to_private_ip
+/// [T-FS004]
 #[tokio::test]
 async fn ssrf_blocks_dns_resolving_to_private_ip() {
     let resolver = StaticDnsResolver::single("127.0.0.1");
@@ -8,7 +8,7 @@ async fn ssrf_blocks_dns_resolving_to_private_ip() {
     assert!(matches!(result, Err(FetchError::InternalHost)));
 }
 
-/// [T-FS005] ssrf_allows_dns_resolving_to_public_ip
+/// [T-FS005]
 #[tokio::test]
 async fn ssrf_allows_dns_resolving_to_public_ip() {
     let resolver = StaticDnsResolver::single("8.8.8.8");
@@ -48,7 +48,7 @@ async fn ssrf_rejects_empty_dns_response() {
     );
 }
 
-/// [T-FS016] ssrf_resolver_blocks_connect_to_private_ip
+/// [T-FS016]
 ///
 /// The connect-time resolver (ADR-0012) must reject a host that resolves to a
 /// private IP and emit the `"blocked connect to private IP"` warn, which
@@ -66,7 +66,7 @@ async fn ssrf_resolver_blocks_connect_to_private_ip() {
     assert!(logs_contain("blocked connect to private IP"));
 }
 
-/// [T-FS017] ssrf_resolver_allows_connect_to_public_ip
+/// [T-FS017]
 ///
 /// A host resolving to a public IP passes through, and the resolved address is
 /// returned for reqwest to dial.
@@ -97,14 +97,14 @@ fn redact_strips_userinfo() {
     assert!(safe.contains("example.com/path"));
 }
 
-/// [T-FS009] redact_preserves_clean_url
+/// [T-FS009]
 #[test]
 fn redact_preserves_clean_url() {
     let url = "https://example.com/path";
     assert!(matches!(redact_url_credentials(url), Cow::Borrowed(_)));
 }
 
-/// [T-FS010] redact_handles_username_only
+/// [T-FS010] userinfo with a username and no password is still stripped
 #[test]
 fn redact_handles_username_only() {
     let url = "https://admin@example.com/";
@@ -113,7 +113,7 @@ fn redact_handles_username_only() {
     assert!(safe.contains("example.com"));
 }
 
-/// [T-FS011] redacted_log_url_display_strips_userinfo
+/// [T-FS011]
 ///
 /// Guards the `Display` impl directly so a future divergence between
 /// `RedactedLogUrl::fmt` and `redact_url_credentials` would be caught.
@@ -141,7 +141,7 @@ fn redact_falls_back_when_unparseable() {
     assert_eq!(safe, "[redacted-url]");
 }
 
-/// [T-FS015] redact_preserves_at_sign_outside_userinfo
+/// [T-FS015]
 ///
 /// Fail-closed parse handling (T-FS014) must not over-redact: a `@` in the
 /// path parses cleanly with an empty username, so the URL is returned

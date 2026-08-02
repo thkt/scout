@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-SLC001] TokenNotSet classifies as UsageError with SLACK_TOKEN hint.
+/// [T-SLC001]
 #[test]
 fn token_not_set_is_usage_error_with_token_hint() {
     let c = SlackError::TokenNotSet.classify();
@@ -14,8 +14,7 @@ fn token_not_set_is_usage_error_with_token_hint() {
     );
 }
 
-/// [T-SLC011] TokenWrongType classifies as UsageError with the SLACK_TOKEN hint
-/// — same caller-facing treatment as `TokenNotSet`, since both are a
+/// [T-SLC011] Same caller-facing treatment as `TokenNotSet`: both are a
 /// misconfigured credential the user must fix before retrying (issue #261).
 #[test]
 fn token_wrong_type_is_usage_error_with_token_hint() {
@@ -37,8 +36,7 @@ fn insecure_url_is_data_error() {
     assert_eq!(c.kind, ErrorCode::DataError);
 }
 
-/// [T-SLC003] Slack-native NOT_FOUND error codes classify as NotFound.
-/// scout's internal "message not found" (space form) must classify the same
+/// [T-SLC003] scout's internal "message not found" (space form) must classify the same
 /// as Slack's `message_not_found` (underscore) — both should land on
 /// EX_NOINPUT(66) per issue #114.
 #[test]
@@ -76,8 +74,7 @@ fn api_not_found_in_thread_with_ts_classifies_as_not_found() {
     assert_eq!(c.kind, ErrorCode::NotFound);
 }
 
-/// [T-SLC004] Slack TEMP_FAILURE error codes classify as TempFailure
-/// (ADR-0003 — internal_error must not be misclassified as UsageError).
+/// [T-SLC004] ADR-0003 — internal_error must not be misclassified as UsageError.
 #[test]
 fn api_temp_failure_codes_classify_as_temp_failure() {
     for code in ["internal_error", "service_unavailable", "fatal_error"] {
@@ -89,7 +86,7 @@ fn api_temp_failure_codes_classify_as_temp_failure() {
     }
 }
 
-/// [T-SLC005] Other Slack API error codes (e.g., invalid_auth) classify as UsageError.
+/// [T-SLC005]
 #[test]
 fn api_other_codes_classify_as_usage_error() {
     for code in ["invalid_auth", "missing_scope", "not_authed"] {

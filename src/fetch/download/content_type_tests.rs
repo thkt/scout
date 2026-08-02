@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-F007] accepts_textual_content_types
+/// [T-F007]
 #[test]
 fn accepts_textual_content_types() {
     for ct in [
@@ -14,7 +14,7 @@ fn accepts_textual_content_types() {
     }
 }
 
-/// [T-F008] rejects_non_textual_content_types
+/// [T-F008]
 #[test]
 fn rejects_non_textual_content_types() {
     for ct in ["application/pdf", "image/png", "application/json"] {

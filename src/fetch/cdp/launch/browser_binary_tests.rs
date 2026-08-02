@@ -1,7 +1,7 @@
 use super::*;
 use std::env;
 
-/// [T-F041] t001_returns_error_when_chrome_not_found
+/// [T-F041]
 #[test]
 fn t001_returns_error_when_chrome_not_found() {
     let result = resolve_browser_binary_from(&[], &[]);
@@ -11,7 +11,7 @@ fn t001_returns_error_when_chrome_not_found() {
     );
 }
 
-/// [T-F042] finds_binary_at_known_path
+/// [T-F042]
 #[test]
 fn finds_binary_at_known_path() {
     let existing = env::current_exe().unwrap();

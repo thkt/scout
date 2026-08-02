@@ -21,7 +21,7 @@ fn slack_url(ts: &str, thread_ts: Option<&str>) -> SlackUrl {
     }
 }
 
-/// [T-SK001] HTTP 429 response maps to SlackError::RateLimited
+/// [T-SK001]
 #[tokio::test]
 async fn api_get_once_429_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -99,7 +99,7 @@ async fn api_get_once_429_with_retry_after_header() {
     ));
 }
 
-/// [T-SK003] Body-level ratelimited error maps to SlackError::RateLimited
+/// [T-SK003]
 #[tokio::test]
 async fn api_get_once_body_ratelimited_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -656,7 +656,6 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
             "author {raw} is within the first 50 by order and must resolve, but its raw ID leaked: {out}"
         );
     }
-    // Authors 50..59 fall past the cap, so they are evicted and render raw.
     for i in SLACK_MAX_USER_LOOKUPS..total {
         let raw = format!("U{i:03}");
         assert!(

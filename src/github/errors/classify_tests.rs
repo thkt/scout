@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-GHC001] Forbidden classifies as UsageError with GITHUB_TOKEN scope hint.
+/// [T-GHC001]
 #[test]
 fn forbidden_is_usage_error_with_scope_hint() {
     let c = GitHubError::Forbidden("denied".into()).classify();

@@ -19,7 +19,7 @@ fn t002_single_mention_returns_one_span() {
     assert_eq!(&text[spans[0].start..spans[0].end], "<@U123>");
 }
 
-/// [T-SK017] parse_mentions extracts user id only from pipe-labeled mention
+/// [T-SK017]
 #[test]
 fn t003_pipe_label_extracts_user_id_only() {
     let text = "cc <@U123|alice>";
@@ -37,7 +37,7 @@ fn t003b_pipe_label_captured() {
     assert_eq!(spans[0].label, Some("alice"));
 }
 
-/// [T-SK059] parse_mentions leaves label as None for a bare mention
+/// [T-SK059]
 #[test]
 fn t003c_bare_mention_has_no_label() {
     let spans = parse_mentions("hi <@U123>");
@@ -122,7 +122,7 @@ fn t009_no_mentions_returns_text_unchanged() {
     assert_eq!(result, text);
 }
 
-/// [T-SK024] substitute_mentions replaces pipe-labeled mention with display name
+/// [T-SK024] substitute_mentions prefers the cached display name over the embedded pipe label
 #[test]
 fn t009b_pipe_label_substituted_with_display_name() {
     let cache: HashMap<String, String> = [("U123".into(), "Alice".into())].into_iter().collect();

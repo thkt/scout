@@ -308,7 +308,7 @@ fn readme_truncation_snaps_to_last_newline() {
     );
 }
 
-/// [T-GF023] README truncation does not panic when no newline exists
+/// [T-GF023]
 #[test]
 fn readme_truncation_no_newline_no_panic() {
     let repo = sample_repo();
@@ -321,7 +321,7 @@ fn readme_truncation_no_newline_no_panic() {
     assert!(output.contains(&format!("/ {total} bytes)")));
 }
 
-/// [T-GF024] README truncation lands on a character boundary for multibyte content
+/// [T-GF024]
 #[test]
 fn readme_truncation_multibyte_no_mid_char_cut() {
     let repo = sample_repo();
@@ -360,7 +360,7 @@ fn readme_truncation_multibyte_with_newlines() {
 /// [T-GF036] README truncation note is appended after heading shift so it is not rewritten
 #[test]
 fn readme_truncation_note_not_heading_shifted() {
-    // TC-004 fix: ordering invariant — note appended after shift_headings
+    // TC-004 fix
     let repo = sample_repo();
     let readme = format!("# Title\n{}", "x\n".repeat(super::MAX_README_BYTES));
     let output = format_overview(&repo, Some(&readme), &[], &[], &[]);

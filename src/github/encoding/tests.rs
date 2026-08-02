@@ -2,7 +2,7 @@ use super::*;
 
 // ── Explicit Shift_JIS decoding ──
 
-/// [T-GE001] decode_bytes with shift_jis hint returns Explicit DecodeResult
+/// [T-GE001]
 #[test]
 fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
     // FR-001, BR-003
@@ -18,7 +18,7 @@ fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
 
 // ── Explicit EUC-JP decoding ──
 
-/// [T-GE002] decode_bytes with euc-jp hint returns Explicit DecodeResult
+/// [T-GE002]
 #[test]
 fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
     // FR-001, BR-003
@@ -94,7 +94,7 @@ fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
 
     let result = decode_bytes(&bytes, None).unwrap();
 
-    // The key assertion: source must be Detected (chardetng), not AssumedUtf8.
+    // Source must be Detected (chardetng), not AssumedUtf8.
     // If UTF-8 were tried first, the invalid bytes would cause it to fail
     // and potentially produce a different source or error.
     assert_eq!(
@@ -170,8 +170,7 @@ fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
 /// [T-GE008] decode_bytes treats null-byte content as binary and returns NonUtf8 error
 #[test]
 fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
-    // Binary heuristic: null bytes indicate non-text content
-    // chardetng would otherwise guess windows-1252 and return Detected with garbage text
+    // Without the null-byte guard, chardetng would guess windows-1252 and return Detected with garbage text
     let bytes: &[u8] = &[0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00];
 
     let result = decode_bytes(bytes, None);
@@ -225,10 +224,9 @@ fn decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
 }
 
 // ── NonUtf8 Display output ──
-// Note: This test validates the error variant exists and its Display output.
 // The ScoutError mapping test belongs in tools/errors.rs.
 
-/// [T-GE010] GitHubError::NonUtf8 Display output contains the inner descriptive message
+/// [T-GE010]
 #[test]
 fn non_utf8_error_contains_descriptive_message() {
     // FR-011
@@ -249,7 +247,6 @@ fn decode_error_is_distinct_from_non_utf8() {
     let decode_err = GitHubError::Decode("bad base64".into());
     let non_utf8_err = GitHubError::NonUtf8("encoding failed".into());
 
-    // Verify they are different variants with different Display output
     let decode_msg = decode_err.to_string();
     let non_utf8_msg = non_utf8_err.to_string();
 
@@ -265,7 +262,7 @@ fn decode_error_is_distinct_from_non_utf8() {
 
 // ── decode_base64 tests ──
 
-/// [T-GE012] decode_base64 returns raw bytes for valid base64 input
+/// [T-GE012]
 #[test]
 fn decode_base64_valid_input_returns_bytes() {
     // Validates the base64 → bytes path that was split from decode_content
@@ -274,7 +271,7 @@ fn decode_base64_valid_input_returns_bytes() {
     assert_eq!(bytes, b"hello world");
 }
 
-/// [T-GE013] decode_base64 strips whitespace and decodes GitHub-style line-wrapped base64
+/// [T-GE013]
 #[test]
 fn decode_base64_with_whitespace_succeeds() {
     // GitHub API returns base64 with line breaks
@@ -297,9 +294,7 @@ fn decode_base64_invalid_input_returns_decode_error() {
 
 // ── Fallback logging (issue #189) ──
 
-/// [T-GE015] decode_bom emits a debug event when the BOM-identified encoding
-/// produces replacement characters (had_errors=true).
-/// Action: decode UTF-16BE BOM + lone high surrogate (D800) under `traced_test`.
+/// [T-GE015]
 #[tracing_test::traced_test]
 #[test]
 fn decode_bom_logs_debug_on_replacement_characters() {

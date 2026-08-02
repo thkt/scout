@@ -169,7 +169,7 @@ fn decode_content_handles_base64() {
     );
 }
 
-/// [T-GHH015] decode_content auto-detects Shift_JIS without a hint
+/// [T-GHH015]
 #[test]
 fn decode_content_decodes_shift_jis_without_hint() {
     // [Phase 1-B] delegate to decode_bytes: chardetng auto-detects Shift_JIS

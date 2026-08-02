@@ -1,6 +1,6 @@
 use super::*;
 
-/// [T-F043] t009_launch_args_contain_security_flags
+/// [T-F043]
 #[test]
 fn t009_launch_args_contain_security_flags() {
     let args = build_launch_args(0);

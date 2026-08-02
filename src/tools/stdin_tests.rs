@@ -1,4 +1,4 @@
-/// [T-SR001] StdinResolver: first arg consumes stdin, second uses its own value
+/// [T-SR001]
 #[test]
 fn stdin_resolver_first_consumes_second_uses_arg() {
     let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
@@ -22,7 +22,7 @@ fn stdin_resolver_arg_wins_stdin_preserved() {
     assert_eq!(second, "from_stdin");
 }
 
-/// [T-SR003] StdinResolver: second arg fails when stdin already consumed
+/// [T-SR003]
 #[test]
 fn stdin_resolver_consumed_stdin_fails_second() {
     let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
@@ -53,7 +53,7 @@ fn stdin_resolver_consumed_error_hints_stdin_exhausted() {
     );
 }
 
-/// [T-SR004] StdinResolver: both args provided, stdin unused
+/// [T-SR004]
 #[test]
 fn stdin_resolver_both_args_stdin_unused() {
     let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
