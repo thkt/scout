@@ -374,6 +374,41 @@ fn localhost_hostname_fetch_exits_65_data_error() {
     );
 }
 
+// T-C018 (T-004): --js 指定でも literal loopback への fetch は exit 65 と
+// DATA_ERROR になる。`ssrf_check` (src/fetch.rs) runs before `fetch_page` ever
+// calls `fetch_with_cdp`, so the rejection fires before chromium launches — the
+// SOCKS5 hop the CDP path would otherwise open (ADR-0021) never runs. Gated on
+// `js-rendering` because without the feature `--js` short-circuits to
+// `BrowserNotFound` (USAGE_ERROR) ahead of `ssrf_check`, which would assert a
+// different contract than the one under test; ci.yml's `--features
+// js-rendering` job is what runs this test.
+#[cfg(feature = "js-rendering")]
+#[test]
+fn js_flag_literal_loopback_fetch_exits_65_data_error() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch --js failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "literal loopback fetch with --js should exit 65 (EX_DATAERR) without \
+         ever launching chromium, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "literal loopback should classify as DATA_ERROR even with --js, got: {value}"
+    );
+}
+
 // T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)
 #[test]
 fn json_error_envelope_is_single_line() {
