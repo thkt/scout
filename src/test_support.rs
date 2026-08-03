@@ -39,16 +39,21 @@ pub(crate) fn no_redirect_client() -> Client {
 /// Produce a real "connection refused" `reqwest::Error` deterministically:
 /// reserve a loopback port, then drop the listener so the port closes
 /// synchronously (no async shutdown race, unlike `MockServer`), and GET it.
-pub(crate) async fn connection_refused_error() -> reqwest::Error {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+///
+/// Returns `None` when loopback bind is unavailable so callers can
+/// early-return in restricted environments, matching `try_spawn_mock_server`.
+pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest::Error> {
+    let listener = bind_loopback(test_name)?;
     let addr = listener.local_addr().expect("local_addr");
     drop(listener);
 
-    Client::new()
-        .get(format!("http://{addr}/should-refuse"))
-        .send()
-        .await
-        .expect_err("request to dead port should fail")
+    Some(
+        Client::new()
+            .get(format!("http://{addr}/should-refuse"))
+            .send()
+            .await
+            .expect_err("request to dead port should fail"),
+    )
 }
 
 /// Mount a `users.info` responder that resolves every lookup to a name.
@@ -72,20 +77,17 @@ pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
 
 static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Spawn a wiremock server, returning `None` if loopback bind is unavailable.
-pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
-    let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
-    try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
-}
-
-/// Testable core: inject bind result and force flag to control skip-vs-panic.
-pub async fn try_spawn_with_bind(
+/// The single bind-failure decision every loopback-binding helper routes
+/// through, so a restricted environment produces one uniform outcome across
+/// the suite: skip (`None` + warn + skip counter), or a panic when
+/// `SCOUT_NETWORK_TESTS` asserts the network must exist.
+fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
     force: bool,
-) -> Option<MockServer> {
+) -> Option<TcpListener> {
     match bind_result {
-        Ok(listener) => Some(MockServer::builder().listener(listener).start().await),
+        Ok(listener) => Some(listener),
         Err(e) => {
             if force {
                 panic!(
@@ -99,6 +101,28 @@ pub async fn try_spawn_with_bind(
             None
         }
     }
+}
+
+/// Bind a loopback listener under the shared guard policy.
+fn bind_loopback(test_name: &str) -> Option<TcpListener> {
+    let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
+    guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
+}
+
+/// Spawn a wiremock server, returning `None` if loopback bind is unavailable.
+pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
+    let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
+    try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
+}
+
+/// Testable core: inject bind result and force flag to control skip-vs-panic.
+pub async fn try_spawn_with_bind(
+    test_name: &str,
+    bind_result: io::Result<TcpListener>,
+    force: bool,
+) -> Option<MockServer> {
+    let listener = guard_loopback_bind(test_name, bind_result, force)?;
+    Some(MockServer::builder().listener(listener).start().await)
 }
 
 /// One-shot server that accepts up to `accept_count` connections and replies
@@ -118,7 +142,7 @@ pub async fn try_spawn_with_bind(
 pub fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let listener = bind_loopback("spawn_mid_stream_drop_server")?;
     let addr = listener.local_addr().ok()?;
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = Arc::clone(&counter);
@@ -151,7 +175,7 @@ pub fn spawn_mid_stream_drop_server(
 /// early-return in restricted environments, matching
 /// `spawn_mid_stream_drop_server`.
 pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, JoinHandle<()>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let listener = bind_loopback("spawn_close_delimited_body_server")?;
     let addr = listener.local_addr().ok()?;
     let handle = thread::spawn(move || {
         // Single-shot: the test makes exactly one connection, so a failed
@@ -180,7 +204,7 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
 /// Returns `None` when loopback bind is unavailable so callers can early-return
 /// in restricted environments, matching `spawn_close_delimited_body_server`.
 pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<()>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let listener = bind_loopback("spawn_forward_proxy")?;
     let addr = listener.local_addr().ok()?;
     let body = body.to_owned();
     let handle = thread::spawn(move || {

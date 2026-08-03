@@ -95,13 +95,19 @@ fn io_errors_have_exit_code_74() {
 
 /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
+///
+/// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
+/// になる — the `SlackError::Network` row below carries a real connection-refused
+/// `reqwest::Error`, so the acceptance criterion lives in this case table.
 #[tokio::test]
 async fn temp_failure_errors_have_exit_code_75() {
-    // `SlackError::Network` now carries the raw `reqwest::Error`
-    // (`#[from]`), so this fixture needs a real connect-level failure
-    // instead of a string literal.
+    // `SlackError::Network` carries the raw `reqwest::Error`, so this
+    // fixture needs a real connect-level failure instead of a string literal.
     use crate::test_support::connection_refused_error;
-    let slack_network_err = connection_refused_error().await;
+    let Some(slack_network_err) = connection_refused_error("temp_failure_exit_code_75").await
+    else {
+        return;
+    };
 
     let cases: Vec<ScoutError> = vec![
         FetchError::Status(408).into(),
@@ -133,27 +139,6 @@ async fn temp_failure_errors_have_exit_code_75() {
             "should include retry hint: {err}"
         );
     }
-}
-
-// TcpListener::drop is synchronous, so the port is immediately closed
-// with no async shutdown race, mirroring T-ER009's fixture for FetchError.
-/// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint になる
-#[tokio::test]
-async fn slack_connection_refused_error_is_temp_failure_via_scout_error() {
-    use crate::test_support::connection_refused_error;
-
-    let reqwest_err = connection_refused_error().await;
-    let scout_err = ScoutError::from(SlackError::Network(reqwest_err));
-
-    assert_eq!(
-        scout_err.exit_code(),
-        75,
-        "expected EX_TEMPFAIL (75): {scout_err}"
-    );
-    assert!(
-        scout_err.to_string().contains("retry may succeed"),
-        "should include retry hint: {scout_err}"
-    );
 }
 
 /// [T-ER027] Exit 124 (GNU coreutils `timeout`) is split from TempFailure(75) so
@@ -195,28 +180,16 @@ fn non_transient_errors_are_not_retryable() {
     }
 }
 
-// TcpListener::drop is synchronous, so the port is immediately closed
-// with no async shutdown race (unlike MockServer).
 /// [T-ER009]
 #[tokio::test]
 async fn fetch_error_http_connection_refused_is_transient() {
-    use reqwest::Client;
-    use std::net::TcpListener;
-
     use crate::retry::is_transient_network;
+    use crate::test_support::connection_refused_error;
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-
-    let dead_url = format!("http://{addr}/should-refuse");
-
-    let client = Client::new();
-    let reqwest_err = client
-        .get(&dead_url)
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
+    let Some(reqwest_err) = connection_refused_error("fetch_error_http_connection_refused").await
+    else {
+        return;
+    };
 
     assert!(
         is_transient_network(&reqwest_err),

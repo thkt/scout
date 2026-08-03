@@ -117,12 +117,14 @@ fn rate_limited_is_temp_failure() {
 ///
 /// Superseded in kind coverage by [T-002], which also asserts the network
 /// hint; this fixture keeps the original connect-refused case so the
-/// `Network` variant's `#[from] reqwest::Error` construction stays exercised
+/// `Network` variant's `From<reqwest::Error>` construction stays exercised
 /// under its own test id.
 #[tokio::test]
 async fn network_is_temp_failure() {
-    let err = connection_refused_error().await;
-    let c = SlackError::Network(err).classify();
+    let Some(err) = connection_refused_error("network_is_temp_failure").await else {
+        return;
+    };
+    let c = SlackError::from(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
 }
 
@@ -177,7 +179,9 @@ async fn reqwest_timeout_error_classifies_as_timeout() {
 /// in `src/tools/errors/exit_code_tests.rs`).
 #[tokio::test]
 async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint() {
-    let err = connection_refused_error().await;
+    let Some(err) = connection_refused_error("reqwest_connection_refused_classifies").await else {
+        return;
+    };
     let c = SlackError::Network(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
     assert!(
