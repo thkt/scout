@@ -16,6 +16,7 @@
 //! its own suppression.
 #![allow(dead_code)]
 
+use std::env;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Output};
@@ -23,6 +24,37 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Mirrors `guard_loopback_bind` / `bind_loopback` in `src/test_support.rs`:
+/// one bind-failure decision for every loopback-binding helper here, so a
+/// restricted environment produces the same outcome across both crates —
+/// skip (`None` + warn + skip counter), or a panic when `SCOUT_NETWORK_TESTS`
+/// asserts the network must exist. Without this, a caller's
+/// `let Some(..) = spawn_mock_proxy(..) else { return; }` turns a lost bind
+/// into a file full of tests that pass while asserting nothing.
+///
+/// The warn goes to `eprintln!` rather than `tracing::warn!` as the mirrored
+/// original does: these `tests/*.rs` binaries install no tracing subscriber,
+/// so a `tracing` record would be dropped instead of reaching the operator
+/// deciding whether the skip was expected.
+fn bind_loopback(test_name: &str) -> Option<TcpListener> {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => Some(listener),
+        Err(e) => {
+            assert!(
+                env::var("SCOUT_NETWORK_TESTS").is_err(),
+                "[network-guard] {test_name}: bind failed and SCOUT_NETWORK_TESTS is set: {e}"
+            );
+            let count = NETWORK_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            eprintln!(
+                "[network-guard] {test_name}: loopback bind unavailable, early return ({count} skipped)"
+            );
+            None
+        }
+    }
+}
 
 /// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
 /// the lookup rule (`CARGO_BIN_EXE_scout`, set by Cargo for integration
@@ -68,8 +100,9 @@ pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
 ///   unlike `spawn_forward_proxy`'s `&str` body.
 ///
 /// Returns `(base_url, connection_count, join_handle)`, or `None` when
-/// loopback bind is unavailable, matching `spawn_forward_proxy`'s early
-/// return for restricted environments. `connection_count` increments once
+/// `bind_loopback` above skips for an unavailable loopback bind, matching
+/// `spawn_forward_proxy`'s early return for restricted environments.
+/// `connection_count` increments once
 /// per accepted connection, so a test that drives several requests (a proxy
 /// retry, several keep-alive-less calls, ...) through the returned base URL
 /// can assert how many dials actually reached the proxy.
@@ -84,7 +117,7 @@ pub fn spawn_mock_proxy(
     delay: Duration,
     body: &[u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let listener = bind_loopback("spawn_mock_proxy")?;
     let addr = listener.local_addr().ok()?;
     let connection_count = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&connection_count);
@@ -128,16 +161,16 @@ pub fn spawn_mock_proxy(
 /// status line ahead of `body`.
 ///
 /// Single-shot rather than looping (unlike `spawn_mock_proxy`): the `fetch`
-/// path this proves has no retry loop (`src/retry.rs`'s `retry_with` wires
-/// only the Brave/GitHub backends), so a caller of this helper never dials
-/// the mock proxy more than once.
+/// path this proves calls nothing from `src/retry.rs` at all, so a caller of
+/// this helper never dials the mock proxy more than once.
 ///
 /// Returns `(base_url, connection_count, join_handle)`, or `None` when
-/// loopback bind is unavailable, matching `spawn_mock_proxy`.
+/// `bind_loopback` above skips for an unavailable loopback bind, matching
+/// `spawn_mock_proxy`.
 pub fn spawn_mock_proxy_raw_response(
     raw_response: &'static [u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let listener = bind_loopback("spawn_mock_proxy_raw_response")?;
     let addr = listener.local_addr().ok()?;
     let connection_count = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&connection_count);
