@@ -32,28 +32,28 @@
 
 mod common;
 
+use common::{parse_envelope, scout};
 use std::env;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-fn scout() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_scout"))
-}
-
-/// Same rule as `tests/cli_integration.rs`'s `parse_envelope`: scan stderr
-/// line by line for the first line that parses as JSON, because
-/// `init_tracing`'s WARN/INFO lines share stderr with the envelope.
-fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .unwrap_or_else(|| {
-            panic!("{context} stderr should contain a JSON envelope line, got:\n{stderr}")
-        });
-    serde_json::from_str(line)
-        .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
+/// Runs `scout --json fetch http://example.com/` with a from-scratch
+/// environment (`PATH`/`HOME` restored so the OS proxy lookup and any config
+/// file it reads still resolve, everything else cleared so a var set in the
+/// invoking shell can't leak into the contract) plus `extra_env` layered on
+/// top. Shared by every scenario below, which differ only in `extra_env`.
+fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
+    let mut cmd = scout();
+    cmd.env_clear()
+        .env("PATH", env::var("PATH").unwrap_or_default())
+        .env("HOME", env::var("HOME").unwrap_or_default());
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    cmd.args(["--json", "fetch", "http://example.com/"])
+        .output()
+        .expect("scout --json fetch failed to run")
 }
 
 /// Drive `scout --json fetch` through `common::spawn_mock_proxy` answering
@@ -77,14 +77,7 @@ fn assert_proxy_status_maps_to(
         return; // loopback bind unavailable in this environment
     };
 
-    let output = scout()
-        .env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default())
-        .env("HTTP_PROXY", &proxy_url)
-        .args(["--json", "fetch", "http://example.com/"])
-        .output()
-        .expect("scout --json fetch failed to run");
+    let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
 
     assert_eq!(
         output.status.code(),
@@ -151,15 +144,10 @@ fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_12
         return; // loopback bind unavailable in this environment
     };
 
-    let output = scout()
-        .env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default())
-        .env("HTTP_PROXY", &proxy_url)
-        .env("SCOUT_FETCH_TIMEOUT_SECS", "1")
-        .args(["--json", "fetch", "http://example.com/"])
-        .output()
-        .expect("scout --json fetch failed to run");
+    let output = run_scout_fetch(&[
+        ("HTTP_PROXY", &proxy_url),
+        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
+    ]);
 
     assert_eq!(
         output.status.code(),
@@ -207,14 +195,7 @@ fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unkno
         return; // loopback bind unavailable in this environment
     };
 
-    let output = scout()
-        .env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default())
-        .env("HTTP_PROXY", &proxy_url)
-        .args(["--json", "fetch", "http://example.com/"])
-        .output()
-        .expect("scout --json fetch failed to run");
+    let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
 
     assert_eq!(
         output.status.code(),
@@ -257,14 +238,7 @@ fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unkno
 // not a builder-path regression.
 #[test]
 fn 不正な_http_proxy_値での起動は_exit_code_74_と_error_code_io_error_になる() {
-    let output = scout()
-        .env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default())
-        .env("HTTP_PROXY", "not a url with spaces")
-        .args(["--json", "fetch", "http://example.com/"])
-        .output()
-        .expect("scout --json fetch failed to run");
+    let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);
 
     assert_eq!(
         output.status.code(),

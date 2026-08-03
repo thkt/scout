@@ -8,13 +8,44 @@
 //! would put a test-only server on the library's public API), so it cannot be
 //! re-exported either. A helper `tests/` needs has to live here instead, even
 //! where it mirrors something `src/test_support.rs` already does.
+//!
+//! `mod common;` recompiles this file separately per `tests/*.rs` binary, so
+//! an item only one binary calls reads as dead code in every other binary
+//! that also includes the module. `dead_code` is silenced at module level
+//! rather than per item so a helper added for a future binary doesn't need
+//! its own suppression.
+#![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::process::{Command, Output};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+/// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
+/// the lookup rule (`CARGO_BIN_EXE_scout`, set by Cargo for integration
+/// tests) lives in one place instead of once per test binary.
+pub fn scout() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_scout"))
+}
+
+/// Every `--json` error test needs the envelope line before it can assert
+/// anything, so the rule for finding it — scan stderr line by line for the
+/// first line that parses as JSON, because `init_tracing`'s WARN/INFO lines
+/// share stderr with the envelope — lives here once.
+pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("{context} stderr should contain a JSON envelope line, got:\n{stderr}")
+        });
+    serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
+}
 
 /// Forward proxy mock that loops `accept` instead of serving one connection,
 /// so a client that re-dials (retry after failure, connection churn, ...)
