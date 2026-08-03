@@ -15,8 +15,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_API_RESPONSE_BYTES, parse_retry_after, read_body_capped, retry_after_within_cap,
-    retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
+    retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -198,8 +198,7 @@ impl SlackClient {
         method: &str,
         params: &[(&str, &str)],
     ) -> Result<T, SlackError> {
-        let mut url = url::Url::parse(&format!("{}/{method}", self.base_url))
-            .map_err(|e| SlackError::Network(e.to_string()))?;
+        let mut url = url::Url::parse(&format!("{}/{method}", self.base_url))?;
         for (k, v) in params {
             url.query_pairs_mut().append_pair(k, v);
         }
@@ -213,8 +212,7 @@ impl SlackClient {
             .get(url)
             .header("Authorization", format!("Bearer {}", self.token.expose()))
             .send()
-            .await
-            .map_err(|e| SlackError::Network(e.to_string()))?;
+            .await?;
 
         let retry_after = parse_retry_after(resp.headers(), self.clock.as_ref());
 
@@ -241,7 +239,7 @@ impl SlackClient {
                     "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
                 ))
             },
-            |e| SlackError::Network(e.to_string()),
+            SlackError::from,
         )
         .await?;
         // Schema fail → Decode (terminal); transport drop already mapped to
@@ -505,7 +503,13 @@ impl SlackClient {
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        SlackError::Network(_) | SlackError::Timeout(_) | SlackError::Server(_) => true,
+        SlackError::Timeout(_) | SlackError::Server(_) => true,
+        // Mirrors `BraveError`'s `is_retriable`: `Network` no longer blanket-
+        // retries now that it carries the raw `reqwest::Error` — an
+        // unclassifiable (Unknown) transport failure must not retry, so this
+        // asks the same transient check `Classification::from_reqwest` does
+        // rather than keeping a second, independently-maintained table.
+        SlackError::Network(e) => is_transient_network(e),
         _ => false,
     }
 }

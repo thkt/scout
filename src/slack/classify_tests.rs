@@ -1,3 +1,12 @@
+use std::net::TcpListener;
+use std::time::Duration;
+
+use wiremock::matchers::method;
+use wiremock::{Mock, ResponseTemplate};
+
+use crate::retry::is_transient_network;
+use crate::test_support::try_spawn_mock_server;
+
 use super::*;
 
 /// [T-SLC001]
@@ -106,9 +115,24 @@ fn rate_limited_is_temp_failure() {
 }
 
 /// [T-SLC007] Network classifies as TempFailure (network-class hint).
-#[test]
-fn network_is_temp_failure() {
-    let c = SlackError::Network("connection reset".into()).classify();
+///
+/// Superseded in kind coverage by [T-002], which also asserts the network
+/// hint; this fixture keeps the original connect-refused case so the
+/// `Network` variant's `#[from] reqwest::Error` construction stays exercised
+/// under its own test id.
+#[tokio::test]
+async fn network_is_temp_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    drop(listener);
+
+    let err = reqwest::Client::new()
+        .get(format!("http://{addr}/should-refuse"))
+        .send()
+        .await
+        .expect_err("request to dead port should fail");
+
+    let c = SlackError::Network(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
 }
 
@@ -123,5 +147,107 @@ fn timeout_is_timeout_kind() {
 #[test]
 fn decode_is_internal() {
     let c = SlackError::Decode("schema mismatch".into()).classify();
+    assert_eq!(c.kind, ErrorCode::Internal);
+}
+
+/// [T-001] connect または read の timeout に由来する reqwest error は Timeout(124) に分類される。
+///
+/// `classify` must delegate `Network` to `Classification::from_reqwest`
+/// (mirrors `BraveError::classify`'s `Self::Network(re) => Classification::from_reqwest(re)`),
+/// which checks `is_timeout()` before the transient check.
+#[tokio::test]
+async fn reqwest_timeout_error_classifies_as_timeout() {
+    let Some(server) = try_spawn_mock_server("slack::classify::timeout").await else {
+        return; // loopback bind unavailable — skip
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .expect("client build");
+    let err = client
+        .get(server.uri())
+        .send()
+        .await
+        .expect_err("request must time out");
+    assert!(err.is_timeout(), "fixture must be a timeout: {err}");
+
+    let c = SlackError::Network(err).classify();
+    assert_eq!(c.kind, ErrorCode::Timeout);
+}
+
+/// [T-002] 接続拒否に由来する reqwest error は TempFailure(75) と network hint に分類される。
+///
+/// Reserve-then-drop a loopback listener so the connect is refused
+/// deterministically (mirrors `fetch_error_http_connection_refused_is_transient`
+/// in `src/tools/errors/exit_code_tests.rs`).
+#[tokio::test]
+async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    drop(listener);
+
+    let err = reqwest::Client::new()
+        .get(format!("http://{addr}/should-refuse"))
+        .send()
+        .await
+        .expect_err("request to dead port should fail");
+
+    let c = SlackError::Network(err).classify();
+    assert_eq!(c.kind, ErrorCode::TempFailure);
+    assert!(
+        c.next_step
+            .as_deref()
+            .is_some_and(|h| h.contains("network")),
+        "expected network hint, got: {:?}",
+        c.next_step
+    );
+}
+
+/// [T-003] timeout でも transient でもない reqwest error は Unknown(104) に分類される。
+///
+/// A body-decode failure on a 2xx response is neither a timeout nor a
+/// transient transport fault (mirrors
+/// `unclassifiable_reqwest_error_is_unknown_across_backends` in
+/// `src/tools/errors/exit_code_tests.rs`, extended to the Slack backend).
+#[tokio::test]
+async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
+    let Some(server) = try_spawn_mock_server("slack::classify::unknown").await else {
+        return; // loopback bind unavailable — skip
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let resp = reqwest::Client::new()
+        .get(server.uri())
+        .send()
+        .await
+        .expect("mock server responds");
+    let err = resp
+        .json::<serde_json::Value>()
+        .await
+        .expect_err("body is not JSON");
+    assert!(!err.is_timeout(), "fixture must not be a timeout");
+    assert!(!is_transient_network(&err), "fixture must not be transient");
+
+    let c = SlackError::Network(err).classify();
+    assert_eq!(c.kind, ErrorCode::Unknown);
+}
+
+/// [T-004] URL 構築失敗は ParseUrl として Internal(70) に分類される。
+///
+/// Unlike `BraveError::ParseUrl` (DataError — base_url is caller-controlled),
+/// Slack's base_url is a `const`, so a parse failure is unreachable in
+/// production and is a scout-side bug, classified Internal per the contract.
+#[test]
+fn url_build_failure_classifies_as_parse_url_internal() {
+    let parse_err = url::Url::parse("not a url").expect_err("malformed url must fail to parse");
+    let c = SlackError::ParseUrl(parse_err).classify();
     assert_eq!(c.kind, ErrorCode::Internal);
 }

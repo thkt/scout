@@ -47,7 +47,15 @@ pub(crate) enum SlackError {
     Server(u16),
 
     #[error("Slack request failed: {0}")]
-    Network(String),
+    Network(#[from] reqwest::Error),
+
+    /// URL construction failure inside `client::api_get_once`. Unlike
+    /// `BraveError::ParseUrl` (DataError — Brave's `base_url` is caller-supplied),
+    /// Slack's `base_url` is a `const` (`client::API_BASE`), so this arm is
+    /// unreachable in production; a hit here is a scout-side bug, not a
+    /// user-facing data problem.
+    #[error("Invalid Slack API URL: {0}")]
+    ParseUrl(#[from] url::ParseError),
 
     #[error("Slack fetch timed out: {0}")]
     Timeout(String),
@@ -99,11 +107,15 @@ impl SlackError {
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
-            Self::Network(_) => Classification::transient_network(),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // (mirrors `BraveError::classify`'s `Self::Network(re) => Classification::from_reqwest(re)`).
+            Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
-            Self::Decode(_) => Classification::new(ErrorCode::Internal),
+            // Priority 5: INTERNAL — scout-side bug: unexpected schema (Decode)
+            // or a URL build failure (ParseUrl) unreachable in production
+            // because `base_url` is a `const`.
+            Self::Decode(_) | Self::ParseUrl(_) => Classification::new(ErrorCode::Internal),
         }
     }
 }
