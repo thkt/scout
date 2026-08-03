@@ -283,6 +283,97 @@ fn json_clap_parse_error_emits_envelope() {
     );
 }
 
+// T-C015 (T-001): proxy env なしの literal loopback への fetch は exit 65 と
+// DATA_ERROR と private IPs are blocked の next_step になる
+#[test]
+fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "literal loopback fetch with no proxy env set should exit 65 (EX_DATAERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "literal loopback should classify as DATA_ERROR, got: {value}"
+    );
+    assert!(
+        value["error"]["next_step"]
+            .as_str()
+            .is_some_and(|s| s.contains("private IPs are blocked")),
+        "next_step should state private IPs are blocked, got: {value}"
+    );
+}
+
+// T-C016 (T-002): HTTP_PROXY 設定下でも literal loopback への fetch は proxy へ
+// 接続せず exit 65 になる
+#[test]
+fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
+    let output = scout()
+        .env_clear()
+        // Port 1 on loopback has nothing listening, so if the literal-loopback
+        // rejection were skipped under Proxied egress, the process would fail
+        // fast with a connection error instead of hanging — the test stays
+        // deterministic either way.
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .args(["--json", "fetch", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "literal loopback fetch should exit 65 (EX_DATAERR) even with HTTP_PROXY set, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "literal loopback should classify as DATA_ERROR under Proxied egress too, got: {value}"
+    );
+}
+
+// T-C017 (T-003): localhost 名への fetch は exit 65 と DATA_ERROR になる
+#[test]
+fn localhost_hostname_fetch_exits_65_data_error() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "http://localhost/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "localhost hostname fetch should exit 65 (EX_DATAERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .expect("stderr should contain a JSON envelope line");
+    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "localhost hostname should classify as DATA_ERROR, got: {value}"
+    );
+}
+
 // T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)
 #[test]
 fn json_error_envelope_is_single_line() {
