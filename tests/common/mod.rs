@@ -88,3 +88,41 @@ pub fn spawn_mock_proxy(
     });
     Some((format!("http://{addr}"), connection_count, handle))
 }
+
+/// One-shot forward proxy mock that answers the single connection it accepts
+/// with `raw_response` written verbatim — no status line, no
+/// `Content-Length` framing added by this helper, unlike `spawn_mock_proxy`.
+/// Exercises the non-HTTP-bytes response path `spawn_mock_proxy` cannot
+/// reach, since that helper always writes a well-formed `HTTP/1.1 ...`
+/// status line ahead of `body`.
+///
+/// Single-shot rather than looping (unlike `spawn_mock_proxy`): the `fetch`
+/// path this proves has no retry loop (`src/retry.rs`'s `retry_with` wires
+/// only the Brave/GitHub backends), so a caller of this helper never dials
+/// the mock proxy more than once.
+///
+/// Returns `(base_url, connection_count, join_handle)`, or `None` when
+/// loopback bind is unavailable, matching `spawn_mock_proxy`.
+pub fn spawn_mock_proxy_raw_response(
+    raw_response: &'static [u8],
+) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let addr = listener.local_addr().ok()?;
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&connection_count);
+    let handle = thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            // Loopback bind unavailable races aside, a failed accept here is a
+            // test-environment fault; return rather than hang the caller.
+            return;
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+        // Drain the request so the write below is the response, not racing an
+        // unread request buffer, matching `spawn_mock_proxy`'s rationale.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(raw_response);
+        // stream drops here → connection closes after the raw bytes.
+    });
+    Some((format!("http://{addr}"), connection_count, handle))
+}

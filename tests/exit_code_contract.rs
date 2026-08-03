@@ -8,6 +8,27 @@
 //! so a test that happened to exit with the right code via a different path
 //! (e.g. the SSRF pre-check or a DNS failure short-circuiting before the
 //! proxy is ever dialed) cannot pass as a false positive for this contract.
+//!
+//! `T-005`/`T-006`/`T-007` extend the same end-to-end shape to the three exit
+//! codes an HTTP status can never produce: a proxy response slower than
+//! `src/tools/config.rs`'s `SCOUT_FETCH_TIMEOUT_SECS` (124, `T-005`), a proxy
+//! response that never parses as HTTP at all (104, `T-006`), and an
+//! `HTTP_PROXY` value `src/fetch/ssrf.rs`'s `detect_egress_mode` reads but
+//! `reqwest::Proxy::all` cannot parse (74, `T-007`). None of the three sets
+//! `SCOUT_MAX_RETRIES`: the `fetch` path these tests exercise has no retry
+//! loop (`src/retry.rs`'s `retry_with` is wired to the Brave/GitHub backends
+//! only), so there is nothing for that env var to change here.
+//!
+//! Exit 70 (`ErrorCode::Internal`, EX_SOFTWARE) is out of scope for this file
+//! on purpose, not by oversight: every constructor of it (`SlackError::Decode`
+//! / `ParseUrl`, `BraveError::ParseJson` / `ResponseTooLarge`,
+//! `GitHubError::Decode` / `ResponseTooLarge`) sits in a non-`fetch` backend's
+//! JSON-deserialize path, and `FetchError::classify` (src/fetch.rs) has no arm
+//! that reaches `Internal` at all. None of those backends expose an env var
+//! this file's proxy/timeout harness can turn into a deterministic
+//! malformed-JSON response the way `HTTP_PROXY` and
+//! `SCOUT_FETCH_TIMEOUT_SECS` do here, so 70 has no external construction path
+//! through this contract's fetch-only surface.
 
 mod common;
 
@@ -109,4 +130,153 @@ fn proxy_経由の_400_応答は_exit_code_65_と_error_code_data_error_にな�
 #[test]
 fn proxy_経由の_500_応答は_exit_code_75_と_error_code_temp_failure_になる() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
+}
+
+// [T-005] proxy の応答遅延が SCOUT_FETCH_TIMEOUT_SECS を超えると exit code 124 と error.code TIMEOUT になる
+//
+// `Scout::fetch` (src/tools/query.rs) wraps `fetch_page` in
+// `tokio::time::timeout(self.config.fetch_timeout, ..)`; a slower response
+// fires that call's own `Err(FetchError::Timeout(..))` fallback, which
+// `FetchError::classify`'s `Self::Timeout(_) => Classification::timeout_retry()`
+// arm (src/fetch.rs) turns into exit 124. `SCOUT_FETCH_TIMEOUT_SECS=1` is the
+// lowest value `src/tools/config.rs`'s `parse_timeout` accepts
+// (`TIMEOUT_MIN_SECS`), so a 2s mock-proxy delay clears it with margin without
+// slowing the suite more than necessary.
+#[test]
+fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_124_と_error_code_timeout_になる()
+ {
+    let Some((proxy_url, connection_count, _handle)) =
+        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
+    else {
+        return; // loopback bind unavailable in this environment
+    };
+
+    let output = scout()
+        .env_clear()
+        .env("PATH", env::var("PATH").unwrap_or_default())
+        .env("HOME", env::var("HOME").unwrap_or_default())
+        .env("HTTP_PROXY", &proxy_url)
+        .env("SCOUT_FETCH_TIMEOUT_SECS", "1")
+        .args(["--json", "fetch", "http://example.com/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(124),
+        "a proxy response slower than SCOUT_FETCH_TIMEOUT_SECS should exit 124 (GNU coreutils \
+         timeout convention), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = parse_envelope(&output, "slow proxy response");
+    assert_eq!(
+        value["error"]["code"], "TIMEOUT",
+        "a fetch exceeding SCOUT_FETCH_TIMEOUT_SECS should classify as TIMEOUT, got: {value}"
+    );
+
+    assert!(
+        connection_count.load(Ordering::SeqCst) >= 1,
+        "expected the proxy to have been dialed at least once — a 0 count would mean the \
+         timeout fired before the request ever reached the proxy, which would not prove the \
+         SCOUT_FETCH_TIMEOUT_SECS path this test targets"
+    );
+}
+
+// [T-006] proxy が非 HTTP バイト列を返すと exit code 104 と error.code UNKNOWN になる
+//
+// Reached through `FetchError::Http(re) => Classification::from_reqwest(re)`
+// (src/fetch.rs), not the ADR-0003 status table `T-001`–`T-004` exercise: a
+// response with no status line has no `Status(u16)` to classify.
+//
+// reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock, verified
+// this session — see notes) this malformed proxy response surfaces as a
+// `SendRequest` / "invalid HTTP version parsed" `reqwest::Error` with
+// `is_decode() == false`, `is_connect() == false`, `is_timeout() == false`, so
+// none of `retry::is_transient_network`'s checks fire and
+// `Classification::from_reqwest` falls to its `Unknown` retreat slot. A
+// reqwest upgrade that reclassifies this exact byte sequence so
+// `is_decode()`/`is_connect()`/`is_timeout()` turns true would move the exit
+// code to 75 or 124 (`TempFailure`/`Timeout`); that is a test-update event for
+// this test's fixture, not a regression in `from_reqwest` itself.
+#[test]
+fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unknown_になる() {
+    let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
+        b"not an http response at all, just garbage bytes\r\n\r\n",
+    ) else {
+        return; // loopback bind unavailable in this environment
+    };
+
+    let output = scout()
+        .env_clear()
+        .env("PATH", env::var("PATH").unwrap_or_default())
+        .env("HOME", env::var("HOME").unwrap_or_default())
+        .env("HTTP_PROXY", &proxy_url)
+        .args(["--json", "fetch", "http://example.com/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(104),
+        "a non-HTTP proxy response should exit 104 (PJ extension, unclassifiable failure per \
+         ADR-0002), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = parse_envelope(&output, "non-HTTP proxy response");
+    assert_eq!(
+        value["error"]["code"], "UNKNOWN",
+        "a non-HTTP proxy response should classify as UNKNOWN, got: {value}"
+    );
+
+    assert!(
+        connection_count.load(Ordering::SeqCst) >= 1,
+        "expected at least one connection to reach the mock proxy — a 0 count means the exit \
+         code above did not travel through the proxy response path"
+    );
+}
+
+// [T-007] 不正な HTTP_PROXY 値での起動は exit code 74 と error.code IO_ERROR になる
+//
+// Proven through `build_default_clients`'s own
+// `Proxy::all(url).map_err(|e| ScoutError::io_error(..))` arm
+// (src/tools/builder.rs), not through `FetchError::classify` /
+// `Classification::from_reqwest` (the reqwest-error priority table `T-006`
+// exercises): `ScoutBuilder::from_env` runs inside `Scout::new()` before
+// `cli.command` ever dispatches to a handler (src/lib.rs), so this failure
+// happens before any command handler or proxy connection — no mock proxy is
+// spawned for this test, unlike every other scenario in this file.
+//
+// reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock),
+// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all> does not
+// document which URL forms it accepts or rejects (checked this session, nothing
+// on the page states it — see notes), so the literal value below was confirmed
+// empirically this session, not from that page. A reqwest upgrade that starts
+// accepting this exact literal is a test-update event for this test's fixture,
+// not a builder-path regression.
+#[test]
+fn 不正な_http_proxy_値での起動は_exit_code_74_と_error_code_io_error_になる() {
+    let output = scout()
+        .env_clear()
+        .env("PATH", env::var("PATH").unwrap_or_default())
+        .env("HOME", env::var("HOME").unwrap_or_default())
+        .env("HTTP_PROXY", "not a url with spaces")
+        .args(["--json", "fetch", "http://example.com/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(74),
+        "an HTTP_PROXY value reqwest::Proxy::all cannot parse should fail client construction \
+         (exit 74 EX_IOERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = parse_envelope(&output, "invalid HTTP_PROXY value");
+    assert_eq!(
+        value["error"]["code"], "IO_ERROR",
+        "invalid HTTP_PROXY should classify as IO_ERROR, got: {value}"
+    );
 }
