@@ -17,7 +17,7 @@
 #![allow(dead_code)]
 
 use std::env;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -39,14 +39,23 @@ static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// original does: these `tests/*.rs` binaries install no tracing subscriber,
 /// so a `tracing` record would be dropped instead of reaching the operator
 /// deciding whether the skip was expected.
-fn bind_loopback(test_name: &str) -> Option<TcpListener> {
-    match TcpListener::bind("127.0.0.1:0") {
+///
+/// `bind_result` and `force` are parameters rather than read inside, matching
+/// `try_spawn_with_bind` in the original, so the skip-vs-panic decision can be
+/// driven from a test without an environment that actually refuses to bind.
+fn guard_loopback_bind(
+    test_name: &str,
+    bind_result: io::Result<TcpListener>,
+    force: bool,
+) -> Option<TcpListener> {
+    match bind_result {
         Ok(listener) => Some(listener),
         Err(e) => {
-            assert!(
-                env::var("SCOUT_NETWORK_TESTS").is_err(),
-                "[network-guard] {test_name}: bind failed and SCOUT_NETWORK_TESTS is set: {e}"
-            );
+            if force {
+                panic!(
+                    "[network-guard] {test_name}: bind failed and SCOUT_NETWORK_TESTS is set: {e}"
+                );
+            }
             let count = NETWORK_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             eprintln!(
                 "[network-guard] {test_name}: loopback bind unavailable, early return ({count} skipped)"
@@ -54,6 +63,12 @@ fn bind_loopback(test_name: &str) -> Option<TcpListener> {
             None
         }
     }
+}
+
+/// Bind a loopback listener under the guard policy above.
+fn bind_loopback(test_name: &str) -> Option<TcpListener> {
+    let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
+    guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
 }
 
 /// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
@@ -102,10 +117,10 @@ pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
 /// Returns `(base_url, connection_count, join_handle)`, or `None` when
 /// `bind_loopback` above skips for an unavailable loopback bind, matching
 /// `spawn_forward_proxy`'s early return for restricted environments.
-/// `connection_count` increments once
-/// per accepted connection, so a test that drives several requests (a proxy
-/// retry, several keep-alive-less calls, ...) through the returned base URL
-/// can assert how many dials actually reached the proxy.
+/// `connection_count` increments once per accepted connection, so a test that
+/// drives several requests (a proxy retry, several keep-alive-less calls, ...)
+/// through the returned base URL can assert how many dials actually reached
+/// the proxy.
 ///
 /// The accept loop has no exit condition other than a fatal `accept` error
 /// (e.g. the OS closing the socket), so in the happy path the spawned thread
@@ -189,4 +204,30 @@ pub fn spawn_mock_proxy_raw_response(
         // stream drops here → connection closes after the raw bytes.
     });
     Some((format!("http://{addr}"), connection_count, handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bind_refused() -> io::Result<TcpListener> {
+        Err(io::Error::other("bind refused"))
+    }
+
+    // T-C027: forced_run_panics_when_loopback_bind_fails
+    //
+    // The branch the callers cannot reach on their own: every `spawn_mock_proxy`
+    // caller turns `None` into an early return, so without this the guard could
+    // stop panicking and the suite would still be green while asserting nothing.
+    #[test]
+    #[should_panic(expected = "SCOUT_NETWORK_TESTS is set")]
+    fn forced_run_panics_when_loopback_bind_fails() {
+        guard_loopback_bind("forced_run", bind_refused(), true);
+    }
+
+    // T-C028: unforced_run_skips_when_loopback_bind_fails
+    #[test]
+    fn unforced_run_skips_when_loopback_bind_fails() {
+        assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
+    }
 }
