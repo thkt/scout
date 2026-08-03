@@ -75,7 +75,7 @@ fn assert_proxy_status_maps_to(
     let Some((proxy_url, connection_count, _handle)) =
         common::spawn_mock_proxy(proxy_status, Duration::ZERO, b"upstream response body")
     else {
-        return; // loopback bind unavailable in this environment
+        return; // bind_loopback ruled this a skip, not a failure
     };
 
     let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
@@ -141,7 +141,7 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     let Some((proxy_url, connection_count, _handle)) =
         common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
     else {
-        return; // loopback bind unavailable in this environment
+        return; // bind_loopback ruled this a skip, not a failure
     };
 
     let output = run_scout_fetch(&[
@@ -177,9 +177,9 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
 // (src/fetch.rs), not the ADR-0003 status table `T-C020`–`T-C023` exercise: a
 // response with no status line has no `Status(u16)` to classify.
 //
-// reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock, verified
-// this session — see notes) this malformed proxy response surfaces as a
-// `SendRequest` / "invalid HTTP version parsed" `reqwest::Error` with
+// reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock) this
+// malformed proxy response surfaces as a `SendRequest` / "invalid HTTP
+// version parsed" `reqwest::Error` with
 // `is_decode() == false`, `is_connect() == false`, `is_timeout() == false`, so
 // none of `retry::is_transient_network`'s checks fire and
 // `Classification::from_reqwest` falls to its `Unknown` retreat slot. A
@@ -192,7 +192,7 @@ fn non_http_proxy_response_exits_104_unknown() {
     let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
         b"not an http response at all, just garbage bytes\r\n\r\n",
     ) else {
-        return; // loopback bind unavailable in this environment
+        return; // bind_loopback ruled this a skip, not a failure
     };
 
     let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
@@ -231,11 +231,10 @@ fn non_http_proxy_response_exits_104_unknown() {
 //
 // reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock),
 // <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all> does not
-// document which URL forms it accepts or rejects (checked this session, nothing
-// on the page states it — see notes), so the literal value below was confirmed
-// empirically this session, not from that page. A reqwest upgrade that starts
-// accepting this exact literal is a test-update event for this test's fixture,
-// not a builder-path regression.
+// document which URL forms it accepts or rejects, so the literal value below
+// was confirmed empirically rather than read off that page. A reqwest upgrade
+// that starts accepting this exact literal is a test-update event for this
+// test's fixture, not a builder-path regression.
 #[test]
 fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);

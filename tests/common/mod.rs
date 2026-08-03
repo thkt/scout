@@ -40,9 +40,9 @@ static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// so a `tracing` record would be dropped instead of reaching the operator
 /// deciding whether the skip was expected.
 ///
-/// `bind_result` and `force` are parameters rather than read inside, matching
-/// `try_spawn_with_bind` in the original, so the skip-vs-panic decision can be
-/// driven from a test without an environment that actually refuses to bind.
+/// `bind_result` and `force` arrive as parameters, matching
+/// `try_spawn_with_bind` in the original, so a test can drive the skip-vs-panic
+/// decision without an environment that actually refuses to bind.
 fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -104,15 +104,13 @@ pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
 /// becomes a loop, and the fixed 200/no-delay/text-body response becomes the
 /// caller-supplied `status` / `delay` / `body` below.
 ///
-/// - `status`: the numeric status line code the response opens with (e.g.
-///   `200`, `503`). The reason phrase is always written as `OK` regardless of
-///   `status`; a caller asserting on the reason phrase itself needs a
-///   different helper.
-/// - `delay`: sleep before writing the response, so a caller can simulate a
-///   slow proxy or upstream.
-/// - `body`: written verbatim after a `Content-Length` header sized to it, so
-///   arbitrary (including non-UTF-8) payloads round-trip byte for byte —
-///   unlike `spawn_forward_proxy`'s `&str` body.
+/// - `status`: the numeric status line code the response opens with. The
+///   reason phrase is always written as `OK` regardless of `status`; a caller
+///   asserting on the reason phrase itself needs a different helper.
+/// - `delay`: slept through after the request is drained and before the
+///   response is written.
+/// - `body`: written verbatim after a `Content-Length` header sized to it —
+///   unlike `spawn_forward_proxy`'s `&str` body, a non-UTF-8 payload survives.
 ///
 /// Returns `(base_url, connection_count, join_handle)`, or `None` when
 /// `bind_loopback` above skips for an unavailable loopback bind, matching
@@ -123,10 +121,8 @@ pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
 /// the proxy.
 ///
 /// The accept loop has no exit condition other than a fatal `accept` error
-/// (e.g. the OS closing the socket), so in the happy path the spawned thread
-/// runs until the test process itself exits — `join_handle` is returned for
-/// completeness and for a caller that wants to detect that fatal-error exit,
-/// not for a caller to `.join()` and wait on, which would hang.
+/// (e.g. the OS closing the socket), so `join_handle` is not for a caller to
+/// `.join()` and wait on, which would hang until the test process exits.
 pub fn spawn_mock_proxy(
     status: u16,
     delay: Duration,
@@ -160,9 +156,9 @@ pub fn spawn_mock_proxy(
             .into_bytes();
             response.extend_from_slice(&body);
             let _ = stream.write_all(&response);
-            // stream drops here → connection closes after the framed body,
-            // which is what forces a keep-alive-unaware client to re-dial
-            // for its next request and exercise the accept loop again.
+            // Dropping the stream per iteration is what forces a
+            // keep-alive-unaware client to re-dial for its next request and
+            // exercise the accept loop again.
         }
     });
     Some((format!("http://{addr}"), connection_count, handle))
@@ -201,7 +197,6 @@ pub fn spawn_mock_proxy_raw_response(
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
         let _ = stream.write_all(raw_response);
-        // stream drops here → connection closes after the raw bytes.
     });
     Some((format!("http://{addr}"), connection_count, handle))
 }
