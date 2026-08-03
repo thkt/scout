@@ -21,8 +21,8 @@ use reqwest::Client;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
+use crate::classify::Classification;
 use crate::envelope::ErrorCode;
-use crate::tools::Classification;
 
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;

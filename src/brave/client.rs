@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 use tracing::{info, warn};
 
+use crate::classify::Classification;
 use crate::clock::{Clock, SystemClock};
 use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
@@ -16,7 +17,6 @@ use crate::retry::{
     retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
-use crate::tools::Classification;
 
 use super::types::{SearchResult, WebSearchResponse};
 
