@@ -1,7 +1,22 @@
 use std::process::Command;
+use std::process::Output;
 
 fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
+}
+
+/// Every `--json` error test needs the envelope line before it can assert
+/// anything, so the rule for finding it lives here once.
+fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("{context} stderr should contain a JSON envelope line, got:\n{stderr}")
+        });
+    serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
 }
 
 // T-C001: help_exits_zero_and_contains_app_name
@@ -196,12 +211,7 @@ fn json_emits_envelope_on_error() {
         Some(65),
         "malformed owner/repo should still exit 65 (EX_DATAERR) in --json mode"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "malformed owner/repo");
     assert_eq!(
         value["error"]["code"], "DATA_ERROR",
         "code should be DATA_ERROR per ADR-0010, got: {value}"
@@ -241,12 +251,7 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
         Some(64),
         "missing API key → exit 64 (EX_USAGE)"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "missing API key");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
         "missing API key is a usage problem per ADR-0011 priority 1, got: {value}"
@@ -271,16 +276,165 @@ fn json_clap_parse_error_emits_envelope() {
         Some(64),
         "clap parse error should exit 64 (EX_USAGE per ADR-0002)"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line for clap parse errors");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "clap parse error");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
         "clap parse error should be USAGE_ERROR per ADR-0011 priority 1, got: {value}"
     );
+}
+
+/// Exit 65 alone cannot distinguish the SSRF rejection from any other
+/// `DataError` variant reachable on these paths, so the code and next_step
+/// asserts below are what pin the contract.
+fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "{form_name} literal loopback fetch should exit 65 (EX_DATAERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = parse_envelope(output, form_name);
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "{form_name} literal loopback should classify as DATA_ERROR, got: {value}"
+    );
+    assert!(
+        value["error"]["next_step"]
+            .as_str()
+            .is_some_and(|s| s.contains("private IPs are blocked")),
+        "{form_name} next_step should state private IPs are blocked, got: {value}"
+    );
+    value
+}
+
+// T-C015: direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked
+#[test]
+fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_reject_envelope(&output, "Direct");
+}
+
+// T-C016: http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy
+#[test]
+fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
+    let output = scout()
+        .env_clear()
+        // Port 1 on loopback has nothing listening, so if the literal-loopback
+        // rejection were skipped under Proxied egress, the process would fail
+        // fast with a connection error instead of hanging.
+        //
+        // Scope: this catches only the rejection moving after the Proxied
+        // branch. It cannot tell which egress mode was selected, because
+        // rejection precedes either branch dialing and both modes therefore
+        // produce the same envelope. Mode selection is pinned by
+        // detect_egress_mode's own tests.
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .args(["--json", "fetch", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_reject_envelope(&output, "Proxied");
+}
+
+// T-C017: localhost_hostname_fetch_exits_65_data_error — Host::Domain arm, not the IP-literal one
+#[test]
+fn localhost_hostname_fetch_exits_65_data_error() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "http://localhost/"])
+        .output()
+        .expect("scout --json fetch failed to run");
+    assert_reject_envelope(&output, "localhost hostname");
+}
+
+// T-C018: js_flag_literal_loopback_fetch_exits_65_data_error — `ssrf_check`
+// (src/fetch.rs) runs before `fetch_page` ever calls `fetch_with_cdp`, so the
+// rejection fires before chromium launches and the SOCKS5 hop the CDP path
+// would otherwise open (ADR-0021) never runs. Gated on `js-rendering` because
+// without the feature `--js` short-circuits to `BrowserNotFound`
+// (USAGE_ERROR) ahead of `ssrf_check`, asserting a different contract than the
+// one under test.
+#[cfg(feature = "js-rendering")]
+#[test]
+fn js_flag_literal_loopback_fetch_exits_65_data_error() {
+    let output = scout()
+        .env_clear()
+        .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
+        .output()
+        .expect("scout --json fetch --js failed to run");
+    assert_reject_envelope(&output, "--js");
+}
+
+// T-C019: direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url
+//
+// A launch form that stops sharing the SSRF rejection path fails here even
+// though its own T-C015/T-C016/T-C018 test still passes in isolation. The
+// `--js` row is added only when `js-rendering` is compiled in, for the same
+// `BrowserNotFound` reason as T-C018; Direct vs Proxied still runs in the
+// default job. `cfg!` rather than `#[cfg]` keeps the push in the AST so
+// neither `mut` nor `LaunchForm` reads as unused under the default features.
+struct LaunchForm {
+    name: &'static str,
+    args: Vec<&'static str>,
+    env: Vec<(&'static str, &'static str)>,
+}
+
+#[test]
+fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url() {
+    let mut forms = vec![
+        LaunchForm {
+            name: "Direct",
+            args: vec![],
+            env: vec![],
+        },
+        LaunchForm {
+            name: "Proxied",
+            args: vec![],
+            // Port 1 and the scope caveat that comes with it: see T-C016.
+            env: vec![("HTTP_PROXY", "http://127.0.0.1:1")],
+        },
+    ];
+    if cfg!(feature = "js-rendering") {
+        forms.push(LaunchForm {
+            name: "--js",
+            args: vec!["--js"],
+            env: vec![],
+        });
+    }
+
+    let mut envelopes: Vec<(&str, serde_json::Value)> = Vec::new();
+    for form in &forms {
+        let mut cmd = scout();
+        cmd.env_clear();
+        for (key, val) in &form.env {
+            cmd.env(key, val);
+        }
+        cmd.arg("--json").arg("fetch");
+        for arg in &form.args {
+            cmd.arg(arg);
+        }
+        cmd.arg("http://127.0.0.1/");
+        let output = cmd
+            .output()
+            .unwrap_or_else(|e| panic!("scout --json fetch ({}) failed to run: {e}", form.name));
+        let envelope = assert_reject_envelope(&output, form.name);
+        envelopes.push((form.name, envelope));
+    }
+
+    let (baseline_name, baseline) = &envelopes[0];
+    for (name, envelope) in &envelopes[1..] {
+        assert_eq!(
+            envelope["error"]["code"], baseline["error"]["code"],
+            "{name} should return the same error.code as {baseline_name}, got: {envelope}"
+        );
+        assert_eq!(
+            envelope["error"]["next_step"], baseline["error"]["next_step"],
+            "{name} should return the same next_step as {baseline_name}, got: {envelope}"
+        );
+    }
 }
 
 // T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)

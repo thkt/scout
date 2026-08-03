@@ -87,8 +87,7 @@ async fn accept_loop(
 /// connect-time validation gate: callers must validate `dial_addr` first.
 ///
 /// Generic over the client stream so a refused-dial reply can be asserted with a
-/// loopback `TcpStream` pair while the success/tunnel path stays covered by the
-/// chromium e2e (T-201-7).
+/// loopback `TcpStream` pair.
 pub(super) async fn dial_and_tunnel<S>(client: &mut S, dial_addr: SocketAddr) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
