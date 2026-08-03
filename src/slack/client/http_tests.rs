@@ -726,3 +726,97 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
         "the pure mention must be evicted past the full cap and render raw: {out}"
     );
 }
+
+/// [T-005] api error internal_error は一度再試行され 2 回目の成功レスポンスが返る
+///
+/// `internal_error` classifies as TempFailure (per `SlackError::classify`'s
+/// `Api` string table), so `is_retriable` must derive from `classify().kind`
+/// rather than a second, independently-maintained table that never listed the
+/// `Api` variant at all.
+#[tokio::test]
+async fn api_error_internal_error_retries_once_then_succeeds() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "internal_error"})),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<DummyBody, _> = client.api_get("test.method", &[]).await;
+    assert!(
+        result.is_ok(),
+        "internal_error should retry once and return the second call's success, got: {result:?}"
+    );
+}
+
+/// [T-006] timeout でも transient でもない transport error は再試行されず 1 回で返る
+///
+/// A redirect loop is neither `is_timeout()` nor `is_transient_network()`
+/// (not connect, not a transport-IO decode failure), so it classifies as
+/// Unknown — the escape hatch `Classification::from_reqwest` reserves for an
+/// unrecognized transport failure — and must not retry.
+#[tokio::test]
+async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/test.method"))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a redirect loop must not resolve to a body");
+    assert!(
+        matches!(err, SlackError::Network(ref e) if e.is_redirect()),
+        "expected a redirect-loop Network error, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::Unknown,
+        "a redirect loop is neither timeout nor transient"
+    );
+    assert!(
+        !is_retriable(&err),
+        "an unclassifiable transport failure must not retry"
+    );
+}
+
+/// [T-007] 2xx の mid-stream body 切断は Network に落ち TempFailure に分類される
+///
+/// Mirrors `api_get_once_2xx_mid_stream_drop_returns_network` (T-SK030), and
+/// additionally pins the classification: a transport-IO drop must land in
+/// TempFailure (retriable), not Decode (schema drift, terminal).
+#[tokio::test]
+async fn mid_stream_body_drop_classifies_as_temp_failure() {
+    let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
+        return;
+    };
+    let client = SlackClient::with_base_url(Client::new(), &url);
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a mid-stream drop must not resolve to a body");
+    assert!(
+        matches!(err, SlackError::Network(_)),
+        "expected SlackError::Network for mid-stream drop, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::TempFailure,
+        "a transport-IO drop is retriable, not a scout-side schema bug"
+    );
+    let _ = handle.join();
+}

@@ -11,12 +11,13 @@ use serde::de::DeserializeOwned;
 use tracing::{info, warn};
 
 use crate::clock::{Clock, SystemClock};
+use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
-    retry_after_within_cap, retry_with_rate_limit,
+    MAX_API_RESPONSE_BYTES, parse_retry_after, read_body_capped, retry_after_within_cap,
+    retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
@@ -500,17 +501,18 @@ impl SlackClient {
     }
 }
 
+/// Retry eligibility, derived from [`SlackError::classify`] so retryability
+/// stays a single source of truth (mirrors `BraveError::is_degradable`):
+/// only `TempFailure`/`Timeout` retry. `RateLimited` is the one exception —
+/// its cap check needs the raw `retry_after` value that `classify()` doesn't
+/// carry through, so it stays its own arm ahead of the derived fallback.
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        SlackError::Timeout(_) | SlackError::Server(_) => true,
-        // Mirrors `BraveError`'s `is_retriable`: `Network` no longer blanket-
-        // retries now that it carries the raw `reqwest::Error` — an
-        // unclassifiable (Unknown) transport failure must not retry, so this
-        // asks the same transient check `Classification::from_reqwest` does
-        // rather than keeping a second, independently-maintained table.
-        SlackError::Network(e) => is_transient_network(e),
-        _ => false,
+        _ => matches!(
+            e.classify().kind,
+            ErrorCode::TempFailure | ErrorCode::Timeout
+        ),
     }
 }
 
