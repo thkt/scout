@@ -1,25 +1,7 @@
 mod common;
 
-use std::process::Command;
+use common::{parse_envelope, scout};
 use std::process::Output;
-
-fn scout() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_scout"))
-}
-
-/// Every `--json` error test needs the envelope line before it can assert
-/// anything, so the rule for finding it lives here once.
-fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .unwrap_or_else(|| {
-            panic!("{context} stderr should contain a JSON envelope line, got:\n{stderr}")
-        });
-    serde_json::from_str(line)
-        .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
-}
 
 // T-C001: help_exits_zero_and_contains_app_name
 #[test]
