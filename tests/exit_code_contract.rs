@@ -102,31 +102,31 @@ fn assert_proxy_status_maps_to(
     );
 }
 
-// [T-C020] proxy 経由の 404 応答は exit code 66 と error.code NOT_FOUND になる
+// T-C020: proxied_404_exits_66_not_found
 #[test]
-fn proxy_経由の_404_応答は_exit_code_66_と_error_code_not_found_になる() {
+fn proxied_404_exits_66_not_found() {
     assert_proxy_status_maps_to(404, 66, "NOT_FOUND");
 }
 
-// [T-C021] proxy 経由の 403 応答は exit code 64 と error.code USAGE_ERROR になる
+// T-C021: proxied_403_exits_64_usage_error
 #[test]
-fn proxy_経由の_403_応答は_exit_code_64_と_error_code_usage_error_になる() {
+fn proxied_403_exits_64_usage_error() {
     assert_proxy_status_maps_to(403, 64, "USAGE_ERROR");
 }
 
-// [T-C022] proxy 経由の 400 応答は exit code 65 と error.code DATA_ERROR になる
+// T-C022: proxied_400_exits_65_data_error
 #[test]
-fn proxy_経由の_400_応答は_exit_code_65_と_error_code_data_error_になる() {
+fn proxied_400_exits_65_data_error() {
     assert_proxy_status_maps_to(400, 65, "DATA_ERROR");
 }
 
-// [T-C023] proxy 経由の 500 応答は exit code 75 と error.code TEMP_FAILURE になる
+// T-C023: proxied_500_exits_75_temp_failure
 #[test]
-fn proxy_経由の_500_応答は_exit_code_75_と_error_code_temp_failure_になる() {
+fn proxied_500_exits_75_temp_failure() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
 }
 
-// [T-C024] proxy の応答遅延が SCOUT_FETCH_TIMEOUT_SECS を超えると exit code 124 と error.code TIMEOUT になる
+// T-C024: proxy_response_slower_than_fetch_timeout_exits_124_timeout
 //
 // `Scout::fetch` (src/tools/query.rs) wraps `fetch_page` in
 // `tokio::time::timeout(self.config.fetch_timeout, ..)`; a slower response
@@ -137,8 +137,7 @@ fn proxy_経由の_500_応答は_exit_code_75_と_error_code_temp_failure_にな
 // (`TIMEOUT_MIN_SECS`), so a 2s mock-proxy delay clears it with margin without
 // slowing the suite more than necessary.
 #[test]
-fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_124_と_error_code_timeout_になる()
- {
+fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     let Some((proxy_url, connection_count, _handle)) =
         common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
     else {
@@ -172,7 +171,7 @@ fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_12
     );
 }
 
-// [T-C025] proxy が非 HTTP バイト列を返すと exit code 104 と error.code UNKNOWN になる
+// T-C025: non_http_proxy_response_exits_104_unknown
 //
 // Reached through `FetchError::Http(re) => Classification::from_reqwest(re)`
 // (src/fetch.rs), not the ADR-0003 status table `T-C020`–`T-C023` exercise: a
@@ -189,7 +188,7 @@ fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_12
 // code to 75 or 124 (`TempFailure`/`Timeout`); that is a test-update event for
 // this test's fixture, not a regression in `from_reqwest` itself.
 #[test]
-fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unknown_になる() {
+fn non_http_proxy_response_exits_104_unknown() {
     let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
         b"not an http response at all, just garbage bytes\r\n\r\n",
     ) else {
@@ -219,7 +218,7 @@ fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unkno
     );
 }
 
-// [T-C026] 不正な HTTP_PROXY 値での起動は exit code 74 と error.code IO_ERROR になる
+// T-C026: unparsable_http_proxy_value_exits_74_io_error
 //
 // Proven through `build_default_clients`'s own
 // `Proxy::all(url).map_err(|e| ScoutError::io_error(..))` arm
@@ -238,7 +237,7 @@ fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unkno
 // accepting this exact literal is a test-update event for this test's fixture,
 // not a builder-path regression.
 #[test]
-fn 不正な_http_proxy_値での起動は_exit_code_74_と_error_code_io_error_になる() {
+fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);
 
     assert_eq!(
