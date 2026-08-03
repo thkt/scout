@@ -1,7 +1,8 @@
 //! SOCKS5 SSRF proxy tests. All offline: rejection cases close before any dial,
 //! and the one validation-pass case (T-201-3) exercises `first_blocked_ip`
-//! directly so no real upstream connection is attempted (full-tunnel success is
-//! covered by the chromium e2e, T-201-7).
+//! directly so no real upstream connection is attempted. The full-tunnel
+//! (SOCKS5 -> real upstream) success path is not run by any automated test;
+//! see issue #314.
 
 use std::net::IpAddr;
 use std::sync::Arc;
