@@ -9,9 +9,7 @@ use crate::fetch::FetchError;
 use crate::github;
 use crate::slack::SlackError;
 
-/// Re-exported so `crate::tools::Classification` (tools.rs:14) keeps resolving
-/// through this module after the definition moved to `crate::classify`.
-pub(crate) use crate::classify::Classification;
+use crate::classify::Classification;
 
 #[derive(Debug)]
 pub struct ScoutError {
