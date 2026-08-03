@@ -19,7 +19,7 @@ pub(crate) enum GitHubError {
     Api { code: u16, message: String },
 
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
 
     #[error("Invalid repository format: expected 'owner/repo', got '{0}'")]
     InvalidRepo(String),
@@ -50,6 +50,17 @@ pub(crate) enum GitHubError {
 
     #[error("Insecure URL: HTTPS required for token-bearing request")]
     InsecureUrl,
+}
+
+/// Hand-written (not `#[from]`) to strip the request URL before the error can
+/// reach `Display`: reqwest appends `for url (…)` including the query string,
+/// so a future query parameter carrying a token or signed value would
+/// otherwise leak. Classification flags (`is_timeout()` etc.) survive
+/// `without_url`.
+impl From<reqwest::Error> for GitHubError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 impl GitHubError {

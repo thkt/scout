@@ -47,7 +47,7 @@ pub(crate) enum SlackError {
     Server(u16),
 
     #[error("Slack request failed: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
 
     /// URL construction failure inside `client::api_get_once`. Unlike
     /// `BraveError::ParseUrl` (DataError — Brave's `base_url` is caller-supplied),
@@ -65,6 +65,17 @@ pub(crate) enum SlackError {
 
     #[error("Insecure URL: HTTPS required for token-bearing request")]
     InsecureUrl,
+}
+
+/// Hand-written (not `#[from]`) to strip the request URL before the error can
+/// reach `Display` in logs or `ScoutError` messages: reqwest appends
+/// `for url (…)` including the query string, so a future query parameter
+/// carrying a token or signed value would otherwise leak with no compiler
+/// signal. Classification flags (`is_timeout()` etc.) survive `without_url`.
+impl From<reqwest::Error> for SlackError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 impl SlackError {
