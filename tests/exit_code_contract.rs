@@ -9,15 +9,16 @@
 //! (e.g. the SSRF pre-check or a DNS failure short-circuiting before the
 //! proxy is ever dialed) cannot pass as a false positive for this contract.
 //!
-//! `T-005`/`T-006`/`T-007` extend the same end-to-end shape to the three exit
+//! `T-C024`/`T-C025`/`T-C026` extend the same end-to-end shape to the three exit
 //! codes an HTTP status can never produce: a proxy response slower than
-//! `src/tools/config.rs`'s `SCOUT_FETCH_TIMEOUT_SECS` (124, `T-005`), a proxy
-//! response that never parses as HTTP at all (104, `T-006`), and an
+//! `src/tools/config.rs`'s `SCOUT_FETCH_TIMEOUT_SECS` (124, `T-C024`), a proxy
+//! response that never parses as HTTP at all (104, `T-C025`), and an
 //! `HTTP_PROXY` value `src/fetch/ssrf.rs`'s `detect_egress_mode` reads but
-//! `reqwest::Proxy::all` cannot parse (74, `T-007`). None of the three sets
-//! `SCOUT_MAX_RETRIES`: the `fetch` path these tests exercise has no retry
-//! loop (`src/retry.rs`'s `retry_with` is wired to the Brave/GitHub backends
-//! only), so there is nothing for that env var to change here.
+//! `reqwest::Proxy::all` cannot parse (74, `T-C026`). None of the three sets
+//! `SCOUT_MAX_RETRIES`: the `fetch` path these tests exercise calls nothing
+//! from `src/retry.rs` (`retry_with_rate_limit` is called from the Brave,
+//! GitHub, and Slack clients, none of which this path enters), so there is
+//! nothing for that env var to change here.
 //!
 //! Exit 70 (`ErrorCode::Internal`, EX_SOFTWARE) is out of scope for this file
 //! on purpose, not by oversight: every constructor of it (`SlackError::Decode`
@@ -101,31 +102,31 @@ fn assert_proxy_status_maps_to(
     );
 }
 
-// [T-001] proxy 経由の 404 応答は exit code 66 と error.code NOT_FOUND になる
+// [T-C020] proxy 経由の 404 応答は exit code 66 と error.code NOT_FOUND になる
 #[test]
 fn proxy_経由の_404_応答は_exit_code_66_と_error_code_not_found_になる() {
     assert_proxy_status_maps_to(404, 66, "NOT_FOUND");
 }
 
-// [T-002] proxy 経由の 403 応答は exit code 64 と error.code USAGE_ERROR になる
+// [T-C021] proxy 経由の 403 応答は exit code 64 と error.code USAGE_ERROR になる
 #[test]
 fn proxy_経由の_403_応答は_exit_code_64_と_error_code_usage_error_になる() {
     assert_proxy_status_maps_to(403, 64, "USAGE_ERROR");
 }
 
-// [T-003] proxy 経由の 400 応答は exit code 65 と error.code DATA_ERROR になる
+// [T-C022] proxy 経由の 400 応答は exit code 65 と error.code DATA_ERROR になる
 #[test]
 fn proxy_経由の_400_応答は_exit_code_65_と_error_code_data_error_になる() {
     assert_proxy_status_maps_to(400, 65, "DATA_ERROR");
 }
 
-// [T-004] proxy 経由の 500 応答は exit code 75 と error.code TEMP_FAILURE になる
+// [T-C023] proxy 経由の 500 応答は exit code 75 と error.code TEMP_FAILURE になる
 #[test]
 fn proxy_経由の_500_応答は_exit_code_75_と_error_code_temp_failure_になる() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
 }
 
-// [T-005] proxy の応答遅延が SCOUT_FETCH_TIMEOUT_SECS を超えると exit code 124 と error.code TIMEOUT になる
+// [T-C024] proxy の応答遅延が SCOUT_FETCH_TIMEOUT_SECS を超えると exit code 124 と error.code TIMEOUT になる
 //
 // `Scout::fetch` (src/tools/query.rs) wraps `fetch_page` in
 // `tokio::time::timeout(self.config.fetch_timeout, ..)`; a slower response
@@ -171,10 +172,10 @@ fn proxy_の応答遅延が_scout_fetch_timeout_secsを超えると_exit_code_12
     );
 }
 
-// [T-006] proxy が非 HTTP バイト列を返すと exit code 104 と error.code UNKNOWN になる
+// [T-C025] proxy が非 HTTP バイト列を返すと exit code 104 と error.code UNKNOWN になる
 //
 // Reached through `FetchError::Http(re) => Classification::from_reqwest(re)`
-// (src/fetch.rs), not the ADR-0003 status table `T-001`–`T-004` exercise: a
+// (src/fetch.rs), not the ADR-0003 status table `T-C020`–`T-C023` exercise: a
 // response with no status line has no `Status(u16)` to classify.
 //
 // reqwest-version-bound: on reqwest 0.13.4 (pinned in Cargo.lock, verified
@@ -218,12 +219,12 @@ fn proxy_が非_http_バイト列を返すと_exit_code_104_と_error_code_unkno
     );
 }
 
-// [T-007] 不正な HTTP_PROXY 値での起動は exit code 74 と error.code IO_ERROR になる
+// [T-C026] 不正な HTTP_PROXY 値での起動は exit code 74 と error.code IO_ERROR になる
 //
 // Proven through `build_default_clients`'s own
 // `Proxy::all(url).map_err(|e| ScoutError::io_error(..))` arm
 // (src/tools/builder.rs), not through `FetchError::classify` /
-// `Classification::from_reqwest` (the reqwest-error priority table `T-006`
+// `Classification::from_reqwest` (the reqwest-error priority table `T-C025`
 // exercises): `ScoutBuilder::from_env` runs inside `Scout::new()` before
 // `cli.command` ever dispatches to a handler (src/lib.rs), so this failure
 // happens before any command handler or proxy connection — no mock proxy is
