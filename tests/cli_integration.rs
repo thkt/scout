@@ -1,3 +1,5 @@
+mod common;
+
 use std::process::Command;
 use std::process::Output;
 
