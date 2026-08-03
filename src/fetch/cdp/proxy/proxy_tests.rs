@@ -1,7 +1,15 @@
 //! SOCKS5 SSRF proxy tests. All offline: rejection cases close before any dial,
 //! and the one validation-pass case (T-201-3) exercises `first_blocked_ip`
-//! directly so no real upstream connection is attempted. The full-tunnel
-//! (SOCKS5 -> real upstream) success path is not run by any automated test;
+//! directly so no real upstream connection is attempted.
+//!
+//! The full-tunnel (SOCKS5 -> real upstream) success path is reached only by
+//! `cdp_integration_tests::t005_t006_cdp_renders_and_removes_profile_dir`,
+//! which fetches example.com through a real chromium and therefore through
+//! this proxy. That coverage is incidental — the test pins rendering and
+//! profile-dir cleanup, not the tunnel — and it runs only under
+//! `--features js-rendering` on a host where `resolve_browser_binary()`
+//! succeeds. Without chromium the test returns early and still counts as
+//! passed, so the tunnel can stop being exercised without CI turning red;
 //! see issue #314.
 
 use std::net::IpAddr;
