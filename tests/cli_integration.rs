@@ -1,4 +1,6 @@
 use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::process::Output;
 
 fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
@@ -407,6 +409,108 @@ fn js_flag_literal_loopback_fetch_exits_65_data_error() {
         value["error"]["code"], "DATA_ERROR",
         "literal loopback should classify as DATA_ERROR even with --js, got: {value}"
     );
+}
+
+// T-C019 (T-005): Direct と Proxied と --js の 3 起動形は同一 URL に対して
+// 同じ error.code と next_step を返す。Table-driven over the three launch
+// forms, sharing one envelope-assert helper (`assert_reject_envelope`) so a
+// launch form that stops sharing the SSRF rejection path with the others
+// fails here even though each form's own T-C015/T-C016/T-C018 test still
+// passes in isolation. Gated on `js-rendering` for the same reason as
+// T-C018: without the feature, `--js` short-circuits to `BrowserNotFound`
+// (USAGE_ERROR) ahead of `ssrf_check`, so the three forms would no longer
+// share one contract; ci.yml's `--features js-rendering` job runs this test.
+// LaunchForm and assert_reject_envelope are gated with the test itself so a
+// build without the feature does not warn on dead code (ci.yml's default
+// clippy job runs `--all-targets -- -D warnings` without js-rendering).
+#[cfg(feature = "js-rendering")]
+struct LaunchForm {
+    name: &'static str,
+    args: Vec<&'static str>,
+    env: Vec<(&'static str, &'static str)>,
+}
+
+/// Shared envelope-assert helper: parses the single JSON line scout emits on
+/// stderr and asserts exit 65 (EX_DATAERR) with error.code == DATA_ERROR,
+/// mirroring T-C015's envelope-assert shape.
+#[cfg(feature = "js-rendering")]
+fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "{form_name} literal loopback fetch should exit 65 (EX_DATAERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("{form_name} stderr should contain a JSON envelope line, got:\n{stderr}")
+        });
+    let value: serde_json::Value = serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{form_name} envelope must be valid JSON ({e}): {line}"));
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "{form_name} literal loopback should classify as DATA_ERROR, got: {value}"
+    );
+    value
+}
+
+#[cfg(feature = "js-rendering")]
+#[test]
+fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url() {
+    let forms = vec![
+        LaunchForm {
+            name: "Direct",
+            args: vec![],
+            env: vec![],
+        },
+        LaunchForm {
+            name: "Proxied",
+            args: vec![],
+            // Port 1 on loopback has nothing listening; the literal-loopback
+            // rejection must fire before any connection to the proxy is
+            // attempted (see T-C016), so this stays deterministic.
+            env: vec![("HTTP_PROXY", "http://127.0.0.1:1")],
+        },
+        LaunchForm {
+            name: "--js",
+            args: vec!["--js"],
+            env: vec![],
+        },
+    ];
+
+    let mut envelopes: Vec<(&str, serde_json::Value)> = Vec::new();
+    for form in &forms {
+        let mut cmd = scout();
+        cmd.env_clear();
+        for (key, val) in &form.env {
+            cmd.env(key, val);
+        }
+        cmd.arg("--json").arg("fetch");
+        for arg in &form.args {
+            cmd.arg(arg);
+        }
+        cmd.arg("http://127.0.0.1/");
+        let output = cmd
+            .output()
+            .unwrap_or_else(|e| panic!("scout --json fetch ({}) failed to run: {e}", form.name));
+        let envelope = assert_reject_envelope(&output, form.name);
+        envelopes.push((form.name, envelope));
+    }
+
+    let (baseline_name, baseline) = &envelopes[0];
+    for (name, envelope) in &envelopes[1..] {
+        assert_eq!(
+            envelope["error"]["code"], baseline["error"]["code"],
+            "{name} should return the same error.code as {baseline_name}, got: {envelope}"
+        );
+        assert_eq!(
+            envelope["error"]["next_step"], baseline["error"]["next_step"],
+            "{name} should return the same next_step as {baseline_name}, got: {envelope}"
+        );
+    }
 }
 
 // T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)
