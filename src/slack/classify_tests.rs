@@ -1,11 +1,10 @@
-use std::net::TcpListener;
 use std::time::Duration;
 
 use wiremock::matchers::method;
 use wiremock::{Mock, ResponseTemplate};
 
 use crate::retry::is_transient_network;
-use crate::test_support::try_spawn_mock_server;
+use crate::test_support::{connection_refused_error, try_spawn_mock_server};
 
 use super::*;
 
@@ -122,16 +121,7 @@ fn rate_limited_is_temp_failure() {
 /// under its own test id.
 #[tokio::test]
 async fn network_is_temp_failure() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-    let addr = listener.local_addr().expect("local_addr");
-    drop(listener);
-
-    let err = reqwest::Client::new()
-        .get(format!("http://{addr}/should-refuse"))
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
-
+    let err = connection_refused_error().await;
     let c = SlackError::Network(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
 }
@@ -187,16 +177,7 @@ async fn reqwest_timeout_error_classifies_as_timeout() {
 /// in `src/tools/errors/exit_code_tests.rs`).
 #[tokio::test]
 async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-    let addr = listener.local_addr().expect("local_addr");
-    drop(listener);
-
-    let err = reqwest::Client::new()
-        .get(format!("http://{addr}/should-refuse"))
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
-
+    let err = connection_refused_error().await;
     let c = SlackError::Network(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
     assert!(

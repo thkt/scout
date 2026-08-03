@@ -36,6 +36,21 @@ pub(crate) fn no_redirect_client() -> Client {
     Client::builder().redirect(Policy::none()).build().unwrap()
 }
 
+/// Produce a real "connection refused" `reqwest::Error` deterministically:
+/// reserve a loopback port, then drop the listener so the port closes
+/// synchronously (no async shutdown race, unlike `MockServer`), and GET it.
+pub(crate) async fn connection_refused_error() -> reqwest::Error {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    drop(listener);
+
+    Client::new()
+        .get(format!("http://{addr}/should-refuse"))
+        .send()
+        .await
+        .expect_err("request to dead port should fail")
+}
+
 /// Mount a `users.info` responder that resolves every lookup to a name.
 ///
 /// The body is the one shape `UserBody` / `UserDetail` accept, so it lives in

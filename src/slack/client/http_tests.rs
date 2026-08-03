@@ -7,6 +7,7 @@ use crate::test_support::{
 };
 use crate::tools::ScoutError;
 use reqwest::Client;
+use reqwest::redirect::Policy;
 use tracing_test::traced_test;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
@@ -769,7 +770,10 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
 /// A redirect loop is neither `is_timeout()` nor `is_transient_network()`
 /// (not connect, not a transport-IO decode failure), so it classifies as
 /// Unknown — the escape hatch `Classification::from_reqwest` reserves for an
-/// unrecognized transport failure — and must not retry.
+/// unrecognized transport failure — and must not retry. Driving `api_get`
+/// (the retry loop) with a redirect limit of 1 makes one attempt cost exactly
+/// 2 requests (initial + one followed redirect), so a retry would double the
+/// count the mock server records.
 #[tokio::test]
 async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -781,8 +785,12 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
         .mount(&server)
         .await;
 
-    let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let redirect_limit_1 = Client::builder()
+        .redirect(Policy::limited(1))
+        .build()
+        .expect("client builds");
+    let client = SlackClient::with_base_url(redirect_limit_1, &server.uri());
+    let result: Result<DummyBody, _> = client.api_get("test.method", &[]).await;
     let err = result.expect_err("a redirect loop must not resolve to a body");
     assert!(
         matches!(err, SlackError::Network(ref e) if e.is_redirect()),
@@ -793,9 +801,14 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
         ErrorCode::Unknown,
         "a redirect loop is neither timeout nor transient"
     );
-    assert!(
-        !is_retriable(&err),
-        "an unclassifiable transport failure must not retry"
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request recording is on by default");
+    assert_eq!(
+        requests.len(),
+        2,
+        "one attempt is initial + 1 followed redirect; a retry would raise this to 4"
     );
 }
 

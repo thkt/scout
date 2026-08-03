@@ -97,19 +97,11 @@ fn io_errors_have_exit_code_74() {
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
 #[tokio::test]
 async fn temp_failure_errors_have_exit_code_75() {
-    use std::net::TcpListener;
-
     // `SlackError::Network` now carries the raw `reqwest::Error`
     // (`#[from]`), so this fixture needs a real connect-level failure
     // instead of a string literal.
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-    let addr = listener.local_addr().expect("local_addr");
-    drop(listener);
-    let slack_network_err = reqwest::Client::new()
-        .get(format!("http://{addr}/should-refuse"))
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
+    use crate::test_support::connection_refused_error;
+    let slack_network_err = connection_refused_error().await;
 
     let cases: Vec<ScoutError> = vec![
         FetchError::Status(408).into(),
@@ -148,18 +140,9 @@ async fn temp_failure_errors_have_exit_code_75() {
 /// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint になる
 #[tokio::test]
 async fn slack_connection_refused_error_is_temp_failure_via_scout_error() {
-    use std::net::TcpListener;
+    use crate::test_support::connection_refused_error;
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-    let addr = listener.local_addr().expect("local_addr");
-    drop(listener);
-
-    let reqwest_err = reqwest::Client::new()
-        .get(format!("http://{addr}/should-refuse"))
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
-
+    let reqwest_err = connection_refused_error().await;
     let scout_err = ScoutError::from(SlackError::Network(reqwest_err));
 
     assert_eq!(
@@ -382,6 +365,16 @@ async fn slack_persistent_internal_error_reaches_exit_code_75_via_scout_error() 
     assert!(
         matches!(err, SlackError::Api { ref error } if error == "internal_error"),
         "expected the persistent internal_error to propagate, got: {err:?}"
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request recording is on by default");
+    assert!(
+        requests.len() >= 2,
+        "a retryable internal_error must be retried at least once before giving up, \
+         got {} request(s)",
+        requests.len()
     );
 
     let scout_err = ScoutError::from(err);
