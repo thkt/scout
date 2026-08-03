@@ -5,9 +5,8 @@ fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
 }
 
-/// Extracts the single JSON envelope line scout emits on stderr and parses it.
-/// Every `--json` error test needs this line before it can assert anything, so
-/// the lookup rule (first stderr line starting with `{`) lives here once.
+/// Every `--json` error test needs the envelope line before it can assert
+/// anything, so the rule for finding it lives here once.
 fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
@@ -284,12 +283,9 @@ fn json_clap_parse_error_emits_envelope() {
     );
 }
 
-/// Asserts the full SSRF-rejection contract: exit 65 (EX_DATAERR),
-/// error.code == DATA_ERROR, and a next_step naming the private-IP block. Exit
-/// 65 alone cannot distinguish the SSRF rejection from any other DataError
-/// variant reachable on these paths, so the code and next_step asserts are what
-/// pin the contract. Used by T-C015/T-C016/T-C017/T-C018 (single launch form)
-/// and T-C019 (table-driven over launch forms).
+/// Exit 65 alone cannot distinguish the SSRF rejection from any other
+/// `DataError` variant reachable on these paths, so the code and next_step
+/// asserts below are what pin the contract.
 fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
     assert_eq!(
         output.status.code(),
@@ -311,8 +307,7 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
     value
 }
 
-// T-C015: proxy env なしの literal loopback への fetch は exit 65 と
-// DATA_ERROR と private IPs are blocked の next_step になる
+// T-C015: direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked
 #[test]
 fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
     let output = scout()
@@ -323,22 +318,20 @@ fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked()
     assert_reject_envelope(&output, "Direct");
 }
 
-// T-C016: HTTP_PROXY 設定下でも literal loopback への fetch は proxy へ
-// 接続せず exit 65 になる
+// T-C016: http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy
 #[test]
 fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
     let output = scout()
         .env_clear()
         // Port 1 on loopback has nothing listening, so if the literal-loopback
         // rejection were skipped under Proxied egress, the process would fail
-        // fast with a connection error instead of hanging — the test stays
-        // deterministic either way.
+        // fast with a connection error instead of hanging.
         //
-        // Scope: this test only catches the literal-loopback rejection moving
-        // after the Proxied branch. It cannot tell which egress mode was
-        // actually selected, because rejection happens before either branch
-        // dials anything and both modes therefore produce the same envelope.
-        // Mode selection itself is pinned by detect_egress_mode's own tests.
+        // Scope: this catches only the rejection moving after the Proxied
+        // branch. It cannot tell which egress mode was selected, because
+        // rejection precedes either branch dialing and both modes therefore
+        // produce the same envelope. Mode selection is pinned by
+        // detect_egress_mode's own tests.
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .args(["--json", "fetch", "http://127.0.0.1/"])
         .output()
@@ -346,7 +339,7 @@ fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_pro
     assert_reject_envelope(&output, "Proxied");
 }
 
-// T-C017: localhost 名への fetch は exit 65 と DATA_ERROR になる
+// T-C017: localhost_hostname_fetch_exits_65_data_error — Host::Domain arm, not the IP-literal one
 #[test]
 fn localhost_hostname_fetch_exits_65_data_error() {
     let output = scout()
@@ -357,14 +350,13 @@ fn localhost_hostname_fetch_exits_65_data_error() {
     assert_reject_envelope(&output, "localhost hostname");
 }
 
-// T-C018: --js 指定でも literal loopback への fetch は exit 65 と
-// DATA_ERROR になる。`ssrf_check` (src/fetch.rs) runs before `fetch_page` ever
-// calls `fetch_with_cdp`, so the rejection fires before chromium launches — the
-// SOCKS5 hop the CDP path would otherwise open (ADR-0021) never runs. Gated on
-// `js-rendering` because without the feature `--js` short-circuits to
-// `BrowserNotFound` (USAGE_ERROR) ahead of `ssrf_check`, which would assert a
-// different contract than the one under test; ci.yml's `--features
-// js-rendering` job is what runs this test.
+// T-C018: js_flag_literal_loopback_fetch_exits_65_data_error — `ssrf_check`
+// (src/fetch.rs) runs before `fetch_page` ever calls `fetch_with_cdp`, so the
+// rejection fires before chromium launches and the SOCKS5 hop the CDP path
+// would otherwise open (ADR-0021) never runs. Gated on `js-rendering` because
+// without the feature `--js` short-circuits to `BrowserNotFound`
+// (USAGE_ERROR) ahead of `ssrf_check`, asserting a different contract than the
+// one under test.
 #[cfg(feature = "js-rendering")]
 #[test]
 fn js_flag_literal_loopback_fetch_exits_65_data_error() {
@@ -376,16 +368,14 @@ fn js_flag_literal_loopback_fetch_exits_65_data_error() {
     assert_reject_envelope(&output, "--js");
 }
 
-// T-C019: Direct と Proxied と --js の 3 起動形は同一 URL に対して
-// 同じ error.code と next_step を返す。Table-driven over the launch forms,
-// sharing `assert_reject_envelope` so a launch form that stops sharing the
-// SSRF rejection path with the others fails here even though each form's own
-// T-C015/T-C016/T-C018 test still passes in isolation. The `--js` row is added
-// only when `js-rendering` is compiled in, because without the feature `--js`
-// short-circuits to `BrowserNotFound` (USAGE_ERROR) ahead of `ssrf_check` and
-// would not share the contract; the Direct-vs-Proxied comparison still runs in
-// the default job. `cfg!` rather than `#[cfg]` keeps the push in the AST so
-// neither `mut` nor `LaunchForm` reads as unused under the default feature set.
+// T-C019: direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url
+//
+// A launch form that stops sharing the SSRF rejection path fails here even
+// though its own T-C015/T-C016/T-C018 test still passes in isolation. The
+// `--js` row is added only when `js-rendering` is compiled in, for the same
+// `BrowserNotFound` reason as T-C018; Direct vs Proxied still runs in the
+// default job. `cfg!` rather than `#[cfg]` keeps the push in the AST so
+// neither `mut` nor `LaunchForm` reads as unused under the default features.
 struct LaunchForm {
     name: &'static str,
     args: Vec<&'static str>,
@@ -403,11 +393,7 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
         LaunchForm {
             name: "Proxied",
             args: vec![],
-            // Port 1 on loopback has nothing listening; the literal-loopback
-            // rejection must fire before any connection to the proxy is
-            // attempted (see T-C016), so this stays deterministic. Same scope
-            // caveat as T-C016: an identical envelope does not prove Proxied
-            // mode was selected, only that rejection precedes the branch.
+            // Port 1 and the scope caveat that comes with it: see T-C016.
             env: vec![("HTTP_PROXY", "http://127.0.0.1:1")],
         },
     ];
