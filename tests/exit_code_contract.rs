@@ -36,7 +36,7 @@ mod common;
 use common::{parse_envelope, scout};
 use std::env;
 use std::process::Output;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Runs `scout --json fetch http://example.com/` with a from-scratch
@@ -55,6 +55,41 @@ fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     cmd.args(["--json", "fetch", "http://example.com/"])
         .output()
         .expect("scout --json fetch failed to run")
+}
+
+/// Assert the exit code and `error.code` one run produced. The two travel
+/// together — `ErrorCode` (src/envelope.rs) is what decides both — so a
+/// scenario that pinned only one of them would leave the other free to drift.
+/// `context` names the scenario in the failure output.
+fn assert_exits_with(
+    output: &Output,
+    expected_exit_code: i32,
+    expected_error_code: &str,
+    context: &str,
+) {
+    assert_eq!(
+        output.status.code(),
+        Some(expected_exit_code),
+        "{context} should exit {expected_exit_code}, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = parse_envelope(output, context);
+    assert_eq!(
+        value["error"]["code"], expected_error_code,
+        "{context} should classify as {expected_error_code}, got: {value}"
+    );
+}
+
+/// Assert the mock proxy was dialed, so a run that reached the expected exit
+/// code without ever leaving scout (a DNS or SSRF short-circuit landing on the
+/// same code by coincidence) fails instead of passing as a false positive.
+fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str) {
+    assert!(
+        connection_count.load(Ordering::SeqCst) >= 1,
+        "{context}: no connection reached the mock proxy, so the exit code above did not travel \
+         through the proxy response path"
+    );
 }
 
 /// Drive `scout --json fetch` through `common::spawn_mock_proxy` answering
@@ -79,27 +114,10 @@ fn assert_proxy_status_maps_to(
     };
 
     let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
+    let context = format!("proxy status {proxy_status}");
 
-    assert_eq!(
-        output.status.code(),
-        Some(expected_exit_code),
-        "proxy status {proxy_status} should exit {expected_exit_code}, got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value = parse_envelope(&output, &format!("proxy status {proxy_status}"));
-    assert_eq!(
-        value["error"]["code"], expected_error_code,
-        "proxy status {proxy_status} should classify as {expected_error_code}, got: {value}"
-    );
-
-    assert!(
-        connection_count.load(Ordering::SeqCst) >= 1,
-        "expected at least one connection to reach the mock proxy for status {proxy_status}, \
-         got 0 — a 0 count means the exit code above did not travel through the proxy response \
-         path (e.g. a DNS/SSRF short-circuit produced the same code by coincidence), which would \
-         be a false positive for this contract"
-    );
+    assert_exits_with(&output, expected_exit_code, expected_error_code, &context);
+    assert_proxy_was_dialed(&connection_count, &context);
 }
 
 // T-C020: proxied_404_exits_66_not_found
@@ -149,26 +167,15 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
         ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
     ]);
 
-    assert_eq!(
-        output.status.code(),
-        Some(124),
-        "a proxy response slower than SCOUT_FETCH_TIMEOUT_SECS should exit 124 (GNU coreutils \
-         timeout convention), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_exits_with(
+        &output,
+        124,
+        "TIMEOUT",
+        "a proxy response slower than the fetch timeout",
     );
-
-    let value = parse_envelope(&output, "slow proxy response");
-    assert_eq!(
-        value["error"]["code"], "TIMEOUT",
-        "a fetch exceeding SCOUT_FETCH_TIMEOUT_SECS should classify as TIMEOUT, got: {value}"
-    );
-
-    assert!(
-        connection_count.load(Ordering::SeqCst) >= 1,
-        "expected the proxy to have been dialed at least once — a 0 count would mean the \
-         timeout fired before the request ever reached the proxy, which would not prove the \
-         SCOUT_FETCH_TIMEOUT_SECS path this test targets"
-    );
+    // A 0 count here would mean the timeout fired before the request reached
+    // the proxy, which is a different path from the one this test targets.
+    assert_proxy_was_dialed(&connection_count, "slow proxy response");
 }
 
 // T-C025: non_http_proxy_response_exits_104_unknown
@@ -197,25 +204,9 @@ fn non_http_proxy_response_exits_104_unknown() {
 
     let output = run_scout_fetch(&[("HTTP_PROXY", &proxy_url)]);
 
-    assert_eq!(
-        output.status.code(),
-        Some(104),
-        "a non-HTTP proxy response should exit 104 (PJ extension, unclassifiable failure per \
-         ADR-0002), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value = parse_envelope(&output, "non-HTTP proxy response");
-    assert_eq!(
-        value["error"]["code"], "UNKNOWN",
-        "a non-HTTP proxy response should classify as UNKNOWN, got: {value}"
-    );
-
-    assert!(
-        connection_count.load(Ordering::SeqCst) >= 1,
-        "expected at least one connection to reach the mock proxy — a 0 count means the exit \
-         code above did not travel through the proxy response path"
-    );
+    // 104 is the PJ extension ADR-0002 gives an unclassifiable failure.
+    assert_exits_with(&output, 104, "UNKNOWN", "a non-HTTP proxy response");
+    assert_proxy_was_dialed(&connection_count, "non-HTTP proxy response");
 }
 
 // T-C026: unparsable_http_proxy_value_exits_74_io_error
@@ -239,17 +230,12 @@ fn non_http_proxy_response_exits_104_unknown() {
 fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);
 
-    assert_eq!(
-        output.status.code(),
-        Some(74),
-        "an HTTP_PROXY value reqwest::Proxy::all cannot parse should fail client construction \
-         (exit 74 EX_IOERR), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value = parse_envelope(&output, "invalid HTTP_PROXY value");
-    assert_eq!(
-        value["error"]["code"], "IO_ERROR",
-        "invalid HTTP_PROXY should classify as IO_ERROR, got: {value}"
+    // 74 is EX_IOERR, reached by client construction failing rather than by a
+    // request failing.
+    assert_exits_with(
+        &output,
+        74,
+        "IO_ERROR",
+        "an HTTP_PROXY value reqwest::Proxy::all cannot parse",
     );
 }
