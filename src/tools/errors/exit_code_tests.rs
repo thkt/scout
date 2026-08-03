@@ -95,8 +95,22 @@ fn io_errors_have_exit_code_74() {
 
 /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
-#[test]
-fn temp_failure_errors_have_exit_code_75() {
+#[tokio::test]
+async fn temp_failure_errors_have_exit_code_75() {
+    use std::net::TcpListener;
+
+    // `SlackError::Network` now carries the raw `reqwest::Error`
+    // (`#[from]`), so this fixture needs a real connect-level failure
+    // instead of a string literal.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    drop(listener);
+    let slack_network_err = reqwest::Client::new()
+        .get(format!("http://{addr}/should-refuse"))
+        .send()
+        .await
+        .expect_err("request to dead port should fail");
+
     let cases: Vec<ScoutError> = vec![
         FetchError::Status(408).into(),
         FetchError::Status(429).into(),
@@ -116,7 +130,7 @@ fn temp_failure_errors_have_exit_code_75() {
         }
         .into(),
         SlackError::RateLimited { retry_after: None }.into(),
-        SlackError::Network("err".into()).into(),
+        SlackError::Network(slack_network_err).into(),
     ];
     for err in &cases {
         assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
@@ -127,6 +141,36 @@ fn temp_failure_errors_have_exit_code_75() {
             "should include retry hint: {err}"
         );
     }
+}
+
+// TcpListener::drop is synchronous, so the port is immediately closed
+// with no async shutdown race, mirroring T-ER009's fixture for FetchError.
+/// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint になる
+#[tokio::test]
+async fn slack_connection_refused_error_is_temp_failure_via_scout_error() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    drop(listener);
+
+    let reqwest_err = reqwest::Client::new()
+        .get(format!("http://{addr}/should-refuse"))
+        .send()
+        .await
+        .expect_err("request to dead port should fail");
+
+    let scout_err = ScoutError::from(SlackError::Network(reqwest_err));
+
+    assert_eq!(
+        scout_err.exit_code(),
+        75,
+        "expected EX_TEMPFAIL (75): {scout_err}"
+    );
+    assert!(
+        scout_err.to_string().contains("retry may succeed"),
+        "should include retry hint: {scout_err}"
+    );
 }
 
 /// [T-ER027] Exit 124 (GNU coreutils `timeout`) is split from TempFailure(75) so
