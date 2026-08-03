@@ -129,3 +129,16 @@ fn non_temp_failure_variants_are_not_degradable() {
         assert!(!case.is_degradable(), "{case:?}");
     }
 }
+
+/// [T-BRC009] A `reqwest::Error` converts through `From` (which strips the
+/// request URL) and a connect-refused error classifies as TempFailure.
+#[tokio::test]
+async fn reqwest_error_conversion_classifies_as_temp_failure() {
+    use crate::test_support::connection_refused_error;
+
+    let Some(err) = connection_refused_error("brave_reqwest_error_conversion").await else {
+        return;
+    };
+    let c = BraveError::from(err).classify();
+    assert_eq!(c.kind, ErrorCode::TempFailure);
+}
