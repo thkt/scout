@@ -1,9 +1,13 @@
+use std::time::Duration;
+
 use super::*;
 use crate::envelope::ErrorCode;
 use crate::test_support::{
     mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
+use crate::tools::ScoutError;
 use reqwest::Client;
+use reqwest::redirect::Policy;
 use tracing_test::traced_test;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
@@ -724,5 +728,149 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
     assert!(
         out.contains("UMENT01"),
         "the pure mention must be evicted past the full cap and render raw: {out}"
+    );
+}
+
+/// [T-005] api error internal_error は一度再試行され 2 回目の成功レスポンスが返る
+///
+/// `internal_error` classifies as TempFailure (per `SlackError::classify`'s
+/// `Api` string table), so `is_retriable` must derive from `classify().kind`
+/// rather than a second, independently-maintained table that never listed the
+/// `Api` variant at all.
+#[tokio::test]
+async fn api_error_internal_error_retries_once_then_succeeds() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "internal_error"})),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<DummyBody, _> = client.api_get("test.method", &[]).await;
+    assert!(
+        result.is_ok(),
+        "internal_error should retry once and return the second call's success, got: {result:?}"
+    );
+}
+
+/// [T-006] timeout でも transient でもない transport error は再試行されず 1 回で返る
+///
+/// A redirect loop is neither `is_timeout()` nor `is_transient_network()`,
+/// so it classifies as Unknown — `Classification::from_reqwest`'s escape
+/// hatch — and must not retry. The request count proves the retry loop
+/// made exactly one attempt.
+#[tokio::test]
+async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/test.method"))
+        .mount(&server)
+        .await;
+
+    let redirect_limit_1 = Client::builder()
+        .redirect(Policy::limited(1))
+        .build()
+        .expect("client builds");
+    let client = SlackClient::with_base_url(redirect_limit_1, &server.uri());
+    let result: Result<DummyBody, _> = client.api_get("test.method", &[]).await;
+    let err = result.expect_err("a redirect loop must not resolve to a body");
+    assert!(
+        matches!(err, SlackError::Network(ref e) if e.is_redirect()),
+        "expected a redirect-loop Network error, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::Unknown,
+        "a redirect loop is neither timeout nor transient"
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request recording is on by default");
+    assert_eq!(
+        requests.len(),
+        2,
+        "one attempt is initial + 1 followed redirect; a retry would raise this to 4"
+    );
+}
+
+/// [T-007] 2xx の mid-stream body 切断は Network に落ち TempFailure に分類される
+///
+/// Mirrors `api_get_once_2xx_mid_stream_drop_returns_network` (T-SK030), and
+/// additionally pins the classification: a transport-IO drop must land in
+/// TempFailure (retriable), not Decode (schema drift, terminal).
+#[tokio::test]
+async fn mid_stream_body_drop_classifies_as_temp_failure() {
+    let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
+        return;
+    };
+    let client = SlackClient::with_base_url(Client::new(), &url);
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a mid-stream drop must not resolve to a body");
+    assert!(
+        matches!(err, SlackError::Network(_)),
+        "expected SlackError::Network for mid-stream drop, got: {err:?}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::TempFailure,
+        "a transport-IO drop is retriable, not a scout-side schema bug"
+    );
+    let _ = handle.join();
+}
+
+/// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
+///
+/// The seam from a real HTTP timeout through to the process exit code:
+/// a `SlackClient::api_get_once` call whose request timeout fires must reach
+/// `ScoutError` as exit 124 (GNU coreutils `timeout` convention, ADR-0002),
+/// not the pre-fix TempFailure(75).
+#[tokio::test]
+async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
+    let Some(server) = try_spawn_mock_server("slack::http::read_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+        .mount(&server)
+        .await;
+
+    let http = Client::builder()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .expect("client build");
+    let client = SlackClient::with_base_url(http, &server.uri());
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a response slower than the client timeout must fail");
+    assert!(
+        matches!(err, SlackError::Network(ref e) if e.is_timeout()),
+        "expected a timeout Network error, got: {err:?}"
+    );
+
+    let scout_err = ScoutError::from(err);
+    assert_eq!(
+        scout_err.exit_code(),
+        124,
+        "expected 124 (GNU timeout): {scout_err}"
+    );
+    assert!(
+        scout_err.retryable(),
+        "Timeout must be retryable: {scout_err}"
     );
 }

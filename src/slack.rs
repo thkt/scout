@@ -47,7 +47,15 @@ pub(crate) enum SlackError {
     Server(u16),
 
     #[error("Slack request failed: {0}")]
-    Network(String),
+    Network(#[source] reqwest::Error),
+
+    /// URL construction failure inside `client::api_get_once`. Unlike
+    /// `BraveError::ParseUrl` (DataError — Brave's `base_url` is caller-supplied),
+    /// Slack's `base_url` is a `const` (`client::API_BASE`), so this arm is
+    /// unreachable in production; a hit here is a scout-side bug, not a
+    /// user-facing data problem.
+    #[error("Invalid Slack API URL: {0}")]
+    ParseUrl(#[from] url::ParseError),
 
     #[error("Slack fetch timed out: {0}")]
     Timeout(String),
@@ -57,6 +65,15 @@ pub(crate) enum SlackError {
 
     #[error("Insecure URL: HTTPS required for token-bearing request")]
     InsecureUrl,
+}
+
+/// Hand-written (not `#[from]`) so the conversion strips the request URL:
+/// reqwest's `Display` appends `for url (…)` including the query string.
+/// Classification flags (`is_timeout()` etc.) survive `without_url`.
+impl From<reqwest::Error> for SlackError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 impl SlackError {
@@ -99,11 +116,12 @@ impl SlackError {
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
-            Self::Network(_) => Classification::transient_network(),
+            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema)
-            Self::Decode(_) => Classification::new(ErrorCode::Internal),
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema / URL build failure)
+            Self::Decode(_) | Self::ParseUrl(_) => Classification::new(ErrorCode::Internal),
         }
     }
 }

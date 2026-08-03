@@ -51,10 +51,19 @@ pub(crate) enum BraveError {
     Api { code: u16, message: String },
 
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
 
     #[error("Insecure base URL: HTTPS required")]
     InsecureBaseUrl,
+}
+
+/// Hand-written (not `#[from]`) so the conversion strips the request URL:
+/// reqwest's `Display` appends `for url (…)` including the query string, and
+/// Brave requests carry the user's search query as a parameter.
+impl From<reqwest::Error> for BraveError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 impl BraveError {

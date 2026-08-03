@@ -95,8 +95,18 @@ fn io_errors_have_exit_code_74() {
 
 /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
-#[test]
-fn temp_failure_errors_have_exit_code_75() {
+///
+/// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
+/// になる — pinned by the `SlackError::Network` row, which carries a real
+/// connection-refused `reqwest::Error`.
+#[tokio::test]
+async fn temp_failure_errors_have_exit_code_75() {
+    use crate::test_support::connection_refused_error;
+    let Some(slack_network_err) = connection_refused_error("temp_failure_exit_code_75").await
+    else {
+        return;
+    };
+
     let cases: Vec<ScoutError> = vec![
         FetchError::Status(408).into(),
         FetchError::Status(429).into(),
@@ -116,7 +126,7 @@ fn temp_failure_errors_have_exit_code_75() {
         }
         .into(),
         SlackError::RateLimited { retry_after: None }.into(),
-        SlackError::Network("err".into()).into(),
+        SlackError::Network(slack_network_err).into(),
     ];
     for err in &cases {
         assert_eq!(err.error_kind(), ErrorCode::TempFailure, "{err}");
@@ -168,28 +178,16 @@ fn non_transient_errors_are_not_retryable() {
     }
 }
 
-// TcpListener::drop is synchronous, so the port is immediately closed
-// with no async shutdown race (unlike MockServer).
 /// [T-ER009]
 #[tokio::test]
 async fn fetch_error_http_connection_refused_is_transient() {
-    use reqwest::Client;
-    use std::net::TcpListener;
-
     use crate::retry::is_transient_network;
+    use crate::test_support::connection_refused_error;
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-
-    let dead_url = format!("http://{addr}/should-refuse");
-
-    let client = Client::new();
-    let reqwest_err = client
-        .get(&dead_url)
-        .send()
-        .await
-        .expect_err("request to dead port should fail");
+    let Some(reqwest_err) = connection_refused_error("fetch_error_http_connection_refused").await
+    else {
+        return;
+    };
 
     assert!(
         is_transient_network(&reqwest_err),
@@ -292,4 +290,73 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
             "{label} should report an unclassifiable transport failure as Unknown"
         );
     }
+}
+
+/// [T-010] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
+///
+/// The seam from a persistently-failing real HTTP call through to the
+/// process exit code: a `fetch_message` whose responder always answers
+/// `internal_error` must exhaust the retry loop and reach `ScoutError` as
+/// exit 75 (EX_TEMPFAIL) with the retry hint. The request count proves at
+/// least one retry actually ran.
+#[tokio::test]
+async fn slack_persistent_internal_error_reaches_exit_code_75_via_scout_error() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    use crate::slack::{SlackClient, parse_slack_url};
+    use crate::test_support::try_spawn_mock_server;
+
+    let Some(server) = try_spawn_mock_server("errors::slack_persistent_internal_error").await
+    else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "internal_error"})),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(reqwest::Client::new(), &server.uri());
+    let url = parse_slack_url("https://acme.slack.com/archives/C1/p1000000001")
+        .expect("valid slack permalink parses");
+    let result = client.fetch_message(&url).await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("internal_error persisting past every retry attempt must still fail"),
+    };
+    assert!(
+        matches!(err, SlackError::Api { ref error } if error == "internal_error"),
+        "expected the persistent internal_error to propagate, got: {err:?}"
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request recording is on by default");
+    assert!(
+        requests.len() >= 2,
+        "a retryable internal_error must be retried at least once before giving up, \
+         got {} request(s)",
+        requests.len()
+    );
+
+    let scout_err = ScoutError::from(err);
+    assert_eq!(
+        scout_err.exit_code(),
+        75,
+        "expected EX_TEMPFAIL (75): {scout_err}"
+    );
+    assert!(scout_err.retryable(), "expected retryable: {scout_err}");
+    assert!(
+        scout_err.next_step().is_some_and(|h| h.contains("Retry")),
+        "expected a retry hint, got: {:?}",
+        scout_err.next_step()
+    );
+    assert!(
+        scout_err.to_string().contains("retry may succeed"),
+        "should include retry hint in Display: {scout_err}"
+    );
 }

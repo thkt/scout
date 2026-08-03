@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use tracing::{info, warn};
 
 use crate::clock::{Clock, SystemClock};
+use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
@@ -198,8 +199,7 @@ impl SlackClient {
         method: &str,
         params: &[(&str, &str)],
     ) -> Result<T, SlackError> {
-        let mut url = url::Url::parse(&format!("{}/{method}", self.base_url))
-            .map_err(|e| SlackError::Network(e.to_string()))?;
+        let mut url = url::Url::parse(&format!("{}/{method}", self.base_url))?;
         for (k, v) in params {
             url.query_pairs_mut().append_pair(k, v);
         }
@@ -213,8 +213,7 @@ impl SlackClient {
             .get(url)
             .header("Authorization", format!("Bearer {}", self.token.expose()))
             .send()
-            .await
-            .map_err(|e| SlackError::Network(e.to_string()))?;
+            .await?;
 
         let retry_after = parse_retry_after(resp.headers(), self.clock.as_ref());
 
@@ -241,7 +240,7 @@ impl SlackClient {
                     "response too large (>{MAX_API_RESPONSE_BYTES} bytes)"
                 ))
             },
-            |e| SlackError::Network(e.to_string()),
+            SlackError::from,
         )
         .await?;
         // Schema fail → Decode (terminal); transport drop already mapped to
@@ -502,11 +501,17 @@ impl SlackClient {
     }
 }
 
+/// Retry eligibility, derived from [`SlackError::classify`] so retryability
+/// stays a single source of truth (mirrors `BraveError::is_degradable`).
+/// `RateLimited` keeps its own arm: the cap check needs the raw `retry_after`
+/// value, which `classify()` does not carry through.
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        SlackError::Network(_) | SlackError::Timeout(_) | SlackError::Server(_) => true,
-        _ => false,
+        _ => matches!(
+            e.classify().kind,
+            ErrorCode::TempFailure | ErrorCode::Timeout
+        ),
     }
 }
 
