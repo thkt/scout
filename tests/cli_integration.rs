@@ -1,5 +1,4 @@
 use std::process::Command;
-#[cfg(feature = "js-rendering")]
 use std::process::Output;
 
 fn scout() -> Command {
@@ -285,6 +284,34 @@ fn json_clap_parse_error_emits_envelope() {
     );
 }
 
+/// Shared envelope-assert helper: parses the single JSON line scout emits on
+/// stderr and asserts exit 65 (EX_DATAERR) with error.code == DATA_ERROR.
+/// Used by T-C015/T-C016/T-C017/T-C018 (single launch form) and T-C019
+/// (table-driven over launch forms) so all five share one envelope-parsing
+/// path instead of each re-implementing it.
+fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "{form_name} literal loopback fetch should exit 65 (EX_DATAERR), got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("{form_name} stderr should contain a JSON envelope line, got:\n{stderr}")
+        });
+    let value: serde_json::Value = serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{form_name} envelope must be valid JSON ({e}): {line}"));
+    assert_eq!(
+        value["error"]["code"], "DATA_ERROR",
+        "{form_name} literal loopback should classify as DATA_ERROR, got: {value}"
+    );
+    value
+}
+
 // T-C015 (T-001): proxy env なしの literal loopback への fetch は exit 65 と
 // DATA_ERROR と private IPs are blocked の next_step になる
 #[test]
@@ -294,22 +321,7 @@ fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked()
         .args(["--json", "fetch", "http://127.0.0.1/"])
         .output()
         .expect("scout --json fetch failed to run");
-    assert_eq!(
-        output.status.code(),
-        Some(65),
-        "literal loopback fetch with no proxy env set should exit 65 (EX_DATAERR), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
-    assert_eq!(
-        value["error"]["code"], "DATA_ERROR",
-        "literal loopback should classify as DATA_ERROR, got: {value}"
-    );
+    let value = assert_reject_envelope(&output, "Direct");
     assert!(
         value["error"]["next_step"]
             .as_str()
@@ -332,22 +344,7 @@ fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_pro
         .args(["--json", "fetch", "http://127.0.0.1/"])
         .output()
         .expect("scout --json fetch failed to run");
-    assert_eq!(
-        output.status.code(),
-        Some(65),
-        "literal loopback fetch should exit 65 (EX_DATAERR) even with HTTP_PROXY set, got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
-    assert_eq!(
-        value["error"]["code"], "DATA_ERROR",
-        "literal loopback should classify as DATA_ERROR under Proxied egress too, got: {value}"
-    );
+    assert_reject_envelope(&output, "Proxied");
 }
 
 // T-C017 (T-003): localhost 名への fetch は exit 65 と DATA_ERROR になる
@@ -358,22 +355,7 @@ fn localhost_hostname_fetch_exits_65_data_error() {
         .args(["--json", "fetch", "http://localhost/"])
         .output()
         .expect("scout --json fetch failed to run");
-    assert_eq!(
-        output.status.code(),
-        Some(65),
-        "localhost hostname fetch should exit 65 (EX_DATAERR), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
-    assert_eq!(
-        value["error"]["code"], "DATA_ERROR",
-        "localhost hostname should classify as DATA_ERROR, got: {value}"
-    );
+    assert_reject_envelope(&output, "localhost hostname");
 }
 
 // T-C018 (T-004): --js 指定でも literal loopback への fetch は exit 65 と
@@ -392,69 +374,26 @@ fn js_flag_literal_loopback_fetch_exits_65_data_error() {
         .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
         .output()
         .expect("scout --json fetch --js failed to run");
-    assert_eq!(
-        output.status.code(),
-        Some(65),
-        "literal loopback fetch with --js should exit 65 (EX_DATAERR) without \
-         ever launching chromium, got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
-    assert_eq!(
-        value["error"]["code"], "DATA_ERROR",
-        "literal loopback should classify as DATA_ERROR even with --js, got: {value}"
-    );
+    assert_reject_envelope(&output, "--js");
 }
 
 // T-C019 (T-005): Direct と Proxied と --js の 3 起動形は同一 URL に対して
 // 同じ error.code と next_step を返す。Table-driven over the three launch
-// forms, sharing one envelope-assert helper (`assert_reject_envelope`) so a
-// launch form that stops sharing the SSRF rejection path with the others
-// fails here even though each form's own T-C015/T-C016/T-C018 test still
-// passes in isolation. Gated on `js-rendering` for the same reason as
-// T-C018: without the feature, `--js` short-circuits to `BrowserNotFound`
-// (USAGE_ERROR) ahead of `ssrf_check`, so the three forms would no longer
-// share one contract; ci.yml's `--features js-rendering` job runs this test.
-// LaunchForm and assert_reject_envelope are gated with the test itself so a
-// build without the feature does not warn on dead code (ci.yml's default
-// clippy job runs `--all-targets -- -D warnings` without js-rendering).
+// forms, sharing `assert_reject_envelope` so a launch form that stops sharing
+// the SSRF rejection path with the others fails here even though each form's
+// own T-C015/T-C016/T-C018 test still passes in isolation. Gated on
+// `js-rendering` for the same reason as T-C018: without the feature, `--js`
+// short-circuits to `BrowserNotFound` (USAGE_ERROR) ahead of `ssrf_check`, so
+// the three forms would no longer share one contract; ci.yml's `--features
+// js-rendering` job runs this test. LaunchForm is gated with the test itself
+// so a build without the feature does not warn on dead code (ci.yml's
+// default clippy job runs `--all-targets -- -D warnings` without
+// js-rendering).
 #[cfg(feature = "js-rendering")]
 struct LaunchForm {
     name: &'static str,
     args: Vec<&'static str>,
     env: Vec<(&'static str, &'static str)>,
-}
-
-/// Shared envelope-assert helper: parses the single JSON line scout emits on
-/// stderr and asserts exit 65 (EX_DATAERR) with error.code == DATA_ERROR,
-/// mirroring T-C015's envelope-assert shape.
-#[cfg(feature = "js-rendering")]
-fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
-    assert_eq!(
-        output.status.code(),
-        Some(65),
-        "{form_name} literal loopback fetch should exit 65 (EX_DATAERR), got:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .unwrap_or_else(|| {
-            panic!("{form_name} stderr should contain a JSON envelope line, got:\n{stderr}")
-        });
-    let value: serde_json::Value = serde_json::from_str(line)
-        .unwrap_or_else(|e| panic!("{form_name} envelope must be valid JSON ({e}): {line}"));
-    assert_eq!(
-        value["error"]["code"], "DATA_ERROR",
-        "{form_name} literal loopback should classify as DATA_ERROR, got: {value}"
-    );
-    value
 }
 
 #[cfg(feature = "js-rendering")]
