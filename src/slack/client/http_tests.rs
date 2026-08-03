@@ -767,13 +767,10 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
 
 /// [T-006] timeout でも transient でもない transport error は再試行されず 1 回で返る
 ///
-/// A redirect loop is neither `is_timeout()` nor `is_transient_network()`
-/// (not connect, not a transport-IO decode failure), so it classifies as
-/// Unknown — the escape hatch `Classification::from_reqwest` reserves for an
-/// unrecognized transport failure — and must not retry. Driving `api_get`
-/// (the retry loop) with a redirect limit of 1 makes one attempt cost exactly
-/// 2 requests (initial + one followed redirect), so a retry would double the
-/// count the mock server records.
+/// A redirect loop is neither `is_timeout()` nor `is_transient_network()`,
+/// so it classifies as Unknown — `Classification::from_reqwest`'s escape
+/// hatch — and must not retry. The request count proves the retry loop
+/// made exactly one attempt.
 #[tokio::test]
 async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -839,14 +836,10 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
 
 /// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
 ///
-/// A real `SlackClient::api_get_once` call against a wiremock server that
-/// delays past the client's request timeout produces a `SlackError::Network`
-/// whose `reqwest::Error::is_timeout()` is true. `Classification::from_reqwest`
-/// checks `is_timeout()` before the transient-network check (mirrors [T-001]
-/// in `classify_tests.rs`), so `SlackError::classify` answers `ErrorCode::Timeout`
-/// and `ScoutError::from(err).exit_code()` must be 124 (GNU coreutils `timeout`
-/// convention, ADR-0002) — the seam from the real HTTP call through to the
-/// process exit code.
+/// The seam from a real HTTP timeout through to the process exit code:
+/// a `SlackClient::api_get_once` call whose request timeout fires must reach
+/// `ScoutError` as exit 124 (GNU coreutils `timeout` convention, ADR-0002),
+/// not the pre-fix TempFailure(75).
 #[tokio::test]
 async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     let Some(server) = try_spawn_mock_server("slack::http::read_timeout").await else {

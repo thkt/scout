@@ -144,9 +144,8 @@ fn decode_is_internal() {
 
 /// [T-001] connect または read の timeout に由来する reqwest error は Timeout(124) に分類される。
 ///
-/// `classify` must delegate `Network` to `Classification::from_reqwest`
-/// (mirrors `BraveError::classify`'s `Self::Network(re) => Classification::from_reqwest(re)`),
-/// which checks `is_timeout()` before the transient check.
+/// `classify` delegates `Network` to `Classification::from_reqwest`, which
+/// checks `is_timeout()` before the transient check.
 #[tokio::test]
 async fn reqwest_timeout_error_classifies_as_timeout() {
     let Some(server) = try_spawn_mock_server("slack::classify::timeout").await else {
@@ -174,9 +173,7 @@ async fn reqwest_timeout_error_classifies_as_timeout() {
 
 /// [T-002] 接続拒否に由来する reqwest error は TempFailure(75) と network hint に分類される。
 ///
-/// Reserve-then-drop a loopback listener so the connect is refused
-/// deterministically (mirrors `fetch_error_http_connection_refused_is_transient`
-/// in `src/tools/errors/exit_code_tests.rs`).
+/// Companion to T-ER009, which drives the same failure through `FetchError`.
 #[tokio::test]
 async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint() {
     let Some(err) = connection_refused_error("reqwest_connection_refused_classifies").await else {
@@ -196,9 +193,7 @@ async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint
 /// [T-003] timeout でも transient でもない reqwest error は Unknown(104) に分類される。
 ///
 /// A body-decode failure on a 2xx response is neither a timeout nor a
-/// transient transport fault (mirrors
-/// `unclassifiable_reqwest_error_is_unknown_across_backends` in
-/// `src/tools/errors/exit_code_tests.rs`, extended to the Slack backend).
+/// transient transport fault. Companion to T-ER033.
 #[tokio::test]
 async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
     let Some(server) = try_spawn_mock_server("slack::classify::unknown").await else {
@@ -227,9 +222,8 @@ async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
 
 /// [T-004] URL 構築失敗は ParseUrl として Internal(70) に分類される。
 ///
-/// Unlike `BraveError::ParseUrl` (DataError — base_url is caller-controlled),
-/// Slack's base_url is a `const`, so a parse failure is unreachable in
-/// production and is a scout-side bug, classified Internal per the contract.
+/// The why-Internal-not-DataError rationale lives on the `ParseUrl`
+/// variant's doc in `src/slack.rs`.
 #[test]
 fn url_build_failure_classifies_as_parse_url_internal() {
     let parse_err = url::Url::parse("not a url").expect_err("malformed url must fail to parse");

@@ -502,10 +502,9 @@ impl SlackClient {
 }
 
 /// Retry eligibility, derived from [`SlackError::classify`] so retryability
-/// stays a single source of truth (mirrors `BraveError::is_degradable`):
-/// only `TempFailure`/`Timeout` retry. `RateLimited` is the one exception —
-/// its cap check needs the raw `retry_after` value that `classify()` doesn't
-/// carry through, so it stays its own arm ahead of the derived fallback.
+/// stays a single source of truth (mirrors `BraveError::is_degradable`).
+/// `RateLimited` keeps its own arm: the cap check needs the raw `retry_after`
+/// value, which `classify()` does not carry through.
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),

@@ -67,11 +67,9 @@ pub(crate) enum SlackError {
     InsecureUrl,
 }
 
-/// Hand-written (not `#[from]`) to strip the request URL before the error can
-/// reach `Display` in logs or `ScoutError` messages: reqwest appends
-/// `for url (…)` including the query string, so a future query parameter
-/// carrying a token or signed value would otherwise leak with no compiler
-/// signal. Classification flags (`is_timeout()` etc.) survive `without_url`.
+/// Hand-written (not `#[from]`) so the conversion strips the request URL:
+/// reqwest's `Display` appends `for url (…)` including the query string.
+/// Classification flags (`is_timeout()` etc.) survive `without_url`.
 impl From<reqwest::Error> for SlackError {
     fn from(e: reqwest::Error) -> Self {
         Self::Network(e.without_url())
@@ -119,13 +117,10 @@ impl SlackError {
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
             // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
-            // (mirrors `BraveError::classify`'s `Self::Network(re) => Classification::from_reqwest(re)`).
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
-            // Priority 5: INTERNAL — scout-side bug: unexpected schema (Decode)
-            // or a URL build failure (ParseUrl) unreachable in production
-            // because `base_url` is a `const`.
+            // Priority 5: INTERNAL — scout-side bug (unexpected schema / URL build failure)
             Self::Decode(_) | Self::ParseUrl(_) => Classification::new(ErrorCode::Internal),
         }
     }

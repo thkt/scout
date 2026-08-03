@@ -52,11 +52,8 @@ pub(crate) enum GitHubError {
     InsecureUrl,
 }
 
-/// Hand-written (not `#[from]`) to strip the request URL before the error can
-/// reach `Display`: reqwest appends `for url (…)` including the query string,
-/// so a future query parameter carrying a token or signed value would
-/// otherwise leak. Classification flags (`is_timeout()` etc.) survive
-/// `without_url`.
+/// Hand-written (not `#[from]`) so the conversion strips the request URL:
+/// reqwest's `Display` appends `for url (…)` including the query string.
 impl From<reqwest::Error> for GitHubError {
     fn from(e: reqwest::Error) -> Self {
         Self::Network(e.without_url())

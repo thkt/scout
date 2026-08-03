@@ -97,12 +97,10 @@ fn io_errors_have_exit_code_74() {
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
 ///
 /// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
-/// になる — the `SlackError::Network` row below carries a real connection-refused
-/// `reqwest::Error`, so the acceptance criterion lives in this case table.
+/// になる — pinned by the `SlackError::Network` row, which carries a real
+/// connection-refused `reqwest::Error`.
 #[tokio::test]
 async fn temp_failure_errors_have_exit_code_75() {
-    // `SlackError::Network` carries the raw `reqwest::Error`, so this
-    // fixture needs a real connect-level failure instead of a string literal.
     use crate::test_support::connection_refused_error;
     let Some(slack_network_err) = connection_refused_error("temp_failure_exit_code_75").await
     else {
@@ -296,16 +294,11 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
 
 /// [T-010] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
 ///
-/// Drives a real `SlackClient::fetch_message` call (the public entry point
-/// reachable from outside `slack::client`) against a wiremock
-/// `conversations.history` responder that always answers `internal_error`.
-/// `SlackError::classify` maps `internal_error` to `TempFailure`, so the
-/// client's internal retry loop (`api_get`) retries it up to
-/// `DEFAULT_MAX_RETRIES` times; when it still has not recovered, the final
-/// `SlackError::Api` propagates through `fetch_message` and must reach
-/// `ScoutError` as exit 75 (EX_TEMPFAIL) with the "retry after a short delay"
-/// hint — the seam from a real, persistently-failing HTTP call through to the
-/// process exit code and next_step hint.
+/// The seam from a persistently-failing real HTTP call through to the
+/// process exit code: a `fetch_message` whose responder always answers
+/// `internal_error` must exhaust the retry loop and reach `ScoutError` as
+/// exit 75 (EX_TEMPFAIL) with the retry hint. The request count proves at
+/// least one retry actually ran.
 #[tokio::test]
 async fn slack_persistent_internal_error_reaches_exit_code_75_via_scout_error() {
     use wiremock::matchers::{method, path};
