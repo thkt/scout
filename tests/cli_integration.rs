@@ -5,6 +5,21 @@ fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
 }
 
+/// Extracts the single JSON envelope line scout emits on stderr and parses it.
+/// Every `--json` error test needs this line before it can assert anything, so
+/// the lookup rule (first stderr line starting with `{`) lives here once.
+fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("{context} stderr should contain a JSON envelope line, got:\n{stderr}")
+        });
+    serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
+}
+
 // T-C001: help_exits_zero_and_contains_app_name
 #[test]
 fn help_exits_zero_and_contains_app_name() {
@@ -197,12 +212,7 @@ fn json_emits_envelope_on_error() {
         Some(65),
         "malformed owner/repo should still exit 65 (EX_DATAERR) in --json mode"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "malformed owner/repo");
     assert_eq!(
         value["error"]["code"], "DATA_ERROR",
         "code should be DATA_ERROR per ADR-0010, got: {value}"
@@ -242,12 +252,7 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
         Some(64),
         "missing API key → exit 64 (EX_USAGE)"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "missing API key");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
         "missing API key is a usage problem per ADR-0011 priority 1, got: {value}"
@@ -272,26 +277,19 @@ fn json_clap_parse_error_emits_envelope() {
         Some(64),
         "clap parse error should exit 64 (EX_USAGE per ADR-0002)"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("stderr should contain a JSON envelope line for clap parse errors");
-    let value: serde_json::Value = serde_json::from_str(line).expect("envelope must be valid JSON");
+    let value = parse_envelope(&output, "clap parse error");
     assert_eq!(
         value["error"]["code"], "USAGE_ERROR",
         "clap parse error should be USAGE_ERROR per ADR-0011 priority 1, got: {value}"
     );
 }
 
-/// Shared envelope-assert helper: parses the single JSON line scout emits on
-/// stderr and asserts exit 65 (EX_DATAERR), error.code == DATA_ERROR, and a
-/// next_step naming the private-IP block. Exit 65 alone cannot distinguish the
-/// SSRF rejection from any other DataError variant reachable on these paths,
-/// so the code and next_step asserts are what pin the contract.
-/// Used by T-C015/T-C016/T-C017/T-C018 (single launch form) and T-C019
-/// (table-driven over launch forms) so all five share one envelope-parsing
-/// path instead of each re-implementing it.
+/// Asserts the full SSRF-rejection contract: exit 65 (EX_DATAERR),
+/// error.code == DATA_ERROR, and a next_step naming the private-IP block. Exit
+/// 65 alone cannot distinguish the SSRF rejection from any other DataError
+/// variant reachable on these paths, so the code and next_step asserts are what
+/// pin the contract. Used by T-C015/T-C016/T-C017/T-C018 (single launch form)
+/// and T-C019 (table-driven over launch forms).
 fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
     assert_eq!(
         output.status.code(),
@@ -299,15 +297,7 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
         "{form_name} literal loopback fetch should exit 65 (EX_DATAERR), got:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .unwrap_or_else(|| {
-            panic!("{form_name} stderr should contain a JSON envelope line, got:\n{stderr}")
-        });
-    let value: serde_json::Value = serde_json::from_str(line)
-        .unwrap_or_else(|e| panic!("{form_name} envelope must be valid JSON ({e}): {line}"));
+    let value = parse_envelope(output, form_name);
     assert_eq!(
         value["error"]["code"], "DATA_ERROR",
         "{form_name} literal loopback should classify as DATA_ERROR, got: {value}"
