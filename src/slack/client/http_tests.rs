@@ -1,8 +1,11 @@
+use std::time::Duration;
+
 use super::*;
 use crate::envelope::ErrorCode;
 use crate::test_support::{
     mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
+use crate::tools::ScoutError;
 use reqwest::Client;
 use tracing_test::traced_test;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
@@ -819,4 +822,49 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
         "a transport-IO drop is retriable, not a scout-side schema bug"
     );
     let _ = handle.join();
+}
+
+/// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
+///
+/// A real `SlackClient::api_get_once` call against a wiremock server that
+/// delays past the client's request timeout produces a `SlackError::Network`
+/// whose `reqwest::Error::is_timeout()` is true. `Classification::from_reqwest`
+/// checks `is_timeout()` before the transient-network check (mirrors [T-001]
+/// in `classify_tests.rs`), so `SlackError::classify` answers `ErrorCode::Timeout`
+/// and `ScoutError::from(err).exit_code()` must be 124 (GNU coreutils `timeout`
+/// convention, ADR-0002) — the seam from the real HTTP call through to the
+/// process exit code.
+#[tokio::test]
+async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
+    let Some(server) = try_spawn_mock_server("slack::http::read_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/test.method"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+        .mount(&server)
+        .await;
+
+    let http = Client::builder()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .expect("client build");
+    let client = SlackClient::with_base_url(http, &server.uri());
+    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
+    let err = result.expect_err("a response slower than the client timeout must fail");
+    assert!(
+        matches!(err, SlackError::Network(ref e) if e.is_timeout()),
+        "expected a timeout Network error, got: {err:?}"
+    );
+
+    let scout_err = ScoutError::from(err);
+    assert_eq!(
+        scout_err.exit_code(),
+        124,
+        "expected 124 (GNU timeout): {scout_err}"
+    );
+    assert!(
+        scout_err.retryable(),
+        "Timeout must be retryable: {scout_err}"
+    );
 }

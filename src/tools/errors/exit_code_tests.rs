@@ -337,3 +337,67 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
         );
     }
 }
+
+/// [T-010] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
+///
+/// Drives a real `SlackClient::fetch_message` call (the public entry point
+/// reachable from outside `slack::client`) against a wiremock
+/// `conversations.history` responder that always answers `internal_error`.
+/// `SlackError::classify` maps `internal_error` to `TempFailure`, so the
+/// client's internal retry loop (`api_get`) retries it up to
+/// `DEFAULT_MAX_RETRIES` times; when it still has not recovered, the final
+/// `SlackError::Api` propagates through `fetch_message` and must reach
+/// `ScoutError` as exit 75 (EX_TEMPFAIL) with the "retry after a short delay"
+/// hint — the seam from a real, persistently-failing HTTP call through to the
+/// process exit code and next_step hint.
+#[tokio::test]
+async fn slack_persistent_internal_error_reaches_exit_code_75_via_scout_error() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    use crate::slack::{SlackClient, parse_slack_url};
+    use crate::test_support::try_spawn_mock_server;
+
+    let Some(server) = try_spawn_mock_server("errors::slack_persistent_internal_error").await
+    else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "internal_error"})),
+        )
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(reqwest::Client::new(), &server.uri());
+    let url = parse_slack_url("https://acme.slack.com/archives/C1/p1000000001")
+        .expect("valid slack permalink parses");
+    let result = client.fetch_message(&url).await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("internal_error persisting past every retry attempt must still fail"),
+    };
+    assert!(
+        matches!(err, SlackError::Api { ref error } if error == "internal_error"),
+        "expected the persistent internal_error to propagate, got: {err:?}"
+    );
+
+    let scout_err = ScoutError::from(err);
+    assert_eq!(
+        scout_err.exit_code(),
+        75,
+        "expected EX_TEMPFAIL (75): {scout_err}"
+    );
+    assert!(scout_err.retryable(), "expected retryable: {scout_err}");
+    assert!(
+        scout_err.next_step().is_some_and(|h| h.contains("Retry")),
+        "expected a retry hint, got: {:?}",
+        scout_err.next_step()
+    );
+    assert!(
+        scout_err.to_string().contains("retry may succeed"),
+        "should include retry hint in Display: {scout_err}"
+    );
+}
