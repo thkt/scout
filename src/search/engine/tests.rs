@@ -345,16 +345,14 @@ async fn research_search_failure_returns_error() {
 }
 
 /// [T-SE015] Pins the payload rule stated on `FetchError::Timeout`
-/// (src/fetch.rs) for the research call site: a source that outlasts the
-/// per-source budget lands in `failed_urls` with the timeout stated once, where
-/// it read "fetch timed out: page fetch timed out after 15s" until issue #329.
-/// The `fetch` and `fetch_slack` sites are pinned by `T-C027` and `T-SK072`.
+/// (src/fetch.rs) for the research call site, which reported a source that
+/// outlasted its budget as "fetch timed out: page fetch timed out after 15s"
+/// until issue #329.
 ///
-/// `fetch_sources` is called directly so `source_timeout` can be 1s instead of
-/// the 15s `research` passes; the mock delay only has to outlast it. The client
-/// reaches the loopback wiremock the way `scout_reaching` does (a `.resolve()`
-/// client paired with a public-address pre-flight resolver), because the SSRF
-/// guard would otherwise reject the loopback address before any timeout.
+/// The client reaches the loopback wiremock the way `scout_reaching`
+/// (src/tools/test_helpers.rs) does — a `.resolve()` client paired with a
+/// public-address pre-flight resolver — because the SSRF guard would otherwise
+/// reject the loopback address before the budget ever elapsed.
 #[tokio::test]
 async fn source_fetch_timeout_states_the_timeout_once() {
     let Some(server) = try_spawn_mock_server("engine::source_timeout").await else {

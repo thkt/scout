@@ -79,9 +79,9 @@ pub(crate) async fn research(
     })
 }
 
-/// `source_timeout` is the per-source page budget. `research` passes
-/// `FETCH_TIMEOUT`; taking it as an argument is what lets a test reach the
-/// timeout arm below without waiting those 15s.
+/// `research` passes `FETCH_TIMEOUT` as `source_timeout`; taking the per-source
+/// budget as an argument is what lets `T-SE015` reach the timeout arm below
+/// without waiting those 15s.
 async fn fetch_sources(
     http: &Client,
     sources: &[SearchResult],
