@@ -4,12 +4,11 @@ use std::fmt;
 use tracing::warn;
 
 use crate::brave::client::BraveError;
+use crate::classify::Classification;
 use crate::envelope::{Degradation, DegradedReason, ErrorCode};
 use crate::fetch::FetchError;
 use crate::github;
 use crate::slack::SlackError;
-
-use crate::classify::Classification;
 
 #[derive(Debug)]
 pub struct ScoutError {
