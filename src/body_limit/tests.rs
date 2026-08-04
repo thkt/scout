@@ -8,13 +8,14 @@ use wiremock::{Mock, ResponseTemplate};
 /// [T-R013] Issue #219: every existing `too_large` test drives wiremock's
 /// `set_body_bytes`, which always emits an honest Content-Length, so they
 /// exercise only `read_body_capped`'s Content-Length pre-check. Its chunk
-/// loop, the `body.len() > cap` arm, is the defense-in-depth guard for upstreams that omit
-/// Content-Length (compression → `content_length() == None`, chunked or
-/// close-delimited transfer); before this test it had zero coverage. A
-/// close-delimited response (no Content-Length, EOF-terminated body) forces
-/// `content_length() == None`, so the chunk loop — not the pre-check — must
-/// be what rejects the oversized body. CAP is tiny to keep the transfer
-/// cheap; the branch under test is identical regardless of cap size.
+/// loop, the `body.len() > cap` arm, is the defense-in-depth guard for
+/// upstreams that omit Content-Length (compression → `content_length() ==
+/// None`, chunked or close-delimited transfer); before this test it had zero
+/// coverage. A close-delimited response (no Content-Length, EOF-terminated
+/// body) forces `content_length() == None`, so the chunk loop — not the
+/// pre-check — must be what rejects the oversized body. CAP is tiny to keep
+/// the transfer cheap; the branch under test is identical regardless of cap
+/// size.
 #[tokio::test]
 async fn read_body_capped_rejects_close_delimited_oversized_body() {
     const CAP: usize = 16;
@@ -23,8 +24,6 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
     };
     let resp = reqwest::Client::new().get(&url).send().await.expect("send");
 
-    // Pin the chunk-loop path: a present Content-Length would route through
-    // the pre-check instead, silently re-covering the existing gap.
     assert!(
         resp.content_length().is_none(),
         "close-delimited response must have no Content-Length so the chunk \
