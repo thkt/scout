@@ -3,14 +3,14 @@
 use crate::envelope::ErrorCode;
 use crate::retry::is_transient_network;
 
-/// Reusable next_step hints so transient/network errors stay consistent.
+// Named so every backend reporting the same class of failure hands the caller
+// the same next_step string.
 const HINT_RETRY_DELAY: &str = "Retry after a short delay";
 const HINT_CHECK_NETWORK: &str = "Check your network connection";
 
 /// Per-variant error classification produced by each backend error type's
-/// `classify()` method. Carries the `ErrorCode` and the optional `next_step`
-/// hint; `From<XxxError> for ScoutError` composes it with the variant's
-/// `Display` message into a `ScoutError`.
+/// `classify()` method. `From<XxxError> for ScoutError` composes it with the
+/// variant's `Display` message into a `ScoutError`.
 ///
 /// Centralising classification on the variant (instead of inside `From`) keeps
 /// the ADR-0011 priority decision next to the variant definition and lets
