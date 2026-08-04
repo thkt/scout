@@ -1,13 +1,12 @@
-//! Slack message URL parsing, error classification, and wire-format structs.
-//! Message resolution and YAML output formatting live in [`format`]; the
+//! Slack message URL parsing and error classification. Wire-format structs
+//! live next to their deserialize call sites in [`client`]. Message
+//! resolution and YAML output formatting live in [`format`]; the
 //! token-bearing HTTP client lives in [`client`].
 
 // Only `resolve_messages_tests` needs this directly (via `use super::*`);
 // `resolve_messages` itself lives in `format` and imports its own copy.
 #[cfg(test)]
 use std::collections::HashMap;
-
-use serde::Deserialize;
 
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
@@ -138,60 +137,6 @@ impl SlackError {
             Self::Decode(_) | Self::ParseUrl(_) => Classification::new(ErrorCode::Internal),
         }
     }
-}
-
-#[derive(Deserialize)]
-struct MessagesBody {
-    #[serde(default)]
-    messages: Vec<Message>,
-    #[serde(default)]
-    has_more: bool,
-    response_metadata: Option<ResponseMetadata>,
-}
-
-impl MessagesBody {
-    /// The non-empty `next_cursor` to fetch the following page, if Slack
-    /// signalled more results.
-    fn next_cursor(&self) -> Option<&str> {
-        if !self.has_more {
-            return None;
-        }
-        self.response_metadata
-            .as_ref()
-            .and_then(|m| m.next_cursor.as_deref())
-            .filter(|c| !c.is_empty())
-    }
-}
-
-#[derive(Deserialize)]
-struct ResponseMetadata {
-    next_cursor: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ChannelBody {
-    channel: Option<ChannelInfo>,
-}
-
-#[derive(Deserialize)]
-struct ChannelInfo {
-    name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UserBody {
-    user: Option<UserDetail>,
-}
-
-#[derive(Deserialize)]
-struct UserDetail {
-    real_name: Option<String>,
-    profile: Option<Profile>,
-}
-
-#[derive(Deserialize)]
-struct Profile {
-    display_name: Option<String>,
 }
 
 #[cfg(test)]
