@@ -1,10 +1,11 @@
 //! Slack message permalink parsing.
 
-/// Parsed Slack message URL. Fields are `pub(in crate::slack)` (visible
-/// anywhere under [`crate::slack`]) rather than fully private, but the only
-/// construction path is still [`parse_slack_url`]; this guarantees
-/// `workspace`/`channel`/`ts` carry the shape that path established
-/// (non-empty workspace, `<secs>.<micros>` ts).
+/// Parsed Slack message URL. [`parse_slack_url`] is the only path that
+/// production code constructs one through, and it establishes the shape the
+/// accessors below promise: non-empty workspace, `<secs>.<micros>` ts. Fields
+/// are `pub(in crate::slack)` rather than private so test fixtures under
+/// [`crate::slack`] can build one directly, which means a fixture's values
+/// carry that shape by the author's care rather than by the parser.
 #[derive(Debug, Clone)]
 pub(crate) struct SlackUrl {
     pub(in crate::slack) workspace: String,
