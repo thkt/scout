@@ -103,7 +103,7 @@ async fn fetch_sources(
                 let result = match result {
                     Ok(inner) => inner,
                     Err(_) => Err(fetch::FetchError::Timeout(format!(
-                        "no response within {}s",
+                        "page fetch timed out after {}s",
                         FETCH_TIMEOUT.as_secs()
                     ))),
                 };

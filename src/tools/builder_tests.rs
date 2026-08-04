@@ -623,3 +623,57 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
         output.markdown()
     );
 }
+
+/// [T-SK072] The message a `fetch_slack` timeout produces states the timeout
+/// once. `SlackError::Timeout`'s Display prefixes "Slack fetch timed out: " and
+/// the `tokio::time::timeout` fallback in `fetch_slack` (src/tools/query.rs)
+/// supplies the payload; while both carried the phrase, `error.message` read
+/// "Slack fetch timed out: slack fetch timed out after 30s" (issue #313).
+///
+/// The assertion runs on a real timed-out call rather than a hand-built
+/// `SlackError::Timeout`, so a call site that puts the phrase back fails here.
+/// `with_slack_timeout` keeps the wait at 1s instead of the production 30s; the
+/// delay only has to outlast it.
+#[tokio::test]
+async fn fetch_slack_timeout_message_states_the_timeout_once() {
+    let Some(server) = try_spawn_mock_server("tools::slack_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(2))
+                .set_body_json(serde_json::json!({
+                    "ok": true,
+                    "messages": [{"text": "too slow to matter", "ts": "1000.000001"}]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .with_slack_timeout(Duration::from_secs(1))
+        .build();
+
+    let err = scout
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
+        .await
+        .expect_err("a Slack response slower than the timeout must fail");
+
+    assert_eq!(
+        err.error_kind(),
+        ErrorCode::Timeout,
+        "a slow Slack response must classify as Timeout, got: {}",
+        err.message()
+    );
+    assert_eq!(
+        err.message().matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {}",
+        err.message()
+    );
+}

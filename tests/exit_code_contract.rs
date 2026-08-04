@@ -47,11 +47,21 @@ use std::time::Duration;
 /// file it reads still resolve, everything else cleared so a var set in the
 /// invoking shell can't leak into the contract) plus `extra_env` layered on
 /// top. Shared by every scenario below, which differ only in `extra_env`.
+///
+/// `LLVM_PROFILE_FILE` is restored as well when the run is instrumented: the
+/// child writes its `.profraw` from that path, so clearing it dropped every
+/// line this file's scenarios exercise from the coverage report. It reads no
+/// scout config, so restoring it leaves the contract above intact, and
+/// cargo-llvm-cov's pattern carries `%p`/`%m` so the child gets its own file
+/// rather than overwriting the parent's.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     let mut cmd = scout();
     cmd.env_clear()
         .env("PATH", env::var("PATH").unwrap_or_default())
         .env("HOME", env::var("HOME").unwrap_or_default());
+    if let Ok(profile) = env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
