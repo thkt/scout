@@ -5,8 +5,6 @@
 
 // Only `resolve_messages_tests` needs this directly (via `use super::*`);
 // `resolve_messages` itself lives in `format` and imports its own copy.
-#[cfg(test)]
-use std::collections::HashMap;
 
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
@@ -141,9 +139,3 @@ impl SlackError {
 
 #[cfg(test)]
 mod classify_tests;
-#[cfg(test)]
-mod format_tests;
-#[cfg(test)]
-mod resolve_messages_tests;
-#[cfg(test)]
-mod url_tests;

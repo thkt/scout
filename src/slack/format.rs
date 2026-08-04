@@ -128,3 +128,8 @@ pub(in crate::slack) fn format_slack_output(
 
     out
 }
+
+#[cfg(test)]
+mod format_tests;
+#[cfg(test)]
+mod resolve_messages_tests;

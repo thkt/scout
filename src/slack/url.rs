@@ -66,3 +66,6 @@ pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
         raw_url: url.to_owned(),
     })
 }
+
+#[cfg(test)]
+mod url_tests;
