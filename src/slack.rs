@@ -142,6 +142,8 @@ impl SlackError {
 #[cfg(test)]
 mod classify_tests;
 #[cfg(test)]
+mod format_tests;
+#[cfg(test)]
 mod resolve_messages_tests;
 #[cfg(test)]
 mod url_tests;
