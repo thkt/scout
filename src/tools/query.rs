@@ -69,9 +69,6 @@ impl Scout {
                 timeout_secs = fetch_timeout.as_secs(),
                 "fetch timed out"
             );
-            // Payload carries the detail only: `FetchError::Timeout`'s Display
-            // already prefixes "fetch timed out: ", so repeating the phrase here
-            // doubles it in the JSON envelope's error.message (issue #313).
             Err(FetchError::Timeout(format!(
                 "no response within {}s",
                 fetch_timeout.as_secs()
@@ -118,8 +115,6 @@ impl Scout {
                     timeout_secs = slack_timeout.as_secs(),
                     "slack fetch timed out"
                 );
-                // Detail only, for the same reason as the `fetch` arm above:
-                // `SlackError::Timeout` prefixes "Slack fetch timed out: ".
                 Err(SlackError::Timeout(format!(
                     "no response within {}s",
                     slack_timeout.as_secs()

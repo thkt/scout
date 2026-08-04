@@ -81,6 +81,10 @@ pub(crate) enum FetchError {
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
 
+    /// The payload states what did not respond and within what budget, never
+    /// the timeout itself: this prefix already carries it, and a payload that
+    /// repeated the phrase reached the envelope as "fetch timed out: fetch
+    /// timed out after 30s" (issue #313, pinned by `T-C027`).
     #[error("fetch timed out: {0}")]
     Timeout(String),
 

@@ -181,42 +181,6 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     assert_proxy_was_dialed(&connection_count, "slow proxy response");
 }
 
-// T-C027: fetch_timeout_message_states_the_timeout_once
-//
-// The envelope message is assembled from two places that can each carry the
-// phrase: `FetchError::Timeout`'s Display prefix (src/fetch.rs) and the payload
-// the `tokio::time::timeout` fallback in `Scout::fetch` (src/tools/query.rs)
-// hands it. When both did, `error.message` read "fetch timed out: fetch timed
-// out after 1s" (issue #313).
-//
-// Driving a real timed-out run is what makes this catch a call-site
-// regression: a `FetchError::Timeout` built in-process would assert on a
-// payload the test itself wrote, so it would pass no matter what
-// `Scout::fetch` passes in production.
-#[test]
-fn fetch_timeout_message_states_the_timeout_once() {
-    let Some((proxy_url, _connection_count, _handle)) =
-        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
-    else {
-        return; // bind_loopback ruled this a skip, not a failure
-    };
-
-    let output = run_scout_fetch(&[
-        ("HTTP_PROXY", &proxy_url),
-        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
-    ]);
-
-    let envelope = parse_envelope(&output, "a proxy response slower than the fetch timeout");
-    let message = envelope["error"]["message"]
-        .as_str()
-        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
-    assert_eq!(
-        message.matches("timed out").count(),
-        1,
-        "error.message should state the timeout once, got: {message}"
-    );
-}
-
 // T-C025: non_http_proxy_response_exits_104_unknown
 //
 // Reached through `FetchError::Http(re) => Classification::from_reqwest(re)`
@@ -276,5 +240,41 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
         74,
         "IO_ERROR",
         "an HTTP_PROXY value reqwest::Proxy::all cannot parse",
+    );
+}
+
+// T-C027: fetch_timeout_message_states_the_timeout_once
+//
+// Two places can each carry the phrase: `FetchError::Timeout`'s Display prefix
+// (src/fetch.rs) and the payload the `tokio::time::timeout` fallback in
+// `Scout::fetch` (src/tools/query.rs) hands it. While both did, `error.message`
+// read "fetch timed out: fetch timed out after 1s" (issue #313).
+//
+// Running `T-C024`'s scenario again rather than asserting on the same run keeps
+// each ID pinning one contract. Driving a real timeout is what makes the
+// assertion non-tautological: a `FetchError::Timeout` built in-process would
+// assert on a payload this test itself wrote, leaving the call sites free to
+// reintroduce the prefix.
+#[test]
+fn fetch_timeout_message_states_the_timeout_once() {
+    let Some((proxy_url, _connection_count, _handle)) =
+        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
+    else {
+        return; // bind_loopback ruled this a skip, not a failure
+    };
+
+    let output = run_scout_fetch(&[
+        ("HTTP_PROXY", &proxy_url),
+        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
+    ]);
+
+    let envelope = parse_envelope(&output, "a proxy response slower than the fetch timeout");
+    let message = envelope["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
+    assert_eq!(
+        message.matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {message}"
     );
 }
