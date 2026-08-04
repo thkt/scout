@@ -20,6 +20,30 @@
 //! trips the raw-fallback path (and thus never reaches
 //! `neutralize_yaml_markers` through the extracted-content path this file
 //! targets) fails loudly instead of silently proving a different contract.
+//!
+//! `T-005`/`T-006` pin the sibling contract `write_yaml_str`
+//! (src/fetch/converter.rs) owns: a frontmatter *field value* (the article
+//! title, here) is wrapped in double quotes and escaped through
+//! `escape_yaml` as one contract, not two independent steps, so a title
+//! carrying `"` or a `---`-shaped substring is written back out as ordinary
+//! text on the single `title: "..."` line rather than breaking out of the
+//! quotes into a new line. The fixture titles below are proven, empirically
+//! (a throwaway `dom_smoothie` probe, not read off crate docs), to survive
+//! `dom_smoothie::Readability::get_article_title`'s separator-driven
+//! cleanup unchanged: their word count after that cleanup's split-on-`-`
+//! step is still <= 4, so `get_article_title` reverts to the original
+//! `<title>` text verbatim before `to_fetch_result` ever sees it.
+//!
+//! A title containing a literal newline is out of reach through this
+//! HTML-driven, end-to-end path on purpose: `get_article_title` runs
+//! `normalize_spaces` (collapsing any whitespace run, including a
+//! newline, to a single space) on every title it does not revert
+//! verbatim, and the revert-to-original branch these fixtures take can only
+//! be reached by a `<title>` text node, which an HTML parser never lets
+//! contain a raw `\n` byte in the first place. `escape_yaml`'s `'\n' =>
+//! "\\n"` arm therefore stays pinned only by the crate-internal tests in
+//! `src/fetch/converter.rs` (`escapes_yaml_special_chars`,
+//! `escapes_combined_special_chars`), not by anything in this file.
 
 mod common;
 
@@ -91,15 +115,20 @@ fn body_after_frontmatter<'a>(markdown: &'a str, context: &str) -> &'a str {
 }
 
 /// Wraps `injected` inside a `<nav>`/`<article>`/`<footer>` shell with a
-/// title, byline, and several sentences of filler prose on either side —
-/// the same shape `src/fetch/extractor.rs`'s own `BLOG_HTML` test fixture
-/// uses — so `dom_smoothie::Readability` scores the article region high
-/// enough to extract it rather than falling back to raw HTML.
-fn article_html(injected: &str) -> String {
+/// caller-supplied `<title>`, byline, and several sentences of filler prose
+/// on either side — the same shape `src/fetch/extractor.rs`'s own
+/// `BLOG_HTML` test fixture uses — so `dom_smoothie::Readability` scores the
+/// article region high enough to extract it rather than falling back to raw
+/// HTML. `title` lands verbatim in the `<title>` element, which
+/// `get_article_title` (`dom_smoothie`) reads to produce `article.title`,
+/// the value `format_with_frontmatter` (src/fetch/converter.rs) passes to
+/// `write_yaml_str` — the module doc above records why `title` must stay
+/// free of raw newlines for that value to round-trip unchanged.
+fn article_html_with_title(title: &str, injected: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html>
-<head><title>Marker Injection Post</title></head>
+<head><title>{title}</title></head>
 <body>
 <nav>Navigation links here</nav>
 <article>
@@ -117,6 +146,30 @@ rather than discarding it as boilerplate noise.</p>
 </body>
 </html>"#
     )
+}
+
+/// `article_html_with_title` with the fixed title `T-001`-`T-004` share.
+fn article_html(injected: &str) -> String {
+    article_html_with_title("Marker Injection Post", injected)
+}
+
+/// The frontmatter block's interior lines — everything between the opening
+/// `"---\n"` `format_with_frontmatter` (src/fetch/converter.rs) writes and
+/// the closing `"---\n\n"` it writes after the last field — with neither
+/// delimiter included. `T-005` reads a single field line out of this; `find`
+/// (not a `"---\n"` split like `body_after_frontmatter` uses) is safe against
+/// a field value that itself contains a `-`-only run followed by non-`\n`
+/// text (`T-005`'s title does), because `escape_yaml` never lets a field
+/// value contain a raw `\n`, so `"---\n\n"` cannot occur before the real
+/// closing delimiter.
+fn frontmatter_block<'a>(markdown: &'a str, context: &str) -> &'a str {
+    let after_open = markdown.strip_prefix("---\n").unwrap_or_else(|| {
+        panic!("{context}: output should start with an opening --- line, got:\n{markdown}")
+    });
+    let close_at = after_open.find("---\n\n").unwrap_or_else(|| {
+        panic!("{context}: output should contain a closed frontmatter block, got:\n{markdown}")
+    });
+    &after_open[..close_at]
 }
 
 // T-001: 本文由来の column-0 の --- 行は frontmatter 閉じ以降の出力に現れない
@@ -186,5 +239,64 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
         !body.lines().any(|l| l == "---" || l == "..."),
         "no bare --- or ... line should survive anywhere in the body, \
          inside or outside the code fence, got body:\n{body}"
+    );
+}
+
+// T-005: 二重引用符と --- を含む title は frontmatter の title 値としてエスケープされ新しい行を作らない
+#[test]
+fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() {
+    // Empirically confirmed (throwaway `dom_smoothie` probe against the
+    // pinned 0.18.0, not read off crate docs, `unverified` no docs page
+    // documents this cleanup's exact behavior): this exact string reverts to
+    // itself, unchanged, through `get_article_title`'s separator cleanup —
+    // see the module doc's `T-005`/`T-006` paragraph for why.
+    let title = r#"Report --- "Special" Edition"#;
+    let markdown = fetch_markdown(
+        &article_html_with_title(title, "<p>Injected content placeholder.</p>"),
+        "quoted-dash title",
+    );
+    let frontmatter = frontmatter_block(&markdown, "quoted-dash title");
+
+    let title_lines: Vec<&str> = frontmatter
+        .lines()
+        .filter(|l| l.starts_with("title:"))
+        .collect();
+    assert_eq!(
+        title_lines,
+        vec![r#"title: "Report --- \"Special\" Edition""#],
+        "the title's \" must be escaped to \\\" and the whole value must stay \
+         on write_yaml_str's single title: \"...\" line, got frontmatter:\n{frontmatter}"
+    );
+    assert!(
+        !frontmatter.lines().any(|l| l == "---" || l == "..."),
+        "an escaped title must not produce a bare --- or ... line inside the \
+         frontmatter block, got frontmatter:\n{frontmatter}"
+    );
+}
+
+// T-006: 最初の frontmatter block を除いた出力全体に --- または ... で始まる行が存在しない
+#[test]
+fn no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker() {
+    // Combines T-005's hostile title with T-001/T-002/T-003/T-004's hostile
+    // body markers in one fixture, so this scenario proves the two
+    // mechanisms (write_yaml_str's per-field escaping and
+    // neutralize_yaml_markers's per-line body rewrite) compose without
+    // leaving a gap at their boundary, rather than re-proving either one in
+    // isolation.
+    let title = r#"Report --- "Special" Edition"#;
+    let injected = "<p>---</p><p>...</p><p>--- evil: true</p>\
+                     <pre>---\nevil: true\n...\n</pre>";
+    let markdown = fetch_markdown(
+        &article_html_with_title(title, injected),
+        "combined title and body markers",
+    );
+    let body = body_after_frontmatter(&markdown, "combined title and body markers");
+
+    assert!(
+        !body
+            .lines()
+            .any(|l| l.starts_with("---") || l.starts_with("...")),
+        "no line anywhere in the output after the first frontmatter block's \
+         close should start with --- or ..., got body:\n{body}"
     );
 }
