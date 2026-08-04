@@ -59,7 +59,7 @@ use common::scout;
 /// Mirrors `run_scout_fetch` in `tests/exit_code_contract.rs`: a from-scratch
 /// environment (`PATH`/`HOME` restored, everything else cleared) plus
 /// `HTTP_PROXY` pointed at the mock proxy, so `fetch`'s `EgressMode::Proxied`
-/// path (src/fetch/ssrf.rs::detect_egress_mode) is taken and the domain-name
+/// path (`src/fetch/ssrf.rs::detect_egress_mode`) is taken and the domain-name
 /// target (not an IP literal) clears `ssrf_check` without the mock proxy's
 /// own loopback address ever being the dialed target.
 ///
@@ -67,7 +67,7 @@ use common::scout;
 /// bind, which `guard_loopback_bind` (tests/common/mod.rs) defines as a skip
 /// unless `SCOUT_NETWORK_TESTS` forces a panic — the same
 /// `else { return; }` treatment `assert_proxy_status_maps_to`
-/// (tests/exit_code_contract.rs) gives it, so a bind-restricted environment
+/// (`tests/exit_code_contract.rs`) gives it, so a bind-restricted environment
 /// skips this file the way it skips the other two `tests/*.rs` binaries
 /// instead of reddening the suite here alone.
 fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
@@ -143,13 +143,16 @@ fn split_frontmatter<'a>(markdown: &'a str, context: &str) -> (&'a str, &'a str)
     let open_at = if markdown.starts_with("---\n") {
         0
     } else {
-        markdown
-            .find("\n---\n")
-            .map(|at| at + 1)
-            .unwrap_or_else(|| {
-                panic!("{context}: output should contain an opening --- line, got:\n{markdown}")
-            })
+        markdown.find("\n---\n").map_or_else(
+            || panic!("{context}: output should contain an opening --- line, got:\n{markdown}"),
+            |at| at + 1,
+        )
     };
+    // Both search patterns are ASCII-only, so `open_at` and the length added
+    // to it are byte offsets that always land on a char boundary. A marker
+    // pattern carrying a non-ASCII byte would break that premise and turn the
+    // slice below into a byte-index panic naming neither the file nor the
+    // fixture.
     let after_open = &markdown[open_at + "---\n".len()..];
     after_open.split_once("---\n\n").unwrap_or_else(|| {
         panic!("{context}: output should contain a closed frontmatter block, got:\n{markdown}")
