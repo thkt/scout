@@ -20,6 +20,9 @@
 //! GitHub, and Slack clients, none of which this path enters), so there is
 //! nothing for that env var to change here.
 //!
+//! `T-C027` reuses `T-C024`'s slow-proxy setup for a different contract: not the
+//! exit code, but the wording of `error.message` the timeout produces.
+//!
 //! Exit 70 (`ErrorCode::Internal`, EX_SOFTWARE) is out of scope for this file
 //! on purpose, not by oversight: every constructor of it (`SlackError::Decode`
 //! / `ParseUrl`, `BraveError::ParseJson` / `ResponseTooLarge`,
@@ -176,6 +179,42 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     // A 0 count here would mean the timeout fired before the request reached
     // the proxy, which is a different path from the one this test targets.
     assert_proxy_was_dialed(&connection_count, "slow proxy response");
+}
+
+// T-C027: fetch_timeout_message_states_the_timeout_once
+//
+// The envelope message is assembled from two places that can each carry the
+// phrase: `FetchError::Timeout`'s Display prefix (src/fetch.rs) and the payload
+// the `tokio::time::timeout` fallback in `Scout::fetch` (src/tools/query.rs)
+// hands it. When both did, `error.message` read "fetch timed out: fetch timed
+// out after 1s" (issue #313).
+//
+// Driving a real timed-out run is what makes this catch a call-site
+// regression: a `FetchError::Timeout` built in-process would assert on a
+// payload the test itself wrote, so it would pass no matter what
+// `Scout::fetch` passes in production.
+#[test]
+fn fetch_timeout_message_states_the_timeout_once() {
+    let Some((proxy_url, _connection_count, _handle)) =
+        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
+    else {
+        return; // bind_loopback ruled this a skip, not a failure
+    };
+
+    let output = run_scout_fetch(&[
+        ("HTTP_PROXY", &proxy_url),
+        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
+    ]);
+
+    let envelope = parse_envelope(&output, "a proxy response slower than the fetch timeout");
+    let message = envelope["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
+    assert_eq!(
+        message.matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {message}"
+    );
 }
 
 // T-C025: non_http_proxy_response_exits_104_unknown

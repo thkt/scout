@@ -42,7 +42,10 @@ pub(super) enum BrowserError {
     NotFound,
     #[error("browser failed: {0}")]
     ProcessFailed(String),
-    #[error("browser rendering timed out")]
+    /// Rendered as the payload of `FetchError::Timeout`, whose Display already
+    /// prefixes "fetch timed out: ", so this message names the stage that ran
+    /// out of budget instead of repeating the phrase (issue #313).
+    #[error("browser rendering did not finish")]
     TimedOut,
     #[error("browser cancelled by signal")]
     Cancelled,

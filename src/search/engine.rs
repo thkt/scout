@@ -102,8 +102,10 @@ async fn fetch_sources(
                 .await;
                 let result = match result {
                     Ok(inner) => inner,
+                    // Detail only: `FetchError::Timeout`'s Display supplies the
+                    // "fetch timed out: " prefix (issue #313).
                     Err(_) => Err(fetch::FetchError::Timeout(format!(
-                        "page fetch timed out after {}s",
+                        "no response within {}s",
                         FETCH_TIMEOUT.as_secs()
                     ))),
                 };
