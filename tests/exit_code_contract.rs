@@ -20,8 +20,8 @@
 //! GitHub, and Slack clients, none of which this path enters), so there is
 //! nothing for that env var to change here.
 //!
-//! `T-C027` reuses `T-C024`'s slow-proxy setup for a different contract: not the
-//! exit code, but the wording of `error.message` the timeout produces.
+//! `T-C027` reuses `T-C024`'s slow-proxy setup to pin a different contract: the
+//! wording of the `error.message` a timeout produces, rather than its exit code.
 //!
 //! Exit 70 (`ErrorCode::Internal`, EX_SOFTWARE) is out of scope for this file
 //! on purpose, not by oversight: every constructor of it (`SlackError::Decode`
@@ -48,12 +48,11 @@ use std::time::Duration;
 /// invoking shell can't leak into the contract) plus `extra_env` layered on
 /// top. Shared by every scenario below, which differ only in `extra_env`.
 ///
-/// `LLVM_PROFILE_FILE` is restored as well when the run is instrumented: the
+/// `LLVM_PROFILE_FILE` survives the clear while a run is instrumented: the
 /// child writes its `.profraw` from that path, so clearing it dropped every
-/// line this file's scenarios exercise from the coverage report. It reads no
-/// scout config, so restoring it leaves the contract above intact, and
-/// cargo-llvm-cov's pattern carries `%p`/`%m` so the child gets its own file
-/// rather than overwriting the parent's.
+/// line these scenarios exercise from the coverage report. It carries no scout
+/// config, and cargo-llvm-cov's pattern includes `%p`/`%m`, so the child gets
+/// its own file instead of overwriting the parent's.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     let mut cmd = scout();
     cmd.env_clear()
@@ -255,16 +254,14 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
 
 // T-C027: fetch_timeout_message_states_the_timeout_once
 //
-// Two places can each carry the phrase: `FetchError::Timeout`'s Display prefix
-// (src/fetch.rs) and the payload the `tokio::time::timeout` fallback in
-// `Scout::fetch` (src/tools/query.rs) hands it. While both did, `error.message`
-// read "fetch timed out: fetch timed out after 1s" (issue #313).
+// Pins the payload rule stated on `FetchError::Timeout` (src/fetch.rs) for the
+// `Scout::fetch` call site, which read "fetch timed out: fetch timed out after
+// 1s" until issue #313.
 //
-// Running `T-C024`'s scenario again rather than asserting on the same run keeps
-// each ID pinning one contract. Driving a real timeout is what makes the
-// assertion non-tautological: a `FetchError::Timeout` built in-process would
-// assert on a payload this test itself wrote, leaving the call sites free to
-// reintroduce the prefix.
+// Repeating `T-C024`'s scenario rather than asserting on that run keeps each ID
+// pinning one contract. Driving a real timeout is what makes the assertion
+// non-tautological: a `FetchError::Timeout` built in-process would assert on a
+// payload this test wrote itself.
 #[test]
 fn fetch_timeout_message_states_the_timeout_once() {
     let Some((proxy_url, _connection_count, _handle)) =

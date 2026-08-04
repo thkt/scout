@@ -624,16 +624,15 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
     );
 }
 
-/// [T-SK072] The message a `fetch_slack` timeout produces states the timeout
-/// once. `SlackError::Timeout`'s Display prefixes "Slack fetch timed out: " and
-/// the `tokio::time::timeout` fallback in `fetch_slack` (src/tools/query.rs)
-/// supplies the payload; while both carried the phrase, `error.message` read
-/// "Slack fetch timed out: slack fetch timed out after 30s" (issue #313).
+/// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`
+/// (src/slack.rs) for the `fetch_slack` call site, which read "Slack fetch
+/// timed out: slack fetch timed out after 30s" until issue #313. The `fetch`
+/// side is pinned by `T-C027` (tests/exit_code_contract.rs).
 ///
-/// The assertion runs on a real timed-out call rather than a hand-built
-/// `SlackError::Timeout`, so a call site that puts the phrase back fails here.
-/// `with_slack_timeout` keeps the wait at 1s instead of the production 30s; the
-/// delay only has to outlast it.
+/// Driving a real timed-out call is what makes the assertion non-tautological:
+/// a `SlackError::Timeout` built in-process would assert on a payload this test
+/// wrote itself. `with_slack_timeout` cuts the wait to 1s from the production
+/// 30s, and the mock delay only has to outlast it.
 #[tokio::test]
 async fn fetch_slack_timeout_message_states_the_timeout_once() {
     let Some(server) = try_spawn_mock_server("tools::slack_timeout").await else {
@@ -664,16 +663,15 @@ async fn fetch_slack_timeout_message_states_the_timeout_once() {
         .await
         .expect_err("a Slack response slower than the timeout must fail");
 
+    let message = err.message();
     assert_eq!(
         err.error_kind(),
         ErrorCode::Timeout,
-        "a slow Slack response must classify as Timeout, got: {}",
-        err.message()
+        "a slow Slack response must classify as Timeout, got: {message}"
     );
     assert_eq!(
-        err.message().matches("timed out").count(),
+        message.matches("timed out").count(),
         1,
-        "error.message should state the timeout once, got: {}",
-        err.message()
+        "error.message should state the timeout once, got: {message}"
     );
 }

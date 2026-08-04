@@ -71,9 +71,9 @@ pub(crate) enum SlackError {
     // above shadows the `url` crate name within this module's path resolution.
     ParseUrl(#[from] ::url::ParseError),
 
-    /// The payload states what did not respond and within what budget, never
-    /// the timeout itself; see `FetchError::Timeout` (src/fetch.rs) for the
-    /// doubling that rule prevents.
+    /// The payload names what did not respond and within what budget; the
+    /// phrase itself belongs to this prefix alone (see `FetchError::Timeout`,
+    /// src/fetch.rs, for the doubling that prevents; pinned by `T-SK072`).
     #[error("Slack fetch timed out: {0}")]
     Timeout(String),
 
