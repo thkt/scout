@@ -7,8 +7,7 @@ use std::fmt::Write;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use super::SlackUrl;
-use super::substitute_mentions;
+use super::{SlackUrl, substitute_mentions};
 use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 #[derive(Deserialize)]
