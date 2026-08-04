@@ -76,7 +76,7 @@ Two adjacent audit findings are intentionally not addressed here.
 
 ### Adjacent dedup: From transient cluster
 
-`tools/errors.rs` has a parallel duplication: `From<BraveError>` and `From<GitHubError>` for `ScoutError` share a structurally identical 4-arm transient cluster (RateLimited / Server-or-Api-5xx / Network / Network-is-timeout). This ADR's scope includes consolidating that pattern via three small `Classification` constructors (`transient_retry`, `transient_network`, `timeout_retry` at `src/tools/errors.rs:43-58`) rather than via macro or trait. Same reasoning as the main decision: helpers are type-safe, debuggable, and avoid macro indirection.
+`tools/errors.rs` has a parallel duplication: `From<BraveError>` and `From<GitHubError>` for `ScoutError` share a structurally identical 4-arm transient cluster (RateLimited / Server-or-Api-5xx / Network / Network-is-timeout). This ADR's scope includes consolidating that pattern via three small `Classification` constructors (`transient_retry`, `transient_network`, `timeout_retry` in `src/classify.rs`) rather than via macro or trait. Same reasoning as the main decision: helpers are type-safe, debuggable, and avoid macro indirection.
 
 ### Reassessment Triggers
 

@@ -11,7 +11,6 @@ pub use params::Command;
 
 pub(crate) use builder::ScoutBuilder;
 pub(crate) use config::RuntimeConfig;
-pub(crate) use errors::Classification;
 
 use std::future::Future;
 use std::io::{IsTerminal, stdin};

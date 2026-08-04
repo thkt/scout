@@ -136,5 +136,6 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 - `docs/decisions/0003-error-classification-contract-for-sysexits-and-json-output.md` (HTTP status → ErrorCode mapping、本 ADR と別軸)
 - `docs/decisions/0010-scout-local-json-envelope-contract.md` (本 ADR と並ぶ supersede portion 2、Rule 1 `is_retryable` が本 ADR の Unknown 退避と整合)
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` §Classification Priority (本 ADR が supersede する meta ADR section)
-- `src/tools/errors.rs` (`Classification` 型、`From<*Error>` の委譲、`ScoutError` の home)
+- `src/classify.rs` (`Classification` 型の home)
+- `src/tools/errors.rs` (`From<*Error>` の委譲、`ScoutError` の home)
 - 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) (`// Priority N:` match arm 順序の実装 site)
