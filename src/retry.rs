@@ -23,15 +23,11 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
-/// Upper bound on JSON response body bytes accepted from Brave and Slack
-/// (issue #165 / CHX-008 / CHX-009). 1 MiB comfortably covers a
-/// `web/search` payload at Brave's `count=20` default and a Slack thread
-/// at `SLACK_REPLIES_LIMIT=200`; an oversized response cannot consume
-/// unbounded memory while the JSON parser allocates. `fetch.rs` keeps a
-/// separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the JSON cap is an
-/// order of magnitude smaller because API payloads are structured data,
-/// not human pages.
-pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Temporary re-export: `read_body_capped` and `MAX_API_RESPONSE_BYTES` moved
+/// to `body_limit.rs` (a shared leaf in `charset.rs`'s `//!`-doc format); this
+/// keeps existing `crate::retry::` call sites (Brave/Slack clients, tests)
+/// resolving without an update.
+pub(crate) use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
 
 /// Upper bound on JSON response body bytes accepted from the GitHub backend
 /// (issue #186). GitHub's payloads are an order of magnitude larger than
@@ -41,45 +37,6 @@ pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 /// already returns) so legitimate large-repo trees and files are not rejected,
 /// while still bounding the memory a hostile or runaway response can consume.
 pub(crate) const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
-
-/// Drain `response` into a `Vec<u8>` while enforcing `cap` bytes. Content-Length
-/// is pre-checked before any allocation; the chunk loop also rejects bodies that
-/// exceed the cap when the header is absent or lies. Callers pass the cap that
-/// matches their backend's legitimate payload size (`MAX_API_RESPONSE_BYTES` for
-/// Brave/Slack, `MAX_GITHUB_RESPONSE_BYTES` for GitHub, `MAX_RESPONSE_BYTES` for
-/// `fetch`'s HTML downloads).
-///
-/// `cap` applies to *decoded* bytes: with reqwest's compression features enabled,
-/// `chunk()` yields already-decompressed data and `content_length()` returns
-/// `None` for compressed responses (so the pre-check goes inert and the chunk
-/// loop is the live guard). This bounds peak memory to `cap + one chunk` even
-/// against a decompression bomb, at the cost of rejecting a legitimately large
-/// page whose decompressed size exceeds the cap.
-pub(crate) async fn read_body_capped<E>(
-    response: reqwest::Response,
-    cap: usize,
-    too_large: impl Fn() -> E,
-    network: impl Fn(reqwest::Error) -> E,
-) -> Result<Vec<u8>, E> {
-    let content_length = response.content_length();
-    if let Some(len) = content_length
-        && usize::try_from(len).unwrap_or(usize::MAX) > cap
-    {
-        return Err(too_large());
-    }
-    let capacity = content_length
-        .map(|len| usize::try_from(len).unwrap_or(usize::MAX).min(cap))
-        .unwrap_or(8192);
-    let mut body = Vec::with_capacity(capacity);
-    let mut stream = response;
-    while let Some(chunk) = stream.chunk().await.map_err(&network)? {
-        body.extend_from_slice(&chunk);
-        if body.len() > cap {
-            return Err(too_large());
-        }
-    }
-    Ok(body)
-}
 
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
