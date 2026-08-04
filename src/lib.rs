@@ -16,6 +16,7 @@ mod slack;
 mod test_support;
 mod token_source;
 mod tools;
+mod yaml;
 
 pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 

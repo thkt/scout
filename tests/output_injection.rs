@@ -1,4 +1,4 @@
-//! Pins `neutralize_yaml_markers` (src/fetch/converter.rs) end to end through
+//! Pins `neutralize_yaml_markers` (src/yaml.rs) end to end through
 //! `scout fetch`: a page body containing a column-0 `---`/`...` line must not
 //! reach stdout as a bare YAML document marker after the frontmatter block
 //! `format_with_frontmatter` opens, because that would let page content forge
@@ -22,7 +22,7 @@
 //! targets) fails loudly instead of silently proving a different contract.
 //!
 //! `T-C033`/`T-C034` pin the sibling contract `write_yaml_str`
-//! (src/fetch/converter.rs) owns: a frontmatter *field value* (the article
+//! (src/yaml.rs) owns: a frontmatter *field value* (the article
 //! title, here) is wrapped in double quotes and escaped through
 //! `escape_yaml` as one contract, not two independent steps, so a title
 //! carrying `"` or a `---`-shaped substring is written back out as ordinary
@@ -42,7 +42,7 @@
 //! be reached by a `<title>` text node, which an HTML parser never lets
 //! contain a raw `\n` byte in the first place. `escape_yaml`'s `'\n' =>
 //! "\\n"` arm therefore stays pinned only by the crate-internal tests in
-//! `src/fetch/converter.rs` (`escapes_yaml_special_chars`,
+//! `src/yaml.rs` (`escapes_yaml_special_chars`,
 //! `escapes_combined_special_chars`), not by anything in this file.
 
 mod common;

@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
-use crate::fetch::converter::{neutralize_yaml_markers, write_yaml_str};
+use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 mod client;
 pub(crate) use client::SlackClient;
