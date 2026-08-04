@@ -82,10 +82,8 @@ fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
         .args(["fetch", "http://example.com/"]);
     let output = cmd.output().expect("scout fetch failed to run");
 
-    // Same false-positive guard `assert_proxy_was_dialed`
-    // (tests/exit_code_contract.rs) applies: a run that produced plausible
-    // stdout without the fixture ever leaving the mock proxy would prove
-    // nothing about the fixture's markers.
+    // The same false-positive guard `assert_proxy_was_dialed`
+    // (tests/exit_code_contract.rs) applies here.
     assert!(
         connection_count.load(Ordering::SeqCst) >= 1,
         "{context}: no connection reached the mock proxy, so the stdout asserted below did not \
@@ -100,6 +98,9 @@ fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
 /// imported: `RAW_FALLBACK_NOTE` (src/fetch/converter.rs) is `pub(crate)`,
 /// which scopes to the `scout` library crate and does not reach this
 /// separately-compiled integration-test binary.
+///
+/// `None` carries `run_scout_fetch_via_proxy`'s skip decision, which every
+/// caller below turns into an early `return`.
 fn fetch_markdown(html: &str, context: &str) -> Option<String> {
     let output = run_scout_fetch_via_proxy(html, context)?;
     assert!(
@@ -148,11 +149,8 @@ fn split_frontmatter<'a>(markdown: &'a str, context: &str) -> (&'a str, &'a str)
             |at| at + 1,
         )
     };
-    // Both search patterns are ASCII-only, so `open_at` and the length added
-    // to it are byte offsets that always land on a char boundary. A marker
-    // pattern carrying a non-ASCII byte would break that premise and turn the
-    // slice below into a byte-index panic naming neither the file nor the
-    // fixture.
+    // Both search patterns are ASCII-only, which is what keeps `open_at` and
+    // the length added to it on a char boundary.
     let after_open = &markdown[open_at + "---\n".len()..];
     after_open.split_once("---\n\n").unwrap_or_else(|| {
         panic!("{context}: output should contain a closed frontmatter block, got:\n{markdown}")
@@ -193,7 +191,7 @@ rather than discarding it as boilerplate noise.</p>
     )
 }
 
-/// `article_html_with_title` with the fixed title `T-001`-`T-004` share.
+/// `article_html_with_title` with the fixed title `T-C029`-`T-C032` share.
 fn article_html(injected: &str) -> String {
     article_html_with_title("Marker Injection Post", injected)
 }
@@ -203,7 +201,7 @@ fn article_html(injected: &str) -> String {
 fn body_originated_bare_dash_line_does_not_appear_after_frontmatter_close() {
     let context = "bare dash body line";
     let Some(markdown) = fetch_markdown(&article_html("<p>---</p>"), context) else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
@@ -219,7 +217,7 @@ fn body_originated_bare_dash_line_does_not_appear_after_frontmatter_close() {
 fn body_originated_bare_dots_line_does_not_appear_after_frontmatter_close() {
     let context = "bare dots body line";
     let Some(markdown) = fetch_markdown(&article_html("<p>...</p>"), context) else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
@@ -235,7 +233,7 @@ fn body_originated_bare_dots_line_does_not_appear_after_frontmatter_close() {
 fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
     let context = "dash marker with inline content";
     let Some(markdown) = fetch_markdown(&article_html("<p>--- evil: true</p>"), context) else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
@@ -256,14 +254,11 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
     let Some(markdown) =
         fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
     else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
-    // Not fence-aware on purpose (see module doc): the marker lines inside
-    // the fenced code block `<pre>` becomes must be rewritten exactly like
-    // the bare-paragraph cases above, not left as YAML markers just because
-    // they sit inside ``` fences.
+    // Not fence-aware on purpose (see module doc).
     assert!(
         body.contains("```\n***\nevil: true\n***\n```"),
         "column-0 markers inside a <pre>-derived fenced code block must be \
@@ -279,18 +274,16 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
 // T-C033: title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line
 #[test]
 fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() {
-    // Empirically confirmed (throwaway `dom_smoothie` probe against the
-    // pinned 0.18.0, not read off crate docs, `unverified` no docs page
-    // documents this cleanup's exact behavior): this exact string reverts to
-    // itself, unchanged, through `get_article_title`'s separator cleanup —
-    // see the module doc's `T-C033`/`T-C034` paragraph for why.
+    // The module doc's `T-C033`/`T-C034` paragraph records why this exact
+    // string survives `get_article_title`'s separator cleanup unchanged, and
+    // that the source is a throwaway probe rather than crate docs.
     let title = r#"Report --- "Special" Edition"#;
     let context = "quoted-dash title";
     let Some(markdown) = fetch_markdown(
         &article_html_with_title(title, "<p>Injected content placeholder.</p>"),
         context,
     ) else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (frontmatter, _) = split_frontmatter(&markdown, context);
 
@@ -314,18 +307,15 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
 // T-C034: no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker
 #[test]
 fn no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker() {
-    // Combines T-C033's hostile title with T-C029/T-C030/T-C031/T-C032's
-    // hostile body markers in one fixture, so this scenario proves the two
-    // mechanisms (write_yaml_str's per-field escaping and
-    // neutralize_yaml_markers's per-line body rewrite) compose without
-    // leaving a gap at their boundary, rather than re-proving either one in
-    // isolation.
+    // One fixture carrying both hostile shapes, so that `write_yaml_str`'s
+    // per-field escaping and `neutralize_yaml_markers`'s per-line body rewrite
+    // are proven to compose rather than each being re-proven in isolation.
     let title = r#"Report --- "Special" Edition"#;
     let injected = "<p>---</p><p>...</p><p>--- evil: true</p>\
                      <pre>---\nevil: true\n...\n</pre>";
     let context = "combined title and body markers";
     let Some(markdown) = fetch_markdown(&article_html_with_title(title, injected), context) else {
-        return; // bind_loopback ruled this a skip, not a failure
+        return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
