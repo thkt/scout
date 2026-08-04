@@ -56,10 +56,10 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 
 /// Escape a string for use inside a double-quoted YAML scalar.
 ///
-/// The escape set is the half of [`write_yaml_str`]'s contract that neutralizes
-/// the value itself, so callers reach for that function rather than this one;
-/// ADR-0014 lists it as its own neutralization point because the table pins the
-/// escape set (`\` `"` `\n\r\t` escaped, `\0` removed) independently.
+/// This is the value-side half of [`write_yaml_str`]'s contract, so a caller
+/// writing a frontmatter field reaches for that function instead. It carries a
+/// doc of its own because ADR-0014's neutralization table pins this escape set
+/// separately from the quoting.
 pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {
     // The common frontmatter value (a plain title/author/date) carries no escapable
     // char, so borrow it untouched instead of allocating a copy.
