@@ -68,6 +68,7 @@ pub(crate) async fn research(
         &req.egress,
         resolver,
         cancel,
+        FETCH_TIMEOUT,
     )
     .await;
 
@@ -78,6 +79,9 @@ pub(crate) async fn research(
     })
 }
 
+/// `source_timeout` is the per-source page budget. `research` passes
+/// `FETCH_TIMEOUT`; taking it as an argument is what lets a test reach the
+/// timeout arm below without waiting those 15s.
 async fn fetch_sources(
     http: &Client,
     sources: &[SearchResult],
@@ -85,6 +89,7 @@ async fn fetch_sources(
     egress: &EgressMode,
     resolver: Arc<dyn DnsResolver>,
     cancel: &watch::Sender<bool>,
+    source_timeout: Duration,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
     let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
         .map(|(idx, source)| {
@@ -96,15 +101,15 @@ async fn fetch_sources(
             async move {
                 let url = source.url.as_str();
                 let result = timeout(
-                    FETCH_TIMEOUT,
+                    source_timeout,
                     fetch::fetch_page(http, url, opts, resolver, cancel),
                 )
                 .await;
                 let result = match result {
                     Ok(inner) => inner,
                     Err(_) => Err(fetch::FetchError::Timeout(format!(
-                        "page fetch timed out after {}s",
-                        FETCH_TIMEOUT.as_secs()
+                        "no response within {}s",
+                        source_timeout.as_secs()
                     ))),
                 };
                 (idx, url, result)

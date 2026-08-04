@@ -1,6 +1,11 @@
 use super::*;
+use crate::fetch::StaticDnsResolver;
+use crate::test_support::try_spawn_mock_server;
+use reqwest::redirect::Policy;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 fn real_resolver() -> Arc<dyn DnsResolver> {
     Arc::new(fetch::TokioDnsResolver)
@@ -337,4 +342,63 @@ async fn research_search_failure_returns_error() {
         .await
         .unwrap_err();
     assert!(matches!(err, BraveError::RateLimited { .. }));
+}
+
+/// [T-SE015] Pins the payload rule stated on `FetchError::Timeout`
+/// (src/fetch.rs) for the research call site: a source that outlasts the
+/// per-source budget lands in `failed_urls` with the timeout stated once, where
+/// it read "fetch timed out: page fetch timed out after 15s" until issue #329.
+/// The `fetch` and `fetch_slack` sites are pinned by `T-C027` and `T-SK072`.
+///
+/// `fetch_sources` is called directly so `source_timeout` can be 1s instead of
+/// the 15s `research` passes; the mock delay only has to outlast it. The client
+/// reaches the loopback wiremock the way `scout_reaching` does (a `.resolve()`
+/// client paired with a public-address pre-flight resolver), because the SSRF
+/// guard would otherwise reject the loopback address before any timeout.
+#[tokio::test]
+async fn source_fetch_timeout_states_the_timeout_once() {
+    let Some(server) = try_spawn_mock_server("engine::source_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(2))
+                .set_body_string("too slow to matter"),
+        )
+        .mount(&server)
+        .await;
+
+    let addr = *server.address();
+    let http = Client::builder()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .expect("test client builds");
+    let resolver: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let sources = vec![make_source(
+        &format!("http://scout-test.example:{}/slow", addr.port()),
+        "Slow",
+    )];
+    let (cancel, _) = watch::channel(false);
+
+    let (pages, failed) = fetch_sources(
+        &http,
+        &sources,
+        1,
+        &EgressMode::Direct,
+        resolver,
+        &cancel,
+        Duration::from_secs(1),
+    )
+    .await;
+
+    assert!(pages.is_empty(), "the slow source must not land in pages");
+    let reason = &failed.first().expect("the slow source must fail").reason;
+    assert_eq!(
+        reason.matches("timed out").count(),
+        1,
+        "failed_urls[].reason should state the timeout once, got: {reason}"
+    );
 }
