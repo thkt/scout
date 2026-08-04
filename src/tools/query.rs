@@ -70,7 +70,7 @@ impl Scout {
                 "fetch timed out"
             );
             Err(FetchError::Timeout(format!(
-                "fetch timed out after {}s",
+                "no response within {}s",
                 fetch_timeout.as_secs()
             )))
         })?;
@@ -116,7 +116,7 @@ impl Scout {
                     "slack fetch timed out"
                 );
                 Err(SlackError::Timeout(format!(
-                    "slack fetch timed out after {}s",
+                    "no response within {}s",
                     slack_timeout.as_secs()
                 )))
             })

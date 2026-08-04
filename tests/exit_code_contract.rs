@@ -20,6 +20,9 @@
 //! GitHub, and Slack clients, none of which this path enters), so there is
 //! nothing for that env var to change here.
 //!
+//! `T-C027` reuses `T-C024`'s slow-proxy setup to pin a different contract: the
+//! wording of the `error.message` a timeout produces, rather than its exit code.
+//!
 //! Exit 70 (`ErrorCode::Internal`, EX_SOFTWARE) is out of scope for this file
 //! on purpose, not by oversight: every constructor of it (`SlackError::Decode`
 //! / `ParseUrl`, `BraveError::ParseJson` / `ResponseTooLarge`,
@@ -44,11 +47,20 @@ use std::time::Duration;
 /// file it reads still resolve, everything else cleared so a var set in the
 /// invoking shell can't leak into the contract) plus `extra_env` layered on
 /// top. Shared by every scenario below, which differ only in `extra_env`.
+///
+/// `LLVM_PROFILE_FILE` survives the clear while a run is instrumented: the
+/// child writes its `.profraw` from that path, so clearing it dropped every
+/// line these scenarios exercise from the coverage report. It carries no scout
+/// config, and cargo-llvm-cov's pattern includes `%p`/`%m`, so the child gets
+/// its own file instead of overwriting the parent's.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     let mut cmd = scout();
     cmd.env_clear()
         .env("PATH", env::var("PATH").unwrap_or_default())
         .env("HOME", env::var("HOME").unwrap_or_default());
+    if let Ok(profile) = env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
@@ -237,5 +249,39 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
         74,
         "IO_ERROR",
         "an HTTP_PROXY value reqwest::Proxy::all cannot parse",
+    );
+}
+
+// T-C027: fetch_timeout_message_states_the_timeout_once
+//
+// Pins the payload rule stated on `FetchError::Timeout` (src/fetch.rs) for the
+// `Scout::fetch` call site, which read "fetch timed out: fetch timed out after
+// 1s" until issue #313.
+//
+// Repeating `T-C024`'s scenario rather than asserting on that run keeps each ID
+// pinning one contract. Driving a real timeout is what makes the assertion
+// non-tautological: a `FetchError::Timeout` built in-process would assert on a
+// payload this test wrote itself.
+#[test]
+fn fetch_timeout_message_states_the_timeout_once() {
+    let Some((proxy_url, _connection_count, _handle)) =
+        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
+    else {
+        return; // bind_loopback ruled this a skip, not a failure
+    };
+
+    let output = run_scout_fetch(&[
+        ("HTTP_PROXY", &proxy_url),
+        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
+    ]);
+
+    let envelope = parse_envelope(&output, "a proxy response slower than the fetch timeout");
+    let message = envelope["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
+    assert_eq!(
+        message.matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {message}"
     );
 }

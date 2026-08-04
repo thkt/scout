@@ -623,3 +623,55 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
         output.markdown()
     );
 }
+
+/// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`
+/// (src/slack.rs) for the `fetch_slack` call site, which read "Slack fetch
+/// timed out: slack fetch timed out after 30s" until issue #313. The `fetch`
+/// side is pinned by `T-C027` (tests/exit_code_contract.rs).
+///
+/// Driving a real timed-out call is what makes the assertion non-tautological:
+/// a `SlackError::Timeout` built in-process would assert on a payload this test
+/// wrote itself. `with_slack_timeout` cuts the wait to 1s from the production
+/// 30s, and the mock delay only has to outlast it.
+#[tokio::test]
+async fn fetch_slack_timeout_message_states_the_timeout_once() {
+    let Some(server) = try_spawn_mock_server("tools::slack_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(2))
+                .set_body_json(serde_json::json!({
+                    "ok": true,
+                    "messages": [{"text": "too slow to matter", "ts": "1000.000001"}]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .with_slack_timeout(Duration::from_secs(1))
+        .build();
+
+    let err = scout
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
+        .await
+        .expect_err("a Slack response slower than the timeout must fail");
+
+    let message = err.message();
+    assert_eq!(
+        err.error_kind(),
+        ErrorCode::Timeout,
+        "a slow Slack response must classify as Timeout, got: {message}"
+    );
+    assert_eq!(
+        message.matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {message}"
+    );
+}

@@ -218,6 +218,15 @@ impl ScoutBuilder {
         self
     }
 
+    /// The `fetch_slack` counterpart of `with_github_timeout`: a test forces the
+    /// `tokio::time::timeout` around `fetch_message` to trip against a delayed
+    /// wiremock response instead of waiting the production 30s.
+    #[cfg(test)]
+    pub(crate) fn with_slack_timeout(mut self, timeout: Duration) -> Self {
+        self.config.slack_timeout = timeout;
+        self
+    }
+
     /// Re-uses the builder's `http` so wiremock servers share the test client
     /// (avoids spawning a second `reqwest` connection pool per test).
     #[cfg(test)]
