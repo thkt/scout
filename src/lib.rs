@@ -1,3 +1,4 @@
+mod body_limit;
 mod brave;
 mod charset;
 mod classify;

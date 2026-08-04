@@ -1,6 +1,6 @@
+use super::MAX_GITHUB_RESPONSE_BYTES;
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
-use crate::retry::MAX_GITHUB_RESPONSE_BYTES;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GitHubError {

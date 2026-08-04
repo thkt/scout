@@ -10,15 +10,13 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use tracing::{info, warn};
 
+use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
 use crate::clock::{Clock, SystemClock};
 use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
-use crate::retry::{
-    MAX_API_RESPONSE_BYTES, parse_retry_after, read_body_capped, retry_after_within_cap,
-    retry_with_rate_limit,
-};
+use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
 use crate::rng::{FastrandRng, Rng};
 
 use super::{

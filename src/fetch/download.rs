@@ -7,8 +7,8 @@ use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
 use super::{FetchError, MAX_RESPONSE_BYTES};
+use crate::body_limit::read_body_capped;
 use crate::charset::is_reliable_detection;
-use crate::retry::read_body_capped;
 
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
 ///
