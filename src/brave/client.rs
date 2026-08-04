@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 use tracing::{info, warn};
 
+use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
 use crate::classify::Classification;
 use crate::clock::{Clock, SystemClock};
 use crate::envelope::ErrorCode;
@@ -13,8 +14,7 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_API_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
-    retry_after_within_cap, retry_with_rate_limit,
+    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 
