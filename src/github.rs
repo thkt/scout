@@ -12,13 +12,13 @@ use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
+use crate::body_limit::read_body_capped;
 use crate::clock::{Clock, SystemClock};
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    is_transient_network, parse_retry_after, read_body_capped, retry_after_within_cap,
-    retry_with_rate_limit,
+    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 use crate::token_source::TokenSource;

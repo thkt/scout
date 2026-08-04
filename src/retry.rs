@@ -23,12 +23,6 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
-/// Temporary re-export: `read_body_capped` and `MAX_API_RESPONSE_BYTES` moved
-/// to `body_limit.rs` (a shared leaf in `charset.rs`'s `//!`-doc format); this
-/// keeps existing `crate::retry::` call sites (Brave/Slack clients, tests)
-/// resolving without an update.
-pub(crate) use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
-
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;
