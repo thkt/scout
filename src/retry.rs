@@ -29,15 +29,6 @@ pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 /// resolving without an update.
 pub(crate) use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
 
-/// Upper bound on JSON response body bytes accepted from the GitHub backend
-/// (issue #186). GitHub's payloads are an order of magnitude larger than
-/// Brave/Slack: `git/trees?recursive=1` is served up to GitHub's own ~7 MB
-/// truncation ceiling, and `git/blobs` returns base64-inflated file content.
-/// 10 MB matches `fetch.rs`'s `MAX_RESPONSE_BYTES` (the largest content scout
-/// already returns) so legitimate large-repo trees and files are not rejected,
-/// while still bounding the memory a hostile or runaway response can consume.
-pub(crate) const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
-
 pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;

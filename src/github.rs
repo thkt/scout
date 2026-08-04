@@ -17,8 +17,8 @@ use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::retry::{
-    MAX_GITHUB_RESPONSE_BYTES, is_transient_network, parse_retry_after, read_body_capped,
-    retry_after_within_cap, retry_with_rate_limit,
+    is_transient_network, parse_retry_after, read_body_capped, retry_after_within_cap,
+    retry_with_rate_limit,
 };
 use crate::rng::{FastrandRng, Rng};
 use crate::token_source::TokenSource;
@@ -36,6 +36,18 @@ use types::{
 pub(crate) use errors::GitHubError;
 
 const API_BASE: &str = "https://api.github.com";
+
+/// Upper bound on JSON response body bytes accepted from the GitHub backend
+/// (issue #186). GitHub's payloads are an order of magnitude larger than
+/// Brave/Slack: `git/trees?recursive=1` is served up to GitHub's own ~7 MB
+/// truncation ceiling, and `git/blobs` returns base64-inflated file content.
+/// 10 MB matches `fetch.rs`'s `MAX_RESPONSE_BYTES` (the largest content scout
+/// already returns) so legitimate large-repo trees and files are not rejected,
+/// while still bounding the memory a hostile or runaway response can consume.
+/// The match with `fetch.rs` is not enforced in code (no `github` → `fetch`
+/// dependency edge is worth adding for a single shared constant); this
+/// comment is the only record of the two values moving together.
+const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
 
 /// HTTP client for the GitHub REST API v3.
 ///
