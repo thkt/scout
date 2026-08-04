@@ -56,3 +56,6 @@ pub(crate) async fn read_body_capped<E>(
     }
     Ok(body)
 }
+
+#[cfg(test)]
+mod tests;
