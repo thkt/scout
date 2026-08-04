@@ -193,6 +193,46 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
     Some((format!("http://{addr}"), handle))
 }
 
+/// One-shot server that declares `Content-Length: declared_len` in the
+/// response head and then closes the connection without writing a single
+/// body byte. Mirrors `spawn_close_delimited_body_server`'s shape (bind,
+/// accept once, drain the request, write the response, drop the stream) but
+/// controls the header instead of the framing.
+///
+/// Proves `read_body_capped`'s pre-check rejects an oversized declared
+/// length before it reads any body byte: since zero body bytes are ever
+/// written, an implementation that tried to read past the pre-check would
+/// see the connection close before satisfying `declared_len`, which reqwest
+/// surfaces as a decode/network error — not `too_large`. Observing
+/// `too_large` therefore is itself the proof that the body was never read
+/// (issue #219 / TC-006).
+///
+/// Returns `None` when loopback bind is unavailable so callers can
+/// early-return in restricted environments, matching
+/// `spawn_close_delimited_body_server`.
+pub fn spawn_declared_length_no_body_server(
+    declared_len: usize,
+) -> Option<(String, JoinHandle<()>)> {
+    let listener = bind_loopback("spawn_declared_length_no_body_server")?;
+    let addr = listener.local_addr().ok()?;
+    let handle = thread::spawn(move || {
+        // Single-shot: the test makes exactly one connection, so a failed
+        // accept is a test-environment fault — panic loudly rather than
+        // hang the joining test on a silent return.
+        let (mut stream, _) = listener.accept().expect("accept loopback connection");
+        // Drain the request so the write below is the response, not racing
+        // an unread request buffer.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {declared_len}\r\n\r\n").as_bytes(),
+        );
+        // stream drops here with zero body bytes written — the socket
+        // closes before any body byte is sent.
+    });
+    Some((format!("http://{addr}"), handle))
+}
+
 /// One-shot forward proxy: binds loopback, accepts exactly one connection,
 /// drains the absolute-form request line reqwest sends an HTTP proxy
 /// (`GET http://example.com/... HTTP/1.1`), and replies with a canned
