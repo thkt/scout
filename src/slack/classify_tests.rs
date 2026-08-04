@@ -226,7 +226,9 @@ async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
 /// variant's doc in `src/slack.rs`.
 #[test]
 fn url_build_failure_classifies_as_parse_url_internal() {
-    let parse_err = url::Url::parse("not a url").expect_err("malformed url must fail to parse");
+    // `::url` (crate root): the `mod url` declared in `src/slack.rs` shadows
+    // the `url` crate name within this module's path resolution.
+    let parse_err = ::url::Url::parse("not a url").expect_err("malformed url must fail to parse");
     let c = SlackError::ParseUrl(parse_err).classify();
     assert_eq!(c.kind, ErrorCode::Internal);
 }
