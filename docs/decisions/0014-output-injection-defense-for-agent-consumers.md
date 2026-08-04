@@ -86,8 +86,8 @@ scout は素通しし parser 側の安全性に依存する。
 | `escape_md_link`          | src/markdown.rs:6-19    | link target の `[]()` escape、改行畳み                                                   |
 | `sanitize_heading`        | src/markdown.rs:64-71   | 見出し内改行を空白へ                                                                     |
 | `shift_headings`          | src/markdown.rs:109-140 | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip) |
-| `escape_yaml`             | src/yaml.rs:63-85       | `\` `"` `\n\r\t` を escape、`\0` を除去                                                  |
-| `neutralize_yaml_markers` | src/yaml.rs:15-34       | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変                               |
+| `escape_yaml`             | src/yaml.rs:61-83       | `\` `"` `\n\r\t` を escape、`\0` を除去                                                  |
+| `neutralize_yaml_markers` | src/yaml.rs:15-32       | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変                               |
 
 ### HTML 層の分担
 

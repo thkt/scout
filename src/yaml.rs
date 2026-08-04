@@ -19,10 +19,8 @@ pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
             out.push('\n');
         }
         match yaml_marker_rest(line) {
-            // Bare marker (only trailing whitespace): collapse to `***`.
             Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
-            // Marker with content (`--- evil: true`): rewrite the leading token only,
-            // preserving the rest as ordinary text.
+            // `--- evil: true` loses the marker token and keeps its content.
             Some(rest) => {
                 out.push_str("***");
                 out.push_str(rest);

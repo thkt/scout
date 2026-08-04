@@ -10,12 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Loopback-binding helpers (src/test_support.rs, tests/common/mod.rs) skip
-# their scenario when the bind fails, and nextest hides a passing test's
-# stderr, so a runner that lost loopback would turn the proxy-driven suites --
-# including the ADR-0014 injection-defense tests -- green with no assertion
-# executed. Setting the variable turns that bind failure into a panic here
-# while local runs keep the skip.
+# The loopback-binding helpers (src/test_support.rs, tests/common/mod.rs) skip
+# their scenario when the bind fails, and nextest hides a passing test's stderr.
+# A runner that lost loopback would therefore report the proxy-driven suites
+# green with no assertion executed. Local runs keep that skip; CI does not.
 env:
   SCOUT_NETWORK_TESTS: "1"
 
