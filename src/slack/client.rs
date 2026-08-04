@@ -1,5 +1,6 @@
 //! Slack Web API client: token-bearing HTTP, retry/rate-limit handling, and
-//! thread fetch + message resolution orchestration.
+//! thread fetch + message resolution orchestration. Wire-format response
+//! structs are defined directly above the method that deserializes into them.
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::{info, warn};
 
@@ -20,8 +22,8 @@ use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_li
 use crate::rng::{FastrandRng, Rng};
 
 use super::{
-    ChannelBody, Message, MessagesBody, ResolvedMessage, SlackError, SlackUrl, UserBody,
-    collect_mention_ids_ordered, extract_target, format_slack_output, resolve_messages,
+    Message, ResolvedMessage, SlackError, SlackUrl, collect_mention_ids_ordered, extract_target,
+    format_slack_output, resolve_messages,
 };
 
 struct FetchedThread {
@@ -266,7 +268,19 @@ impl SlackClient {
 
         serde_json::from_value(body).map_err(|e| SlackError::Decode(e.to_string()))
     }
+}
 
+#[derive(Deserialize)]
+struct ChannelBody {
+    channel: Option<ChannelInfo>,
+}
+
+#[derive(Deserialize)]
+struct ChannelInfo {
+    name: Option<String>,
+}
+
+impl SlackClient {
     async fn resolve_channel(&self, id: &str) -> String {
         match self
             .api_get::<ChannelBody>("conversations.info", &[("channel", id)])
@@ -286,7 +300,25 @@ impl SlackClient {
             }
         }
     }
+}
 
+#[derive(Deserialize)]
+struct UserBody {
+    user: Option<UserDetail>,
+}
+
+#[derive(Deserialize)]
+struct UserDetail {
+    real_name: Option<String>,
+    profile: Option<Profile>,
+}
+
+#[derive(Deserialize)]
+struct Profile {
+    display_name: Option<String>,
+}
+
+impl SlackClient {
     async fn fetch_user_name(&self, id: &str) -> String {
         match self
             .api_get::<UserBody>("users.info", &[("user", id)])
@@ -326,7 +358,37 @@ impl SlackClient {
             .collect()
             .await
     }
+}
 
+#[derive(Deserialize)]
+struct MessagesBody {
+    #[serde(default)]
+    messages: Vec<Message>,
+    #[serde(default)]
+    has_more: bool,
+    response_metadata: Option<ResponseMetadata>,
+}
+
+impl MessagesBody {
+    /// The non-empty `next_cursor` to fetch the following page, if Slack
+    /// signalled more results.
+    fn next_cursor(&self) -> Option<&str> {
+        if !self.has_more {
+            return None;
+        }
+        self.response_metadata
+            .as_ref()
+            .and_then(|m| m.next_cursor.as_deref())
+            .filter(|c| !c.is_empty())
+    }
+}
+
+#[derive(Deserialize)]
+struct ResponseMetadata {
+    next_cursor: Option<String>,
+}
+
+impl SlackClient {
     /// Fetch every reply in a thread, following `response_metadata.next_cursor`
     /// across pages up to `SLACK_MAX_REPLY_PAGES`. Without this loop a target
     /// message past the first `SLACK_REPLIES_LIMIT` page is silently dropped and

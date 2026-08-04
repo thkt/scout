@@ -99,5 +99,5 @@ scout は素通しし parser 側の安全性に依存する。
 - `src/yaml.rs` (frontmatter YAML 無害化 leaf + テスト T-FC003..007, T-FC012)
 - `src/fetch/converter.rs` (frontmatter 組み立て + テスト T-FC001, T-FC002, T-FC008)
 - `src/search/engine.rs` + `src/search/engine/tests.rs:T-SE010` (search 出力中和)
-- `src/slack.rs:395-435` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用)
+- `src/slack/format.rs:90-130` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #2)
