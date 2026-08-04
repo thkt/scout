@@ -43,21 +43,6 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
 /// Append mention IDs from `text` to `out` in first-occurrence order, skipping
 /// any already in `seen`. Sharing `seen` across calls (and with an author pass)
 /// dedupes a dual-role ID so it consumes a single lookup slot.
-/// Look up a display name for `user_id`, treating an empty value as a failed
-/// resolution rather than a name. The Slack users map carries that convention
-/// in its values, which `HashMap<String, String>` cannot express, so both the
-/// mention substitution below and the author resolution in `format` read it
-/// through here instead of each re-deriving it.
-pub(in crate::slack) fn resolved_display_name<'a>(
-    users: &'a HashMap<String, String>,
-    user_id: &str,
-) -> Option<&'a str> {
-    users
-        .get(user_id)
-        .map(String::as_str)
-        .filter(|name| !name.is_empty())
-}
-
 pub(in crate::slack) fn collect_mention_ids_ordered(
     text: &str,
     seen: &mut HashSet<String>,
@@ -68,6 +53,21 @@ pub(in crate::slack) fn collect_mention_ids_ordered(
             out.push(span.user_id.to_owned());
         }
     }
+}
+
+/// Look up a display name for `user_id`, treating an empty value as a failed
+/// resolution rather than a name. The Slack users map carries that convention
+/// in its values and `HashMap<String, String>` cannot express it, so the
+/// substitution below and the author resolution in `format` both read the map
+/// through here rather than each re-deriving the rule.
+pub(in crate::slack) fn resolved_display_name<'a>(
+    users: &'a HashMap<String, String>,
+    user_id: &str,
+) -> Option<&'a str> {
+    users
+        .get(user_id)
+        .map(String::as_str)
+        .filter(|name| !name.is_empty())
 }
 
 pub(in crate::slack) fn substitute_mentions(text: &str, cache: &HashMap<String, String>) -> String {

@@ -1,8 +1,11 @@
-//! Slack permalink parsing and error classification. Wire-format structs live
-//! next to their deserialize call sites in [`client`], except `Message`, which
-//! [`format`] owns because both modules read it. Message resolution and YAML
-//! output formatting live in [`format`]; the token-bearing HTTP client lives
-//! in [`client`].
+//! Facade over the Slack backend. This file itself holds [`SlackError`] and
+//! its classification; everything else it names comes from a submodule:
+//! permalink parsing from [`url`], message resolution and YAML output from
+//! [`format`], mention handling from [`mention`], and the token-bearing HTTP
+//! client from [`client`].
+//!
+//! Wire-format structs sit next to their deserialize call sites in [`client`],
+//! except `Message`, which [`format`] owns because both modules read it.
 
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
