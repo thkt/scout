@@ -1,11 +1,7 @@
 use serde::Serialize;
 
 use super::extractor::ExtractedArticle;
-
-/// Temporary re-export: slack.rs still imports these two from
-/// `fetch::converter` rather than `crate::yaml` directly. Update slack.rs's
-/// import and drop this line once nothing else depends on the old path.
-pub(crate) use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
+use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 /// Fetched page content converted to Markdown. Fields are private so the only
 /// construction paths are [`to_fetch_result`] (production) and
