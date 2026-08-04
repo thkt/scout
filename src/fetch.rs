@@ -83,8 +83,8 @@ pub(crate) enum FetchError {
 
     /// The payload names what did not respond and within what budget; the
     /// phrase itself belongs to this prefix alone. Carrying it in both read as
-    /// "fetch timed out: fetch timed out after 30s" (issue #313, pinned by
-    /// `T-C027`).
+    /// "fetch timed out: fetch timed out after 30s" (issue #313). `T-C027` pins
+    /// the `fetch` call site, `T-SE015` the research one.
     #[error("fetch timed out: {0}")]
     Timeout(String),
 
