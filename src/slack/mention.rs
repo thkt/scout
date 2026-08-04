@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 /// A `<@UID>` or `<@UID|label>` mention span within a text.
-pub(in crate::slack) struct MentionSpan<'a> {
+struct MentionSpan<'a> {
     user_id: &'a str,
     /// Human-readable label Slack embedded as `<@UID|label>`, `None` when absent
     /// or empty. Used as a best-effort render fallback when the user id is
@@ -14,7 +14,7 @@ pub(in crate::slack) struct MentionSpan<'a> {
     end: usize,
 }
 
-pub(in crate::slack) fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
+fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
     let mut spans = Vec::new();
     let mut search_from = 0;
     while let Some(rel) = text[search_from..].find("<@") {
@@ -43,6 +43,21 @@ pub(in crate::slack) fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
 /// Append mention IDs from `text` to `out` in first-occurrence order, skipping
 /// any already in `seen`. Sharing `seen` across calls (and with an author pass)
 /// dedupes a dual-role ID so it consumes a single lookup slot.
+/// Look up a display name for `user_id`, treating an empty value as a failed
+/// resolution rather than a name. The Slack users map carries that convention
+/// in its values, which `HashMap<String, String>` cannot express, so both the
+/// mention substitution below and the author resolution in `format` read it
+/// through here instead of each re-deriving it.
+pub(in crate::slack) fn resolved_display_name<'a>(
+    users: &'a HashMap<String, String>,
+    user_id: &str,
+) -> Option<&'a str> {
+    users
+        .get(user_id)
+        .map(String::as_str)
+        .filter(|name| !name.is_empty())
+}
+
 pub(in crate::slack) fn collect_mention_ids_ordered(
     text: &str,
     seen: &mut HashSet<String>,
@@ -66,10 +81,7 @@ pub(in crate::slack) fn substitute_mentions(text: &str, cache: &HashMap<String, 
         out.push_str(&text[pos..span.start]);
         out.push('@');
         out.push_str(
-            cache
-                .get(span.user_id)
-                .map(String::as_str)
-                .filter(|name| !name.is_empty())
+            resolved_display_name(cache, span.user_id)
                 .or(span.label)
                 .unwrap_or(span.user_id),
         );

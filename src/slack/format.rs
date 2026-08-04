@@ -7,7 +7,7 @@ use std::fmt::Write;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use super::{SlackUrl, substitute_mentions};
+use super::{SlackUrl, resolved_display_name, substitute_mentions};
 use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 #[derive(Deserialize)]
@@ -32,13 +32,8 @@ pub(in crate::slack) fn resolve_messages(
     let mut resolved = Vec::with_capacity(messages.len());
     for msg in messages {
         let author = match &msg.user {
-            // An empty value is a failed resolution, not a name — the same rule
-            // `substitute_mentions` applies to this map. Without the filter the
-            // frontmatter carries `author: ""` and no log says the lookup missed.
-            Some(uid) => users
-                .get(uid.as_str())
-                .filter(|name| !name.is_empty())
-                .cloned()
+            Some(uid) => resolved_display_name(users, uid)
+                .map(str::to_owned)
                 .unwrap_or_else(|| uid.clone()),
             None => {
                 debug!("msg.user is None, falling back to \"(no author)\"");

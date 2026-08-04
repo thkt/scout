@@ -1,10 +1,8 @@
-//! Slack message URL parsing and error classification. Wire-format structs
-//! live next to their deserialize call sites in [`client`]. Message
-//! resolution and YAML output formatting live in [`format`]; the
-//! token-bearing HTTP client lives in [`client`].
-
-// Only `resolve_messages_tests` needs this directly (via `use super::*`);
-// `resolve_messages` itself lives in `format` and imports its own copy.
+//! Slack permalink parsing and error classification. Wire-format structs live
+//! next to their deserialize call sites in [`client`], except `Message`, which
+//! [`format`] owns because both modules read it. Message resolution and YAML
+//! output formatting live in [`format`]; the token-bearing HTTP client lives
+//! in [`client`].
 
 use crate::classify::Classification;
 use crate::envelope::ErrorCode;
@@ -18,7 +16,9 @@ pub(in crate::slack) use format::{
 };
 
 mod mention;
-pub(in crate::slack) use mention::{collect_mention_ids_ordered, substitute_mentions};
+pub(in crate::slack) use mention::{
+    collect_mention_ids_ordered, resolved_display_name, substitute_mentions,
+};
 
 mod url;
 pub(crate) use url::{SlackUrl, parse_slack_url};
