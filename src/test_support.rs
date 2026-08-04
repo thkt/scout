@@ -179,8 +179,9 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
     let addr = listener.local_addr().ok()?;
     let handle = thread::spawn(move || {
         // Single-shot: the test makes exactly one connection, so a failed
-        // accept is a test-environment fault — panic loudly rather than
-        // hang the joining test on a silent return.
+        // accept is a test-environment fault. The panic reaches stderr and the
+        // caller's own request then fails on its `expect`; callers discard the
+        // join Result, so this arm does not fail a test on its own.
         let (mut stream, _) = listener.accept().expect("accept loopback connection");
         // Drain the request so the write below is the response, not racing
         // an unread request buffer.
@@ -217,8 +218,9 @@ pub fn spawn_declared_length_no_body_server(
     let addr = listener.local_addr().ok()?;
     let handle = thread::spawn(move || {
         // Single-shot: the test makes exactly one connection, so a failed
-        // accept is a test-environment fault — panic loudly rather than
-        // hang the joining test on a silent return.
+        // accept is a test-environment fault. The panic reaches stderr and the
+        // caller's own request then fails on its `expect`; callers discard the
+        // join Result, so this arm does not fail a test on its own.
         let (mut stream, _) = listener.accept().expect("accept loopback connection");
         // Drain the request so the write below is the response, not racing
         // an unread request buffer.

@@ -43,9 +43,9 @@ pub(crate) async fn read_body_capped<E>(
     {
         return Err(too_large());
     }
-    let capacity = content_length
-        .map(|len| usize::try_from(len).unwrap_or(usize::MAX).min(cap))
-        .unwrap_or(8192);
+    let capacity = content_length.map_or(8192, |len| {
+        usize::try_from(len).unwrap_or(usize::MAX).min(cap)
+    });
     let mut body = Vec::with_capacity(capacity);
     let mut stream = response;
     while let Some(chunk) = stream.chunk().await.map_err(&network)? {

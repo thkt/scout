@@ -7,8 +7,8 @@ use wiremock::{Mock, ResponseTemplate};
 
 /// [T-R013] Issue #219: every existing `too_large` test drives wiremock's
 /// `set_body_bytes`, which always emits an honest Content-Length, so they
-/// exercise only the pre-check path (body_limit.rs:40-45). The chunk loop
-/// (body_limit.rs:51-55) is the defense-in-depth guard for upstreams that omit
+/// exercise only `read_body_capped`'s Content-Length pre-check. Its chunk
+/// loop, the `body.len() > cap` arm, is the defense-in-depth guard for upstreams that omit
 /// Content-Length (compression → `content_length() == None`, chunked or
 /// close-delimited transfer); before this test it had zero coverage. A
 /// close-delimited response (no Content-Length, EOF-terminated body) forces
