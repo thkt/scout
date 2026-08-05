@@ -523,16 +523,17 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
     };
     let parent_ts = "1000.000001";
     // Every page advertises another page, so the loop only ends at the cap.
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"user": "U1", "text": "PARENT_BODY", "ts": parent_ts}],
             "has_more": true,
             "response_metadata": {"next_cursor": "MORE"}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());

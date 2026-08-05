@@ -62,17 +62,15 @@ pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest:
 /// one place: a change to that deserializer has to change this fixture, and
 /// twelve copies of it would each have to be found.
 pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, ResponseTemplate};
-
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        server,
+        "/users.info",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "user": {"real_name": "Someone"}
-        })))
-        .mount(server)
-        .await;
+        })),
+    )
+    .await;
 }
 
 /// Mount a single GET responder at `path`, replying with `template`.
