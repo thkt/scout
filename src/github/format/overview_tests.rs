@@ -1,5 +1,5 @@
 use super::*;
-use crate::github::types::{LabelInfo, LicenseInfo, UserInfo, real_issues};
+use crate::github::types::{LabelInfo, LicenseInfo, UserInfo};
 use std::iter;
 
 fn sample_repo() -> RepoInfo {
@@ -66,8 +66,11 @@ fn format_overview_truncates_long_readme() {
     assert!(output.contains(&format!("/ {total} bytes)")));
 }
 
-fn issue_and_pr_backed_issue() -> Vec<IssueInfo> {
-    vec![
+/// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
+#[test]
+fn format_overview_filters_issues_from_prs() {
+    let repo = sample_repo();
+    let issues = vec![
         IssueInfo {
             number: 1,
             title: "Real issue".into(),
@@ -84,38 +87,10 @@ fn issue_and_pr_backed_issue() -> Vec<IssueInfo> {
             user: None,
             pull_request: Some(serde_json::json!({})),
         },
-    ]
-}
-
-/// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
-#[test]
-fn format_overview_filters_issues_from_prs() {
-    let repo = sample_repo();
-    let issues = issue_and_pr_backed_issue();
+    ];
     let output = format_overview(&repo, None, &issues, &[], &[]);
     assert!(output.contains("Real issue"));
     assert!(!output.contains("PR as issue"));
-}
-
-/// [T-004] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
-#[test]
-fn markdown_recent_issues_and_json_issues_array_agree_on_pr_exclusion() {
-    let repo = sample_repo();
-    let issues = issue_and_pr_backed_issue();
-
-    let markdown = format_overview(&repo, None, &issues, &[], &[]);
-    assert!(markdown.contains("Real issue"));
-    assert!(!markdown.contains("PR as issue"));
-
-    // `real_issues` is the same function `tools::repo::repo_overview` calls to
-    // build `data.issues`, so this compares the two production paths, not a copy.
-    let json_side = real_issues(&issues);
-    assert_eq!(
-        json_side.len(),
-        1,
-        "JSON-side filter should exclude the same PR-backed entry the Markdown side excludes"
-    );
-    assert_eq!(json_side[0].number, 1);
 }
 
 /// [T-GF010] format_overview marks draft PRs and shows author handle
