@@ -26,14 +26,11 @@ impl Redacted {
     /// Unset and blank collapse to the same injected error, so callers cannot
     /// tell the two apart from the error alone. Backend-specific prefix or shape
     /// checks (e.g. Slack's `xoxp-` token prefix) stay at the call site, not here.
-    pub(crate) fn from_env_var<F, E>(
+    pub(crate) fn from_env_var<E>(
         name: &str,
-        get_var: F,
+        get_var: impl FnOnce(&str) -> Result<String, env::VarError>,
         err: impl FnOnce() -> E,
-    ) -> Result<Self, E>
-    where
-        F: Fn(&str) -> Result<String, env::VarError>,
-    {
+    ) -> Result<Self, E> {
         get_var(name)
             .ok()
             .and_then(|raw| Self::new(&raw))
@@ -63,6 +60,11 @@ pub(crate) fn validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stand-in for a backend's own error variant, to check that the injection
+    /// form stays decoupled from any concrete error enum.
+    #[derive(Debug, PartialEq, Eq)]
+    struct CallerError;
 
     /// [T-RD001] Redacted value hides contents in Debug output
     #[test]
@@ -96,9 +98,6 @@ mod tests {
     /// `https://` URL.
     #[test]
     fn validate_https_is_generic_over_caller_error_type() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct CallerError;
-
         let http: Result<(), CallerError> = validate_https("http://insecure", || CallerError);
         assert_eq!(http, Err(CallerError));
 
@@ -112,9 +111,6 @@ mod tests {
     /// [T-002] 未設定の env 変数は注入された欠落エラーになる
     #[test]
     fn unset_env_var_becomes_the_injected_missing_error() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct CallerError;
-
         let get_var = |_: &str| Err(env::VarError::NotPresent);
         let result: Result<Redacted, CallerError> =
             Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
@@ -124,9 +120,6 @@ mod tests {
     /// [T-003] 空白のみの env 値も同じ欠落エラーになる
     #[test]
     fn whitespace_only_env_value_becomes_the_same_missing_error() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct CallerError;
-
         let get_var = |_: &str| Ok("   ".to_owned());
         let result: Result<Redacted, CallerError> =
             Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
