@@ -5,10 +5,6 @@ use std::env::temp_dir;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 
-fn chrome_available() -> bool {
-    resolve_browser_binary().is_ok()
-}
-
 /// Collect the set of `<temp>/scout-chromium-*` profile dirs currently on disk.
 fn chromium_profile_dirs() -> HashSet<PathBuf> {
     let Ok(entries) = read_dir(temp_dir()) else {
@@ -70,12 +66,14 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 /// - T-F057 (issue #198): the chromium `--user-data-dir` created for the fetch
 ///   is deleted once the fetch completes, leaving no new `scout-chromium-*` dir
 ///   in the temp dir.
+///
+/// Ignored by default: hosts without a chromium binary would otherwise fail
+/// `fetch_with_cdp` at `resolve_browser_binary`'s `BrowserError::NotFound`.
+/// Run explicitly with:
+/// `cargo nextest run --features js-rendering --run-ignored all --profile ci`
 #[tokio::test]
+#[ignore = "requires chromium"]
 async fn t005_t006_cdp_renders_and_removes_profile_dir() {
-    if !chrome_available() {
-        eprintln!("SKIP: Chrome not found");
-        return;
-    }
     let before = chromium_profile_dirs();
     let (cancel, _) = watch::channel(false);
     let html = fetch_with_cdp(
