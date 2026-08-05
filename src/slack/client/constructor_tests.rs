@@ -24,7 +24,10 @@ async fn t010_with_base_url_constructs_usable_client() {
 
 /// [T-SK033] from_env_with surfaces a closure `Err(VarError::NotPresent)` as
 /// `SlackError::TokenNotSet` — the token-unset path that `unsafe_code = "forbid"`
-/// blocks from being reached via `env::set_var` (ADR-0007, issue #191).
+/// blocks from being reached via `env::set_var` (ADR-0007, issue #191). Since #311
+/// that path runs through the backend-agnostic `Redacted::from_env_var`, so this also
+/// pins that the shared helper still surfaces Slack's own error (Brave counterpart:
+/// [T-RC001]).
 #[test]
 fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
     // `.map(|_| ())` drops the `SlackClient` (no `Debug`) so the failure
@@ -36,24 +39,6 @@ fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
     assert!(
         matches!(result, Err(SlackError::TokenNotSet)),
         "expected TokenNotSet, got: {result:?}"
-    );
-}
-
-/// [T-005] SlackClient の from_env_with は未設定 env でそれぞれ既存の欠落エラーを返す
-///
-/// `Redacted::from_env_var` (shared with `BraveClient::from_env_with`, see the
-/// companion T-005 in `brave/client/http_tests.rs`) does not know about
-/// `SlackError`; this pins that going through the shared helper still surfaces
-/// Slack's own `TokenNotSet` for an unset env var.
-#[test]
-fn t005_from_env_with_returns_existing_missing_error_via_shared_helper() {
-    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Err(env::VarError::NotPresent)
-    })
-    .map(|_| ());
-    assert!(
-        matches!(result, Err(SlackError::TokenNotSet)),
-        "expected the pre-existing TokenNotSet error, got: {result:?}"
     );
 }
 

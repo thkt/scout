@@ -66,11 +66,10 @@ fn format_overview_truncates_long_readme() {
     assert!(output.contains(&format!("/ {total} bytes)")));
 }
 
-/// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
-#[test]
-fn format_overview_filters_issues_from_prs() {
-    let repo = sample_repo();
-    let issues = vec![
+/// One real issue plus one PR-backed issue, shared by the PR-exclusion tests
+/// below (T-GF009, T-004) so the fixture shape stays in one place.
+fn issue_and_pr_backed_issue() -> Vec<IssueInfo> {
+    vec![
         IssueInfo {
             number: 1,
             title: "Real issue".into(),
@@ -87,7 +86,14 @@ fn format_overview_filters_issues_from_prs() {
             user: None,
             pull_request: Some(serde_json::json!({})),
         },
-    ];
+    ]
+}
+
+/// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
+#[test]
+fn format_overview_filters_issues_from_prs() {
+    let repo = sample_repo();
+    let issues = issue_and_pr_backed_issue();
     let output = format_overview(&repo, None, &issues, &[], &[]);
     assert!(output.contains("Real issue"));
     assert!(!output.contains("PR as issue"));
@@ -97,24 +103,7 @@ fn format_overview_filters_issues_from_prs() {
 #[test]
 fn markdown_recent_issues_and_json_issues_array_agree_on_pr_exclusion() {
     let repo = sample_repo();
-    let issues = vec![
-        IssueInfo {
-            number: 1,
-            title: "Real issue".into(),
-            html_url: "https://github.com/o/r/issues/1".into(),
-            labels: vec![],
-            user: None,
-            pull_request: None,
-        },
-        IssueInfo {
-            number: 2,
-            title: "PR as issue".into(),
-            html_url: "https://github.com/o/r/issues/2".into(),
-            labels: vec![],
-            user: None,
-            pull_request: Some(serde_json::json!({})),
-        },
-    ];
+    let issues = issue_and_pr_backed_issue();
 
     // Markdown side: format_overview (pinned by T-GF009 for the same fixture shape).
     let markdown = format_overview(&repo, None, &issues, &[], &[]);

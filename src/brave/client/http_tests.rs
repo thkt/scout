@@ -341,7 +341,9 @@ async fn search_logs_warn_on_parse_failure() {
 
 /// [T-RC001] FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
 /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
-/// env path that `from_env` delegates to.
+/// env path that `from_env` delegates to. Since #311 that path runs through the
+/// backend-agnostic `Redacted::from_env_var`, so this also pins that the shared
+/// helper still surfaces Brave's own error (Slack counterpart: [T-SK033]).
 #[test]
 fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
@@ -350,23 +352,6 @@ fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     assert!(
         matches!(result, Err(BraveError::ApiKeyNotSet)),
         "expected ApiKeyNotSet, got: {result:?}"
-    );
-}
-
-/// [T-005] BraveClient の from_env_with は未設定 env でそれぞれ既存の欠落エラーを返す
-///
-/// `Redacted::from_env_var` (shared with `SlackClient::from_env_with`, see the
-/// companion T-005 in `slack/client/constructor_tests.rs`) does not know about
-/// `BraveError`; this pins that going through the shared helper still surfaces
-/// Brave's own `ApiKeyNotSet` for an unset env var.
-#[test]
-fn from_env_with_returns_existing_missing_error_via_shared_helper() {
-    let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Err(env::VarError::NotPresent)
-    });
-    assert!(
-        matches!(result, Err(BraveError::ApiKeyNotSet)),
-        "expected the pre-existing ApiKeyNotSet error, got: {result:?}"
     );
 }
 
