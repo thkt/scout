@@ -8,9 +8,9 @@
 //! this proxy. That coverage is incidental — the test pins rendering and
 //! profile-dir cleanup, not the tunnel — and it runs only under
 //! `--features js-rendering` on a host where `resolve_browser_binary()`
-//! succeeds. Without chromium the test returns early and still counts as
-//! passed, so the tunnel can stop being exercised without CI turning red;
-//! see issue #314.
+//! succeeds. A plain `cargo test` reports it as ignored rather than passed, and
+//! CI runs it via `--run-ignored all` (.github/workflows/ci.yml), so a missing
+//! chromium fails CI instead of leaving the tunnel unexercised (issue #319).
 
 use std::net::IpAddr;
 use std::sync::Arc;

@@ -52,8 +52,10 @@ jobs:
       - name: Test
         run: cargo nextest run --profile ci
 
+      # --run-ignored all runs every #[ignore] test, not only the chromium-gated
+      # one, so a runner missing chromium fails here instead of skipping silently.
       - name: Test (js-rendering)
-        run: cargo nextest run --features js-rendering --profile ci
+        run: cargo nextest run --features js-rendering --run-ignored all --profile ci
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -90,8 +92,10 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      # Without -- --include-ignored the chromium-gated full-tunnel path drops
+      # out of lcov.info and the diff-cover gate below stops covering it.
       - name: Generate coverage
-        run: cargo llvm-cov --features js-rendering --lcov --output-path lcov.info
+        run: cargo llvm-cov --features js-rendering --lcov --output-path lcov.info -- --include-ignored
 
       - name: Diff coverage gate
         run: |
