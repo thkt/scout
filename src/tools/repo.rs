@@ -197,8 +197,7 @@ impl Scout {
 
         // GitHub's issues endpoint returns PRs too; filter them out so JSON
         // consumers don't see PRs duplicated under issues.
-        let real_issues: Vec<&github::types::IssueInfo> =
-            issues.iter().filter(|i| i.pull_request.is_none()).collect();
+        let real_issues = github::types::real_issues(&issues);
         let data = serde_json::json!({
             "repository": repo_info,
             "readme": readme_content,
