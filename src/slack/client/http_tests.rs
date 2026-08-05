@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::*;
 use crate::envelope::ErrorCode;
 use crate::test_support::{
-    mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
+    mount_get, mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
 use crate::tools::ScoutError;
 use reqwest::Client;
@@ -31,11 +31,7 @@ async fn api_get_once_429_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(429))
-        .mount(&server)
-        .await;
+    mount_get(&server, "/test.method", ResponseTemplate::new(429)).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -55,13 +51,12 @@ async fn api_get_once_502_returns_a_retriable_server_error() {
     let Some(server) = try_spawn_mock_server("slack::http_502").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(
-            ResponseTemplate::new(502).set_body_string("<html><body>502 Bad Gateway</body></html>"),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(502).set_body_string("<html><body>502 Bad Gateway</body></html>"),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -87,11 +82,12 @@ async fn api_get_once_429_with_retry_after_header() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "30"))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(429).append_header("Retry-After", "30"),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -109,14 +105,13 @@ async fn api_get_once_body_ratelimited_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": false, "error": "ratelimited"})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -129,14 +124,13 @@ async fn api_get_once_api_error_returns_api_variant() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -155,11 +149,12 @@ async fn api_get_once_ok_false_without_error_field_returns_decode() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false})))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
@@ -229,14 +224,13 @@ async fn resolve_channel_null_name_warns_then_falls_back() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/conversations.info"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"ok": true, "channel": {"id": "C123"}})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/conversations.info",
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": true, "channel": {"id": "C123"}})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let name = client.resolve_channel("C123").await;
@@ -256,11 +250,12 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/users.info",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let name = client.fetch_user_name("U123").await;
@@ -343,14 +338,15 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         .collect::<Vec<_>>()
         .join(" ");
     // Single message (no thread): conversations.history returns it directly.
-    Mock::given(method("GET"))
-        .and(path("/conversations.history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.history",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"text": mentions, "ts": "1000.000001"}]
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     // users.info must be hit exactly SLACK_MAX_USER_LOOKUPS times, not `total`.
     Mock::given(method("GET"))
         .and(path("/users.info"))
@@ -396,18 +392,20 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
         .collect::<Vec<_>>()
         .join(" ");
     // Thread probe: the root has replies, so fetch_replies is used.
-    Mock::given(method("GET"))
-        .and(path("/conversations.history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.history",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"user": "UAUTHOR0", "text": "parent", "ts": parent_ts, "reply_count": 2}]
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     // Replies carry three distinct authors; the mass mention lives in one reply.
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [
                 {"user": "UAUTHOR0", "text": "parent", "ts": parent_ts},
@@ -416,9 +414,9 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
             ],
             "has_more": false,
             "response_metadata": {"next_cursor": ""}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     // Any looked-up user resolves to a name, so a resolved author cannot leave
     // its raw ID in the output.
     mount_users_info_resolving(&server).await;
@@ -449,14 +447,15 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
     };
     let parent_ts = "1000.000001";
     // Page 1: parent + first reply, more pages follow.
-    Mock::given(method("GET"))
-        .and(path("/conversations.history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.history",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"user": "U1", "text": "PARENT_BODY", "ts": parent_ts, "reply_count": 2}]
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
         .and(query_param_is_missing("cursor"))
@@ -524,16 +523,17 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
     };
     let parent_ts = "1000.000001";
     // Every page advertises another page, so the loop only ends at the cap.
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"user": "U1", "text": "PARENT_BODY", "ts": parent_ts}],
             "has_more": true,
             "response_metadata": {"next_cursor": "MORE"}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
@@ -571,17 +571,19 @@ async fn fetch_message_link_with_replies_fetches_thread() {
     };
     let parent_ts = "1000.000001";
     // The probe reports the target has one reply, so fetch_replies runs next.
-    Mock::given(method("GET"))
-        .and(path("/conversations.history"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.history",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [{"user": "U1", "text": "parent", "ts": parent_ts, "reply_count": 1}]
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        })),
+    )
+    .await;
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": [
                 {"user": "U1", "text": "parent", "ts": parent_ts},
@@ -589,9 +591,9 @@ async fn fetch_message_link_with_replies_fetches_thread() {
             ],
             "has_more": false,
             "response_metadata": {"next_cursor": ""}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
@@ -632,16 +634,17 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
             })
         })
         .collect::<Vec<_>>();
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": messages,
             "has_more": false,
             "response_metadata": {"next_cursor": ""}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
@@ -702,16 +705,17 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
         "text": "dual-role author",
         "ts": "1000.000049",
     }));
-    Mock::given(method("GET"))
-        .and(path("/conversations.replies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "messages": messages,
             "has_more": false,
             "response_metadata": {"next_cursor": ""}
-        })))
-        .mount(&server)
-        .await;
+        })),
+    )
+    .await;
     mount_users_info_resolving(&server).await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
@@ -751,11 +755,12 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
         .up_to_n_times(1)
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+    )
+    .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
     let result: Result<DummyBody, _> = client.api_get("test.method", &[]).await;
@@ -776,11 +781,12 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(302).insert_header("Location", "/test.method"))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(302).insert_header("Location", "/test.method"),
+    )
+    .await;
 
     let redirect_limit_1 = Client::builder()
         .redirect(Policy::limited(1))
@@ -845,11 +851,12 @@ async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     let Some(server) = try_spawn_mock_server("slack::http::read_timeout").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test.method"))
-        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test.method",
+        ResponseTemplate::new(200).set_delay(Duration::from_secs(2)),
+    )
+    .await;
 
     let http = Client::builder()
         .timeout(Duration::from_millis(50))

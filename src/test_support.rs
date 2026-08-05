@@ -27,7 +27,7 @@ use std::thread::{self, JoinHandle};
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
-use wiremock::MockServer;
+use wiremock::{MockServer, ResponseTemplate};
 
 /// Build a reqwest `Client` with redirects disabled. No connect or read
 /// timeouts are set; wrap calls in `tokio::time::timeout` if a bounded test
@@ -62,15 +62,28 @@ pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest:
 /// one place: a change to that deserializer has to change this fixture, and
 /// twelve copies of it would each have to be found.
 pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, ResponseTemplate};
-
-    Mock::given(method("GET"))
-        .and(path("/users.info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    mount_get(
+        server,
+        "/users.info",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "user": {"real_name": "Someone"}
-        })))
+        })),
+    )
+    .await;
+}
+
+/// Covers the plain `method(GET) + path + respond_with + mount` shape only.
+/// A mock that also matches on query params or asserts a call count encodes
+/// that condition as part of what the test verifies, so those stay
+/// hand-written at the call site.
+pub(crate) async fn mount_get(server: &MockServer, path: &str, template: ResponseTemplate) {
+    use wiremock::Mock;
+    use wiremock::matchers::{method, path as path_matcher};
+
+    Mock::given(method("GET"))
+        .and(path_matcher(path))
+        .respond_with(template)
         .mount(server)
         .await;
 }
