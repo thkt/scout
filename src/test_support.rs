@@ -27,7 +27,7 @@ use std::thread::{self, JoinHandle};
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
-use wiremock::MockServer;
+use wiremock::{MockServer, ResponseTemplate};
 
 /// Build a reqwest `Client` with redirects disabled. No connect or read
 /// timeouts are set; wrap calls in `tokio::time::timeout` if a bounded test
@@ -71,6 +71,23 @@ pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
             "ok": true,
             "user": {"real_name": "Someone"}
         })))
+        .mount(server)
+        .await;
+}
+
+/// Mount a single GET responder at `path`, replying with `template`.
+///
+/// Covers the plain `method(GET) + path + respond_with + mount` shape only.
+/// A mock that also asserts on query params, headers, or call count encodes
+/// that assertion as part of what the test verifies, so those stay
+/// hand-written at the call site instead of routing through here.
+pub(crate) async fn mount_get(server: &MockServer, path: &str, template: ResponseTemplate) {
+    use wiremock::Mock;
+    use wiremock::matchers::{method, path as path_matcher};
+
+    Mock::given(method("GET"))
+        .and(path_matcher(path))
+        .respond_with(template)
         .mount(server)
         .await;
 }
