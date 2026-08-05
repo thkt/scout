@@ -52,9 +52,8 @@ jobs:
       - name: Test
         run: cargo nextest run --profile ci
 
-      # --run-ignored all runs every #[ignore] test alongside the default set
-      # (e.g. src/fetch/cdp/cdp_integration_tests.rs's chromium-gated checks),
-      # so a runner missing chromium fails here instead of silently skipping.
+      # --run-ignored all runs every #[ignore] test, not only the chromium-gated
+      # one, so a runner missing chromium fails here instead of skipping silently.
       - name: Test (js-rendering)
         run: cargo nextest run --features js-rendering --run-ignored all --profile ci
 
@@ -93,9 +92,8 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      # -- --include-ignored forwards to the test binary so the chromium-gated
-      # #[ignore] tests execute too, keeping their full-tunnel code path in
-      # lcov.info for the diff-cover gate below.
+      # Without -- --include-ignored the chromium-gated full-tunnel path drops
+      # out of lcov.info and the diff-cover gate below stops covering it.
       - name: Generate coverage
         run: cargo llvm-cov --features js-rendering --lcov --output-path lcov.info -- --include-ignored
 

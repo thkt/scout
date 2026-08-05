@@ -67,10 +67,9 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 ///   is deleted once the fetch completes, leaving no new `scout-chromium-*` dir
 ///   in the temp dir.
 ///
-/// Ignored by default: hosts without a chromium binary would otherwise fail
-/// `fetch_with_cdp` at `resolve_browser_binary`'s `BrowserError::NotFound`.
-/// Run explicitly with:
-/// `cargo nextest run --features js-rendering --run-ignored all --profile ci`
+/// Without `#[ignore]` a host with no chromium binary would fail here at
+/// `resolve_browser_binary`'s `BrowserError::NotFound`. Run it explicitly with
+/// `cargo nextest run --features js-rendering --run-ignored all --profile ci`.
 #[tokio::test]
 #[ignore = "requires chromium"]
 async fn t005_t006_cdp_renders_and_removes_profile_dir() {
