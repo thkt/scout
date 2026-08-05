@@ -121,7 +121,7 @@ mod tests {
         #[derive(Debug, PartialEq, Eq)]
         struct CallerError;
 
-        let get_var = |_: &str| Err(std::env::VarError::NotPresent);
+        let get_var = |_: &str| Err(env::VarError::NotPresent);
         let result: Result<Redacted, CallerError> =
             Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
         assert_eq!(result.err(), Some(CallerError));

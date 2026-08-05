@@ -1,5 +1,5 @@
 use super::*;
-use crate::github::types::{LabelInfo, LicenseInfo, UserInfo};
+use crate::github::types::{LabelInfo, LicenseInfo, UserInfo, real_issues};
 use std::iter;
 
 fn sample_repo() -> RepoInfo {
@@ -124,7 +124,7 @@ fn markdown_recent_issues_and_json_issues_array_agree_on_pr_exclusion() {
     // JSON side: the same function `tools::repo::repo_overview` calls to build
     // `data.issues` (crate::github::types::real_issues), applied to the identical
     // `issues` slice fed to `format_overview` above.
-    let json_side = crate::github::types::real_issues(&issues);
+    let json_side = real_issues(&issues);
     assert_eq!(
         json_side.len(),
         1,
