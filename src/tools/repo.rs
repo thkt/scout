@@ -197,8 +197,7 @@ impl Scout {
 
         // GitHub's issues endpoint returns PRs too; filter them out so JSON
         // consumers don't see PRs duplicated under issues.
-        let real_issues: Vec<&github::types::IssueInfo> =
-            issues.iter().filter(|i| i.pull_request.is_none()).collect();
+        let real_issues = github::types::real_issues(&issues);
         let data = serde_json::json!({
             "repository": repo_info,
             "readme": readme_content,
@@ -320,4 +319,107 @@ async fn resolve_readme(
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::try_spawn_mock_server;
+    use crate::tools::test_helpers::scout_with_github;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, ResponseTemplate};
+
+    /// [T-004] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
+    ///
+    /// Drives the real `Scout::repo_overview` wiring, not the format/types
+    /// functions in isolation, so a change feeding the Markdown and JSON paths
+    /// different issue lists is caught.
+    #[tokio::test]
+    async fn repo_overview_markdown_and_json_agree_on_pr_backed_issue_exclusion() {
+        let Some(server) = try_spawn_mock_server("tools::repo::t_seam_004").await else {
+            return;
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "full_name": "owner/repo",
+                "description": null,
+                "html_url": "https://github.com/owner/repo",
+                "default_branch": "main",
+                "language": null,
+                "stargazers_count": 0,
+                "forks_count": 0,
+                "open_issues_count": 0,
+                "topics": null,
+                "license": null
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/readme"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 1,
+                    "title": "Real issue",
+                    "html_url": "https://github.com/owner/repo/issues/1",
+                    "labels": [],
+                    "user": null,
+                    "pull_request": null
+                },
+                {
+                    "number": 2,
+                    "title": "PR as issue",
+                    "html_url": "https://github.com/owner/repo/issues/2",
+                    "labels": [],
+                    "user": null,
+                    "pull_request": {}
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_github(&server.uri(), &server.uri());
+        let params = RepoOverviewParams {
+            repository: Some("owner/repo".into()),
+        };
+
+        let result = s
+            .repo_overview(params)
+            .await
+            .expect("repo_overview should succeed against the mocked GitHub API");
+
+        assert!(result.markdown().contains("Real issue"));
+        assert!(!result.markdown().contains("PR as issue"));
+
+        let issues_json = result.data()["issues"]
+            .as_array()
+            .expect("data.issues should be a JSON array");
+        assert_eq!(
+            issues_json.len(),
+            1,
+            "JSON issues array should exclude the same PR-backed entry the Markdown \
+             Recent Issues section excludes"
+        );
+        assert_eq!(issues_json[0]["number"], 1);
+    }
 }

@@ -171,8 +171,8 @@ impl BraveClient {
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
-        let api_key = get_var("BRAVE_SEARCH_API_KEY").map_err(|_| BraveError::ApiKeyNotSet)?;
-        let api_key = Redacted::new(&api_key).ok_or(BraveError::ApiKeyNotSet)?;
+        let api_key =
+            Redacted::from_env_var("BRAVE_SEARCH_API_KEY", get_var, || BraveError::ApiKeyNotSet)?;
         Ok(Self {
             http,
             api_key,

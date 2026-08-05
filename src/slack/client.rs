@@ -133,8 +133,7 @@ impl SlackClient {
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
-        let raw = get_var("SLACK_TOKEN").map_err(|_| SlackError::TokenNotSet)?;
-        let token = Redacted::new(&raw).ok_or(SlackError::TokenNotSet)?;
+        let token = Redacted::from_env_var("SLACK_TOKEN", get_var, || SlackError::TokenNotSet)?;
         if !token.expose().starts_with(USER_TOKEN_PREFIX) {
             return Err(SlackError::TokenWrongType);
         }

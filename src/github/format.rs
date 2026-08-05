@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry};
+use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserInfo, real_issues};
 use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note};
 
 const MAX_README_BYTES: usize = 24_000;
@@ -168,8 +168,13 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
     out.push_str("\n\n");
 }
 
+fn author_suffix(user: Option<&UserInfo>) -> String {
+    user.map(|u| format!(" — @{}", escape_md_inline(&u.login)))
+        .unwrap_or_default()
+}
+
 fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
-    let real_issues: Vec<_> = issues.iter().filter(|i| i.pull_request.is_none()).collect();
+    let real_issues = real_issues(issues);
     if real_issues.is_empty() {
         return;
     }
@@ -188,11 +193,7 @@ fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
                     .join(", ")
             )
         };
-        let user = issue
-            .user
-            .as_ref()
-            .map(|u| format!(" — @{}", escape_md_inline(&u.login)))
-            .unwrap_or_default();
+        let user = author_suffix(issue.user.as_ref());
         let _ = writeln!(
             out,
             "- {} {}{}{}",
@@ -216,11 +217,7 @@ fn format_pulls_section(pulls: &[PullInfo], out: &mut String) {
         } else {
             ""
         };
-        let user = pr
-            .user
-            .as_ref()
-            .map(|u| format!(" — @{}", escape_md_inline(&u.login)))
-            .unwrap_or_default();
+        let user = author_suffix(pr.user.as_ref());
         let _ = writeln!(
             out,
             "- {} {}{}{}",

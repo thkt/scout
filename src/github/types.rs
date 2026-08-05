@@ -87,6 +87,12 @@ pub(crate) struct IssueInfo {
     pub pull_request: Option<serde_json::Value>,
 }
 
+/// GitHub's `GET /repos/{owner}/{repo}/issues` endpoint returns PRs alongside
+/// issues; callers that only want issues must apply this filter (#67/ADR-0010).
+pub(crate) fn real_issues(issues: &[IssueInfo]) -> Vec<&IssueInfo> {
+    issues.iter().filter(|i| i.pull_request.is_none()).collect()
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct LabelInfo {
     pub name: String,
@@ -113,4 +119,37 @@ pub(crate) struct ReleaseInfo {
     pub html_url: String,
     pub published_at: Option<String>,
     pub prerelease: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [T-001] real_issues は pull_request を持つ項目を除外し issue だけを返す
+    #[test]
+    fn real_issues_excludes_pull_requests_and_returns_issues_only() {
+        let issues = vec![
+            IssueInfo {
+                number: 1,
+                title: "Real issue".into(),
+                html_url: "https://github.com/o/r/issues/1".into(),
+                labels: vec![],
+                user: None,
+                pull_request: None,
+            },
+            IssueInfo {
+                number: 2,
+                title: "PR as issue".into(),
+                html_url: "https://github.com/o/r/issues/2".into(),
+                labels: vec![],
+                user: None,
+                pull_request: Some(serde_json::json!({})),
+            },
+        ];
+
+        let result = real_issues(&issues);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].number, 1);
+    }
 }
