@@ -93,6 +93,46 @@ fn format_overview_filters_issues_from_prs() {
     assert!(!output.contains("PR as issue"));
 }
 
+/// [T-004] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
+#[test]
+fn markdown_recent_issues_and_json_issues_array_agree_on_pr_exclusion() {
+    let repo = sample_repo();
+    let issues = vec![
+        IssueInfo {
+            number: 1,
+            title: "Real issue".into(),
+            html_url: "https://github.com/o/r/issues/1".into(),
+            labels: vec![],
+            user: None,
+            pull_request: None,
+        },
+        IssueInfo {
+            number: 2,
+            title: "PR as issue".into(),
+            html_url: "https://github.com/o/r/issues/2".into(),
+            labels: vec![],
+            user: None,
+            pull_request: Some(serde_json::json!({})),
+        },
+    ];
+
+    // Markdown side: format_overview (pinned by T-GF009 for the same fixture shape).
+    let markdown = format_overview(&repo, None, &issues, &[], &[]);
+    assert!(markdown.contains("Real issue"));
+    assert!(!markdown.contains("PR as issue"));
+
+    // JSON side: the same function `tools::repo::repo_overview` calls to build
+    // `data.issues` (crate::github::types::real_issues), applied to the identical
+    // `issues` slice fed to `format_overview` above.
+    let json_side = crate::github::types::real_issues(&issues);
+    assert_eq!(
+        json_side.len(),
+        1,
+        "JSON-side filter should exclude the same PR-backed entry the Markdown side excludes"
+    );
+    assert_eq!(json_side[0].number, 1);
+}
+
 /// [T-GF010] format_overview marks draft PRs and shows author handle
 #[test]
 fn format_overview_shows_draft_prs() {

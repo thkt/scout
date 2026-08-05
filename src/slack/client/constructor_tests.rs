@@ -39,6 +39,24 @@ fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
     );
 }
 
+/// [T-005] SlackClient の from_env_with は未設定 env でそれぞれ既存の欠落エラーを返す
+///
+/// `Redacted::from_env_var` (shared with `BraveClient::from_env_with`, see the
+/// companion T-005 in `brave/client/http_tests.rs`) does not know about
+/// `SlackError`; this pins that going through the shared helper still surfaces
+/// Slack's own `TokenNotSet` for an unset env var.
+#[test]
+fn t005_from_env_with_returns_existing_missing_error_via_shared_helper() {
+    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
+        Err(env::VarError::NotPresent)
+    })
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(SlackError::TokenNotSet)),
+        "expected the pre-existing TokenNotSet error, got: {result:?}"
+    );
+}
+
 /// [T-SK034] from_env_with rejects a whitespace-only token as `TokenNotSet`
 /// (parity with `Redacted::new` rejecting blank secrets).
 #[test]
