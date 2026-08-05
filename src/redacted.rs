@@ -1,3 +1,4 @@
+use std::env;
 use std::fmt;
 
 /// A secret value that hides its contents from `Debug` formatting.
@@ -20,6 +21,29 @@ impl Redacted {
 
     pub fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Reads `name` via `get_var` and constructs a `Redacted` from it,
+    /// yielding the error produced by `err` when the variable is unset OR
+    /// its value is empty/whitespace-only. Unset and blank collapse to the
+    /// same injected error so callers cannot tell the two apart from the
+    /// error alone; each backend supplies its own missing-credential
+    /// variant, keeping this helper decoupled from any single client's
+    /// error enum (mirrors `validate_https`). Prefix/shape checks specific
+    /// to one backend (e.g. Slack's `xoxp-` token prefix) stay at the call
+    /// site instead of here.
+    pub(crate) fn from_env_var<F, E>(
+        name: &str,
+        get_var: F,
+        err: impl FnOnce() -> E,
+    ) -> Result<Self, E>
+    where
+        F: Fn(&str) -> Result<String, env::VarError>,
+    {
+        get_var(name)
+            .ok()
+            .and_then(|raw| Self::new(&raw))
+            .ok_or_else(err)
     }
 }
 
@@ -89,5 +113,29 @@ mod tests {
 
         let https: Result<(), CallerError> = validate_https("https://ok.example", || CallerError);
         assert_eq!(https, Ok(()));
+    }
+
+    /// [T-002] 未設定の env 変数は注入された欠落エラーになる
+    #[test]
+    fn unset_env_var_becomes_the_injected_missing_error() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct CallerError;
+
+        let get_var = |_: &str| Err(std::env::VarError::NotPresent);
+        let result: Result<Redacted, CallerError> =
+            Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
+        assert_eq!(result.err(), Some(CallerError));
+    }
+
+    /// [T-003] 空白のみの env 値も同じ欠落エラーになる
+    #[test]
+    fn whitespace_only_env_value_becomes_the_same_missing_error() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct CallerError;
+
+        let get_var = |_: &str| Ok("   ".to_owned());
+        let result: Result<Redacted, CallerError> =
+            Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
+        assert_eq!(result.err(), Some(CallerError));
     }
 }
