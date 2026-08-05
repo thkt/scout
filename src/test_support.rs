@@ -73,12 +73,10 @@ pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
     .await;
 }
 
-/// Mount a single GET responder at `path`, replying with `template`.
-///
 /// Covers the plain `method(GET) + path + respond_with + mount` shape only.
-/// A mock that also asserts on query params, headers, or call count encodes
-/// that assertion as part of what the test verifies, so those stay
-/// hand-written at the call site instead of routing through here.
+/// A mock that also matches on query params or asserts a call count encodes
+/// that condition as part of what the test verifies, so those stay
+/// hand-written at the call site.
 pub(crate) async fn mount_get(server: &MockServer, path: &str, template: ResponseTemplate) {
     use wiremock::Mock;
     use wiremock::matchers::{method, path as path_matcher};
