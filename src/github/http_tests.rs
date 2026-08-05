@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use super::*;
 use crate::clock::FixedClock;
 use crate::envelope::ErrorCode;
-use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
+use crate::test_support::{mount_get, spawn_mid_stream_drop_server, try_spawn_mock_server};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -18,14 +18,15 @@ async fn get_contents_on_a_directory_is_a_data_error_not_internal() {
     let Some(server) = try_spawn_mock_server("github::get_contents_dir").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo/contents/src"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+    mount_get(
+        &server,
+        "/repos/owner/repo/contents/src",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {"name": "lib.rs", "path": "src/lib.rs", "sha": "abc", "type": "file"},
             {"name": "main.rs", "path": "src/main.rs", "sha": "def", "type": "file"},
-        ])))
-        .mount(&server)
-        .await;
+        ])),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let err = client
@@ -50,11 +51,7 @@ async fn get_json_404_returns_not_found() {
     let Some(server) = try_spawn_mock_server("github::get_json_404").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
+    mount_get(&server, "/repos/owner/repo", ResponseTemplate::new(404)).await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -67,11 +64,7 @@ async fn get_json_429_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(429))
-        .mount(&server)
-        .await;
+    mount_get(&server, "/repos/owner/repo", ResponseTemplate::new(429)).await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -89,11 +82,12 @@ async fn get_json_429_without_retry_after_uses_ratelimit_reset() {
     let Some(server) = try_spawn_mock_server("github::http_429_reset").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(429).insert_header("x-ratelimit-reset", "1000300"))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(429).insert_header("x-ratelimit-reset", "1000300"),
+    )
+    .await;
 
     // `get_json_once`, not `get_json`: the retry loop honors the returned delay,
     // so driving the full loop here would sleep for the window under test.
@@ -117,15 +111,14 @@ async fn get_json_403_with_zero_remaining_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(
-            ResponseTemplate::new(403)
-                .append_header("x-ratelimit-remaining", "0")
-                .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .append_header("x-ratelimit-remaining", "0")
+            .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -138,15 +131,14 @@ async fn get_json_403_with_remaining_returns_forbidden() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(
-            ResponseTemplate::new(403)
-                .append_header("x-ratelimit-remaining", "50")
-                .set_body_json(serde_json::json!({"message": "access denied"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .append_header("x-ratelimit-remaining", "50")
+            .set_body_json(serde_json::json!({"message": "access denied"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -159,14 +151,13 @@ async fn get_json_403_with_missing_remaining_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(
-            ResponseTemplate::new(403)
-                .set_body_json(serde_json::json!({"message": "secondary rate limit"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .set_body_json(serde_json::json!({"message": "secondary rate limit"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -224,14 +215,13 @@ async fn get_json_500_returns_api_error() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/test"))
-        .respond_with(
-            ResponseTemplate::new(500)
-                .set_body_json(serde_json::json!({"message": "internal server error"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/test",
+        ResponseTemplate::new(500)
+            .set_body_json(serde_json::json!({"message": "internal server error"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<serde_json::Value, _> = client.get_json("/test").await;
@@ -244,11 +234,12 @@ async fn get_json_429_with_retry_after_carries_delay() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "30"))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(429).append_header("Retry-After", "30"),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
@@ -266,16 +257,15 @@ async fn get_json_403_with_ratelimit_reset_carries_delay() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(
-            ResponseTemplate::new(403)
-                .append_header("x-ratelimit-remaining", "0")
-                .append_header("x-ratelimit-reset", "1060")
-                .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .append_header("x-ratelimit-remaining", "0")
+            .append_header("x-ratelimit-reset", "1060")
+            .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri())
         .with_clock(Arc::new(FixedClock(1000)));
@@ -302,11 +292,12 @@ async fn get_json_2xx_malformed_body_returns_decode() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("{not valid json"))
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(200).set_body_string("{not valid json"),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let result: Result<RepoInfo, _> = client.get_json("/repos/owner/repo").await;
@@ -420,16 +411,15 @@ async fn get_json_403_uses_injected_clock_for_retry_after() {
     let Some(server) = try_spawn_mock_server("github::http_clock_inject").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(
-            ResponseTemplate::new(403)
-                .append_header("x-ratelimit-remaining", "0")
-                .append_header("x-ratelimit-reset", "1300")
-                .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
-        )
-        .mount(&server)
-        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .append_header("x-ratelimit-remaining", "0")
+            .append_header("x-ratelimit-reset", "1300")
+            .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
+    )
+    .await;
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri())
         .with_clock(Arc::new(FixedClock(1000)));
