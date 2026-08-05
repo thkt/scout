@@ -23,15 +23,9 @@ impl Redacted {
         &self.0
     }
 
-    /// Reads `name` via `get_var` and constructs a `Redacted` from it,
-    /// yielding the error produced by `err` when the variable is unset OR
-    /// its value is empty/whitespace-only. Unset and blank collapse to the
-    /// same injected error so callers cannot tell the two apart from the
-    /// error alone; each backend supplies its own missing-credential
-    /// variant, keeping this helper decoupled from any single client's
-    /// error enum (mirrors `validate_https`). Prefix/shape checks specific
-    /// to one backend (e.g. Slack's `xoxp-` token prefix) stay at the call
-    /// site instead of here.
+    /// Unset and blank collapse to the same injected error, so callers cannot
+    /// tell the two apart from the error alone. Backend-specific prefix or shape
+    /// checks (e.g. Slack's `xoxp-` token prefix) stay at the call site, not here.
     pub(crate) fn from_env_var<F, E>(
         name: &str,
         get_var: F,

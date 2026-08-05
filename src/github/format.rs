@@ -168,8 +168,6 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
     out.push_str("\n\n");
 }
 
-/// Render the ` — @login` suffix for an optional author, or an empty string
-/// when no author is present.
 fn author_suffix(user: Option<&UserInfo>) -> String {
     user.map(|u| format!(" — @{}", escape_md_inline(&u.login)))
         .unwrap_or_default()

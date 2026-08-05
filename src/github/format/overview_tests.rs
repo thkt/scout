@@ -66,8 +66,6 @@ fn format_overview_truncates_long_readme() {
     assert!(output.contains(&format!("/ {total} bytes)")));
 }
 
-/// One real issue plus one PR-backed issue, shared by the PR-exclusion tests
-/// below (T-GF009, T-004) so the fixture shape stays in one place.
 fn issue_and_pr_backed_issue() -> Vec<IssueInfo> {
     vec![
         IssueInfo {
@@ -105,14 +103,12 @@ fn markdown_recent_issues_and_json_issues_array_agree_on_pr_exclusion() {
     let repo = sample_repo();
     let issues = issue_and_pr_backed_issue();
 
-    // Markdown side: format_overview (pinned by T-GF009 for the same fixture shape).
     let markdown = format_overview(&repo, None, &issues, &[], &[]);
     assert!(markdown.contains("Real issue"));
     assert!(!markdown.contains("PR as issue"));
 
-    // JSON side: the same function `tools::repo::repo_overview` calls to build
-    // `data.issues` (crate::github::types::real_issues), applied to the identical
-    // `issues` slice fed to `format_overview` above.
+    // `real_issues` is the same function `tools::repo::repo_overview` calls to
+    // build `data.issues`, so this compares the two production paths, not a copy.
     let json_side = real_issues(&issues);
     assert_eq!(
         json_side.len(),

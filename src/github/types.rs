@@ -87,10 +87,8 @@ pub(crate) struct IssueInfo {
     pub pull_request: Option<serde_json::Value>,
 }
 
-/// Filters out GitHub's issues-endpoint entries that are actually pull
-/// requests (`pull_request.is_some()`), returning only real issues. GitHub's
-/// `GET /repos/{owner}/{repo}/issues` endpoint returns PRs alongside issues;
-/// callers that only want issues must apply this filter (#67/ADR-0010).
+/// GitHub's `GET /repos/{owner}/{repo}/issues` endpoint returns PRs alongside
+/// issues; callers that only want issues must apply this filter (#67/ADR-0010).
 pub(crate) fn real_issues(issues: &[IssueInfo]) -> Vec<&IssueInfo> {
     issues.iter().filter(|i| i.pull_request.is_none()).collect()
 }

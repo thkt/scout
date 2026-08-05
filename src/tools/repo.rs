@@ -331,9 +331,9 @@ mod tests {
 
     /// [T-004] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
     ///
-    /// Runs through the real `Scout::repo_overview` wiring (not the format/
-    /// types functions in isolation) so a future change that feeds the
-    /// Markdown and JSON paths different issue lists would be caught here.
+    /// Drives the real `Scout::repo_overview` wiring, not the format/types
+    /// functions in isolation, so a change feeding the Markdown and JSON paths
+    /// different issue lists is caught.
     #[tokio::test]
     async fn repo_overview_markdown_and_json_agree_on_pr_backed_issue_exclusion() {
         let Some(server) = try_spawn_mock_server("tools::repo::t_seam_004").await else {
