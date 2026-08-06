@@ -11,7 +11,7 @@ fn usage_errors_have_exit_code_64() {
         SlackError::TokenNotSet.into(),
         SlackError::TokenWrongType.into(),
         SlackError::Api {
-            error: "err".into(),
+            error: "invalid_auth".into(),
         }
         .into(),
         BraveError::ApiKeyNotSet.into(),

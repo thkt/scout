@@ -282,3 +282,66 @@ fn invalid_cursor_classifies_as_temp_failure_with_restart_paging_hint() {
         Some("Re-run to restart thread paging from the first page")
     );
 }
+
+/// [T-001] contract が列挙した 14 文字列はいずれも UsageError に分類される
+#[test]
+fn contract_listed_fourteen_strings_classify_as_usage_error() {
+    for code in [
+        "access_denied",
+        "accesslimited",
+        "account_inactive",
+        "ekm_access_denied",
+        "enterprise_is_restricted",
+        "invalid_auth",
+        "missing_scope",
+        "no_permission",
+        "not_allowed_token_type",
+        "not_authed",
+        "team_access_not_granted",
+        "token_expired",
+        "token_revoked",
+        "two_factor_setup_required",
+    ] {
+        let c = SlackError::Api {
+            error: code.to_owned(),
+        }
+        .classify();
+        assert_eq!(c.kind, ErrorCode::UsageError, "{code}");
+    }
+}
+
+/// [T-002] invalid_arguments は DataError に分類される
+#[test]
+fn invalid_arguments_classifies_as_data_error() {
+    let c = SlackError::Api {
+        error: "invalid_arguments".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::DataError);
+}
+
+/// [T-003] invalid_arg_name と deprecated_endpoint と method_deprecated は Internal に分類される
+#[test]
+fn invalid_arg_name_and_deprecated_endpoint_and_method_deprecated_classify_as_internal() {
+    for code in [
+        "invalid_arg_name",
+        "deprecated_endpoint",
+        "method_deprecated",
+    ] {
+        let c = SlackError::Api {
+            error: code.to_owned(),
+        }
+        .classify();
+        assert_eq!(c.kind, ErrorCode::Internal, "{code}");
+    }
+}
+
+/// [T-004] 表に無い未知の文字列は Unknown に分類される
+#[test]
+fn unlisted_unknown_string_classifies_as_unknown() {
+    let c = SlackError::Api {
+        error: "some_future_slack_error_code".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::Unknown);
+}
