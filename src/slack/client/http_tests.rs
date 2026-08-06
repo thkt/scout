@@ -773,14 +773,11 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
 
 /// [T-004] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
 ///
-/// `invalid_cursor` classifies as TempFailure (see `classify_tests::T-003`),
-/// so `is_retriable` retries the identical `conversations.replies` call —
-/// `api_get`'s retry closure recaptures the same `params`, so every attempt
-/// resends page 2's own cursor rather than restarting from page 1. The mock's
-/// `query_param("cursor", "PAGE2")` match on every attempt pins that. Once
-/// the retry budget is exhausted, `fetch_replies` must propagate the error
-/// through `?` rather than returning the page-1 messages already collected
-/// as a partial/truncated thread.
+/// `invalid_cursor` is TempFailure, so `is_retriable` retries the call, and
+/// `api_get`'s retry closure recaptures the same `params`. Retrying therefore
+/// resends page 2's own cursor and cannot restart from page 1, which is the
+/// recovery the error actually needs. Once the budget is spent, the page-1
+/// messages already collected must not surface as a truncated thread.
 #[tokio::test(start_paused = true)]
 async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_partial_thread() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {

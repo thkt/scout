@@ -103,9 +103,8 @@ impl SlackError {
     /// them those codes would fall through to UsageError instead of the
     /// retryable TempFailure.
     ///
-    /// `team_added_to_org`, `org_login_required`, and `invalid_cursor` are
-    /// cross-checked against Slack's own error enumeration, not guessed:
-    /// <https://api.slack.com/methods/conversations.replies#errors> (2026-08).
+    /// The transient set is cross-checked against Slack's own error enumeration:
+    /// <https://docs.slack.dev/reference/methods/conversations.replies> (2026-08).
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
@@ -133,9 +132,9 @@ impl SlackError {
                 "internal_error" | "service_unavailable" | "fatal_error" | "team_added_to_org" => {
                     Classification::transient_retry()
                 }
-                // Priority 4: TEMP_FAILURE, but not recoverable within the same
-                // invocation by a short wait — each carries its own hint instead
-                // of the shared `transient_retry` delay hint.
+                // Priority 4: TEMP_FAILURE. A short wait cannot clear either
+                // condition within one invocation, so the shared
+                // `transient_retry` hint would send the caller back too soon.
                 "org_login_required" => Classification::new(ErrorCode::TempFailure)
                     .with_hint("Retry after the workspace's Enterprise migration completes"),
                 "invalid_cursor" => Classification::new(ErrorCode::TempFailure)
