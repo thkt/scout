@@ -196,42 +196,45 @@ pub fn spawn_mock_proxy_raw_response(
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
-/// `PATH` is restored so the OS proxy lookup still resolves, and
-/// `LLVM_PROFILE_FILE` survives the clear because an instrumented child that
-/// loses it writes no `.profraw`, dropping every line it drives from the
-/// coverage report. Everything else from the invoking shell stays cleared so
-/// it cannot leak into the contract under test.
+/// `PATH` is restored so the OS proxy lookup still resolves. Everything else
+/// from the invoking shell stays cleared so it cannot leak into the contract
+/// under test, except the coverage output `forward_coverage_profile` carries
+/// across for the reason stated there.
 ///
 /// `HOME` is deliberately not restored: neither `src/` nor any crate in
 /// `Cargo.lock` reads it. The macOS proxy lookup goes through
 /// `system-configuration` and the Linux one reads proxy env vars only.
 pub fn scout_with_clean_env() -> Command {
-    let mut cmd = scout_with_env(&env::var("PATH").unwrap_or_default(), None);
+    let mut cmd = scout_with_env(&env::var("PATH").unwrap_or_default());
     forward_coverage_profile(&mut cmd);
     cmd
 }
 
 /// Carries the parent's coverage output path across an `env_clear()`. An
 /// instrumented child that loses it writes no `.profraw`, so every line it
-/// drives disappears from the report. Separate from `scout_with_clean_env`
-/// because `tests/cli_integration.rs` clears the environment without
-/// restoring `PATH`, and so cannot use that builder.
+/// drives disappears from the report. It is separate from
+/// `scout_with_clean_env` because `tests/cli_integration.rs` clears the
+/// environment without restoring `PATH`, and so cannot use that builder.
 pub fn forward_coverage_profile(cmd: &mut Command) {
-    if let Ok(profile) = env::var("LLVM_PROFILE_FILE") {
+    set_coverage_profile(cmd, env::var("LLVM_PROFILE_FILE").ok().as_deref());
+}
+
+/// Testable core `forward_coverage_profile` wraps. The value arrives as a
+/// parameter rather than being read here because `unsafe_code = "forbid"`
+/// (Cargo.toml) blocks a test from mutating the real process env, which would
+/// otherwise be the only way to reach either branch.
+pub fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
+    if let Some(profile) = profile {
         cmd.env("LLVM_PROFILE_FILE", profile);
     }
 }
 
-/// Testable core `scout_with_clean_env` wraps. The values arrive as
-/// parameters rather than being read here because `unsafe_code = "forbid"`
-/// (Cargo.toml) blocks a test from mutating the real process env, which would
-/// otherwise be the only way to reach the coverage-output branch.
-pub fn scout_with_env(path: &str, coverage_output: Option<&str>) -> Command {
+/// Testable core `scout_with_clean_env` wraps. `path` arrives as a parameter
+/// rather than being read here because `unsafe_code = "forbid"` (Cargo.toml)
+/// blocks a test from mutating the real process env.
+pub fn scout_with_env(path: &str) -> Command {
     let mut cmd = scout();
     cmd.env_clear().env("PATH", path);
-    if let Some(profile) = coverage_output {
-        cmd.env("LLVM_PROFILE_FILE", profile);
-    }
     cmd
 }
 
@@ -276,7 +279,8 @@ mod tests {
     // T-C035: command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given
     #[test]
     fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
-        let cmd = scout_with_env("/usr/bin", Some("/tmp/scout-123.profraw"));
+        let mut cmd = scout_with_env("/usr/bin");
+        set_coverage_profile(&mut cmd, Some("/tmp/scout-123.profraw"));
 
         let llvm_profile_file = cmd
             .get_envs()
@@ -293,7 +297,8 @@ mod tests {
     // T-C036: command_does_not_set_llvm_profile_file_when_coverage_output_is_absent
     #[test]
     fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
-        let cmd = scout_with_env("/usr/bin", None);
+        let mut cmd = scout_with_env("/usr/bin");
+        set_coverage_profile(&mut cmd, None);
 
         let has_llvm_profile_file = cmd
             .get_envs()
