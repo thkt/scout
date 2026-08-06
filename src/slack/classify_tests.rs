@@ -85,7 +85,12 @@ fn api_not_found_in_thread_with_ts_classifies_as_not_found() {
 /// [T-SLC004] ADR-0003 — internal_error must not be misclassified as UsageError.
 #[test]
 fn api_temp_failure_codes_classify_as_temp_failure() {
-    for code in ["internal_error", "service_unavailable", "fatal_error"] {
+    for code in [
+        "internal_error",
+        "service_unavailable",
+        "fatal_error",
+        "team_added_to_org",
+    ] {
         let c = SlackError::Api {
             error: code.to_owned(),
         }
@@ -231,4 +236,53 @@ fn url_build_failure_classifies_as_parse_url_internal() {
     let parse_err = ::url::Url::parse("not a url").expect_err("malformed url must fail to parse");
     let c = SlackError::ParseUrl(parse_err).classify();
     assert_eq!(c.kind, ErrorCode::Internal);
+}
+
+/// [T-001] team_added_to_org は TempFailure に分類され短い待機後の再試行を促す hint を持つ
+#[test]
+fn team_added_to_org_classifies_as_temp_failure_with_short_delay_hint() {
+    let c = SlackError::Api {
+        error: "team_added_to_org".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::TempFailure);
+    assert_eq!(
+        c.next_step.as_deref(),
+        Some("Retry after a short delay"),
+        "team_added_to_org must reuse the shared short-delay retry hint"
+    );
+}
+
+/// [T-002] org_login_required は TempFailure に分類され hint が
+/// "Retry after the workspace's Enterprise migration completes" になる。
+/// Enterprise 移行完了は同一 invocation 内では起きないので、短い待機を指す
+/// 共通 hint (`transient_retry`) を再利用してはならない。
+#[test]
+fn org_login_required_classifies_as_temp_failure_with_enterprise_migration_hint() {
+    let c = SlackError::Api {
+        error: "org_login_required".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::TempFailure);
+    assert_eq!(
+        c.next_step.as_deref(),
+        Some("Retry after the workspace's Enterprise migration completes")
+    );
+}
+
+/// [T-003] invalid_cursor は TempFailure に分類され hint が
+/// "Re-run to restart thread paging from the first page" になる。
+/// カーソルの再開ではなく最初のページからの再実行が必要なので、短い待機を
+/// 指す共通 hint (`transient_retry`) を再利用してはならない。
+#[test]
+fn invalid_cursor_classifies_as_temp_failure_with_restart_paging_hint() {
+    let c = SlackError::Api {
+        error: "invalid_cursor".to_owned(),
+    }
+    .classify();
+    assert_eq!(c.kind, ErrorCode::TempFailure);
+    assert_eq!(
+        c.next_step.as_deref(),
+        Some("Re-run to restart thread paging from the first page")
+    );
 }

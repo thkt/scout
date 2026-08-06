@@ -99,8 +99,18 @@ impl SlackError {
     /// Slack surfaces failures as `error` strings inside `Api` instead of HTTP
     /// status codes, so the string-table arm replaces the HTTP-status arm used
     /// by other backends. The table's `internal_error` / `service_unavailable`
-    /// / `fatal_error` entries are load-bearing — without them those codes
-    /// would fall through to UsageError instead of the retryable TempFailure.
+    /// / `fatal_error` / `team_added_to_org` entries are load-bearing — without
+    /// them those codes would fall through to UsageError instead of the
+    /// retryable TempFailure.
+    ///
+    /// `team_added_to_org`, `org_login_required`, and `invalid_cursor` are
+    /// cross-checked against Slack's own error enumeration, not guessed:
+    /// <https://api.slack.com/methods/conversations.replies#errors> (2026-08).
+    /// `org_login_required` and `invalid_cursor` still classify as
+    /// TempFailure — the underlying condition (an in-progress Enterprise
+    /// migration; a cursor Slack has already invalidated) will not clear
+    /// within the same invocation, so each keeps its own hint instead of the
+    /// shared short-delay `transient_retry` hint.
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
@@ -125,9 +135,16 @@ impl SlackError {
                     Classification::new(ErrorCode::NotFound)
                 }
                 // Priority 4: TEMP_FAILURE
-                "internal_error" | "service_unavailable" | "fatal_error" => {
+                "internal_error" | "service_unavailable" | "fatal_error" | "team_added_to_org" => {
                     Classification::transient_retry()
                 }
+                // Priority 4: TEMP_FAILURE, but not recoverable within the same
+                // invocation by a short wait — each carries its own hint instead
+                // of the shared `transient_retry` delay hint.
+                "org_login_required" => Classification::new(ErrorCode::TempFailure)
+                    .with_hint("Retry after the workspace's Enterprise migration completes"),
+                "invalid_cursor" => Classification::new(ErrorCode::TempFailure)
+                    .with_hint("Re-run to restart thread paging from the first page"),
                 // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
                 _ => Classification::new(ErrorCode::UsageError),
             },
