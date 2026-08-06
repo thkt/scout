@@ -13,9 +13,7 @@ use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
-use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
-};
+use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
 use crate::rng::{FastrandRng, Rng};
 
 use super::types::{SearchResult, WebSearchResponse};
@@ -348,15 +346,15 @@ impl SearchClient for BraveClient {
     }
 }
 
+/// Retry eligibility, derived from [`BraveError::classify`] and
+/// [`ErrorCode::is_retryable`] so retryability stays a single source of
+/// truth (mirrors `SlackClient::is_retriable` / `GitHubClient::is_retriable`).
+/// `RateLimited` keeps its own arm: the cap check needs the raw
+/// `retry_after` value, which `classify()` does not carry through.
 fn is_retriable(e: &BraveError) -> bool {
     match e {
         BraveError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        BraveError::Server(_) => true,
-        BraveError::Network(e) => is_transient_network(e),
-        // Oversized body is an upstream invariant violation (issue #165 /
-        // CHX-008), not transient — retry cannot shrink the response.
-        BraveError::ResponseTooLarge => false,
-        _ => false,
+        _ => e.classify().kind.is_retryable(),
     }
 }
 
