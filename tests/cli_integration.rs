@@ -294,8 +294,10 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
 // T-C015: direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked
 #[test]
 fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
-    let output = scout()
-        .env_clear()
+    let mut cmd = scout();
+    cmd.env_clear();
+    common::forward_coverage_profile(&mut cmd);
+    let output = cmd
         .args(["--json", "fetch", "http://127.0.0.1/"])
         .output()
         .expect("scout --json fetch failed to run");
@@ -305,8 +307,10 @@ fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked()
 // T-C016: http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy
 #[test]
 fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
-    let output = scout()
-        .env_clear()
+    let mut cmd = scout();
+    cmd.env_clear();
+    common::forward_coverage_profile(&mut cmd);
+    let output = cmd
         // Port 1 on loopback has nothing listening, so if the literal-loopback
         // rejection were skipped under Proxied egress, the process would fail
         // fast with a connection error instead of hanging.
@@ -326,8 +330,10 @@ fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_pro
 // T-C017: localhost_hostname_fetch_exits_65_data_error — Host::Domain arm, not the IP-literal one
 #[test]
 fn localhost_hostname_fetch_exits_65_data_error() {
-    let output = scout()
-        .env_clear()
+    let mut cmd = scout();
+    cmd.env_clear();
+    common::forward_coverage_profile(&mut cmd);
+    let output = cmd
         .args(["--json", "fetch", "http://localhost/"])
         .output()
         .expect("scout --json fetch failed to run");
@@ -344,8 +350,10 @@ fn localhost_hostname_fetch_exits_65_data_error() {
 #[cfg(feature = "js-rendering")]
 #[test]
 fn js_flag_literal_loopback_fetch_exits_65_data_error() {
-    let output = scout()
-        .env_clear()
+    let mut cmd = scout();
+    cmd.env_clear();
+    common::forward_coverage_profile(&mut cmd);
+    let output = cmd
         .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
         .output()
         .expect("scout --json fetch --js failed to run");
@@ -393,6 +401,7 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
     for form in &forms {
         let mut cmd = scout();
         cmd.env_clear();
+        common::forward_coverage_profile(&mut cmd);
         for (key, val) in &form.env {
             cmd.env(key, val);
         }
