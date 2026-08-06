@@ -207,10 +207,9 @@ pub fn spawn_mock_proxy_raw_response(
 /// coverage report. Everything else from the invoking shell stays cleared so
 /// it cannot leak into the contract under test.
 ///
-/// `HOME` is not restored. The callers this replaces did restore it, but
-/// neither `src/` nor any crate in `Cargo.lock` reads it: the macOS proxy
-/// lookup goes through `system-configuration` and the Linux one reads proxy
-/// env vars only.
+/// `HOME` is deliberately not restored: neither `src/` nor any crate in
+/// `Cargo.lock` reads it. The macOS proxy lookup goes through
+/// `system-configuration` and the Linux one reads proxy env vars only.
 pub fn scout_with_clean_env() -> Command {
     scout_with_env(
         &env::var("PATH").unwrap_or_default(),

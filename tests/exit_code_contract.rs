@@ -41,11 +41,9 @@ use std::process::Output;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-/// Runs `scout --json fetch http://example.com/` via
-/// `common::scout_with_clean_env` (env_clear plus `PATH`/`HOME`/
-/// `LLVM_PROFILE_FILE` restored so the OS proxy lookup still resolves and an
-/// instrumented run keeps writing its coverage) with `extra_env` layered on
-/// top. Shared by every scenario below, which differ only in `extra_env`.
+/// Runs `scout --json fetch http://example.com/` with `extra_env` layered on
+/// top of `common::scout_with_clean_env`. Shared by every scenario below,
+/// which differ only in `extra_env`.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     let mut cmd = common::scout_with_clean_env();
     for (key, value) in extra_env {

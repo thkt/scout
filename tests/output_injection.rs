@@ -52,13 +52,11 @@ use std::time::Duration;
 
 /// Runs `scout fetch http://example.com/` (Markdown stdout, not `--json`)
 /// against a mock forward proxy serving `html` as the upstream page body.
-/// Builds the child's environment via `common::scout_with_clean_env` — the
-/// same env_clear plus `PATH`/`HOME`/`LLVM_PROFILE_FILE` carry-through
-/// `run_scout_fetch` (`tests/exit_code_contract.rs`) uses — with `HTTP_PROXY`
-/// pointed at the mock proxy, so `fetch`'s `EgressMode::Proxied` path
-/// (`src/fetch/ssrf.rs::detect_egress_mode`) is taken and the domain-name
-/// target (not an IP literal) clears `ssrf_check` without the mock proxy's
-/// own loopback address ever being the dialed target.
+/// `HTTP_PROXY` points at the mock proxy so `fetch` takes its
+/// `EgressMode::Proxied` path (`src/fetch/ssrf.rs::detect_egress_mode`), and
+/// the target is a domain name rather than an IP literal so `ssrf_check`
+/// clears it without the mock proxy's own loopback address ever being the
+/// dialed target.
 ///
 /// Returns `None` when `spawn_mock_proxy` reports an unavailable loopback
 /// bind, which `guard_loopback_bind` (tests/common/mod.rs) defines as a skip
