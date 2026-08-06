@@ -260,8 +260,12 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
     .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.fetch_user_name("U123").await;
+    let (name, failed) = client.fetch_user_name("U123").await;
     assert_eq!(name, "U123", "falls back to the raw user ID");
+    assert!(
+        !failed,
+        "a 200 response with a missing name field is not a lookup failure"
+    );
     assert!(
         logs_contain("user name missing"),
         "expected a warn for the null user name"
@@ -957,11 +961,12 @@ async fn users_info_500_returns_after_1_request_per_id() {
         .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.fetch_user_name("U123").await;
+    let (name, failed) = client.fetch_user_name("U123").await;
     assert_eq!(
         name, "U123",
         "a persistently failing users.info falls back to the raw user ID"
     );
+    assert!(failed, "a 500 response from users.info is a lookup failure");
     // The `.expect(1)` mock is verified when `server` drops at end of scope.
 }
 
