@@ -98,10 +98,7 @@ impl SlackError {
     ///
     /// Slack surfaces failures as `error` strings inside `Api` instead of HTTP
     /// status codes, so the string-table arm replaces the HTTP-status arm used
-    /// by other backends. The table's `internal_error` / `service_unavailable`
-    /// / `fatal_error` / `team_added_to_org` entries are load-bearing — without
-    /// them those codes would fall through to UsageError instead of the
-    /// retryable TempFailure.
+    /// by other backends.
     ///
     /// The transient set is cross-checked against Slack's own error enumeration:
     /// <https://docs.slack.dev/reference/methods/conversations.replies> (2026-08).
