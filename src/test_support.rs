@@ -20,7 +20,7 @@
 
 use std::env;
 use std::io::{self, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
@@ -138,6 +138,56 @@ pub async fn try_spawn_with_bind(
     Some(MockServer::builder().listener(listener).start().await)
 }
 
+/// The one primitive every one-shot test server routes through: bind
+/// loopback under the shared guard policy, then accept up to `accept_count`
+/// connections, draining each request's first 4 KiB before handing the
+/// stream to `respond` to write the reply and dropping it.
+///
+/// `respond` runs once per accepted connection, so it must be `Fn` (not
+/// `FnOnce`/`FnMut`). A connection's `respond` failure does not cut the
+/// accept loop short — every one of `accept_count` connections is still
+/// accepted and counted, so a caller asserting on the counter (e.g. a
+/// retry-budget test) sees the loop run to completion regardless of
+/// mid-loop write failures. Once the loop completes, the thread returns the
+/// *first* `respond` error, if any; a caller that cares inspects it via
+/// `handle.join()`, and a caller that does not can discard it with
+/// `let _ = handle.join();` same as before this helper existed.
+///
+/// Returns `None` when loopback bind is unavailable so callers can
+/// early-return in restricted environments, matching
+/// `try_spawn_mock_server`.
+pub(crate) fn spawn_accept_loop<F>(
+    test_name: &str,
+    accept_count: usize,
+    respond: F,
+) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)>
+where
+    F: Fn(&mut TcpStream) -> io::Result<()> + Send + 'static,
+{
+    let listener = bind_loopback(test_name)?;
+    let addr = listener.local_addr().ok()?;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = Arc::clone(&counter);
+    let handle = thread::spawn(move || -> io::Result<()> {
+        let mut first_err = None;
+        for _ in 0..accept_count {
+            let (mut stream, _) = listener.accept()?;
+            counter_clone.fetch_add(1, Ordering::SeqCst);
+            // Drain the request before replying so reqwest observes
+            // whatever `respond` writes as the response, not racing an
+            // unread request buffer.
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            if let Err(e) = respond(&mut stream) {
+                first_err.get_or_insert(e);
+            }
+            // stream drops here at each iteration's end.
+        }
+        first_err.map_or(Ok(()), Err)
+    });
+    Some((format!("http://{addr}"), counter, handle))
+}
+
 /// One-shot server that accepts up to `accept_count` connections and replies
 /// with an HTTP/1.1 response declaring `Content-Length: 1000` but writing
 /// only `hello` before dropping the socket. reqwest surfaces the resulting
@@ -154,26 +204,10 @@ pub async fn try_spawn_with_bind(
 /// and makes `handle.join()` hang.
 pub fn spawn_mid_stream_drop_server(
     accept_count: usize,
-) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
-    let listener = bind_loopback("spawn_mid_stream_drop_server")?;
-    let addr = listener.local_addr().ok()?;
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_clone = Arc::clone(&counter);
-    let handle = thread::spawn(move || {
-        for _ in 0..accept_count {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-            // Drain the request before replying so reqwest observes the
-            // close as a mid-stream body drop on `json().await`, not as a
-            // write error during `send().await`.
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhello");
-        }
-    });
-    Some((format!("http://{addr}"), counter, handle))
+) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
+    spawn_accept_loop("spawn_mid_stream_drop_server", accept_count, |stream| {
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nhello")
+    })
 }
 
 /// One-shot server that accepts one connection and replies with a
@@ -187,24 +221,15 @@ pub fn spawn_mid_stream_drop_server(
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
 /// `spawn_mid_stream_drop_server`.
-pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, JoinHandle<()>)> {
-    let listener = bind_loopback("spawn_close_delimited_body_server")?;
-    let addr = listener.local_addr().ok()?;
-    let handle = thread::spawn(move || {
-        // Single-shot: the test makes exactly one connection, so a failed
-        // accept is a test-environment fault. The panic reaches stderr and the
-        // caller's own request then fails on its `expect`; callers discard the
-        // join Result, so this arm does not fail a test on its own.
-        let (mut stream, _) = listener.accept().expect("accept loopback connection");
-        // Drain the request so the write below is the response, not racing
-        // an unread request buffer.
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf);
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
-        let _ = stream.write_all(&vec![b'x'; body_size]);
-        // stream drops here → socket close is the body's EOF delimiter.
-    });
-    Some((format!("http://{addr}"), handle))
+pub fn spawn_close_delimited_body_server(
+    body_size: usize,
+) -> Option<(String, JoinHandle<io::Result<()>>)> {
+    let (addr, _counter, handle) =
+        spawn_accept_loop("spawn_close_delimited_body_server", 1, move |stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")?;
+            stream.write_all(&vec![b'x'; body_size])
+        })?;
+    Some((addr, handle))
 }
 
 /// One-shot server that declares `Content-Length: declared_len` in the
@@ -226,26 +251,14 @@ pub fn spawn_close_delimited_body_server(body_size: usize) -> Option<(String, Jo
 /// `spawn_close_delimited_body_server`.
 pub fn spawn_declared_length_no_body_server(
     declared_len: usize,
-) -> Option<(String, JoinHandle<()>)> {
-    let listener = bind_loopback("spawn_declared_length_no_body_server")?;
-    let addr = listener.local_addr().ok()?;
-    let handle = thread::spawn(move || {
-        // Single-shot: the test makes exactly one connection, so a failed
-        // accept is a test-environment fault. The panic reaches stderr and the
-        // caller's own request then fails on its `expect`; callers discard the
-        // join Result, so this arm does not fail a test on its own.
-        let (mut stream, _) = listener.accept().expect("accept loopback connection");
-        // Drain the request so the write below is the response, not racing
-        // an unread request buffer.
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf);
-        let _ = stream.write_all(
-            format!("HTTP/1.1 200 OK\r\nContent-Length: {declared_len}\r\n\r\n").as_bytes(),
-        );
-        // stream drops here with zero body bytes written — the socket
-        // closes before any body byte is sent.
-    });
-    Some((format!("http://{addr}"), handle))
+) -> Option<(String, JoinHandle<io::Result<()>>)> {
+    let (addr, _counter, handle) =
+        spawn_accept_loop("spawn_declared_length_no_body_server", 1, move |stream| {
+            stream.write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {declared_len}\r\n\r\n").as_bytes(),
+            )
+        })?;
+    Some((addr, handle))
 }
 
 /// One-shot forward proxy: binds loopback, accepts exactly one connection,
@@ -258,30 +271,17 @@ pub fn spawn_declared_length_no_body_server(
 ///
 /// Returns `None` when loopback bind is unavailable so callers can early-return
 /// in restricted environments, matching `spawn_close_delimited_body_server`.
-pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<()>)> {
-    let listener = bind_loopback("spawn_forward_proxy")?;
-    let addr = listener.local_addr().ok()?;
+pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let body = body.to_owned();
-    let handle = thread::spawn(move || {
-        // Single-shot: the test makes exactly one proxied request, so a failed
-        // accept is a test-environment fault — panic loudly rather than hang
-        // the joining test on a silent return.
-        let (mut stream, _) = listener.accept().expect("accept proxied connection");
-        // Drain the request so the write below is the response, not racing an
-        // unread request buffer. The request-target form is ignored: a forward
-        // proxy that always returns the same body makes absolute- vs origin-form
-        // irrelevant here.
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf);
+    let (addr, _counter, handle) = spawn_accept_loop("spawn_forward_proxy", 1, move |stream| {
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
             body
         );
-        let _ = stream.write_all(response.as_bytes());
-        // stream drops here → connection closes after the framed body.
-    });
-    Some((format!("http://{addr}"), handle))
+        stream.write_all(response.as_bytes())
+    })?;
+    Some((addr, handle))
 }
 
 #[cfg(test)]
@@ -329,5 +329,55 @@ mod tests {
         ));
 
         let _result = try_spawn_with_bind("forced_panic", bind_err, true).await;
+    }
+
+    /// [T-001] respond 閉包が Err を返すとサーバ thread の join 結果が Err になる
+    #[test]
+    fn respond_err_makes_thread_join_result_err() {
+        let Some((addr, _counter, handle)) = spawn_accept_loop(
+            "respond_err_makes_thread_join_result_err",
+            1,
+            |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+
+        let host = addr
+            .strip_prefix("http://")
+            .expect("spawn_accept_loop should return an http:// URL");
+        let _ = TcpStream::connect(host);
+
+        let result = handle.join().expect("server thread should not panic");
+        assert!(
+            result.is_err(),
+            "respond closure's io failure should surface via the join result"
+        );
+    }
+
+    /// [T-002] respond 閉包が Err を返した接続の後も accept ループは続き接続カウンタは accept_count に達する
+    #[test]
+    fn accept_loop_continues_past_respond_err_until_accept_count() {
+        let accept_count = 3;
+        let Some((addr, counter, handle)) = spawn_accept_loop(
+            "accept_loop_continues_past_respond_err_until_accept_count",
+            accept_count,
+            |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+
+        let host = addr
+            .strip_prefix("http://")
+            .expect("spawn_accept_loop should return an http:// URL");
+        for _ in 0..accept_count {
+            let _ = TcpStream::connect(host);
+        }
+
+        let _ = handle.join().expect("server thread should not panic");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            accept_count,
+            "accept loop should keep accepting connections after a respond error"
+        );
     }
 }
