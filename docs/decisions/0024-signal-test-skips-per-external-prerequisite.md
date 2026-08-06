@@ -78,5 +78,7 @@ policy の表現を 1 つに揃える価値と、ローカルでスキップが�
 - runner イメージから Chrome が外れる。方式 C を再検討する
 
 > **Note (2026-08-06, skip 警告の件数表示を削除)**: `bind_failure_without_force_returns_none_and_warns` (`src/test_support.rs`) を読むと、pin しているのは `logs_contain("permission_denied")` というテスト名の一致だけで、件数は assert 対象に入っていない。`NETWORK_SKIP_COUNT` はプロセス内 static なので、nextest が各テストを別プロセスで走らせる既定設定では 1 テストの skip ごとに 1 から数え直され、プロセスをまたいだ累積件数にはならない。件数を warn 文言に載せると runner の実行形態 (プロセス分離の有無、並列度) で値の意味が変わってしまい、テスト名だけを載せる契約とも整合しない。`NETWORK_SKIP_COUNT` の定義・加算と warn/eprintln 文言の件数部分を `src/test_support.rs` と `tests/common/mod.rs` の両方から削除し、上記 Context の tracing::warn! に関する記述と Reassessment Triggers の該当項目をこの実測に合わせて書き換えた。
+>
+> skip をローカルで読む手順もこの調査で確定した。`cargo nextest run -E '<filter>' --success-output immediate` は passing test の stderr を表示し、`--nocapture` と違ってテストを直列化しない (`cargo nextest run --help` は `--nocapture` を "Run tests serially" と明記し、`--success-output` にその記載はない)。`cargo test` 側に同等の指定はなく、`-- --nocapture` は直列化する。既定ではどちらの runner も passing test の出力を隠すため、この指定を付けない限り skip は読めない。
 
 Related to issue #319 and ADR-0021 (CDP Chromium Launch Egress Flags).
