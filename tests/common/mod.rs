@@ -206,10 +206,14 @@ pub fn spawn_mock_proxy_raw_response(
 /// loses it writes no `.profraw`, dropping every line it drives from the
 /// coverage report. Everything else from the invoking shell stays cleared so
 /// it cannot leak into the contract under test.
+///
+/// `HOME` is not restored. The callers this replaces did restore it, but
+/// neither `src/` nor any crate in `Cargo.lock` reads it: the macOS proxy
+/// lookup goes through `system-configuration` and the Linux one reads proxy
+/// env vars only.
 pub fn scout_with_clean_env() -> Command {
     scout_with_env(
         &env::var("PATH").unwrap_or_default(),
-        &env::var("HOME").unwrap_or_default(),
         env::var("LLVM_PROFILE_FILE").ok().as_deref(),
     )
 }
@@ -218,9 +222,9 @@ pub fn scout_with_clean_env() -> Command {
 /// parameters rather than being read here because `unsafe_code = "forbid"`
 /// (Cargo.toml) blocks a test from mutating the real process env, which would
 /// otherwise be the only way to reach the coverage-output branch.
-pub fn scout_with_env(path: &str, home: &str, coverage_output: Option<&str>) -> Command {
+pub fn scout_with_env(path: &str, coverage_output: Option<&str>) -> Command {
     let mut cmd = scout();
-    cmd.env_clear().env("PATH", path).env("HOME", home);
+    cmd.env_clear().env("PATH", path);
     if let Some(profile) = coverage_output {
         cmd.env("LLVM_PROFILE_FILE", profile);
     }
@@ -268,7 +272,7 @@ mod tests {
     // T-C035: command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given
     #[test]
     fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
-        let cmd = scout_with_env("/usr/bin", "/home/tester", Some("/tmp/scout-123.profraw"));
+        let cmd = scout_with_env("/usr/bin", Some("/tmp/scout-123.profraw"));
 
         let llvm_profile_file = cmd
             .get_envs()
@@ -285,7 +289,7 @@ mod tests {
     // T-C036: command_does_not_set_llvm_profile_file_when_coverage_output_is_absent
     #[test]
     fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
-        let cmd = scout_with_env("/usr/bin", "/home/tester", None);
+        let cmd = scout_with_env("/usr/bin", None);
 
         let has_llvm_profile_file = cmd
             .get_envs()
