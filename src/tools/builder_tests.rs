@@ -10,6 +10,21 @@ use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+/// Serves `conversations.info` so `resolve_channel` succeeds. Only the tests
+/// that assert an EMPTY (or `SlackLookupFailed`-free) `degraded_reasons` need
+/// it: without the mount wiremock answers 404, the channel renders raw, and
+/// `SLACK_LOOKUP_FAILED` fires for a reason the test is not about.
+async fn mount_channel_info(server: &wiremock::MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/conversations.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "channel": {"id": "C1", "name": "general"}
+        })))
+        .mount(server)
+        .await;
+}
+
 /// [T-SB001] `ScoutBuilder::with_clock` で渡した `Arc` が `Scout.clock` まで
 /// 届く injection slot の最小証明。end-to-end な plumbing 確認は T-SB004。
 #[test]
@@ -301,7 +316,7 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
     );
 }
 
-/// [T-003] users.info が失敗した fetch は degraded_reasons に SlackLookupFailed を含む
+/// [T-SK075] users.info が失敗した fetch は degraded_reasons に SlackLookupFailed を含む
 ///
 /// A single distinct author ID triggers exactly one `users.info` lookup; that
 /// count stays far under `SLACK_MAX_USER_LOOKUPS`, so `SLACK_USERS_CAPPED`
@@ -347,11 +362,11 @@ async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
     );
 }
 
-/// [T-004] users.info が成功した fetch は degraded_reasons に SlackLookupFailed を含まない
+/// [T-SK076] users.info が成功した fetch は degraded_reasons に SlackLookupFailed を含まない
 ///
-/// Mirrors T-003 with a `users.info` call that succeeds: no lookup failed, so
+/// Mirrors T-SK075 with a `users.info` call that succeeds: no lookup failed, so
 /// `SLACK_LOOKUP_FAILED` must be absent from `degraded_reasons`. Without this
-/// negative case, T-003 alone cannot rule out `SlackLookupFailed` firing
+/// negative case, T-SK075 alone cannot rule out `SlackLookupFailed` firing
 /// unconditionally on every fetch regardless of lookup outcome.
 #[tokio::test]
 async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
@@ -374,6 +389,7 @@ async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
         })))
         .mount(&server)
         .await;
+    mount_channel_info(&server).await;
 
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
@@ -509,6 +525,7 @@ async fn fetch_slack_without_caps_stays_undegraded() {
         })))
         .mount(&server)
         .await;
+    mount_channel_info(&server).await;
 
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())

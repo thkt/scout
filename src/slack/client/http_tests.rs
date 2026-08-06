@@ -235,8 +235,12 @@ async fn resolve_channel_null_name_warns_then_falls_back() {
     .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.resolve_channel("C123").await;
+    let (name, failed) = client.resolve_channel("C123").await;
     assert_eq!(name, "C123", "falls back to the raw channel ID");
+    assert!(
+        !failed,
+        "a 200 response with a missing name field is not a lookup failure"
+    );
     assert!(
         logs_contain("channel name missing"),
         "expected a warn for the null channel name"
@@ -939,15 +943,13 @@ async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     );
 }
 
-/// [T-001] users.info が 500 を返しても各 ID への request は 1 回で終わる
+/// [T-SK073] users.info が 500 を返しても各 ID への request は 1 回で終わる
 ///
-/// `SlackError::Server(_)` classifies as `transient_retry`, so
-/// `fetch_user_name`'s current `api_get` call retries a 500 up to
-/// `1 + DEFAULT_MAX_RETRIES` times per ID before falling back to the raw ID —
-/// 50 failing lookups would issue 150 requests, not 50. Once `fetch_user_name`
-/// calls `api_get_once` directly the retry loop drops out and exactly one
-/// request lands per ID. The `.expect(1)` mock expectation is checked when
-/// `server` drops, and panics if more than one request lands.
+/// `SlackError::Server(_)` classifies as `transient_retry`, so routing
+/// `fetch_user_name` through `api_get` would retry a 500 up to
+/// `1 + DEFAULT_MAX_RETRIES` times per ID — 50 failing lookups issuing 150
+/// requests instead of 50. The `.expect(1)` mock pins the `api_get_once`
+/// call and panics if a second request lands (issue #346).
 #[tokio::test(start_paused = true)]
 async fn users_info_500_returns_after_1_request_per_id() {
     let Some(server) = try_spawn_mock_server("slack::http_users_500").await else {
@@ -967,15 +969,13 @@ async fn users_info_500_returns_after_1_request_per_id() {
         "a persistently failing users.info falls back to the raw user ID"
     );
     assert!(failed, "a 500 response from users.info is a lookup failure");
-    // The `.expect(1)` mock is verified when `server` drops at end of scope.
 }
 
-/// [T-002] conversations.info が 500 を返しても request は 1 回で終わる
+/// [T-SK074] conversations.info が 500 を返しても request は 1 回で終わる
 ///
-/// Mirrors T-001 for `resolve_channel`: today's `api_get` retries the 500
-/// `1 + DEFAULT_MAX_RETRIES` times before falling back to the raw channel ID.
-/// Once `resolve_channel` calls `api_get_once` directly, exactly one request
-/// lands. The `.expect(1)` mock expectation is checked when `server` drops.
+/// Mirrors T-SK073 for `resolve_channel`, which shares the retry-amplification
+/// path and additionally blocks the `tokio::join!` in `fetch_message` for the
+/// whole `Retry-After` (issue #346).
 #[tokio::test(start_paused = true)]
 async fn conversations_info_500_returns_after_1_request() {
     let Some(server) = try_spawn_mock_server("slack::http_channel_500").await else {
@@ -989,10 +989,13 @@ async fn conversations_info_500_returns_after_1_request() {
         .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.resolve_channel("C123").await;
+    let (name, failed) = client.resolve_channel("C123").await;
     assert_eq!(
         name, "C123",
         "a persistently failing conversations.info falls back to the raw channel ID"
     );
-    // The `.expect(1)` mock is verified when `server` drops at end of scope.
+    assert!(
+        failed,
+        "a 500 response from conversations.info is a lookup failure"
+    );
 }
