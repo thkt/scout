@@ -325,7 +325,8 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
 /// cannot fire here. When the lookup itself fails (a transport/API error, not
 /// the cap), the AI caller needs a distinct signal to tell "resolution
 /// failed" apart from "capped by volume" — `DegradedReason::SlackLookupFailed`
-/// must appear in `degraded_reasons`.
+/// must appear in `degraded_reasons`. `mount_channel_info` keeps the channel
+/// lookup succeeding, so the reason can only come from `users.info`.
 #[tokio::test]
 async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
     let Some(server) = try_spawn_mock_server("tools::slack_users_lookup_failed").await else {
@@ -367,10 +368,8 @@ async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
 
 /// [T-SK076] users.info が成功した fetch は degraded_reasons に SlackLookupFailed を含まない
 ///
-/// Mirrors T-SK075 with a `users.info` call that succeeds: no lookup failed, so
-/// `SLACK_LOOKUP_FAILED` must be absent from `degraded_reasons`. Without this
-/// negative case, T-SK075 alone cannot rule out `SlackLookupFailed` firing
-/// unconditionally on every fetch regardless of lookup outcome.
+/// Without this negative case, T-SK075 alone cannot rule out
+/// `SlackLookupFailed` firing on every fetch regardless of lookup outcome.
 #[tokio::test]
 async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
     let Some(server) = try_spawn_mock_server("tools::slack_users_lookup_ok").await else {

@@ -48,6 +48,9 @@ pub(crate) struct SlackFetchOutcome {
     /// returned an error; that ID renders raw even though the cap did not drop
     /// it. Kept distinct from `users_capped` so a caller can tell "resolution
     /// failed" apart from "capped by volume" (issue #346).
+    ///
+    /// A 200 carrying no name does not count: the lookup reached Slack, which
+    /// had no name to give, so there is nothing for the caller to retry.
     pub lookups_failed: bool,
 }
 
@@ -284,15 +287,11 @@ struct ChannelInfo {
 }
 
 impl SlackClient {
-    /// Calls `api_get_once`, not `api_get`: a failure here already falls
-    /// back to the raw ID, so `api_get`'s retry loop would only spend the
-    /// per-minute budget re-fetching a result this function discards on
-    /// error anyway. A long `Retry-After` also risks the caller's 60s
-    /// budget alone via `tokio::join!` with `prefetch_users` (issue #346).
-    ///
-    /// The paired flag is true only when the call itself failed. A 200 that
-    /// carries no name is not a failure, so it stays out of the flag and the
-    /// caller reports no degradation for it.
+    /// Calls `api_get_once`, not `api_get`: the error is discarded for a raw-ID
+    /// fallback, so a retry only re-fetches what this drops. A long
+    /// `Retry-After` here additionally stalls the `tokio::join!` in
+    /// `fetch_message` and can spend the caller's 60s budget on its own,
+    /// turning a raw channel label into an exit 124 (issue #346).
     async fn resolve_channel(&self, id: &str) -> (String, bool) {
         match self
             .api_get_once::<ChannelBody>("conversations.info", &[("channel", id)])
@@ -333,15 +332,10 @@ struct Profile {
 }
 
 impl SlackClient {
-    /// Calls `api_get_once`, not `api_get`: a failure here already falls
-    /// back to the raw ID, so `api_get`'s retry loop would only inflate the
-    /// per-minute budget re-fetching a result this function discards on
-    /// error anyway — up to `SLACK_MAX_USER_LOOKUPS` (50) failing lookups at
-    /// `1 + DEFAULT_MAX_RETRIES` requests each would cost 150 requests
-    /// instead of 50 (issue #346).
-    ///
-    /// The paired flag follows the same rule as `resolve_channel`: a 200 that
-    /// carries no name is not a failure and stays out of the flag.
+    /// Calls `api_get_once` for the reason given on `resolve_channel`; what
+    /// differs here is volume. `SLACK_MAX_USER_LOOKUPS` (50) failing lookups
+    /// at `1 + DEFAULT_MAX_RETRIES` requests each spend 150 requests of the
+    /// per-minute budget instead of 50, all of them discarded (issue #346).
     async fn fetch_user_name(&self, id: &str) -> (String, bool) {
         match self
             .api_get_once::<UserBody>("users.info", &[("user", id)])
