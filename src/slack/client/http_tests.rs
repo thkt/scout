@@ -4,7 +4,8 @@ use super::*;
 use crate::envelope::ErrorCode;
 use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::test_support::{
-    mount_get, mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
+    join_server_thread, mount_get, mount_users_info_resolving, spawn_mid_stream_drop_server,
+    try_spawn_mock_server,
 };
 use crate::tools::ScoutError;
 use reqwest::Client;
@@ -212,10 +213,7 @@ async fn api_get_once_2xx_mid_stream_drop_returns_network() {
         matches!(result, Err(SlackError::Network(_))),
         "expected SlackError::Network for mid-stream drop, got: {result:?}"
     );
-    handle
-        .join()
-        .expect("server thread should not panic")
-        .expect("server thread should not fail while writing the response");
+    join_server_thread(handle);
 }
 
 /// [T-SK040] conversations.info 200 with a null channel.name emits a WARN
@@ -892,10 +890,7 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
         ErrorCode::TempFailure,
         "a transport-IO drop is retriable, not a scout-side schema bug"
     );
-    handle
-        .join()
-        .expect("server thread should not panic")
-        .expect("server thread should not fail while writing the response");
+    join_server_thread(handle);
 }
 
 /// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる

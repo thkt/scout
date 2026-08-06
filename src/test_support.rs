@@ -188,6 +188,17 @@ where
     Some((format!("http://{addr}"), counter, handle))
 }
 
+/// Joins a `spawn_accept_loop` server thread and asserts neither the thread
+/// panicked nor `respond` returned an `Err` while writing the response. The
+/// shared assertion for every caller that wants the strict check rather than
+/// `let _ = handle.join();`'s silent discard.
+pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
+    handle
+        .join()
+        .expect("server thread should not panic")
+        .expect("server thread should not fail while writing the response");
+}
+
 /// One-shot server that accepts up to `accept_count` connections and replies
 /// with an HTTP/1.1 response declaring `Content-Length: 1000` but writing
 /// only `hello` before dropping the socket. reqwest surfaces the resulting

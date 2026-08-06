@@ -7,7 +7,9 @@ use wiremock::{Mock, ResponseTemplate};
 use super::*;
 use crate::clock::FixedClock;
 use crate::rng::{FastrandRng, SeededRng};
-use crate::test_support::{spawn_mid_stream_drop_server, try_spawn_mock_server};
+use crate::test_support::{
+    join_server_thread, spawn_mid_stream_drop_server, try_spawn_mock_server,
+};
 
 /// Test-only error type. `RateLimited` carries the server-supplied
 /// `Retry-After` (seconds); `Other` represents a non-rate-limit transient
@@ -247,10 +249,7 @@ async fn is_transient_network_recognizes_mid_stream_body_drop() {
         err.is_timeout()
     );
 
-    handle
-        .join()
-        .expect("server thread should not panic")
-        .expect("server thread should not fail while writing the response");
+    join_server_thread(handle);
 }
 
 /// [T-R005] Counterpart to T-R004. A 2xx with malformed JSON also returns
