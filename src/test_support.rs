@@ -88,12 +88,10 @@ pub(crate) async fn mount_get(server: &MockServer, path: &str, template: Respons
         .await;
 }
 
-static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-
 /// The single bind-failure decision every loopback-binding helper routes
 /// through, so a restricted environment produces one uniform outcome across
-/// the suite: skip (`None` + warn + skip counter), or a panic when
-/// `SCOUT_NETWORK_TESTS` asserts the network must exist.
+/// the suite: skip (`None` + warn), or a panic when `SCOUT_NETWORK_TESTS`
+/// asserts the network must exist.
 fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -107,10 +105,7 @@ fn guard_loopback_bind(
                     "[network-guard] {test_name}: bind failed and SCOUT_NETWORK_TESTS is set: {e}"
                 );
             }
-            let count = NETWORK_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            tracing::warn!(
-                "[network-guard] {test_name}: loopback bind unavailable, early return ({count} skipped)"
-            );
+            tracing::warn!("[network-guard] {test_name}: loopback bind unavailable, early return");
             None
         }
     }

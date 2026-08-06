@@ -12,7 +12,7 @@ decision-makers: thkt (project owner)
 
 chromium を要求する `t005_t006_cdp_renders_and_removes_profile_dir` (src/fetch/cdp/cdp_integration_tests.rs) には同じ仕組みが無く、`chrome_available()` が false のとき `eprintln!` + 早期 return で終わる。このテストは CDP 経路の SOCKS5 full-tunnel 成功経路を通す唯一の自動テストで、OUTCOME の Constraints が定める防御の成功経路にあたる (ADR-0021)。
 
-同じ policy なので同じ機構を複製すればよいはずだが、guard 方式の 3 つの伝達チャネルはいずれもローカルで観測できない。tracing subscriber の初期化は `src/lib.rs` の `run()` 内だけで、`src/**` の単体テストは `run()` を通らないため `tracing::warn!` はどこにも出力されない。`NETWORK_SKIP_COUNT` は定義と加算だけで読み出し箇所が 0 で、しかも nextest は各テストを別プロセスで走らせるため累積しない。`eprintln!` は ci.yml のコメント自身が述べるとおり nextest が passing test の stderr を隠す。前提ごとに何で表すかを決める必要がある。
+同じ policy なので同じ機構を複製すればよいはずだが、guard 方式の伝達チャネルは実行時のローカル観測に使えない。tracing subscriber の初期化は `src/lib.rs` の `run()` 内だけで、`src/**` の単体テストは `run()` を通らない。guard がスキップする通常経路 (`guard_loopback_bind` が `None` を返す経路) には subscriber がいないため、`tracing::warn!` の record は誰にも読まれずに消える。一方 `#[traced_test]` を付けたテスト関数の中でだけ `tracing-test` がその場で subscriber を差し込み、`logs_contain` で record を capture して assert できる (`bind_failure_without_force_returns_none_and_warns` がこの経路を pin する)。`eprintln!` は ci.yml のコメント自身が述べるとおり nextest が passing test の stderr を隠す。前提ごとに何で表すかを決める必要がある。
 
 ## Decision Drivers
 
@@ -73,8 +73,12 @@ policy の表現を 1 つに揃える価値と、ローカルでスキップが�
 
 ### Reassessment Triggers
 
-- テストバイナリで `tracing::warn!` が出力されるようになる、または `NETWORK_SKIP_COUNT` の読み出しが加わる。guard 方式でも観測可能になるため、方式 A への統一を再検討する
+- guard 方式の skip が、実行フォームに関わらず runner のサマリで読める件数として現れるようになる (`#[ignore]` の ignored 件数と同種の信号)。guard 方式でも観測可能になるため、方式 A への統一を再検討する
 - `#[ignore]` 付きテストが 2 件以上になり、CI で走らせたくないものが現れる。`--run-ignored all` から filter 指定へ変更する
 - runner イメージから Chrome が外れる。方式 C を再検討する
+
+> **Note (2026-08-06, skip 警告の件数表示を削除)**: `bind_failure_without_force_returns_none_and_warns` (`src/test_support.rs`) を読むと、pin しているのは `logs_contain("permission_denied")` というテスト名の一致だけで、件数は assert 対象に入っていない。`NETWORK_SKIP_COUNT` はプロセス内 static なので、nextest が各テストを別プロセスで走らせる既定設定では 1 テストの skip ごとに 1 から数え直され、プロセスをまたいだ累積件数にはならない。件数を warn 文言に載せると runner の実行形態 (プロセス分離の有無、並列度) で値の意味が変わってしまい、テスト名だけを載せる契約とも整合しない。`NETWORK_SKIP_COUNT` の定義・加算と warn/eprintln 文言の件数部分を `src/test_support.rs` と `tests/common/mod.rs` の両方から削除し、上記 Context の tracing::warn! に関する記述と Reassessment Triggers の該当項目をこの実測に合わせて書き換えた。
+>
+> skip をローカルで読む手順もこの調査で確定した。`cargo nextest run -E '<filter>' --success-output immediate` は passing test の stderr を表示し、`--nocapture` と違ってテストを直列化しない (`cargo nextest run --help` は `--nocapture` を "Run tests serially" と明記し、`--success-output` にその記載はない)。`cargo test` 側に同等の指定はなく、`-- --nocapture` は直列化する。既定ではどちらの runner も passing test の出力を隠すため、この指定を付けない限り skip は読めない。
 
 Related to issue #319 and ADR-0021 (CDP Chromium Launch Egress Flags).
