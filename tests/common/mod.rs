@@ -230,12 +230,8 @@ pub fn scout_with_env(path: &str, home: &str, coverage_output: Option<&str>) -> 
 /// Assert the mock proxy was dialed at least once, so a run that reached its
 /// expected outcome without ever leaving scout (a DNS or SSRF short-circuit
 /// landing on the same result by coincidence) fails instead of passing as a
-/// false positive. `consequence` names what the caller's own assertions rest
-/// on, so the panic message stays specific per call site — mirrors the two
-/// call-site-specific endings this replaces: "the exit code above did not
-/// travel through the proxy response path" (tests/exit_code_contract.rs) and
-/// "the stdout asserted below did not come from the fixture"
-/// (tests/output_injection.rs).
+/// false positive. `consequence` stays a parameter so the panic names what
+/// the caller's own assertions rest on, which differs per call site.
 pub fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str, consequence: &str) {
     assert!(
         connection_count.load(Ordering::SeqCst) >= 1,
@@ -246,6 +242,7 @@ pub fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str, co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     fn bind_refused() -> io::Result<TcpListener> {
         Err(io::Error::other("bind refused"))
@@ -268,9 +265,7 @@ mod tests {
         assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
     }
 
-    use std::ffi::OsStr;
-
-    // T-C035: coverage 出力先が渡されたとき Command に LLVM_PROFILE_FILE が同じ値で設定される
+    // T-C035: command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given
     #[test]
     fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
         let cmd = scout_with_env("/usr/bin", "/home/tester", Some("/tmp/scout-123.profraw"));
@@ -287,7 +282,7 @@ mod tests {
         );
     }
 
-    // T-C036: coverage 出力先が渡されないとき Command に LLVM_PROFILE_FILE は設定されない
+    // T-C036: command_does_not_set_llvm_profile_file_when_coverage_output_is_absent
     #[test]
     fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
         let cmd = scout_with_env("/usr/bin", "/home/tester", None);
@@ -302,11 +297,10 @@ mod tests {
         );
     }
 
-    // T-C037: 接続数が 0 のとき assert_proxy_was_dialed は渡された帰結を含むメッセージで panic する
+    // T-C037: zero_connections_panics_with_the_given_consequence
     #[test]
     #[should_panic(expected = "stdout asserted below did not come from the fixture")]
-    fn assert_proxy_was_dialed_panics_with_message_containing_given_consequence_when_connection_count_is_zero()
-     {
+    fn zero_connections_panics_with_the_given_consequence() {
         let connection_count = AtomicUsize::new(0);
         assert_proxy_was_dialed(
             &connection_count,
