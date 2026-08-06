@@ -374,11 +374,9 @@ async fn get_json_2xx_oversized_body_returns_too_large() {
 
 /// [T-001] github は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
 ///
-/// 408 classifies as TempFailure via `Classification::from_http_status`
-/// (mirrors slack's `api_error_internal_error_retries_once_then_succeeds`,
-/// T-005), so `is_retriable` must derive from `classify().kind.is_retryable()`
-/// rather than the hand-written `Api { code: 500..=599, .. }` arm, which does
-/// not cover 408.
+/// The retryable status set must not be re-tabled in `is_retriable`: 408 is
+/// retried only because `Classification::from_http_status` calls it
+/// TempFailure.
 #[tokio::test]
 async fn get_json_408_retries_once_then_succeeds() {
     let Some(server) = try_spawn_mock_server("github::http_408_retry").await else {

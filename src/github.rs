@@ -383,12 +383,9 @@ fn extract_error_message(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
-/// Retry eligibility, derived from [`GitHubError::classify`] and
-/// [`ErrorCode::is_retryable`](crate::envelope::ErrorCode::is_retryable) so
-/// retryability stays a single source of truth (mirrors
-/// `SlackClient::is_retriable`). `RateLimited` keeps its own arm: the cap
-/// check needs the raw `retry_after` value, which `classify()` does not
-/// carry through.
+/// `RateLimited` keeps its own arm rather than folding into the classify
+/// path: the cap check needs the raw `retry_after` value, which
+/// `classify()` does not carry through.
 fn is_retriable(e: &GitHubError) -> bool {
     match e {
         GitHubError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),

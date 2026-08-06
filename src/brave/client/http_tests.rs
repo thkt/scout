@@ -380,11 +380,9 @@ fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
 
 /// [T-002] brave は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
 ///
-/// 408 classifies as TempFailure via `Classification::from_http_status`
-/// (mirrors github's `get_json_408_retries_once_then_succeeds`, U-002 /
-/// T-001), so `is_retriable` must derive from `classify().kind.is_retryable()`
-/// rather than the hand-written `Server(500..=599)` arm, which does not
-/// cover 408.
+/// The retryable status set must not be re-tabled in `is_retriable`: 408 is
+/// retried only because `Classification::from_http_status` calls it
+/// TempFailure.
 #[tokio::test]
 async fn search_408_retries_once_then_succeeds() {
     let Some(server) = try_spawn_mock_server("brave::http_408_retry").await else {
@@ -410,10 +408,9 @@ async fn search_408_retries_once_then_succeeds() {
 
 /// [T-003] brave の ResponseTooLarge は classify 導出でも再試行されない
 ///
-/// `ResponseTooLarge` classifies as `Internal` (not retryable) via
-/// `BraveError::classify`, so folding `is_retriable` into
-/// `classify().kind.is_retryable()` must keep this variant non-retriable
-/// even after its hand-written `false` arm is removed.
+/// Retry cannot shrink an oversized response, so this variant must stay
+/// non-retriable even though the classify path now decides every arm but
+/// `RateLimited`.
 #[test]
 fn response_too_large_is_not_retriable_via_classify() {
     let err = BraveError::ResponseTooLarge;

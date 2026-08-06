@@ -68,12 +68,9 @@ impl BraveError {
     /// Returns `true` when the error is a transient infrastructure failure that callers
     /// may legitimately surface as a degraded result instead of propagating.
     ///
-    /// Derived from [`classify`](Self::classify) and [`ErrorCode::is_retryable`]
-    /// so the degradable set stays a single source of truth: only
-    /// `TempFailure` and `Timeout` (retryable infrastructure faults) degrade.
-    /// Everything else propagates, including the `Unknown` escape hatch — a
-    /// non-4xx/5xx `Api` code surfaces as an error rather than masking an
-    /// unrecognized status as an empty result.
+    /// The `Unknown` escape hatch does not degrade: a non-4xx/5xx `Api` code
+    /// surfaces as an error rather than masking an unrecognized status as an
+    /// empty result.
     pub(crate) fn is_degradable(&self) -> bool {
         self.classify().kind.is_retryable()
     }
@@ -346,11 +343,9 @@ impl SearchClient for BraveClient {
     }
 }
 
-/// Retry eligibility, derived from [`BraveError::classify`] and
-/// [`ErrorCode::is_retryable`] so retryability stays a single source of
-/// truth (mirrors `SlackClient::is_retriable` / `GitHubClient::is_retriable`).
-/// `RateLimited` keeps its own arm: the cap check needs the raw
-/// `retry_after` value, which `classify()` does not carry through.
+/// `RateLimited` keeps its own arm rather than folding into the classify
+/// path: the cap check needs the raw `retry_after` value, which
+/// `classify()` does not carry through.
 fn is_retriable(e: &BraveError) -> bool {
     match e {
         BraveError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
