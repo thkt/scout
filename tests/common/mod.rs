@@ -25,13 +25,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-static NETWORK_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-
 /// Mirrors `guard_loopback_bind` / `bind_loopback` in `src/test_support.rs`:
 /// one bind-failure decision for every loopback-binding helper here, so a
 /// restricted environment produces the same outcome across both crates —
-/// skip (`None` + warn + skip counter), or a panic when `SCOUT_NETWORK_TESTS`
-/// asserts the network must exist. Without this, a caller's
+/// skip (`None` + warn), or a panic when `SCOUT_NETWORK_TESTS` asserts the
+/// network must exist. Without this, a caller's
 /// `let Some(..) = spawn_mock_proxy(..) else { return; }` turns a lost bind
 /// into a file full of tests that pass while asserting nothing.
 ///
@@ -56,10 +54,7 @@ fn guard_loopback_bind(
                     "[network-guard] {test_name}: bind failed and SCOUT_NETWORK_TESTS is set: {e}"
                 );
             }
-            let count = NETWORK_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            eprintln!(
-                "[network-guard] {test_name}: loopback bind unavailable, early return ({count} skipped)"
-            );
+            eprintln!("[network-guard] {test_name}: loopback bind unavailable, early return");
             None
         }
     }
