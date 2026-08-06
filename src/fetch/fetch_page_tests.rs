@@ -1,6 +1,8 @@
 use super::ssrf::EgressMode;
 use super::*;
-use crate::test_support::{no_redirect_client, spawn_forward_proxy, try_spawn_mock_server};
+use crate::test_support::{
+    join_server_thread, no_redirect_client, spawn_forward_proxy, try_spawn_mock_server,
+};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
@@ -203,13 +205,14 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     };
     let result = fetch_page(&client, "http://example.com/page", opts, resolver, &cancel).await;
 
-    let _ = handle.join();
     let page = result.expect("proxied fetch of a public URL should succeed");
     assert!(
         page.markdown().contains("proxied body content"),
         "proxied fetch should return the page body, got: {:?}",
         page.markdown()
     );
+
+    join_server_thread(handle);
 }
 
 /// [T-F074]

@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_support::{
-    spawn_close_delimited_body_server, spawn_declared_length_no_body_server, try_spawn_mock_server,
+    join_server_thread, spawn_close_delimited_body_server, spawn_declared_length_no_body_server,
+    try_spawn_mock_server,
 };
 use wiremock::matchers::method;
 use wiremock::{Mock, ResponseTemplate};
@@ -42,7 +43,7 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
          the chunk loop"
     );
 
-    let _ = handle.join();
+    join_server_thread(handle);
 }
 
 /// [T-001] Content-Length が cap を超えるヘッダのみのレスポンスは body を読まずに too_large になる
@@ -78,7 +79,7 @@ async fn content_length_over_cap_with_no_body_rejects_too_large_without_reading_
          body byte is read"
     );
 
-    let _ = handle.join();
+    join_server_thread(handle);
 }
 
 /// [T-002] ちょうど cap バイトの body は全量が返る
