@@ -201,6 +201,58 @@ pub fn spawn_mock_proxy_raw_response(
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
+/// Env-reading wrapper: builds a `Command` for the built `scout` binary with
+/// `env_clear()` applied and `PATH`/`HOME` restored from the real process
+/// environment, carrying `LLVM_PROFILE_FILE` through when the run is
+/// instrumented. Mirrors `run_scout_fetch`'s doc comment in
+/// tests/exit_code_contract.rs: the child needs `PATH`/`HOME` for the OS
+/// proxy lookup and any config file it reads, but nothing else from the
+/// invoking shell should leak into the contract under test, and
+/// `LLVM_PROFILE_FILE` has to survive the clear or an instrumented run drops
+/// the child's coverage from the report.
+///
+/// Delegates the assembly to `scout_with_env`, the testable core: reading env
+/// vars here and handing the resulting values to a function that takes them
+/// as parameters keeps the coverage-output branch reachable from a test even
+/// though `unsafe_code = "forbid"` (Cargo.toml) blocks a test from mutating
+/// the real process env directly.
+pub fn scout_with_clean_env() -> Command {
+    scout_with_env(
+        &env::var("PATH").unwrap_or_default(),
+        &env::var("HOME").unwrap_or_default(),
+        env::var("LLVM_PROFILE_FILE").ok().as_deref(),
+    )
+}
+
+/// Testable core `scout_with_clean_env` wraps: takes `PATH`/`HOME`/coverage
+/// output as parameters instead of reading them from the environment, so a
+/// test can drive the coverage-output branch without mutating the real
+/// process env (blocked by `unsafe_code = "forbid"`, Cargo.toml).
+pub fn scout_with_env(path: &str, home: &str, coverage_output: Option<&str>) -> Command {
+    let mut cmd = scout();
+    cmd.env_clear().env("PATH", path).env("HOME", home);
+    if let Some(profile) = coverage_output {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+    cmd
+}
+
+/// Assert the mock proxy was dialed at least once, so a run that reached its
+/// expected outcome without ever leaving scout (a DNS or SSRF short-circuit
+/// landing on the same result by coincidence) fails instead of passing as a
+/// false positive. `consequence` names what the caller's own assertions rest
+/// on, so the panic message stays specific per call site — mirrors the two
+/// call-site-specific endings this replaces: "the exit code above did not
+/// travel through the proxy response path" (tests/exit_code_contract.rs) and
+/// "the stdout asserted below did not come from the fixture"
+/// (tests/output_injection.rs).
+pub fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str, consequence: &str) {
+    assert!(
+        connection_count.load(Ordering::SeqCst) >= 1,
+        "{context}: no connection reached the mock proxy, so {consequence}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +276,63 @@ mod tests {
     #[test]
     fn unforced_run_skips_when_loopback_bind_fails() {
         assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
+    }
+
+    // The following three tests pin `scout_with_clean_env` and
+    // `assert_proxy_was_dialed`, the shared replacements for
+    // `run_scout_fetch` (tests/exit_code_contract.rs) and the inline
+    // env_clear/PATH/HOME/assert block in `run_scout_fetch_via_proxy`
+    // (tests/output_injection.rs). `scout_with_env` is the testable core
+    // `scout_with_clean_env` wraps, mirroring `try_spawn_with_bind` /
+    // `try_spawn_mock_server` above: `unsafe_code = "forbid"` (Cargo.toml)
+    // blocks a test from mutating the real process env
+    // (`std::env::set_var` requires `unsafe` since edition 2024), so the
+    // coverage-output branch has to be reachable by passing a value in
+    // directly instead.
+    use std::ffi::OsStr;
+
+    // T-001: coverage 出力先が渡されたとき Command に LLVM_PROFILE_FILE が同じ値で設定される
+    #[test]
+    fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
+        let cmd = scout_with_env("/usr/bin", "/home/tester", Some("/tmp/scout-123.profraw"));
+
+        let llvm_profile_file = cmd
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("LLVM_PROFILE_FILE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(
+            llvm_profile_file,
+            Some(OsStr::new("/tmp/scout-123.profraw")),
+            "LLVM_PROFILE_FILE should carry the same coverage output value the caller passed"
+        );
+    }
+
+    // T-002: coverage 出力先が渡されないとき Command に LLVM_PROFILE_FILE は設定されない
+    #[test]
+    fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
+        let cmd = scout_with_env("/usr/bin", "/home/tester", None);
+
+        let has_llvm_profile_file = cmd
+            .get_envs()
+            .any(|(key, _)| key == OsStr::new("LLVM_PROFILE_FILE"));
+
+        assert!(
+            !has_llvm_profile_file,
+            "LLVM_PROFILE_FILE should not be set on the Command when no coverage output is given"
+        );
+    }
+
+    // T-003: 接続数が 0 のとき assert_proxy_was_dialed は渡された帰結を含むメッセージで panic する
+    #[test]
+    #[should_panic(expected = "stdout asserted below did not come from the fixture")]
+    fn assert_proxy_was_dialed_panics_with_message_containing_given_consequence_when_connection_count_is_zero()
+     {
+        let connection_count = AtomicUsize::new(0);
+        assert_proxy_was_dialed(
+            &connection_count,
+            "some context",
+            "stdout asserted below did not come from the fixture",
+        );
     }
 }
