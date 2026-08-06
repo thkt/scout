@@ -106,11 +106,6 @@ impl SlackError {
     /// `team_added_to_org`, `org_login_required`, and `invalid_cursor` are
     /// cross-checked against Slack's own error enumeration, not guessed:
     /// <https://api.slack.com/methods/conversations.replies#errors> (2026-08).
-    /// `org_login_required` and `invalid_cursor` still classify as
-    /// TempFailure — the underlying condition (an in-progress Enterprise
-    /// migration; a cursor Slack has already invalidated) will not clear
-    /// within the same invocation, so each keeps its own hint instead of the
-    /// shared short-delay `transient_retry` hint.
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
