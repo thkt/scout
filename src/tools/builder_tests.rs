@@ -3,7 +3,7 @@ use crate::clock::FixedClock;
 use crate::envelope::{DegradedReason, ErrorCode};
 use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
 use crate::rng::SeededRng;
-use crate::test_support::{spawn_forward_proxy, try_spawn_mock_server};
+use crate::test_support::{join_server_thread, spawn_forward_proxy, try_spawn_mock_server};
 use crate::token_source::StaticTokenSource;
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
@@ -622,7 +622,7 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
         output.markdown()
     );
 
-    let _ = handle.join();
+    join_server_thread(handle);
 }
 
 /// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`

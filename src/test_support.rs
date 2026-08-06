@@ -342,7 +342,7 @@ mod tests {
         let _result = try_spawn_with_bind("forced_panic", bind_err, true).await;
     }
 
-    /// [T-001] respond 閉包が Err を返すとサーバ thread の join 結果が Err になる
+    /// [T-SUP001] respond 閉包が Err を返すとサーバ thread の join 結果が Err になる
     #[test]
     fn respond_err_makes_thread_join_result_err() {
         let Some((addr, _counter, handle)) = spawn_accept_loop(
@@ -365,7 +365,7 @@ mod tests {
         );
     }
 
-    /// [T-002] respond 閉包が Err を返した接続の後も accept ループは続き接続カウンタは accept_count に達する
+    /// [T-SUP002] respond 閉包が Err を返した接続の後も accept ループは続き接続カウンタは accept_count に達する
     #[test]
     fn accept_loop_continues_past_respond_err_until_accept_count() {
         let accept_count = 3;
