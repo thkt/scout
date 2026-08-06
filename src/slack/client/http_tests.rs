@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::envelope::ErrorCode;
+use crate::retry::DEFAULT_MAX_RETRIES;
 use crate::test_support::{
     mount_get, mount_users_info_resolving, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
@@ -767,6 +768,57 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
     assert!(
         result.is_ok(),
         "internal_error should retry once and return the second call's success, got: {result:?}"
+    );
+}
+
+/// [T-004] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
+///
+/// `api_get`'s retry closure recaptures the same `params`, so a retry resends
+/// page 2's own cursor and never restarts from page 1, which is the recovery
+/// this error needs.
+#[tokio::test(start_paused = true)]
+async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_partial_thread() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param_is_missing("cursor"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [
+                {"user": "U1", "text": "parent", "ts": parent_ts}
+            ],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "PAGE2"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let expected_attempts = u64::from(DEFAULT_MAX_RETRIES) + 1;
+    Mock::given(method("GET"))
+        .and(path("/conversations.replies"))
+        .and(query_param("cursor", "PAGE2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "invalid_cursor"})),
+        )
+        .expect(expected_attempts)
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = slack_url(parent_ts, Some(parent_ts));
+    let result = client.fetch_message(&url).await;
+
+    // `SlackFetchOutcome` has no `Debug` impl, so the failure message reports
+    // the error side only rather than interpolating the whole `Result`.
+    assert!(
+        result.is_err(),
+        "an unrecoverable invalid_cursor on page 2 must discard the whole thread \
+         instead of returning the page-1 messages as a partial thread, got: {:?}",
+        result.err()
     );
 }
 

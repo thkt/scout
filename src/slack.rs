@@ -98,9 +98,10 @@ impl SlackError {
     ///
     /// Slack surfaces failures as `error` strings inside `Api` instead of HTTP
     /// status codes, so the string-table arm replaces the HTTP-status arm used
-    /// by other backends. The table's `internal_error` / `service_unavailable`
-    /// / `fatal_error` entries are load-bearing — without them those codes
-    /// would fall through to UsageError instead of the retryable TempFailure.
+    /// by other backends.
+    ///
+    /// The transient set is cross-checked against Slack's own error enumeration:
+    /// <https://docs.slack.dev/reference/methods/conversations.replies> (2026-08).
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
@@ -125,9 +126,16 @@ impl SlackError {
                     Classification::new(ErrorCode::NotFound)
                 }
                 // Priority 4: TEMP_FAILURE
-                "internal_error" | "service_unavailable" | "fatal_error" => {
+                "internal_error" | "service_unavailable" | "fatal_error" | "team_added_to_org" => {
                     Classification::transient_retry()
                 }
+                // Priority 4: TEMP_FAILURE. A short wait cannot clear either
+                // condition within one invocation, so the shared
+                // `transient_retry` hint would send the caller back too soon.
+                "org_login_required" => Classification::new(ErrorCode::TempFailure)
+                    .with_hint("Retry after the workspace's Enterprise migration completes"),
+                "invalid_cursor" => Classification::new(ErrorCode::TempFailure)
+                    .with_hint("Re-run to restart thread paging from the first page"),
                 // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
                 _ => Classification::new(ErrorCode::UsageError),
             },
