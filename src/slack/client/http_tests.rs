@@ -212,7 +212,10 @@ async fn api_get_once_2xx_mid_stream_drop_returns_network() {
         matches!(result, Err(SlackError::Network(_))),
         "expected SlackError::Network for mid-stream drop, got: {result:?}"
     );
-    let _ = handle.join();
+    handle
+        .join()
+        .expect("server thread should not panic")
+        .expect("server thread should not fail while writing the response");
 }
 
 /// [T-SK040] conversations.info 200 with a null channel.name emits a WARN
@@ -889,7 +892,10 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
         ErrorCode::TempFailure,
         "a transport-IO drop is retriable, not a scout-side schema bug"
     );
-    let _ = handle.join();
+    handle
+        .join()
+        .expect("server thread should not panic")
+        .expect("server thread should not fail while writing the response");
 }
 
 /// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる

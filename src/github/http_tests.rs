@@ -343,7 +343,10 @@ async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
         "retry loop must consume the full max_retries budget"
     );
 
-    let _ = handle.join();
+    handle
+        .join()
+        .expect("server thread should not panic")
+        .expect("server thread should not fail while writing the response");
 }
 
 /// [T-GH020] A 2xx response whose body exceeds `MAX_GITHUB_RESPONSE_BYTES`

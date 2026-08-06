@@ -247,7 +247,10 @@ async fn is_transient_network_recognizes_mid_stream_body_drop() {
         err.is_timeout()
     );
 
-    let _ = handle.join();
+    handle
+        .join()
+        .expect("server thread should not panic")
+        .expect("server thread should not fail while writing the response");
 }
 
 /// [T-R005] Counterpart to T-R004. A 2xx with malformed JSON also returns
