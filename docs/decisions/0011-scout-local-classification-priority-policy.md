@@ -139,3 +139,13 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 - `src/classify.rs` (`Classification` 型の home)
 - `src/tools/errors.rs` (`From<*Error>` の委譲、`ScoutError` の home)
 - 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) (`// Priority N:` match arm 順序の実装 site)
+
+> **Note (2026-08-06, Slack `Api` 文字列経路の Unknown 退避を他 3 backend に揃える)**: `SlackError::Api` の未一致 arm を、既定 `UsageError` から本 ADR の退避 `Unknown` (`src/slack.rs`) に変更した。HTTP-status 経由の `GitHubError`/`BraveError`/`FetchError` は元々未分類 status を `Unknown` へ逃がしており、文字列 keyed な Slack だけがこの設計から外れていた。
+>
+> 列挙の出典は `conversations.history`/`conversations.replies`/`users.info` の 3 公式 error 一覧が共有する 30 文字列の shared block (`.claude/workspace/research/2026-08-06-slack-api-error-classification.md` § Disconfirmation Check)。このうち 6 文字列は arm を作らず除外した: `invalid_charset`/`invalid_form_data`/`invalid_post_type`/`missing_post_type`/`request_timeout` は Slack 公式説明が `POST` scope と明記し、scout は `api_get_once` (`src/slack/client.rs`) で `.get()` しか発行しないため到達しない。`invalid_array_arg` も同様に到達しない: 呼び出しの params 型 `&[(&str, &str)]` が配列値を渡せない。除外理由は `src/slack.rs` の doc コメントに 1 度だけ書き、arm は作らない。
+>
+> Slack 自身が「service down 等の予期しない要因で他の error 文字列も返しうる」と明記する通り、列挙は非閉鎖集合。ゆえにこの列挙を最新化し続ける仕組みは置かず、`_ => Classification::new(ErrorCode::Unknown)` という退避そのものを陳腐化 (Slack 側の文字列追加) の検知機構として使う。live docs を fetch して列挙と突き合わせる CI テストは意図的に置かない。
+>
+> `docs/audit/2026-05-19-undocumented-decisions.md` TE-01 (transient allowlist の spec citation 欠如、`pending_spec_check`) は上記 research がその citation を与えたことで閉じる。TE-02 (`Api` 未認識 string の `UsageError` 既定が HTTP-based `Unknown(104)` 退避と非対称) は本変更で解消する。
+>
+> transient arm (`internal_error`/`service_unavailable`/`fatal_error`/`team_added_to_org`/`org_login_required`/`invalid_cursor`) を再試行してよい前提は、scout が 4 メソッドいずれも `api_get_once` の `.get()` (read-only GET) しか発行しないこと。Slack は `fatal_error`/`internal_error` の説明で「操作の一部が成功済みの可能性がある」再実行 hazard を警告しており、write method (POST 系の状態変更 API) を scout に追加する場合はこの transient arm の再試行安全性を再検討する。

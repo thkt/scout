@@ -110,6 +110,27 @@ impl SlackError {
             // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
             Self::Api { error } => match error.as_str() {
+                // Priority 1: USAGE_ERROR. The list is closed against Slack's
+                // own error enumeration; ADR-0011's 2026-08-06 note carries the
+                // source and the exclusions. T-SLC005 pins `invalid_auth`,
+                // `missing_scope` and `not_authed`.
+                "access_denied"
+                | "accesslimited"
+                | "account_inactive"
+                | "ekm_access_denied"
+                | "enterprise_is_restricted"
+                | "invalid_auth"
+                | "missing_scope"
+                | "no_permission"
+                | "not_allowed_token_type"
+                | "not_authed"
+                | "team_access_not_granted"
+                | "token_expired"
+                | "token_revoked"
+                | "two_factor_setup_required" => Classification::new(ErrorCode::UsageError),
+                // Priority 2: DATA_ERROR. Malformed request parameters — the
+                // caller's data, not scout's or Slack's fault.
+                "invalid_arguments" => Classification::new(ErrorCode::DataError),
                 // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
                 // codes; the space forms are scout's own strings from
                 // `fetch_message`: bare "message not found" (resolved list empty)
@@ -136,8 +157,23 @@ impl SlackError {
                     .with_hint("Retry after the workspace's Enterprise migration completes"),
                 "invalid_cursor" => Classification::new(ErrorCode::TempFailure)
                     .with_hint("Re-run to restart thread paging from the first page"),
-                // Priority 1: USAGE_ERROR (invalid_auth, missing_scope, etc.)
-                _ => Classification::new(ErrorCode::UsageError),
+                // Priority 5: INTERNAL. The argument names and the method
+                // string are literals in `src/slack/client.rs`, so the caller
+                // cannot correct any of these three.
+                "invalid_arg_name" | "deprecated_endpoint" | "method_deprecated" => {
+                    Classification::new(ErrorCode::Internal)
+                }
+                // Six POST-scoped and array-argument strings from that same
+                // enumeration get no arm here: `api_get_once`
+                // (src/slack/client.rs) issues GET with `&[(&str, &str)]`
+                // params, so neither shape reaches scout. ADR-0011's note
+                // lists them.
+                //
+                // 退避: Unknown (ADR-0011 — not a numbered priority slot).
+                // A string this table does not classify, including one Slack
+                // adds later, surfaces as a classification gap rather than as
+                // a caller mistake.
+                _ => Classification::new(ErrorCode::Unknown),
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
