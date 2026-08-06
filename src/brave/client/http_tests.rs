@@ -1,4 +1,5 @@
 use super::*;
+use crate::envelope::ErrorCode;
 use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
@@ -375,6 +376,53 @@ fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
     let client = result.expect("expected Ok(client) from valid key");
     assert_eq!(client.api_key.expose(), "real-key");
     assert_eq!(client.base_url, API_BASE);
+}
+
+/// [T-002] brave は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
+///
+/// The retryable status set must not be re-tabled in `is_retriable`: 408 is
+/// retried only because `Classification::from_http_status` calls it
+/// TempFailure.
+#[tokio::test]
+async fn search_408_retries_once_then_succeeds() {
+    let Some(server) = try_spawn_mock_server("brave::http_408_retry").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(408).set_body_string("request timeout"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
+        .mount(&server)
+        .await;
+
+    let client = BraveClient::with_base_url(Client::new(), &server.uri());
+    let result = client.search("foo", None).await;
+    assert!(
+        result.is_ok(),
+        "408 should retry once and return the second call's success, got: {result:?}"
+    );
+}
+
+/// [T-003] brave の ResponseTooLarge は classify 導出でも再試行されない
+///
+/// Retry cannot shrink an oversized response, so this variant must stay
+/// non-retriable even though the classify path now decides every arm but
+/// `RateLimited`.
+#[test]
+fn response_too_large_is_not_retriable_via_classify() {
+    let err = BraveError::ResponseTooLarge;
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::Internal,
+        "ResponseTooLarge must classify as Internal"
+    );
+    assert!(
+        !is_retriable(&err),
+        "ResponseTooLarge must stay non-retriable under classify-derived is_retriable"
+    );
 }
 
 /// [T-RC006] FR-010: production constructor path must not enable the test-only HTTPS bypass.

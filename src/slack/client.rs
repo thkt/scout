@@ -14,7 +14,6 @@ use tracing::{info, warn};
 
 use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
 use crate::clock::{Clock, SystemClock};
-use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
@@ -560,17 +559,13 @@ impl SlackClient {
     }
 }
 
-/// Retry eligibility, derived from [`SlackError::classify`] so retryability
-/// stays a single source of truth (mirrors `BraveError::is_degradable`).
-/// `RateLimited` keeps its own arm: the cap check needs the raw `retry_after`
-/// value, which `classify()` does not carry through.
+/// `RateLimited` keeps its own arm rather than folding into the classify
+/// path: the cap check needs the raw `retry_after` value, which
+/// `classify()` does not carry through.
 fn is_retriable(e: &SlackError) -> bool {
     match e {
         SlackError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        _ => matches!(
-            e.classify().kind,
-            ErrorCode::TempFailure | ErrorCode::Timeout
-        ),
+        _ => e.classify().kind.is_retryable(),
     }
 }
 

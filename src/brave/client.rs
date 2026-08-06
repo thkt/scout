@@ -13,9 +13,7 @@ use crate::envelope::ErrorCode;
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
 use crate::retry::DEFAULT_MAX_RETRIES;
-use crate::retry::{
-    is_transient_network, parse_retry_after, retry_after_within_cap, retry_with_rate_limit,
-};
+use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_limit};
 use crate::rng::{FastrandRng, Rng};
 
 use super::types::{SearchResult, WebSearchResponse};
@@ -70,16 +68,11 @@ impl BraveError {
     /// Returns `true` when the error is a transient infrastructure failure that callers
     /// may legitimately surface as a degraded result instead of propagating.
     ///
-    /// Derived from [`classify`](Self::classify) so the degradable set stays a
-    /// single source of truth: only `TempFailure` and `Timeout` (retryable
-    /// infrastructure faults) degrade. Everything else propagates, including
-    /// the `Unknown` escape hatch — a non-4xx/5xx `Api` code surfaces as an
-    /// error rather than masking an unrecognized status as an empty result.
+    /// The `Unknown` escape hatch does not degrade: a non-4xx/5xx `Api` code
+    /// surfaces as an error rather than masking an unrecognized status as an
+    /// empty result.
     pub(crate) fn is_degradable(&self) -> bool {
-        matches!(
-            self.classify().kind,
-            ErrorCode::TempFailure | ErrorCode::Timeout
-        )
+        self.classify().kind.is_retryable()
     }
 
     /// Map each variant to its ADR-0011 priority-table [`Classification`].
@@ -350,15 +343,13 @@ impl SearchClient for BraveClient {
     }
 }
 
+/// `RateLimited` keeps its own arm rather than folding into the classify
+/// path: the cap check needs the raw `retry_after` value, which
+/// `classify()` does not carry through.
 fn is_retriable(e: &BraveError) -> bool {
     match e {
         BraveError::RateLimited { retry_after } => retry_after_within_cap(*retry_after),
-        BraveError::Server(_) => true,
-        BraveError::Network(e) => is_transient_network(e),
-        // Oversized body is an upstream invariant violation (issue #165 /
-        // CHX-008), not transient — retry cannot shrink the response.
-        BraveError::ResponseTooLarge => false,
-        _ => false,
+        _ => e.classify().kind.is_retryable(),
     }
 }
 

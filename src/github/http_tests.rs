@@ -372,6 +372,39 @@ async fn get_json_2xx_oversized_body_returns_too_large() {
     );
 }
 
+/// [T-001] github は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
+///
+/// The retryable status set must not be re-tabled in `is_retriable`: 408 is
+/// retried only because `Classification::from_http_status` calls it
+/// TempFailure.
+#[tokio::test]
+async fn get_json_408_retries_once_then_succeeds() {
+    let Some(server) = try_spawn_mock_server("github::http_408_retry").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(
+            ResponseTemplate::new(408).set_body_json(serde_json::json!({"message": "timeout"})),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 1})),
+    )
+    .await;
+
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<serde_json::Value, _> = client.get_json("/repos/owner/repo").await;
+    assert!(
+        result.is_ok(),
+        "408 should retry once and return the second call's success, got: {result:?}"
+    );
+}
+
 /// [T-GH014] secs_until_ratelimit_reset subtracts the injected clock
 /// from the x-ratelimit-reset header. Pinning the clock removes wall-clock
 /// flakiness from the arithmetic test.
