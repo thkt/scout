@@ -47,19 +47,16 @@
 
 mod common;
 
-use std::env;
 use std::process::Output;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
-
-use common::scout;
 
 /// Runs `scout fetch http://example.com/` (Markdown stdout, not `--json`)
 /// against a mock forward proxy serving `html` as the upstream page body.
-/// Mirrors `run_scout_fetch` in `tests/exit_code_contract.rs`: a from-scratch
-/// environment (`PATH`/`HOME` restored, everything else cleared) plus
-/// `HTTP_PROXY` pointed at the mock proxy, so `fetch`'s `EgressMode::Proxied`
-/// path (`src/fetch/ssrf.rs::detect_egress_mode`) is taken and the domain-name
+/// Builds the child's environment via `common::scout_with_clean_env` — the
+/// same env_clear plus `PATH`/`HOME`/`LLVM_PROFILE_FILE` carry-through
+/// `run_scout_fetch` (`tests/exit_code_contract.rs`) uses — with `HTTP_PROXY`
+/// pointed at the mock proxy, so `fetch`'s `EgressMode::Proxied` path
+/// (`src/fetch/ssrf.rs::detect_egress_mode`) is taken and the domain-name
 /// target (not an IP literal) clears `ssrf_check` without the mock proxy's
 /// own loopback address ever being the dialed target.
 ///
@@ -74,20 +71,15 @@ fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
     let (proxy_url, connection_count, _handle) =
         common::spawn_mock_proxy(200, Duration::ZERO, html.as_bytes())?;
 
-    let mut cmd = scout();
-    cmd.env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default())
-        .env("HTTP_PROXY", &proxy_url)
+    let mut cmd = common::scout_with_clean_env();
+    cmd.env("HTTP_PROXY", &proxy_url)
         .args(["fetch", "http://example.com/"]);
     let output = cmd.output().expect("scout fetch failed to run");
 
-    // The same false-positive guard `assert_proxy_was_dialed`
-    // (tests/exit_code_contract.rs) applies here.
-    assert!(
-        connection_count.load(Ordering::SeqCst) >= 1,
-        "{context}: no connection reached the mock proxy, so the stdout asserted below did not \
-         come from the fixture"
+    common::assert_proxy_was_dialed(
+        &connection_count,
+        context,
+        "the stdout asserted below did not come from the fixture",
     );
     Some(output)
 }

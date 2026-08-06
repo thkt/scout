@@ -36,31 +36,18 @@
 
 mod common;
 
-use common::{parse_envelope, scout};
-use std::env;
+use common::parse_envelope;
 use std::process::Output;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-/// Runs `scout --json fetch http://example.com/` with a from-scratch
-/// environment (`PATH`/`HOME` restored so the OS proxy lookup and any config
-/// file it reads still resolve, everything else cleared so a var set in the
-/// invoking shell can't leak into the contract) plus `extra_env` layered on
+/// Runs `scout --json fetch http://example.com/` via
+/// `common::scout_with_clean_env` (env_clear plus `PATH`/`HOME`/
+/// `LLVM_PROFILE_FILE` restored so the OS proxy lookup still resolves and an
+/// instrumented run keeps writing its coverage) with `extra_env` layered on
 /// top. Shared by every scenario below, which differ only in `extra_env`.
-///
-/// `LLVM_PROFILE_FILE` survives the clear while a run is instrumented: the
-/// child writes its `.profraw` from that path, so clearing it dropped every
-/// line these scenarios exercise from the coverage report. It carries no scout
-/// config, and cargo-llvm-cov's pattern includes `%p`/`%m`, so the child gets
-/// its own file instead of overwriting the parent's.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
-    let mut cmd = scout();
-    cmd.env_clear()
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .env("HOME", env::var("HOME").unwrap_or_default());
-    if let Ok(profile) = env::var("LLVM_PROFILE_FILE") {
-        cmd.env("LLVM_PROFILE_FILE", profile);
-    }
+    let mut cmd = common::scout_with_clean_env();
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
@@ -96,11 +83,13 @@ fn assert_exits_with(
 /// Assert the mock proxy was dialed, so a run that reached the expected exit
 /// code without ever leaving scout (a DNS or SSRF short-circuit landing on the
 /// same code by coincidence) fails instead of passing as a false positive.
+/// Gives `common::assert_proxy_was_dialed`'s `consequence` wording once for
+/// this file's three call sites.
 fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str) {
-    assert!(
-        connection_count.load(Ordering::SeqCst) >= 1,
-        "{context}: no connection reached the mock proxy, so the exit code above did not travel \
-         through the proxy response path"
+    common::assert_proxy_was_dialed(
+        connection_count,
+        context,
+        "the exit code above did not travel through the proxy response path",
     );
 }
 
