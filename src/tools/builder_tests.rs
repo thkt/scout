@@ -10,10 +10,11 @@ use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// Serves `conversations.info` so `resolve_channel` succeeds. Only the tests
-/// that assert an EMPTY (or `SlackLookupFailed`-free) `degraded_reasons` need
-/// it: without the mount wiremock answers 404, the channel renders raw, and
-/// `SLACK_LOOKUP_FAILED` fires for a reason the test is not about.
+/// Serves `conversations.info` so `resolve_channel` succeeds. Every test that
+/// asserts on `degraded_reasons` or on the preamble needs it: without the
+/// mount wiremock answers 404, the channel renders raw, and
+/// `SLACK_LOOKUP_FAILED` adds a reason and a note the test is not about
+/// (issue #346).
 async fn mount_channel_info(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
         .and(path("/conversations.info"))
@@ -292,6 +293,7 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
@@ -343,6 +345,7 @@ async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
@@ -429,6 +432,7 @@ async fn fetch_slack_output_truncation_sets_degraded_reason() {
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
@@ -486,6 +490,7 @@ async fn fetch_slack_thread_cap_note_survives_output_truncation() {
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
@@ -579,6 +584,7 @@ async fn fetch_slack_users_at_cap_boundary_stays_undegraded() {
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
@@ -644,6 +650,7 @@ async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatt
         .mount(&server)
         .await;
 
+    mount_channel_info(&server).await;
     let scout = ScoutBuilder::for_test()
         .with_slack_endpoint(&server.uri())
         .build();
