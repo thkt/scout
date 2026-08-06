@@ -279,9 +279,14 @@ struct ChannelInfo {
 }
 
 impl SlackClient {
+    /// Calls `api_get_once`, not `api_get`: a failure here already falls
+    /// back to the raw ID, so `api_get`'s retry loop would only spend the
+    /// per-minute budget re-fetching a result this function discards on
+    /// error anyway. A long `Retry-After` also risks the caller's 60s
+    /// budget alone via `tokio::join!` with `prefetch_users` (issue #346).
     async fn resolve_channel(&self, id: &str) -> String {
         match self
-            .api_get::<ChannelBody>("conversations.info", &[("channel", id)])
+            .api_get_once::<ChannelBody>("conversations.info", &[("channel", id)])
             .await
         {
             Ok(b) => b
@@ -317,9 +322,15 @@ struct Profile {
 }
 
 impl SlackClient {
+    /// Calls `api_get_once`, not `api_get`: a failure here already falls
+    /// back to the raw ID, so `api_get`'s retry loop would only inflate the
+    /// per-minute budget re-fetching a result this function discards on
+    /// error anyway — up to `SLACK_MAX_USER_LOOKUPS` (50) failing lookups at
+    /// `1 + DEFAULT_MAX_RETRIES` requests each would cost 150 requests
+    /// instead of 50 (issue #346).
     async fn fetch_user_name(&self, id: &str) -> String {
         match self
-            .api_get::<UserBody>("users.info", &[("user", id)])
+            .api_get_once::<UserBody>("users.info", &[("user", id)])
             .await
         {
             Ok(b) => b
