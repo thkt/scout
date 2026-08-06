@@ -203,13 +203,14 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     };
     let result = fetch_page(&client, "http://example.com/page", opts, resolver, &cancel).await;
 
-    let _ = handle.join();
     let page = result.expect("proxied fetch of a public URL should succeed");
     assert!(
         page.markdown().contains("proxied body content"),
         "proxied fetch should return the page body, got: {:?}",
         page.markdown()
     );
+
+    let _ = handle.join();
 }
 
 /// [T-F074]

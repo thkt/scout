@@ -615,13 +615,14 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
     let result = scout
         .fetch(FetchParams::for_test("http://example.com/page"))
         .await;
-    let _ = handle.join();
     let output = result.expect("proxied fetch of a public URL should succeed");
     assert!(
         output.markdown().contains("proxied body content"),
         "proxied fetch must return the page body via the proxy, got: {}",
         output.markdown()
     );
+
+    let _ = handle.join();
 }
 
 /// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`
