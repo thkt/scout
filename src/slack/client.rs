@@ -44,6 +44,11 @@ pub(crate) struct SlackFetchOutcome {
     /// Distinct user IDs exceeded `SLACK_MAX_USER_LOOKUPS`; the excess render
     /// as raw `<@UID>` instead of resolved names.
     pub users_capped: bool,
+    /// At least one in-cap `users.info` call returned an error; that ID falls
+    /// back to its raw form even though it was not dropped by the cap. Kept
+    /// distinct from `users_capped` so a caller can tell "resolution failed"
+    /// apart from "capped by volume" (issue #346 follow-up).
+    pub lookups_failed: bool,
 }
 
 pub(crate) struct SlackClient {
@@ -328,25 +333,33 @@ impl SlackClient {
     /// error anyway — up to `SLACK_MAX_USER_LOOKUPS` (50) failing lookups at
     /// `1 + DEFAULT_MAX_RETRIES` requests each would cost 150 requests
     /// instead of 50 (issue #346).
-    async fn fetch_user_name(&self, id: &str) -> String {
+    /// Returns the resolved name paired with whether the `users.info` call
+    /// itself failed (transport/API error), as opposed to succeeding with no
+    /// usable name field. Only the call-failed case is surfaced to callers as
+    /// `DegradedReason::SlackLookupFailed` — a bare name-missing response is
+    /// not an API failure and stays silent, matching the `resolve_channel`
+    /// precedent above.
+    async fn fetch_user_name(&self, id: &str) -> (String, bool) {
         match self
             .api_get_once::<UserBody>("users.info", &[("user", id)])
             .await
         {
-            Ok(b) => b
-                .user
-                .and_then(|u| {
-                    u.profile
-                        .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
-                        .or(u.real_name)
-                })
-                .unwrap_or_else(|| {
-                    warn!(user_id = %id, "user name missing in response, using raw ID");
-                    id.to_owned()
-                }),
+            Ok(b) => (
+                b.user
+                    .and_then(|u| {
+                        u.profile
+                            .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
+                            .or(u.real_name)
+                    })
+                    .unwrap_or_else(|| {
+                        warn!(user_id = %id, "user name missing in response, using raw ID");
+                        id.to_owned()
+                    }),
+                false,
+            ),
             Err(e) => {
                 warn!(user_id = %id, error = %e, "user resolution failed, using raw ID");
-                id.to_owned()
+                (id.to_owned(), true)
             }
         }
     }
@@ -356,16 +369,24 @@ impl SlackClient {
     /// rate so a thread with hundreds of participants cannot fire that many
     /// simultaneous requests and trip Slack's per-minute rate limit. Matches
     /// the same idiom used in `search/engine.rs::fetch_sources`.
-    async fn prefetch_users(&self, ids: &HashSet<String>) -> HashMap<String, String> {
+    /// Returns the resolved names alongside whether any in-cap lookup failed,
+    /// so `fetch_message` can wire that into `SlackFetchOutcome::lookups_failed`.
+    async fn prefetch_users(&self, ids: &HashSet<String>) -> (HashMap<String, String>, bool) {
         let id_list: Vec<String> = ids.iter().cloned().collect();
-        stream::iter(id_list)
+        let results: Vec<(String, String, bool)> = stream::iter(id_list)
             .map(|id| async move {
-                let name = self.fetch_user_name(&id).await;
-                (id, name)
+                let (name, failed) = self.fetch_user_name(&id).await;
+                (id, name, failed)
             })
             .buffer_unordered(SLACK_USERS_CONCURRENCY)
             .collect()
-            .await
+            .await;
+        let lookups_failed = results.iter().any(|(_, _, failed)| *failed);
+        let names = results
+            .into_iter()
+            .map(|(id, name, _)| (id, name))
+            .collect();
+        (names, lookups_failed)
     }
 }
 
@@ -543,7 +564,7 @@ impl SlackClient {
             .take(SLACK_MAX_USER_LOOKUPS)
             .collect();
 
-        let (channel_name, users) = tokio::join!(
+        let (channel_name, (users, lookups_failed)) = tokio::join!(
             self.resolve_channel(&slack_url.channel),
             self.prefetch_users(&user_ids),
         );
@@ -566,6 +587,7 @@ impl SlackClient {
             markdown: output,
             thread_truncated: fetched.truncated,
             users_capped,
+            lookups_failed,
         })
     }
 }

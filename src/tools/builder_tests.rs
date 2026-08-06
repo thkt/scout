@@ -301,6 +301,99 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
     );
 }
 
+/// [T-003] users.info が失敗した fetch は degraded_reasons に SlackLookupFailed を含む
+///
+/// A single distinct author ID triggers exactly one `users.info` lookup; that
+/// count stays far under `SLACK_MAX_USER_LOOKUPS`, so `SLACK_USERS_CAPPED`
+/// cannot fire here. When the lookup itself fails (a transport/API error, not
+/// the cap), the AI caller needs a distinct signal to tell "resolution
+/// failed" apart from "capped by volume" — `DegradedReason::SlackLookupFailed`
+/// must appear in `degraded_reasons`.
+#[tokio::test]
+async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
+    let Some(server) = try_spawn_mock_server("tools::slack_users_lookup_failed").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "hello", "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
+        .await
+        .expect("a failing users.info lookup still falls back to the raw author ID");
+
+    assert!(
+        output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackLookupFailed),
+        "a failed users.info lookup must surface SLACK_LOOKUP_FAILED, got: {:?}",
+        output.degraded_reasons()
+    );
+}
+
+/// [T-004] users.info が成功した fetch は degraded_reasons に SlackLookupFailed を含まない
+///
+/// Mirrors T-003 with a `users.info` call that succeeds: no lookup failed, so
+/// `SLACK_LOOKUP_FAILED` must be absent from `degraded_reasons`. Without this
+/// negative case, T-003 alone cannot rule out `SlackLookupFailed` firing
+/// unconditionally on every fetch regardless of lookup outcome.
+#[tokio::test]
+async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
+    let Some(server) = try_spawn_mock_server("tools::slack_users_lookup_ok").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "hello", "ts": "1000.000001"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user": {"real_name": "Someone"}
+        })))
+        .mount(&server)
+        .await;
+
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri())
+        .build();
+    let output = scout
+        .fetch(FetchParams::for_test(
+            "https://acme.slack.com/archives/C1/p1000000001",
+        ))
+        .await
+        .expect("a successful users.info lookup resolves fetch");
+
+    assert!(
+        !output
+            .degraded_reasons()
+            .contains(&DegradedReason::SlackLookupFailed),
+        "a successful users.info lookup must not surface SLACK_LOOKUP_FAILED, got: {:?}",
+        output.degraded_reasons()
+    );
+}
+
 /// [T-SK052] A message body over `MAX_FETCH_OUTPUT_BYTES` (100KB) is truncated,
 /// and `fetch_slack` reports it via `SLACK_OUTPUT_TRUNCATED` plus the inline
 /// byte-count note that `truncate_with_note` appends at the body end (issue
