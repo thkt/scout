@@ -201,21 +201,11 @@ pub fn spawn_mock_proxy_raw_response(
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
-/// Env-reading wrapper: builds a `Command` for the built `scout` binary with
-/// `env_clear()` applied and `PATH`/`HOME` restored from the real process
-/// environment, carrying `LLVM_PROFILE_FILE` through when the run is
-/// instrumented. Mirrors `run_scout_fetch`'s doc comment in
-/// tests/exit_code_contract.rs: the child needs `PATH`/`HOME` for the OS
-/// proxy lookup and any config file it reads, but nothing else from the
-/// invoking shell should leak into the contract under test, and
-/// `LLVM_PROFILE_FILE` has to survive the clear or an instrumented run drops
-/// the child's coverage from the report.
-///
-/// Delegates the assembly to `scout_with_env`, the testable core: reading env
-/// vars here and handing the resulting values to a function that takes them
-/// as parameters keeps the coverage-output branch reachable from a test even
-/// though `unsafe_code = "forbid"` (Cargo.toml) blocks a test from mutating
-/// the real process env directly.
+/// `PATH` is restored so the OS proxy lookup still resolves, and
+/// `LLVM_PROFILE_FILE` survives the clear because an instrumented child that
+/// loses it writes no `.profraw`, dropping every line it drives from the
+/// coverage report. Everything else from the invoking shell stays cleared so
+/// it cannot leak into the contract under test.
 pub fn scout_with_clean_env() -> Command {
     scout_with_env(
         &env::var("PATH").unwrap_or_default(),
@@ -224,10 +214,10 @@ pub fn scout_with_clean_env() -> Command {
     )
 }
 
-/// Testable core `scout_with_clean_env` wraps: takes `PATH`/`HOME`/coverage
-/// output as parameters instead of reading them from the environment, so a
-/// test can drive the coverage-output branch without mutating the real
-/// process env (blocked by `unsafe_code = "forbid"`, Cargo.toml).
+/// Testable core `scout_with_clean_env` wraps. The values arrive as
+/// parameters rather than being read here because `unsafe_code = "forbid"`
+/// (Cargo.toml) blocks a test from mutating the real process env, which would
+/// otherwise be the only way to reach the coverage-output branch.
 pub fn scout_with_env(path: &str, home: &str, coverage_output: Option<&str>) -> Command {
     let mut cmd = scout();
     cmd.env_clear().env("PATH", path).env("HOME", home);
@@ -278,20 +268,9 @@ mod tests {
         assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
     }
 
-    // The following three tests pin `scout_with_clean_env` and
-    // `assert_proxy_was_dialed`, the shared replacements for
-    // `run_scout_fetch` (tests/exit_code_contract.rs) and the inline
-    // env_clear/PATH/HOME/assert block in `run_scout_fetch_via_proxy`
-    // (tests/output_injection.rs). `scout_with_env` is the testable core
-    // `scout_with_clean_env` wraps, mirroring `try_spawn_with_bind` /
-    // `try_spawn_mock_server` above: `unsafe_code = "forbid"` (Cargo.toml)
-    // blocks a test from mutating the real process env
-    // (`std::env::set_var` requires `unsafe` since edition 2024), so the
-    // coverage-output branch has to be reachable by passing a value in
-    // directly instead.
     use std::ffi::OsStr;
 
-    // T-001: coverage 出力先が渡されたとき Command に LLVM_PROFILE_FILE が同じ値で設定される
+    // T-C035: coverage 出力先が渡されたとき Command に LLVM_PROFILE_FILE が同じ値で設定される
     #[test]
     fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
         let cmd = scout_with_env("/usr/bin", "/home/tester", Some("/tmp/scout-123.profraw"));
@@ -308,7 +287,7 @@ mod tests {
         );
     }
 
-    // T-002: coverage 出力先が渡されないとき Command に LLVM_PROFILE_FILE は設定されない
+    // T-C036: coverage 出力先が渡されないとき Command に LLVM_PROFILE_FILE は設定されない
     #[test]
     fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
         let cmd = scout_with_env("/usr/bin", "/home/tester", None);
@@ -323,7 +302,7 @@ mod tests {
         );
     }
 
-    // T-003: 接続数が 0 のとき assert_proxy_was_dialed は渡された帰結を含むメッセージで panic する
+    // T-C037: 接続数が 0 のとき assert_proxy_was_dialed は渡された帰結を含むメッセージで panic する
     #[test]
     #[should_panic(expected = "stdout asserted below did not come from the fixture")]
     fn assert_proxy_was_dialed_panics_with_message_containing_given_consequence_when_connection_count_is_zero()
