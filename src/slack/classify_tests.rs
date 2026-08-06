@@ -254,9 +254,7 @@ fn team_added_to_org_classifies_as_temp_failure_with_short_delay_hint() {
 }
 
 /// [T-002] org_login_required は TempFailure に分類され hint が
-/// "Retry after the workspace's Enterprise migration completes" になる。
-/// Enterprise 移行完了は同一 invocation 内では起きないので、短い待機を指す
-/// 共通 hint (`transient_retry`) を再利用してはならない。
+/// "Retry after the workspace's Enterprise migration completes" になる
 #[test]
 fn org_login_required_classifies_as_temp_failure_with_enterprise_migration_hint() {
     let c = SlackError::Api {
@@ -271,9 +269,7 @@ fn org_login_required_classifies_as_temp_failure_with_enterprise_migration_hint(
 }
 
 /// [T-003] invalid_cursor は TempFailure に分類され hint が
-/// "Re-run to restart thread paging from the first page" になる。
-/// カーソルの再開ではなく最初のページからの再実行が必要なので、短い待機を
-/// 指す共通 hint (`transient_retry`) を再利用してはならない。
+/// "Re-run to restart thread paging from the first page" になる
 #[test]
 fn invalid_cursor_classifies_as_temp_failure_with_restart_paging_hint() {
     let c = SlackError::Api {

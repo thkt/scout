@@ -773,18 +773,15 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
 
 /// [T-004] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
 ///
-/// `invalid_cursor` is TempFailure, so `is_retriable` retries the call, and
-/// `api_get`'s retry closure recaptures the same `params`. Retrying therefore
-/// resends page 2's own cursor and cannot restart from page 1, which is the
-/// recovery the error actually needs. Once the budget is spent, the page-1
-/// messages already collected must not surface as a truncated thread.
+/// `api_get`'s retry closure recaptures the same `params`, so a retry resends
+/// page 2's own cursor and never restarts from page 1, which is the recovery
+/// this error needs.
 #[tokio::test(start_paused = true)]
 async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_partial_thread() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
     let parent_ts = "1000.000001";
-    // Page 1: parent only, has_more with a cursor to page 2.
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
         .and(query_param_is_missing("cursor"))
@@ -799,8 +796,6 @@ async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_par
         .expect(1)
         .mount(&server)
         .await;
-    // Page 2: invalid_cursor on every attempt, including the retries. Total
-    // attempts = 1 (initial) + DEFAULT_MAX_RETRIES (retries).
     let expected_attempts = u64::from(DEFAULT_MAX_RETRIES) + 1;
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
