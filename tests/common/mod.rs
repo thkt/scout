@@ -206,10 +206,20 @@ pub fn spawn_mock_proxy_raw_response(
 /// `Cargo.lock` reads it. The macOS proxy lookup goes through
 /// `system-configuration` and the Linux one reads proxy env vars only.
 pub fn scout_with_clean_env() -> Command {
-    scout_with_env(
-        &env::var("PATH").unwrap_or_default(),
-        env::var("LLVM_PROFILE_FILE").ok().as_deref(),
-    )
+    let mut cmd = scout_with_env(&env::var("PATH").unwrap_or_default(), None);
+    forward_coverage_profile(&mut cmd);
+    cmd
+}
+
+/// Carries the parent's coverage output path across an `env_clear()`. An
+/// instrumented child that loses it writes no `.profraw`, so every line it
+/// drives disappears from the report. Separate from `scout_with_clean_env`
+/// because `tests/cli_integration.rs` clears the environment without
+/// restoring `PATH`, and so cannot use that builder.
+pub fn forward_coverage_profile(cmd: &mut Command) {
+    if let Ok(profile) = env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
 }
 
 /// Testable core `scout_with_clean_env` wraps. The values arrive as
