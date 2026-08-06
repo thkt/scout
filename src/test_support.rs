@@ -138,24 +138,14 @@ pub async fn try_spawn_with_bind(
     Some(MockServer::builder().listener(listener).start().await)
 }
 
-/// The one primitive every one-shot test server routes through: bind
-/// loopback under the shared guard policy, then accept up to `accept_count`
-/// connections, draining each request's first 4 KiB before handing the
-/// stream to `respond` to write the reply and dropping it.
+/// The one primitive every one-shot test server routes through.
 ///
-/// `respond` runs once per accepted connection, so it must be `Fn` (not
-/// `FnOnce`/`FnMut`). A connection's `respond` failure does not cut the
-/// accept loop short — every one of `accept_count` connections is still
-/// accepted and counted, so a caller asserting on the counter (e.g. a
-/// retry-budget test) sees the loop run to completion regardless of
-/// mid-loop write failures. Once the loop completes, the thread returns the
-/// *first* `respond` error, if any; a caller that cares inspects it via
-/// `handle.join()`, and a caller that does not can discard it with
-/// `let _ = handle.join();` same as before this helper existed.
-///
-/// Returns `None` when loopback bind is unavailable so callers can
-/// early-return in restricted environments, matching
-/// `try_spawn_mock_server`.
+/// `respond` runs once per accepted connection, so `Fn` rather than
+/// `FnOnce`/`FnMut`. Its failure does not cut the accept loop short: a
+/// caller asserting on the counter (a retry-budget test) needs every one of
+/// `accept_count` connections accepted and counted even when a mid-loop
+/// write fails, so the loop runs to completion and the *first* error
+/// surfaces afterwards.
 pub(crate) fn spawn_accept_loop<F>(
     test_name: &str,
     accept_count: usize,
@@ -181,7 +171,6 @@ where
             if let Err(e) = respond(&mut stream) {
                 first_err.get_or_insert(e);
             }
-            // stream drops here at each iteration's end.
         }
         first_err.map_or(Ok(()), Err)
     });
@@ -189,9 +178,9 @@ where
 }
 
 /// Joins a `spawn_accept_loop` server thread and asserts neither the thread
-/// panicked nor `respond` returned an `Err` while writing the response. The
-/// shared assertion for every caller that wants the strict check rather than
-/// `let _ = handle.join();`'s silent discard.
+/// panicked nor `respond` returned an `Err`. Discarding the join result
+/// instead would leave an accept or write failure entirely silent, which is
+/// what this replaces.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
     handle
         .join()
