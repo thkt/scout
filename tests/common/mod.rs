@@ -201,9 +201,51 @@ pub fn spawn_mock_proxy_raw_response(
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
+/// `PATH` is restored so the OS proxy lookup still resolves, and
+/// `LLVM_PROFILE_FILE` survives the clear because an instrumented child that
+/// loses it writes no `.profraw`, dropping every line it drives from the
+/// coverage report. Everything else from the invoking shell stays cleared so
+/// it cannot leak into the contract under test.
+///
+/// `HOME` is deliberately not restored: neither `src/` nor any crate in
+/// `Cargo.lock` reads it. The macOS proxy lookup goes through
+/// `system-configuration` and the Linux one reads proxy env vars only.
+pub fn scout_with_clean_env() -> Command {
+    scout_with_env(
+        &env::var("PATH").unwrap_or_default(),
+        env::var("LLVM_PROFILE_FILE").ok().as_deref(),
+    )
+}
+
+/// Testable core `scout_with_clean_env` wraps. The values arrive as
+/// parameters rather than being read here because `unsafe_code = "forbid"`
+/// (Cargo.toml) blocks a test from mutating the real process env, which would
+/// otherwise be the only way to reach the coverage-output branch.
+pub fn scout_with_env(path: &str, coverage_output: Option<&str>) -> Command {
+    let mut cmd = scout();
+    cmd.env_clear().env("PATH", path);
+    if let Some(profile) = coverage_output {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+    cmd
+}
+
+/// Assert the mock proxy was dialed at least once, so a run that reached its
+/// expected outcome without ever leaving scout (a DNS or SSRF short-circuit
+/// landing on the same result by coincidence) fails instead of passing as a
+/// false positive. `consequence` stays a parameter so the panic names what
+/// the caller's own assertions rest on, which differs per call site.
+pub fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str, consequence: &str) {
+    assert!(
+        connection_count.load(Ordering::SeqCst) >= 1,
+        "{context}: no connection reached the mock proxy, so {consequence}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     fn bind_refused() -> io::Result<TcpListener> {
         Err(io::Error::other("bind refused"))
@@ -224,5 +266,49 @@ mod tests {
     #[test]
     fn unforced_run_skips_when_loopback_bind_fails() {
         assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
+    }
+
+    // T-C035: command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given
+    #[test]
+    fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
+        let cmd = scout_with_env("/usr/bin", Some("/tmp/scout-123.profraw"));
+
+        let llvm_profile_file = cmd
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("LLVM_PROFILE_FILE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(
+            llvm_profile_file,
+            Some(OsStr::new("/tmp/scout-123.profraw")),
+            "LLVM_PROFILE_FILE should carry the same coverage output value the caller passed"
+        );
+    }
+
+    // T-C036: command_does_not_set_llvm_profile_file_when_coverage_output_is_absent
+    #[test]
+    fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
+        let cmd = scout_with_env("/usr/bin", None);
+
+        let has_llvm_profile_file = cmd
+            .get_envs()
+            .any(|(key, _)| key == OsStr::new("LLVM_PROFILE_FILE"));
+
+        assert!(
+            !has_llvm_profile_file,
+            "LLVM_PROFILE_FILE should not be set on the Command when no coverage output is given"
+        );
+    }
+
+    // T-C037: zero_connections_panics_with_the_given_consequence
+    #[test]
+    #[should_panic(expected = "stdout asserted below did not come from the fixture")]
+    fn zero_connections_panics_with_the_given_consequence() {
+        let connection_count = AtomicUsize::new(0);
+        assert_proxy_was_dialed(
+            &connection_count,
+            "some context",
+            "stdout asserted below did not come from the fixture",
+        );
     }
 }
