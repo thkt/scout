@@ -17,14 +17,14 @@ scout の `ScoutError` → `ErrorCode` 分類は `src/tools/errors.rs` の `matc
 - sysexits portion (8 non-zero exit codes 64/65/66/70/74/75/104/124): ADR-0002 (scout-local, 2026-05-13 supersede)
 - JSON schema portion (envelope structure, `error.code` JSON tag, field omit policy, `[]`-never-`null` invariant): ADR-0010 (scout-local, 2026-05-19 supersede, PR #142)
 
-残るのが**Classification Priority portion**で、code-side ref 11 箇所 (`src/envelope.rs:197`, `src/tools/errors.rs:84, 165, 256, 277, 577, 580, 602, 624, 648, 667, 713`) が依然 `per ADR-0065` を指している。dotclaude meta への external dep が code レベルで残っている状態。
+残るのが **Classification Priority portion** で、code-side ref 11 箇所 (`src/envelope.rs:197`, `src/tools/errors.rs:84, 165, 256, 277, 577, 580, 602, 624, 648, 667, 713`) が依然 `per ADR-0065` を指している。dotclaude meta への external dep が code レベルで残っている状態。
 
-scout repo を clone した contributor は `~/.claude/docs/decisions/0065-...` を読めず、`// per ADR-0065 priority 2` の参照先が解決できない。ADR-0002/ADR-0010 と同パターンで Classification Priority portion を scout-local 化する。
+scout repo を clone した contributor は `~/.claude/docs/decisions/0065-...` を読めず、`// per ADR-0065 priority 2` の参照先が解決できない。ADR-0002 / ADR-0010 と同パターンで Classification Priority portion を scout-local 化する。
 
 ## Decision Drivers
 
-- ADR-0002 (sysexits)/ADR-0010 (JSON schema) の supersede と並ぶ「meta ADR の scout-local 化」series の完結。
-- 分類 priority は `match` arm 順序として code-level invariant。order が崩れると 4xx classification が priority 4 (TempFailure) に流れる等の silent regression を起こす。型/lint で機械 enforce できず、ADR + inline comment が source of truth。
+- ADR-0002 (sysexits) / ADR-0010 (JSON schema) の supersede と並ぶ「meta ADR の scout-local 化」series の完結。
+- 分類 priority は `match` arm 順序として code-level invariant。order が崩れると 4xx classification が priority 4 (TempFailure) に流れる等の silent regression を起こす。型 / lint で機械 enforce できず、ADR + inline comment が source of truth。
 - AI agent contributor が match arm 順序の rationale を問うとき、参照先が scout repo 外 (dotclaude meta) だと clone-only な user に解決できない。
 - `Unknown` rate の上昇は classification 設計 audit の signal として機能する。この設計意図を scout-local ADR で pin する。
 
@@ -52,7 +52,7 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 | 5    | scout 内部不変条件違反 (schema mismatch, invalid state)                    | `Internal`                     | 70 EX_SOFTWARE          |
 | 退避 | priority 1-5 のどれにも fall through しなかった                            | `Unknown`                      | 104 (PJ extension)      |
 
-`IoError` (74 EX_IOERR) は priority slot を占めない: external tool/IO failure (例: headless browser CDP error) は priority 5 (scout-side bug) でも priority 4 (retry 見込み) でもない別 axis のため、`io_error()` constructor で直接 `ErrorCode::IoError` に分類する (ADR-0003 §Decision Outcome 参照)。
+`IoError` (74 EX_IOERR) は priority slot を占めない: external tool / IO failure (例: headless browser CDP error) は priority 5 (scout-side bug) でも priority 4 (retry 見込み) でもない別 axis のため、`io_error()` constructor で直接 `ErrorCode::IoError` に分類する (ADR-0003 §Decision Outcome 参照)。
 
 ### Application Rule
 
@@ -71,21 +71,21 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 ### Consequences
 
 - Good, because Classification Priority portion が scout-local 化、dotclaude meta への code-level dep が解消される。
-- Good, because ADR-0002 (sysexits)/ADR-0010 (JSON schema)/ADR-0011 (Classification Priority) の 3 つで ADR-0065 (meta) 全 portion を scout-local 化、code から ADR-0065 を ref する必要が無くなる。
+- Good, because ADR-0002 (sysexits) / ADR-0010 (JSON schema) / ADR-0011 (Classification Priority) の 3 つで ADR-0065 (meta) 全 portion を scout-local 化、code から ADR-0065 を ref する必要が無くなる。
 - Good, because `match` arm 順序の rationale が ADR table で確認可能。AI agent contributor が new ErrorCode variant 追加時に priority slot を決定できる。
 - Bad, because supersede 後の code-side ref 移行 PR が follow-up として必要 (本 PR に同梱)。
 
 ### Confirmation
 
 - 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) が本 ADR table の priority 順で `match` arm を並べていることを inline comment (`// Priority N:`) で確認可能。`src/tools/errors.rs` の `From<*Error>` 実装は各 backend の `classify()` へ委譲するため、priority 判定はバリアント定義の隣で exhaustiveness-checked に保たれる。
-- 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx)/`T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
+- 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx) / `T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
 - `ugrep "ADR-0065" src/ tests/` で hit 0 (本 PR で移行完了)。
 
 ## Pros and Cons of the Options
 
 ### Option A: 新規 ADR-0011 + ADR-0065 §Classification Priority supersede (採用)
 
-- Good, because ADR-0002/ADR-0010 と同じ shape で meta ADR の portion 切り出しを完結。
+- Good, because ADR-0002 / ADR-0010 と同じ shape で meta ADR の portion 切り出しを完結。
 - Good, because Classification Priority の rationale が単独 ADR として閲覧可能、ADR-0010 の field-level rule とは別軸で読める。
 - Bad, because ADR 件数が増える (number 消費)。
 
@@ -99,7 +99,7 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 - Good, because ADR-0003 が既に HTTP status → ErrorCode mapping を扱う。Classification Priority も近接 concern。
 - Bad, because ADR-0003 は HTTP-axis (status code → ErrorCode) の mapping、本 ADR は ScoutError variant-axis (どの priority に振るか) で軸が違う。混入で ADR-0003 の責務が unclear に。
-- Bad, because ADR-0065 supersede の line (sysexits/JSON schema/Classification Priority の 3 portion 切り出し) に対し、ADR-0003 は ADR-0065 supersede chain の外にある。Pattern を壊す。
+- Bad, because ADR-0065 supersede の line (sysexits / JSON schema / Classification Priority の 3 portion 切り出し) に対し、ADR-0003 は ADR-0065 supersede chain の外にある。Pattern を壊す。
 
 ### Option D: inline comment + table のみ (ADR 化なし)
 
@@ -111,7 +111,7 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 ### Supersedes (ADR-0065 Classification Priority portion)
 
-本 ADR は `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta) の**§Classification Priority**を scout-local 化する。
+本 ADR は `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta) の **§Classification Priority** を scout-local 化する。
 
 ADR-0065 の他 portion は以下で scout-local 化済:
 
@@ -119,7 +119,7 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 - JSON schema portion: ADR-0010 (scout-local, 2026-05-19 supersede)
 - Classification Priority portion: **本 ADR-0011** (2026-05-19 supersede)
 
-これで ADR-0065 全 portion が scout-local 化、code-side の `per ADR-0065` ref を本 PR で `per ADR-0002`/`per ADR-0010`/`per ADR-0011` に migrate する。
+これで ADR-0065 全 portion が scout-local 化、code-side の `per ADR-0065` ref を本 PR で `per ADR-0002` / `per ADR-0010` / `per ADR-0011` に migrate する。
 
 ### Reassessment Triggers
 
