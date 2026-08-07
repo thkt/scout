@@ -96,7 +96,7 @@ fn io_errors_have_exit_code_74() {
 /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
 ///
-/// [T-008] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
+/// [T-ER035] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
 /// になる — pinned by the `SlackError::Network` row, which carries a real
 /// connection-refused `reqwest::Error`.
 #[tokio::test]
@@ -292,7 +292,7 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
     }
 }
 
-/// [T-010] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
+/// [T-ER036] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
 ///
 /// The seam from a persistently-failing real HTTP call through to the
 /// process exit code: a `fetch_message` whose responder always answers
