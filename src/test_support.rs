@@ -310,7 +310,6 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
 mod tests {
     use super::*;
     use std::io;
-    use std::time::{Duration, Instant};
     use tracing_test::traced_test;
 
     #[tokio::test]
