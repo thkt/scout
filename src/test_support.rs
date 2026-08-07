@@ -24,6 +24,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
@@ -177,6 +178,31 @@ where
 /// instead would leave an accept or write failure entirely silent, which is
 /// what this replaces.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
+    join_server_thread_with_deadline(handle, Duration::from_secs(5));
+}
+
+/// Testable core: inject a deadline to control how long a join waits on a
+/// server thread that never finishes.
+///
+/// Polls `JoinHandle::is_finished` instead of blocking on `join` directly, so
+/// a thread stuck in `listener.accept()` fails with a diagnosis instead of
+/// hanging the test. Once the deadline elapses the handle is dropped rather
+/// than joined: joining a still-running thread blocks again, which is
+/// exactly the hang this guards against.
+pub(crate) fn join_server_thread_with_deadline(
+    handle: JoinHandle<io::Result<()>>,
+    deadline: Duration,
+) {
+    let started = Instant::now();
+    while !handle.is_finished() {
+        if started.elapsed() >= deadline {
+            drop(handle);
+            panic!(
+                "server thread did not finish within {deadline:?}; likely cause: accept_count exceeds the number of client connections, so the thread blocks in listener.accept()"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     handle
         .join()
         .expect("server thread should not panic")
@@ -195,8 +221,9 @@ pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
 /// callers can confirm the retry loop kicked in.
 ///
 /// `accept_count` must equal the number of connections the client will make;
-/// passing a larger value blocks the spawned thread on `listener.accept()`
-/// and makes `handle.join()` hang.
+/// passing a larger value blocks the spawned thread on `listener.accept()`.
+/// `join_server_thread` no longer hangs on that: it panics naming
+/// `accept_count` once its deadline elapses (`join_server_thread_with_deadline`).
 pub fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
@@ -283,6 +310,7 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
 mod tests {
     use super::*;
     use std::io;
+    use std::time::{Duration, Instant};
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -373,6 +401,89 @@ mod tests {
             counter.load(Ordering::SeqCst),
             accept_count,
             "accept loop should keep accepting connections after a respond error"
+        );
+    }
+
+    /// [T-SUP003] accept_count がクライアントの接続数を超えたサーバ thread は deadline 経過で accept_count を名指す panic になる
+    #[test]
+    #[should_panic(expected = "accept_count")]
+    fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
+        let Some((_addr, _counter, handle)) = spawn_accept_loop(
+            "accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline",
+            1,
+            |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+        // No client ever connects, so the thread blocks forever in
+        // listener.accept() — the deadline is the only way out.
+
+        join_server_thread_with_deadline(handle, Duration::from_millis(200));
+    }
+
+    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
+    #[test]
+    fn finished_server_thread_returns_before_deadline_elapses() {
+        let Some((addr, _counter, handle)) = spawn_accept_loop(
+            "finished_server_thread_returns_before_deadline_elapses",
+            1,
+            |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+
+        let host = addr
+            .strip_prefix("http://")
+            .expect("spawn_accept_loop should return an http:// URL");
+        let _ = TcpStream::connect(host);
+
+        let deadline = Duration::from_secs(5);
+        let started = Instant::now();
+        join_server_thread_with_deadline(handle, deadline);
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "a finished server thread should join immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
+        );
+    }
+
+    /// [T-SUP005] respond が Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    #[test]
+    fn respond_err_panics_with_existing_message_before_deadline() {
+        let Some((addr, _counter, handle)) = spawn_accept_loop(
+            "respond_err_panics_with_existing_message_before_deadline",
+            1,
+            |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+
+        let host = addr
+            .strip_prefix("http://")
+            .expect("spawn_accept_loop should return an http:// URL");
+        let _ = TcpStream::connect(host);
+
+        let deadline = Duration::from_secs(5);
+        let started = Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            join_server_thread_with_deadline(handle, deadline);
+        }));
+        let elapsed = started.elapsed();
+
+        let panic_payload = result.expect_err("respond Err should panic, not return Ok");
+        let message = panic_payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic_payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("server thread should not fail while writing the response"),
+            "panic message should keep the existing respond-Err diagnostic, got: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "respond-Err panic should fire immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
         );
     }
 }
