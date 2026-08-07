@@ -405,28 +405,16 @@ mod tests {
     }
 
     /// [T-SUP003] accept_count がクライアントの接続数を超えたサーバ thread は deadline 経過で accept_count を名指す panic になる
+    ///
+    /// deadline 経過で thread は切り離されるため、listener はテスト終了の直後まで
+    /// 開いたまま残る。nextest がこれを leak-timeout (既定 100ms) 内に閉じきれず
+    /// leaky と報告することがあるが、pass 判定は変わらない。
     #[test]
     #[should_panic(expected = "accept_count")]
     fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
-        let Some((_addr, _counter, handle)) = spawn_accept_loop(
-            "accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline",
-            1,
-            |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
-        ) else {
-            return; // bind unavailable — can't verify happy path
-        };
-        // No client ever connects, so the thread blocks forever in
-        // listener.accept() — the deadline is the only way out.
-
-        join_server_thread_with_deadline(handle, Duration::from_millis(200));
-    }
-
-    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
-    #[test]
-    fn finished_server_thread_returns_before_deadline_elapses() {
         let Some((addr, _counter, handle)) = spawn_accept_loop(
-            "finished_server_thread_returns_before_deadline_elapses",
-            1,
+            "accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline",
+            2,
             |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
         ) else {
             return; // bind unavailable — can't verify happy path
@@ -435,7 +423,22 @@ mod tests {
         let host = addr
             .strip_prefix("http://")
             .expect("spawn_accept_loop should return an http:// URL");
+        // One connection against accept_count = 2: the thread serves this one,
+        // then blocks in listener.accept() for a second that never comes.
         let _ = TcpStream::connect(host);
+
+        join_server_thread_with_deadline(handle, Duration::from_millis(200));
+    }
+
+    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
+    ///
+    /// `spawn_accept_loop` を通さず thread を直接起こす。待ち方を決めるのは
+    /// handle の状態だけで、その handle が loopback を持つかは結果に現れない。
+    /// 通せば bind 不可の環境用の早期 return が、bind が成功する限り一度も
+    /// 実行されない分岐として残る。
+    #[test]
+    fn finished_server_thread_returns_before_deadline_elapses() {
+        let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
 
         let deadline = Duration::from_secs(5);
         let started = Instant::now();
@@ -448,21 +451,15 @@ mod tests {
         );
     }
 
-    /// [T-SUP005] respond が Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    /// [T-SUP005] Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    ///
+    /// `spawn_accept_loop` を通さず thread を直接起こす理由は T-SUP004 と同じ。
+    /// respond が返した `Err` は thread の戻り値としてしか届かないので、その
+    /// 戻り値を直接置いても伝播経路は変わらない。
     #[test]
-    fn respond_err_panics_with_existing_message_before_deadline() {
-        let Some((addr, _counter, handle)) = spawn_accept_loop(
-            "respond_err_panics_with_existing_message_before_deadline",
-            1,
-            |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
-        ) else {
-            return; // bind unavailable — can't verify happy path
-        };
-
-        let host = addr
-            .strip_prefix("http://")
-            .expect("spawn_accept_loop should return an http:// URL");
-        let _ = TcpStream::connect(host);
+    fn server_thread_err_panics_with_existing_message_before_deadline() {
+        let handle =
+            thread::spawn(|| -> io::Result<()> { Err(io::Error::other("respond failed")) });
 
         let deadline = Duration::from_secs(5);
         let started = Instant::now();
@@ -472,15 +469,11 @@ mod tests {
         let elapsed = started.elapsed();
 
         let panic_payload = result.expect_err("respond Err should panic, not return Ok");
+        // `Result::expect` formats its message, so the payload is a String, never
+        // the `&'static str` a bare `panic!("literal")` would produce.
         let message = panic_payload
             .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| {
-                panic_payload
-                    .downcast_ref::<&str>()
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_default();
+            .expect("expect's panic payload is a formatted String");
         assert!(
             message.contains("server thread should not fail while writing the response"),
             "panic message should keep the existing respond-Err diagnostic, got: {message}"
