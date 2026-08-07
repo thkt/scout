@@ -109,7 +109,7 @@ fn search_without_api_key_exits_64() {
     );
 }
 
-// [T-027] (integration / FR-018)
+// [T-C038] (integration / FR-018)
 // Setup: env `BRAVE_SEARCH_API_KEY="   "` (whitespace only).
 // Action: run `scout search "test query"`.
 // Expected: stderr contains `BRAVE_SEARCH_API_KEY`, exit code 64 (EX_USAGE);

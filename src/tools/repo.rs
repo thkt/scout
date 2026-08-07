@@ -329,7 +329,7 @@ mod tests {
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
-    /// [T-004] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
+    /// [T-TS032] 同じ issue リストに対し Markdown の Recent Issues と JSON の issues 配列が同一の除外結果になる
     ///
     /// Drives the real `Scout::repo_overview` wiring, not the format/types
     /// functions in isolation, so a change feeding the Markdown and JSON paths
