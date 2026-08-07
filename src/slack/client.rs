@@ -44,6 +44,14 @@ pub(crate) struct SlackFetchOutcome {
     /// Distinct user IDs exceeded `SLACK_MAX_USER_LOOKUPS`; the excess render
     /// as raw `<@UID>` instead of resolved names.
     pub users_capped: bool,
+    /// The `conversations.info` call or at least one in-cap `users.info` call
+    /// returned an error; that ID renders raw even though the cap did not drop
+    /// it. Kept distinct from `users_capped` so a caller can tell "resolution
+    /// failed" apart from "capped by volume" (issue #346).
+    ///
+    /// A 200 carrying no name does not count: the lookup reached Slack, which
+    /// had no name to give, so there is nothing for the caller to retry.
+    pub lookups_failed: bool,
 }
 
 pub(crate) struct SlackClient {
@@ -279,22 +287,29 @@ struct ChannelInfo {
 }
 
 impl SlackClient {
-    async fn resolve_channel(&self, id: &str) -> String {
+    /// Calls `api_get_once`, not `api_get`: the error is discarded for a raw-ID
+    /// fallback, so a retry only re-fetches what this drops. A long
+    /// `Retry-After` here additionally stalls the `tokio::join!` in
+    /// `fetch_message` and can spend the caller's 60s budget on its own,
+    /// turning a raw channel label into an exit 124 (issue #346).
+    async fn resolve_channel(&self, id: &str) -> (String, bool) {
         match self
-            .api_get::<ChannelBody>("conversations.info", &[("channel", id)])
+            .api_get_once::<ChannelBody>("conversations.info", &[("channel", id)])
             .await
         {
-            Ok(b) => b
-                .channel
-                .and_then(|c| c.name)
-                .map(|n| format!("#{n}"))
-                .unwrap_or_else(|| {
-                    warn!(channel_id = %id, "channel name missing in response, using raw ID");
-                    id.to_owned()
-                }),
+            Ok(b) => (
+                b.channel
+                    .and_then(|c| c.name)
+                    .map(|n| format!("#{n}"))
+                    .unwrap_or_else(|| {
+                        warn!(channel_id = %id, "channel name missing in response, using raw ID");
+                        id.to_owned()
+                    }),
+                false,
+            ),
             Err(e) => {
                 warn!(channel_id = %id, error = %e, "channel resolution failed, using raw ID");
-                id.to_owned()
+                (id.to_owned(), true)
             }
         }
     }
@@ -317,25 +332,31 @@ struct Profile {
 }
 
 impl SlackClient {
-    async fn fetch_user_name(&self, id: &str) -> String {
+    /// Calls `api_get_once` for the reason given on `resolve_channel`; what
+    /// differs here is volume. `SLACK_MAX_USER_LOOKUPS` (50) failing lookups
+    /// at `1 + DEFAULT_MAX_RETRIES` requests each spend 150 requests of the
+    /// per-minute budget instead of 50, all of them discarded (issue #346).
+    async fn fetch_user_name(&self, id: &str) -> (String, bool) {
         match self
-            .api_get::<UserBody>("users.info", &[("user", id)])
+            .api_get_once::<UserBody>("users.info", &[("user", id)])
             .await
         {
-            Ok(b) => b
-                .user
-                .and_then(|u| {
-                    u.profile
-                        .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
-                        .or(u.real_name)
-                })
-                .unwrap_or_else(|| {
-                    warn!(user_id = %id, "user name missing in response, using raw ID");
-                    id.to_owned()
-                }),
+            Ok(b) => (
+                b.user
+                    .and_then(|u| {
+                        u.profile
+                            .and_then(|p| p.display_name.filter(|n| !n.is_empty()))
+                            .or(u.real_name)
+                    })
+                    .unwrap_or_else(|| {
+                        warn!(user_id = %id, "user name missing in response, using raw ID");
+                        id.to_owned()
+                    }),
+                false,
+            ),
             Err(e) => {
                 warn!(user_id = %id, error = %e, "user resolution failed, using raw ID");
-                id.to_owned()
+                (id.to_owned(), true)
             }
         }
     }
@@ -345,16 +366,22 @@ impl SlackClient {
     /// rate so a thread with hundreds of participants cannot fire that many
     /// simultaneous requests and trip Slack's per-minute rate limit. Matches
     /// the same idiom used in `search/engine.rs::fetch_sources`.
-    async fn prefetch_users(&self, ids: &HashSet<String>) -> HashMap<String, String> {
+    async fn prefetch_users(&self, ids: &HashSet<String>) -> (HashMap<String, String>, bool) {
         let id_list: Vec<String> = ids.iter().cloned().collect();
-        stream::iter(id_list)
+        let results: Vec<(String, String, bool)> = stream::iter(id_list)
             .map(|id| async move {
-                let name = self.fetch_user_name(&id).await;
-                (id, name)
+                let (name, failed) = self.fetch_user_name(&id).await;
+                (id, name, failed)
             })
             .buffer_unordered(SLACK_USERS_CONCURRENCY)
             .collect()
-            .await
+            .await;
+        let lookups_failed = results.iter().any(|(_, _, failed)| *failed);
+        let names = results
+            .into_iter()
+            .map(|(id, name, _)| (id, name))
+            .collect();
+        (names, lookups_failed)
     }
 }
 
@@ -532,10 +559,11 @@ impl SlackClient {
             .take(SLACK_MAX_USER_LOOKUPS)
             .collect();
 
-        let (channel_name, users) = tokio::join!(
+        let ((channel_name, channel_failed), (users, users_failed)) = tokio::join!(
             self.resolve_channel(&slack_url.channel),
             self.prefetch_users(&user_ids),
         );
+        let lookups_failed = channel_failed || users_failed;
 
         let resolved = resolve_messages(&fetched.messages, &users);
 
@@ -555,6 +583,7 @@ impl SlackClient {
             markdown: output,
             thread_truncated: fetched.truncated,
             users_capped,
+            lookups_failed,
         })
     }
 }

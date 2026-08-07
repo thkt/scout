@@ -235,8 +235,12 @@ async fn resolve_channel_null_name_warns_then_falls_back() {
     .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.resolve_channel("C123").await;
+    let (name, failed) = client.resolve_channel("C123").await;
     assert_eq!(name, "C123", "falls back to the raw channel ID");
+    assert!(
+        !failed,
+        "a 200 response with a missing name field is not a lookup failure"
+    );
     assert!(
         logs_contain("channel name missing"),
         "expected a warn for the null channel name"
@@ -260,8 +264,12 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
     .await;
 
     let client = SlackClient::with_base_url(Client::new(), &server.uri());
-    let name = client.fetch_user_name("U123").await;
+    let (name, failed) = client.fetch_user_name("U123").await;
     assert_eq!(name, "U123", "falls back to the raw user ID");
+    assert!(
+        !failed,
+        "a 200 response with a missing name field is not a lookup failure"
+    );
     assert!(
         logs_contain("user name missing"),
         "expected a warn for the null user name"
@@ -932,5 +940,62 @@ async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     assert!(
         scout_err.retryable(),
         "Timeout must be retryable: {scout_err}"
+    );
+}
+
+/// [T-SK073] users.info が 500 を返しても各 ID への request は 1 回で終わる
+///
+/// `SlackError::Server(_)` classifies as `transient_retry`, so routing
+/// `fetch_user_name` through `api_get` would retry a 500 up to
+/// `1 + DEFAULT_MAX_RETRIES` times per ID — 50 failing lookups issuing 150
+/// requests instead of 50. The `.expect(1)` mock pins the `api_get_once`
+/// call and panics if a second request lands (issue #346).
+#[tokio::test(start_paused = true)]
+async fn users_info_500_returns_after_1_request_per_id() {
+    let Some(server) = try_spawn_mock_server("slack::http_users_500").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/users.info"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let (name, failed) = client.fetch_user_name("U123").await;
+    assert_eq!(
+        name, "U123",
+        "a persistently failing users.info falls back to the raw user ID"
+    );
+    assert!(failed, "a 500 response from users.info is a lookup failure");
+}
+
+/// [T-SK074] conversations.info が 500 を返しても request は 1 回で終わる
+///
+/// Mirrors T-SK073 for `resolve_channel`, which shares the retry-amplification
+/// path and additionally blocks the `tokio::join!` in `fetch_message` for the
+/// whole `Retry-After` (issue #346).
+#[tokio::test(start_paused = true)]
+async fn conversations_info_500_returns_after_1_request() {
+    let Some(server) = try_spawn_mock_server("slack::http_channel_500").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/conversations.info"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let (name, failed) = client.resolve_channel("C123").await;
+    assert_eq!(
+        name, "C123",
+        "a persistently failing conversations.info falls back to the raw channel ID"
+    );
+    assert!(
+        failed,
+        "a 500 response from conversations.info is a lookup failure"
     );
 }

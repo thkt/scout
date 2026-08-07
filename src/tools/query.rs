@@ -146,6 +146,12 @@ impl Scout {
             preamble_notes.push(note);
             degradation.push(note.to_owned(), DegradedReason::SlackUsersCapped);
         }
+        if outcome.lookups_failed {
+            let note =
+                "Some user or channel lookups failed, so those authors and mentions show raw IDs.";
+            preamble_notes.push(note);
+            degradation.push(note.to_owned(), DegradedReason::SlackLookupFailed);
+        }
         if output_truncated {
             degradation.push(
                 "Output truncated at the size cap; trailing content is omitted.".to_owned(),
