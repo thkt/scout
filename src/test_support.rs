@@ -24,6 +24,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use reqwest::redirect::Policy;
@@ -172,11 +173,39 @@ where
     Some((format!("http://{addr}"), counter, handle))
 }
 
-/// Joins a `spawn_accept_loop` server thread and asserts neither the thread
-/// panicked nor `respond` returned an `Err`. Discarding the join result
-/// instead would leave an accept or write failure entirely silent, which is
-/// what this replaces.
+/// Joins a server thread under a 5s deadline and asserts neither the thread
+/// panicked nor its result was an `Err`. Discarding the join result instead
+/// would leave an accept or write failure entirely silent, which is what this
+/// replaces.
+///
+/// 5s sits far under `.config/nextest.toml`'s 120s `slow-timeout`, so a thread
+/// that never finishes loses the race to the diagnosis below rather than to an
+/// opaque kill.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
+    join_server_thread_with_deadline(handle, Duration::from_secs(5));
+}
+
+/// Testable core: inject a deadline to control how long a join waits on a
+/// server thread that never finishes.
+///
+/// The elapsed handle is dropped, not joined: joining a still-running thread
+/// blocks again, which is the hang this guards against.
+pub(crate) fn join_server_thread_with_deadline(
+    handle: JoinHandle<io::Result<()>>,
+    deadline: Duration,
+) {
+    let started = Instant::now();
+    while !handle.is_finished() {
+        if started.elapsed() >= deadline {
+            drop(handle);
+            panic!(
+                "server thread did not finish within {deadline:?}; likely cause: \
+                 accept_count exceeds the number of client connections, so the \
+                 thread blocks in listener.accept()"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     handle
         .join()
         .expect("server thread should not panic")
@@ -195,8 +224,9 @@ pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
 /// callers can confirm the retry loop kicked in.
 ///
 /// `accept_count` must equal the number of connections the client will make;
-/// passing a larger value blocks the spawned thread on `listener.accept()`
-/// and makes `handle.join()` hang.
+/// passing a larger value blocks the spawned thread on `listener.accept()`.
+/// `join_server_thread` no longer hangs on that: it panics naming
+/// `accept_count` once its deadline elapses (`join_server_thread_with_deadline`).
 pub fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
@@ -283,6 +313,7 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
 mod tests {
     use super::*;
     use std::io;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -373,6 +404,85 @@ mod tests {
             counter.load(Ordering::SeqCst),
             accept_count,
             "accept loop should keep accepting connections after a respond error"
+        );
+    }
+
+    /// [T-SUP003] accept_count がクライアントの接続数を超えたサーバ thread は deadline 経過で accept_count を名指す panic になる
+    ///
+    /// deadline 経過で thread は切り離されるため、listener はテスト終了の直後まで
+    /// 開いたまま残る。nextest がこれを leak-timeout (既定 100ms) 内に閉じきれず
+    /// leaky と報告することがあるが、pass 判定は変わらない。
+    #[test]
+    #[should_panic(expected = "accept_count")]
+    fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
+        let Some((addr, _counter, handle)) = spawn_accept_loop(
+            "accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline",
+            2,
+            |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
+        ) else {
+            return; // bind unavailable — can't verify happy path
+        };
+
+        let host = addr
+            .strip_prefix("http://")
+            .expect("spawn_accept_loop should return an http:// URL");
+        // One connection against accept_count = 2: the thread serves this one,
+        // then blocks in listener.accept() for a second that never comes.
+        let _ = TcpStream::connect(host);
+
+        join_server_thread_with_deadline(handle, Duration::from_millis(200));
+    }
+
+    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
+    ///
+    /// `spawn_accept_loop` を通さず thread を直接起こす。待ち方を決めるのは
+    /// handle の状態だけなので loopback は要らず、通せば bind 不可の環境用の
+    /// 早期 return が、一度も実行されない分岐として diff に残る。
+    #[test]
+    fn finished_server_thread_returns_before_deadline_elapses() {
+        let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
+
+        let deadline = Duration::from_secs(5);
+        let started = Instant::now();
+        join_server_thread_with_deadline(handle, deadline);
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "a finished server thread should join immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
+        );
+    }
+
+    /// [T-SUP005] Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    ///
+    /// respond が返した `Err` は thread の戻り値としてしか届かないので、その
+    /// 戻り値を直接置いても伝播経路は変わらない。thread を直接起こす理由は
+    /// T-SUP004 に書いた。
+    #[test]
+    fn server_thread_err_panics_with_existing_message_before_deadline() {
+        let handle =
+            thread::spawn(|| -> io::Result<()> { Err(io::Error::other("respond failed")) });
+
+        let deadline = Duration::from_secs(5);
+        let started = Instant::now();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            join_server_thread_with_deadline(handle, deadline);
+        }));
+        let elapsed = started.elapsed();
+
+        let panic_payload = result.expect_err("respond Err should panic, not return Ok");
+        // `Result::expect` formats its message, so the payload is a String, never
+        // the `&'static str` a bare `panic!("literal")` would produce.
+        let message = panic_payload
+            .downcast_ref::<String>()
+            .expect("expect's panic payload is a formatted String");
+        assert!(
+            message.contains("server thread should not fail while writing the response"),
+            "panic message should keep the existing respond-Err diagnostic, got: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "respond-Err panic should fire immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
         );
     }
 }
