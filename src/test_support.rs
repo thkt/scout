@@ -18,9 +18,12 @@
 //! definition, so a bracketed citation is indistinguishable from a second
 //! definition — by grep, and by a reader scanning for where an id lives.
 
+use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
@@ -309,11 +312,113 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
     Some((addr, handle))
 }
 
+/// One `[T-<id>]` bracket found in a source file: the file it lives in and
+/// the id text after the literal `T-` prefix.
+pub struct TestIdOccurrence {
+    pub file: PathBuf,
+    pub id: String,
+}
+
+/// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
+/// the CDP launch flag it pins rather than a `PREFIX+NNN` id, so its id
+/// starts with a digit by design. Allow-listed instead of renumbered, see #356.
+const DIGIT_LEADING_ALLOWLIST: &[&str] = &["201-8"];
+
+/// Testable core: inject already-collected (file, id) occurrences to control
+/// which violations `scan_test_id_violations` reports, without touching the
+/// filesystem.
+fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut first_seen: HashMap<&str, &Path> = HashMap::new();
+
+    for occurrence in occurrences {
+        let id = occurrence.id.as_str();
+        let file = occurrence.file.display();
+
+        if id.starts_with(|c: char| c.is_ascii_digit()) && !DIGIT_LEADING_ALLOWLIST.contains(&id) {
+            violations.push(format!("{file}: test id [T-{id}] starts with a digit"));
+        }
+
+        match first_seen.get(id) {
+            Some(first_file) => violations.push(format!(
+                "duplicate test id [T-{id}]: defined in {} and {file}",
+                first_file.display()
+            )),
+            None => {
+                first_seen.insert(id, &occurrence.file);
+            }
+        }
+    }
+
+    violations
+}
+
+/// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
+/// bracket, and report the violations `find_test_id_violations` finds among
+/// them.
+fn scan_test_id_violations() -> Vec<String> {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut occurrences = Vec::new();
+    for dir in ["src", "tests"] {
+        collect_test_id_occurrences(&crate_root.join(dir), &mut occurrences);
+    }
+    find_test_id_violations(&occurrences)
+}
+
+/// Recursively visit `.rs` files under `dir`, appending one `TestIdOccurrence`
+/// per `[T-<id>]` bracket found in each file's contents.
+fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_test_id_occurrences(&path, occurrences);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for id in extract_bracketed_test_ids(&contents) {
+                occurrences.push(TestIdOccurrence {
+                    file: path.clone(),
+                    id,
+                });
+            }
+        }
+    }
+}
+
+/// Extract the id text from every `[T-<id>]` bracket in `contents`, in the
+/// order they appear. An id is one or more ASCII letters, digits, or hyphens
+/// immediately closed by `]`; a `[T-` not shaped that way (a prose mention
+/// like `` `[T-<id>]` `` in this module's own doc comments, for instance)
+/// contributes nothing.
+fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut offset = 0;
+
+    while let Some(rel_open) = contents[offset..].find("[T-") {
+        let after_prefix = &contents[offset + rel_open + "[T-".len()..];
+        let id_len = after_prefix
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .unwrap_or(after_prefix.len());
+        if id_len > 0 && after_prefix[id_len..].starts_with(']') {
+            ids.push(after_prefix[..id_len].to_owned());
+        }
+        offset += rel_open + "[T-".len();
+    }
+
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io;
     use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -483,6 +588,75 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(500),
             "respond-Err panic should fire immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
+        );
+    }
+
+    /// [T-SUP006] 数字で始まる ID を含む入力は違反として報告される
+    #[test]
+    fn digit_leading_id_is_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("fake/digit_leading_tests.rs"),
+            id: "042ABC".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("fake/digit_leading_tests.rs") && v.contains("042ABC")),
+            "digit-leading id should be reported by file and id, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP007] T-201 系の ID は違反として報告されない
+    #[test]
+    fn t201_family_id_is_not_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("src/fetch/cdp/launch/cdp_launch_tests.rs"),
+            id: "201-8".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations.is_empty(),
+            "T-201-8 is allow-listed per #356 and should not be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP008] 同じ ID が 2 度現れる入力は重複として報告される
+    #[test]
+    fn duplicate_id_across_files_is_reported_as_violation() {
+        let occurrences = vec![
+            TestIdOccurrence {
+                file: PathBuf::from("fake/a_tests.rs"),
+                id: "FS022".to_owned(),
+            },
+            TestIdOccurrence {
+                file: PathBuf::from("fake/b_tests.rs"),
+                id: "FS022".to_owned(),
+            },
+        ];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("FS022") && v.to_lowercase().contains("duplicate")),
+            "duplicate id across files should be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP009] 実際の src/と tests/を走査した結果に違反が無い
+    #[test]
+    fn scanning_src_and_tests_finds_no_violations() {
+        let violations = scan_test_id_violations();
+
+        assert!(
+            violations.is_empty(),
+            "src/ and tests/ should carry no test-id violations, got: {violations:?}"
         );
     }
 }
