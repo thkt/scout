@@ -418,7 +418,6 @@ mod tests {
     use super::*;
     use std::io;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::path::PathBuf;
     use tracing_test::traced_test;
 
     #[tokio::test]
