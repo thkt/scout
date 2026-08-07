@@ -173,10 +173,14 @@ where
     Some((format!("http://{addr}"), counter, handle))
 }
 
-/// Joins a `spawn_accept_loop` server thread and asserts neither the thread
-/// panicked nor `respond` returned an `Err`. Discarding the join result
-/// instead would leave an accept or write failure entirely silent, which is
-/// what this replaces.
+/// Joins a server thread under a 5s deadline and asserts neither the thread
+/// panicked nor its result was an `Err`. Discarding the join result instead
+/// would leave an accept or write failure entirely silent, which is what this
+/// replaces.
+///
+/// 5s sits far under `.config/nextest.toml`'s 120s `slow-timeout`, so a thread
+/// that never finishes loses the race to the diagnosis below rather than to an
+/// opaque kill.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
     join_server_thread_with_deadline(handle, Duration::from_secs(5));
 }
@@ -184,11 +188,8 @@ pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
 /// Testable core: inject a deadline to control how long a join waits on a
 /// server thread that never finishes.
 ///
-/// Polls `JoinHandle::is_finished` instead of blocking on `join` directly, so
-/// a thread stuck in `listener.accept()` fails with a diagnosis instead of
-/// hanging the test. Once the deadline elapses the handle is dropped rather
-/// than joined: joining a still-running thread blocks again, which is
-/// exactly the hang this guards against.
+/// The elapsed handle is dropped, not joined: joining a still-running thread
+/// blocks again, which is the hang this guards against.
 pub(crate) fn join_server_thread_with_deadline(
     handle: JoinHandle<io::Result<()>>,
     deadline: Duration,
@@ -198,7 +199,9 @@ pub(crate) fn join_server_thread_with_deadline(
         if started.elapsed() >= deadline {
             drop(handle);
             panic!(
-                "server thread did not finish within {deadline:?}; likely cause: accept_count exceeds the number of client connections, so the thread blocks in listener.accept()"
+                "server thread did not finish within {deadline:?}; likely cause: \
+                 accept_count exceeds the number of client connections, so the \
+                 thread blocks in listener.accept()"
             );
         }
         thread::sleep(Duration::from_millis(10));
@@ -433,9 +436,8 @@ mod tests {
     /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
     ///
     /// `spawn_accept_loop` を通さず thread を直接起こす。待ち方を決めるのは
-    /// handle の状態だけで、その handle が loopback を持つかは結果に現れない。
-    /// 通せば bind 不可の環境用の早期 return が、bind が成功する限り一度も
-    /// 実行されない分岐として残る。
+    /// handle の状態だけなので loopback は要らず、通せば bind 不可の環境用の
+    /// 早期 return が、一度も実行されない分岐として diff に残る。
     #[test]
     fn finished_server_thread_returns_before_deadline_elapses() {
         let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
@@ -443,8 +445,8 @@ mod tests {
         let deadline = Duration::from_secs(5);
         let started = Instant::now();
         join_server_thread_with_deadline(handle, deadline);
-        let elapsed = started.elapsed();
 
+        let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_millis(500),
             "a finished server thread should join immediately, not wait out the {deadline:?} deadline; took {elapsed:?}"
@@ -453,9 +455,9 @@ mod tests {
 
     /// [T-SUP005] Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
     ///
-    /// `spawn_accept_loop` を通さず thread を直接起こす理由は T-SUP004 と同じ。
     /// respond が返した `Err` は thread の戻り値としてしか届かないので、その
-    /// 戻り値を直接置いても伝播経路は変わらない。
+    /// 戻り値を直接置いても伝播経路は変わらない。thread を直接起こす理由は
+    /// T-SUP004 に書いた。
     #[test]
     fn server_thread_err_panics_with_existing_message_before_deadline() {
         let handle =
