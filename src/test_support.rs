@@ -310,6 +310,7 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
 mod tests {
     use super::*;
     use std::io;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use tracing_test::traced_test;
 
     #[tokio::test]
@@ -465,7 +466,7 @@ mod tests {
 
         let deadline = Duration::from_secs(5);
         let started = Instant::now();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
             join_server_thread_with_deadline(handle, deadline);
         }));
         let elapsed = started.elapsed();
@@ -474,7 +475,11 @@ mod tests {
         let message = panic_payload
             .downcast_ref::<String>()
             .cloned()
-            .or_else(|| panic_payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .or_else(|| {
+                panic_payload
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+            })
             .unwrap_or_default();
         assert!(
             message.contains("server thread should not fail while writing the response"),
