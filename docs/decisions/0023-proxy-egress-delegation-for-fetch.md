@@ -50,7 +50,7 @@ Proxied を選ぶのは proxy env を明示設定した運用者であり、そ�
 
 ### Confirmation
 
-`src/fetch/ssrf/egress_tests.rs` の T-FS022, T-FS023, T-FS024, T-FS025, T-FS026, T-FS027 が `detect_egress_mode` の env→mode 写像を pin する (`HTTPS_PROXY` 優先、大文字優先、無ければ `Direct`)。`src/tools/builder_tests.rs` が Proxied で `fetch_http` が proxy 経由になり guard を持たないことを、`src/fetch/ssrf/tests.rs` と `src/fetch/fetch_page_tests.rs` が Proxied で literal reject を維持しつつ DNS 事前チェックを skip することを pin する。reqwest 更新時は `Proxy::all` が全 scheme を forward し、proxy env 検出精度が本 ADR の前提どおりかを再検証する。
+`src/fetch/ssrf/egress_tests.rs` の T-FS022, T-FS023, T-FS024, T-FS027 が `detect_egress_mode` の env→mode 写像を pin する (`HTTPS_PROXY` 優先、大文字優先、無ければ `Direct`)。`src/tools/builder_tests.rs` が Proxied で `fetch_http` が proxy 経由になり guard を持たないことを、`src/fetch/ssrf/tests.rs` と `src/fetch/fetch_page_tests.rs` が Proxied で literal reject を維持しつつ DNS 事前チェックを skip することを pin する。reqwest 更新時は `Proxy::all` が全 scheme を forward し、proxy env 検出精度が本 ADR の前提どおりかを再検証する。
 
 ## Pros and Cons of the Options
 

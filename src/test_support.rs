@@ -314,9 +314,21 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
 
 /// One `[T-<id>]` bracket found in a source file: the file it lives in and
 /// the id text after the literal `T-` prefix.
-pub struct TestIdOccurrence {
-    pub file: PathBuf,
-    pub id: String,
+struct TestIdOccurrence {
+    file: PathBuf,
+    id: String,
+}
+
+/// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
+/// bracket, and report the violations `find_test_id_violations` finds among
+/// them.
+fn scan_test_id_violations() -> Vec<String> {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut occurrences = Vec::new();
+    for dir in ["src", "tests"] {
+        collect_test_id_occurrences(&crate_root.join(dir), &mut occurrences);
+    }
+    find_test_id_violations(&occurrences)
 }
 
 /// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
@@ -351,18 +363,6 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
     }
 
     violations
-}
-
-/// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
-/// bracket, and report the violations `find_test_id_violations` finds among
-/// them.
-fn scan_test_id_violations() -> Vec<String> {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut occurrences = Vec::new();
-    for dir in ["src", "tests"] {
-        collect_test_id_occurrences(&crate_root.join(dir), &mut occurrences);
-    }
-    find_test_id_violations(&occurrences)
 }
 
 /// Recursively visit `.rs` files under `dir`, appending one `TestIdOccurrence`
@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP009] 実際の src/と tests/を走査した結果に違反が無い
+    /// [T-SUP009] 実際の `src/` と `tests/` を走査した結果に違反が無い
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
         let violations = scan_test_id_violations();
