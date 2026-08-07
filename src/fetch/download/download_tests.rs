@@ -397,7 +397,7 @@ async fn download_transparently_decodes_deflate_response() {
     );
 }
 
-/// [T-008]
+/// [T-F077]
 #[tokio::test]
 async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_ip_url() {
     let Some(server) = try_spawn_mock_server("fetch::download").await else {
