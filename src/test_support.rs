@@ -718,6 +718,10 @@ mod tests {
     }
 
     /// [T-SUP009] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    ///
+    /// 番号順から外れて最後に置いてある。上の T-SUP006 以降が fixture を渡す
+    /// 単体の判定なのに対し、これだけが実ツリーを読む。番号を揃えて動かすと、
+    /// 単体の判定の間に全体走査が挟まる。
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
         let violations = scan_test_id_violations();
