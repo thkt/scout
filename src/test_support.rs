@@ -337,6 +337,19 @@ fn scan_test_id_violations() -> Vec<String> {
     find_test_id_violations(&occurrences)
 }
 
+/// Sibling of `scan_test_id_violations`: same crate-root + `src`/`tests` walk,
+/// but collecting requirement-code citations instead of test ids. `docs/` is
+/// out of scope — ADR-0013 and audit records cite `FR-`/`BR-`/`NFR-` codes
+/// there legitimately.
+fn scan_requirement_code_violations() -> Vec<String> {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut occurrences = Vec::new();
+    for dir in ["src", "tests"] {
+        collect_requirement_code_occurrences(&crate_root.join(dir), &mut occurrences);
+    }
+    find_requirement_code_violations(&occurrences)
+}
+
 /// Testable core: inject already-collected (file, id) occurrences to control
 /// which violations `scan_test_id_violations` reports, without touching the
 /// filesystem.
@@ -369,7 +382,32 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
     violations
 }
 
-fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+/// Testable core: inject already-collected (file, code) occurrences to control
+/// which violations `scan_requirement_code_violations` reports, without
+/// touching the filesystem.
+///
+/// Unlike `find_test_id_violations`, this checks only whether an occurrence
+/// exists — a requirement code has no digit-leading or duplicate shape to
+/// judge, presence in `src`/`tests` is itself the violation — so that
+/// judgment does not belong here.
+fn find_requirement_code_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
+    occurrences
+        .iter()
+        .map(|occurrence| {
+            format!(
+                "{}: requirement code `{}` should not appear in src/tests; cite it from docs/ instead (see ADR-0013)",
+                occurrence.file.display(),
+                occurrence.id
+            )
+        })
+        .collect()
+}
+
+/// Recurse into `dir`, running `on_file` with each `.rs` file's path and
+/// contents. Shared by `collect_test_id_occurrences` and
+/// `collect_requirement_code_occurrences` so the recursion and the
+/// `.rs`-extension filter live in one place.
+fn walk_rs_files(dir: &Path, on_file: &mut dyn FnMut(&Path, &str)) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -377,19 +415,36 @@ fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrenc
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_test_id_occurrences(&path, occurrences);
+            walk_rs_files(&path, on_file);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             let Ok(contents) = fs::read_to_string(&path) else {
                 continue;
             };
-            for id in extract_bracketed_test_ids(&contents) {
-                occurrences.push(TestIdOccurrence {
-                    file: path.clone(),
-                    id,
-                });
-            }
+            on_file(&path, &contents);
         }
     }
+}
+
+fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+    walk_rs_files(dir, &mut |path, contents| {
+        for id in extract_bracketed_test_ids(contents) {
+            occurrences.push(TestIdOccurrence {
+                file: path.to_path_buf(),
+                id,
+            });
+        }
+    });
+}
+
+fn collect_requirement_code_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+    walk_rs_files(dir, &mut |path, contents| {
+        for id in extract_requirement_codes(contents) {
+            occurrences.push(TestIdOccurrence {
+                file: path.to_path_buf(),
+                id,
+            });
+        }
+    });
 }
 
 /// Extract the id text from every `[T-<id>]` bracket in `contents`, in the
@@ -412,6 +467,40 @@ fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     }
 
     ids
+}
+
+/// Extract every backtick-wrapped requirement code — `` `FR-NNN` ``,
+/// `` `BR-NNN` ``, `` `NFR-NNN` `` — from `contents`: exactly `FR-`/`BR-`/`NFR-`
+/// followed by 3 digits, closed by a backtick.
+///
+/// The backtick wrap is this file's own convention for a code-like token in
+/// prose (see the module doc's `` `[T-<PREFIX><NNN>]` ``), and it is what
+/// keeps this scan from citing itself: this module's own test names spell
+/// out unwrapped mentions in plain prose (see `T-SUP013`'s doc comment),
+/// which fail the wrap and contribute nothing, the same way
+/// `extract_bracketed_test_ids` lets its own `[T-<PREFIX><NNN>]` doc mention
+/// pass through unmatched.
+fn extract_requirement_codes(contents: &str) -> Vec<String> {
+    const PREFIXES: [&str; 3] = ["FR-", "BR-", "NFR-"];
+    let mut codes = Vec::new();
+
+    for prefix in PREFIXES {
+        let marker = format!("`{prefix}");
+        let mut offset = 0;
+        while let Some(rel) = contents[offset..].find(marker.as_str()) {
+            let start = offset + rel;
+            let after = &contents[start + marker.len()..];
+            if after.len() >= 4
+                && after.as_bytes()[..3].iter().all(u8::is_ascii_digit)
+                && after.as_bytes()[3] == b'`'
+            {
+                codes.push(format!("{prefix}{}", &after[..3]));
+            }
+            offset = start + marker.len();
+        }
+    }
+
+    codes
 }
 
 #[cfg(test)]
@@ -718,6 +807,66 @@ mod tests {
         assert!(
             violations.is_empty(),
             "src/ and tests/ should carry no test-id violations, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP013] FR-018 を含む入力は違反として報告される
+    #[test]
+    fn fr_requirement_code_in_input_is_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("fake/req_code_tests.rs"),
+            id: "FR-018".to_owned(),
+        }];
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("FR-018")),
+            "FR-018 should be reported by file and code, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP014] BR-001 を含む入力は違反として報告される
+    #[test]
+    fn br_requirement_code_in_input_is_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("fake/req_code_tests.rs"),
+            id: "BR-001".to_owned(),
+        }];
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("BR-001")),
+            "BR-001 should be reported by file and code, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP015] 要件コードを含まない入力は違反として報告されない
+    #[test]
+    fn input_without_requirement_code_is_not_reported_as_violation() {
+        let occurrences: Vec<TestIdOccurrence> = Vec::new();
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations.is_empty(),
+            "input without a requirement code should report no violations, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP016] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    #[test]
+    fn scanning_src_and_tests_finds_no_requirement_code_violations() {
+        let violations = scan_requirement_code_violations();
+
+        assert!(
+            violations.is_empty(),
+            "src/ and tests/ should carry no requirement-code violations, got: {violations:?}"
         );
     }
 }
