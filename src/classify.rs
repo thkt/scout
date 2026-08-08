@@ -33,21 +33,18 @@ impl Classification {
         self
     }
 
-    /// TempFailure(75) with the "retry after a short delay" hint. Used for
-    /// 5xx, rate-limit, and other timing-recoverable failures.
+    /// For 5xx, rate-limit, and other timing-recoverable failures.
     pub(crate) fn transient_retry() -> Self {
         Self::new(ErrorCode::TempFailure).with_hint(HINT_RETRY_DELAY)
     }
 
-    /// TempFailure(75) with the "check your network" hint. Used for
-    /// connect-level network failures where retry alone will not help.
+    /// For connect-level network failures where retry alone will not help.
     pub(crate) fn transient_network() -> Self {
         Self::new(ErrorCode::TempFailure).with_hint(HINT_CHECK_NETWORK)
     }
 
-    /// Timeout(124) with the "retry after a short delay" hint. Split from
-    /// TempFailure(75) per ADR-0002 so caller scripts can apply a longer
-    /// backoff than for rate-limit / 5xx failures.
+    /// Split from `TempFailure` per ADR-0002 so caller scripts can apply a
+    /// longer backoff than for rate-limit / 5xx failures.
     pub(crate) fn timeout_retry() -> Self {
         Self::new(ErrorCode::Timeout).with_hint(HINT_RETRY_DELAY)
     }

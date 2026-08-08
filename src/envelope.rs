@@ -70,7 +70,6 @@ pub(crate) struct Degradation {
 }
 
 impl Degradation {
-    /// Push a human-readable message paired with its typed reason.
     pub fn push(&mut self, message: String, reason: DegradedReason) {
         self.notes.push(message);
         self.reasons.push(reason);
@@ -80,7 +79,6 @@ impl Degradation {
         self.notes.is_empty() && self.reasons.is_empty()
     }
 
-    /// Read access to the human-readable notes for Markdown rendering.
     pub fn notes(&self) -> &[String] {
         &self.notes
     }
@@ -107,7 +105,6 @@ pub(crate) struct CommandOutput {
 }
 
 impl CommandOutput {
-    /// Construct an output with no degradation signal.
     pub fn ok(markdown: String, data: serde_json::Value) -> Self {
         Self {
             markdown,
@@ -118,8 +115,6 @@ impl CommandOutput {
         }
     }
 
-    /// Construct an output from a [`Degradation`] bundle. `degraded` is set
-    /// when either `notes` or `reasons` is non-empty.
     pub fn with_degradation(
         markdown: String,
         data: serde_json::Value,
@@ -136,12 +131,10 @@ impl CommandOutput {
         }
     }
 
-    /// Consume self and return the rendered Markdown body.
     pub(crate) fn into_markdown(self) -> String {
         self.markdown
     }
 
-    /// Consume self into a [`SuccessEnvelope`].
     pub(crate) fn into_envelope(self) -> SuccessEnvelope {
         SuccessEnvelope {
             data: self.data,
@@ -210,9 +203,8 @@ impl ErrorCode {
         }
     }
 
-    /// Whether this classification recommends retry. Determined structurally
-    /// from `kind` so `ScoutError` cannot drift out of sync with the JSON
-    /// `error.retryable` contract.
+    /// Determined structurally from `kind` so `ScoutError` cannot drift out of
+    /// sync with the JSON `error.retryable` contract.
     pub(crate) fn is_retryable(self) -> bool {
         matches!(self, Self::TempFailure | Self::Timeout)
     }

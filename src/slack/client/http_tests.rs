@@ -378,7 +378,6 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         outcome.users_capped,
         "distinct user IDs exceed the cap, so users_capped must be set"
     );
-    // The `.expect(cap)` is verified when `server` drops at end of scope.
 }
 
 /// [T-SK044] When distinct IDs exceed SLACK_MAX_USER_LOOKUPS, message authors

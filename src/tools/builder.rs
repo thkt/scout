@@ -235,18 +235,15 @@ impl ScoutBuilder {
         self
     }
 
-    /// Stores `endpoint`; `build()` uses the current `clock` / `rng` to
-    /// pre-init the `OnceCell`. Composes with `with_clock` / `with_rng`
-    /// (call those before `build`).
+    /// `build()` pre-inits the `OnceCell` with whatever `clock` / `rng` are set
+    /// at that moment, so `with_clock` / `with_rng` have to come first.
     #[cfg(test)]
     pub(crate) fn with_github_endpoint(mut self, endpoint: &str) -> Self {
         self.github_endpoint = Some(endpoint.to_owned());
         self
     }
 
-    /// Stores `endpoint`; `build()` uses the current `clock` / `rng` to pre-init
-    /// the `slack` `OnceCell`. Composes with `with_clock` / `with_rng` (call
-    /// those before `build`). Mirrors `with_github_endpoint`.
+    /// Same ordering constraint as `with_github_endpoint`.
     #[cfg(test)]
     pub(crate) fn with_slack_endpoint(mut self, endpoint: &str) -> Self {
         self.slack_endpoint = Some(endpoint.to_owned());

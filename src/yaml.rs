@@ -20,7 +20,6 @@ pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
         }
         match yaml_marker_rest(line) {
             Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
-            // `--- evil: true` loses the marker token and keeps its content.
             Some(rest) => {
                 out.push_str("***");
                 out.push_str(rest);
@@ -54,10 +53,9 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 
 /// Escape a string for use inside a double-quoted YAML scalar.
 ///
-/// This is the value-side half of [`write_yaml_str`]'s contract, so a caller
-/// writing a frontmatter field reaches for that function instead. It carries a
-/// doc of its own because ADR-0014's neutralization table pins this escape set
-/// separately from the quoting.
+/// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
+/// frontmatter field reaches for that function instead. ADR-0014's
+/// neutralization table pins this escape set separately from the quoting.
 pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {
     // The common frontmatter value (a plain title/author/date) carries no escapable
     // char, so borrow it untouched instead of allocating a copy.
@@ -120,7 +118,6 @@ mod tests {
             neutralize_yaml_markers("before\n---\nmiddle\n...\nafter"),
             "before\n***\nmiddle\n***\nafter"
         );
-        // Trailing whitespace / CR on the marker line is tolerated.
         assert_eq!(neutralize_yaml_markers("---  "), "***");
         assert_eq!(neutralize_yaml_markers("...\r"), "***");
     }
@@ -130,7 +127,6 @@ mod tests {
     fn neutralize_yaml_markers_preserves_non_markers() {
         // Indented `---` is not a YAML document marker (must be at column 0).
         assert_eq!(neutralize_yaml_markers("  ---"), "  ---");
-        // `---` embedded in a line is ordinary content.
         assert_eq!(neutralize_yaml_markers("a --- b"), "a --- b");
         assert_eq!(neutralize_yaml_markers("----"), "----");
         assert_eq!(neutralize_yaml_markers("...foo"), "...foo");
