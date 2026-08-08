@@ -360,8 +360,11 @@ fn scan_requirement_code_violations() -> Vec<String> {
     }
     // This file names the codes to test the check, so scanning it would make
     // the guard cite itself. The exclusion is one file wide and is the reason
-    // the check can match the bare form everywhere else.
-    occurrences.retain(|o| !o.file.ends_with("test_support.rs"));
+    // the check can match the bare form everywhere else. Compared as a full
+    // path, not by file name: `ends_with` matches whole components, so any
+    // future `*/test_support.rs` would inherit the exemption.
+    let this_file = crate_root.join("src").join("test_support.rs");
+    occurrences.retain(|o| o.file != this_file);
     find_requirement_code_violations(&occurrences)
 }
 
@@ -418,27 +421,6 @@ fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String>
         .collect()
 }
 
-/// Recurse into `dir`, running `on_file` with each `.rs` file's path and
-/// contents. Split out so the recursion and the `.rs`-extension filter are
-/// written once for both scans.
-fn walk_rs_files(dir: &Path, on_file: &mut dyn FnMut(&Path, &str)) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_rs_files(&path, on_file);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let Ok(contents) = fs::read_to_string(&path) else {
-                continue;
-            };
-            on_file(&path, &contents);
-        }
-    }
-}
-
 /// Shared by `scan_test_id_violations` and `scan_requirement_code_violations`:
 /// walk `dir`'s `.rs` files and push every match `extract` finds, tagged with
 /// its file. The two callers differ only in which `extract` they pass.
@@ -447,14 +429,26 @@ fn collect_occurrences(
     extract: fn(&str) -> Vec<String>,
     occurrences: &mut Vec<ScannedToken>,
 ) {
-    walk_rs_files(dir, &mut |path, contents| {
-        for token in extract(contents) {
-            occurrences.push(ScannedToken {
-                file: path.to_path_buf(),
-                token,
-            });
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_occurrences(&path, extract, occurrences);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for token in extract(&contents) {
+                occurrences.push(ScannedToken {
+                    file: path.clone(),
+                    token,
+                });
+            }
         }
-    });
+    }
 }
 
 /// Extract the id text from every `[T-<id>]` bracket in `contents`, in the
@@ -501,8 +495,9 @@ fn extract_requirement_codes(contents: &str) -> Vec<String> {
                     .chars()
                     .next()
                     .is_none_or(|c| !c.is_ascii_digit());
-            // `FR-` also sits inside `NFR-`, so a hit whose preceding byte is a
-            // letter belongs to the longer prefix and was counted with it.
+            // `FR-` also sits inside `NFR-`. `PREFIXES` lists `NFR-` first, so
+            // a letter-preceded hit was already counted under that prefix and
+            // is skipped here rather than double-counted.
             let standalone = contents[..start]
                 .chars()
                 .next_back()
