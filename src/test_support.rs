@@ -312,8 +312,6 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
     Some((addr, handle))
 }
 
-/// One `[T-<id>]` bracket found in a source file: the file it lives in and
-/// the id text after the literal `T-` prefix.
 struct TestIdOccurrence {
     file: PathBuf,
     id: String,
@@ -330,9 +328,6 @@ const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
     "201-12", "201-13", "201-14", "201-15", "201-16",
 ];
 
-/// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
-/// bracket, and report the violations `find_test_id_violations` finds among
-/// them.
 fn scan_test_id_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
@@ -374,8 +369,6 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
     violations
 }
 
-/// Recursively visit `.rs` files under `dir`, appending one `TestIdOccurrence`
-/// per `[T-<id>]` bracket found in each file's contents.
 fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -718,10 +711,6 @@ mod tests {
     }
 
     /// [T-SUP009] 実際の `src/` と `tests/` を走査した結果に違反が無い
-    ///
-    /// 番号順から外れて最後に置いてある。上の T-SUP006 以降が fixture を渡す
-    /// 単体の判定なのに対し、これだけが実ツリーを読む。番号を揃えて動かすと、
-    /// 単体の判定の間に全体走査が挟まる。
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
         let violations = scan_test_id_violations();
