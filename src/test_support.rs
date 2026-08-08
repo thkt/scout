@@ -319,6 +319,11 @@ struct TestIdOccurrence {
     id: String,
 }
 
+/// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
+/// the CDP launch flag it pins rather than a `PREFIX+NNN` id, so its id
+/// starts with a digit by design. Allow-listed instead of renumbered, see #356.
+const DIGIT_LEADING_ALLOWLIST: &[&str] = &["201-8"];
+
 /// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
 /// bracket, and report the violations `find_test_id_violations` finds among
 /// them.
@@ -330,11 +335,6 @@ fn scan_test_id_violations() -> Vec<String> {
     }
     find_test_id_violations(&occurrences)
 }
-
-/// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
-/// the CDP launch flag it pins rather than a `PREFIX+NNN` id, so its id
-/// starts with a digit by design. Allow-listed instead of renumbered, see #356.
-const DIGIT_LEADING_ALLOWLIST: &[&str] = &["201-8"];
 
 /// Testable core: inject already-collected (file, id) occurrences to control
 /// which violations `scan_test_id_violations` reports, without touching the
@@ -351,9 +351,12 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
             violations.push(format!("{file}: test id [T-{id}] starts with a digit"));
         }
 
+        // "already defined in", not "defined in X and Y": the same id twice in
+        // one file is the shape this guards against (classify_tests.rs carried
+        // T-002 three times), and naming that one file twice reads as two.
         match first_seen.get(id) {
             Some(first_file) => violations.push(format!(
-                "duplicate test id [T-{id}]: defined in {} and {file}",
+                "{file}: duplicate test id [T-{id}], already defined in {}",
                 first_file.display()
             )),
             None => {
@@ -391,9 +394,8 @@ fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrenc
 }
 
 /// Extract the id text from every `[T-<id>]` bracket in `contents`, in the
-/// order they appear. An id is one or more ASCII letters, digits, or hyphens
-/// immediately closed by `]`; a `[T-` not shaped that way (a prose mention
-/// like `` `[T-<id>]` `` in this module's own doc comments, for instance)
+/// order they appear. An id is ASCII letters, digits, or hyphens closed by
+/// `]`; this module's own `[T-<PREFIX><NNN>]` doc mention fails that shape and
 /// contributes nothing.
 fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     let mut ids = Vec::new();
@@ -645,6 +647,33 @@ mod tests {
                 .iter()
                 .any(|v| v.contains("FS022") && v.to_lowercase().contains("duplicate")),
             "duplicate id across files should be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP010] 同じファイル内で同じ ID が 2 度現れると重複として報告される
+    ///
+    /// 改番前の `src/slack/classify_tests.rs` が T-002 を 3 回持っていた形。
+    /// T-SUP008 のファイル跨ぎだけでは、この経路が報告されるかを決められない。
+    #[test]
+    fn duplicate_id_within_one_file_is_reported_as_violation() {
+        let occurrences = vec![
+            TestIdOccurrence {
+                file: PathBuf::from("fake/a_tests.rs"),
+                id: "SLC016".to_owned(),
+            },
+            TestIdOccurrence {
+                file: PathBuf::from("fake/a_tests.rs"),
+                id: "SLC016".to_owned(),
+            },
+        ];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("SLC016") && v.to_lowercase().contains("duplicate")),
+            "a duplicate inside one file should be reported, got: {violations:?}"
         );
     }
 
