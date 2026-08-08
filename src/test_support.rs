@@ -319,10 +319,16 @@ struct TestIdOccurrence {
     id: String,
 }
 
-/// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
-/// the CDP launch flag it pins rather than a `PREFIX+NNN` id, so its id
-/// starts with a digit by design. Allow-listed instead of renumbered, see #356.
-const DIGIT_LEADING_ALLOWLIST: &[&str] = &["201-8"];
+/// Legacy test IDs from issue #201 (`src/fetch/cdp/proxy/proxy_tests.rs` and
+/// `src/fetch/cdp/launch/cdp_launch_tests.rs`) start with a digit by design rather than
+/// following the current `PREFIX+NNN` convention. These entries are allow-listed for
+/// backward compatibility; the series is closed at 201-16. New tests in these files
+/// must adopt the current naming convention (prefixed IDs) and must not be added to
+/// this array.
+const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
+    "201-1", "201-2", "201-3", "201-4", "201-5", "201-6", "201-8", "201-9", "201-10", "201-11",
+    "201-12", "201-13", "201-14", "201-15", "201-16",
+];
 
 /// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
 /// bracket, and report the violations `find_test_id_violations` finds among
@@ -674,6 +680,42 @@ mod tests {
                 .iter()
                 .any(|v| v.contains("SLC016") && v.to_lowercase().contains("duplicate")),
             "a duplicate inside one file should be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP011] allowlist へ足した 201-1 は違反として報告されない
+    #[test]
+    fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
+            id: "201-1".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            !violations
+                .iter()
+                .any(|v| v.contains("201-1") && v.contains("starts with a digit")),
+            "T-201-1 is allow-listed and should not be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP012] allowlist に無い 201-17 は違反として報告される
+    #[test]
+    fn t201_17_absent_from_allowlist_is_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
+            id: "201-17".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("201-17") && v.contains("starts with a digit")),
+            "T-201-17 is not allow-listed and should be reported, got: {violations:?}"
         );
     }
 

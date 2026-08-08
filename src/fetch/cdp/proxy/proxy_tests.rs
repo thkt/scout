@@ -70,7 +70,7 @@ fn rep_code(reply: &[u8]) -> u8 {
     reply[3]
 }
 
-/// T-201-1: pins the DNS-rebind regression (acceptance criterion 1) — a public
+/// [T-201-1]: pins the DNS-rebind regression (acceptance criterion 1) — a public
 /// pre-flight cannot save a connect-time private resolution because the proxy
 /// validates the dial IP. The fixture is the IMDS link-local address, which
 /// `is_private_ip` catches on a branch separate from RFC1918.
@@ -94,7 +94,7 @@ async fn t201_1_rebind_to_imds_replies_not_allowed_and_logs() {
     );
 }
 
-/// T-201-2: a literal loopback IPv4 target (ATYP 0x01) is validated too, not just
+/// [T-201-2]: a literal loopback IPv4 target (ATYP 0x01) is validated too, not just
 /// domains. REP 0x02.
 #[tokio::test]
 async fn t201_2_ipv4_literal_loopback_replies_not_allowed() {
@@ -110,7 +110,7 @@ async fn t201_2_ipv4_literal_loopback_replies_not_allowed() {
     assert_eq!(rep_code(&reply), 0x02);
 }
 
-/// T-201-3: a domain resolving to a single public IP passes validation: no block
+/// [T-201-3]: a domain resolving to a single public IP passes validation: no block
 /// reply, no block log. Exercises `first_blocked_ip` directly so no real dial is
 /// attempted (the equivalence class "all public" maps to "allowed").
 #[tokio::test]
@@ -125,7 +125,7 @@ async fn t201_3_public_resolution_passes_validation() {
     );
 }
 
-/// T-201-4: when resolution returns a mix of public and private IPs, the whole
+/// [T-201-4]: when resolution returns a mix of public and private IPs, the whole
 /// connection is rejected (fail-closed). REP 0x02, no dial.
 #[tokio::test]
 async fn t201_4_mixed_public_and_private_fails_closed() {
@@ -141,7 +141,7 @@ async fn t201_4_mixed_public_and_private_fails_closed() {
     assert_eq!(rep_code(&reply), 0x02, "one private IP must reject the set");
 }
 
-/// T-201-5: a non-CONNECT command (BIND) is refused with REP 0x07.
+/// [T-201-5]: a non-CONNECT command (BIND) is refused with REP 0x07.
 #[tokio::test]
 async fn t201_5_bind_command_replies_cmd_not_supported() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
@@ -159,7 +159,7 @@ async fn t201_5_bind_command_replies_cmd_not_supported() {
     assert_eq!(rep_code(&reply), 0x07);
 }
 
-/// T-201-6
+/// [T-201-6]
 #[tokio::test]
 async fn t201_6_non_socks5_greeting_closes_silently() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
@@ -176,7 +176,7 @@ async fn t201_6_non_socks5_greeting_closes_silently() {
     );
 }
 
-/// T-201-9
+/// [T-201-9]
 #[tokio::test]
 async fn t201_9_request_stage_version_mismatch_closes_after_method_reply() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
@@ -195,7 +195,7 @@ async fn t201_9_request_stage_version_mismatch_closes_after_method_reply() {
     );
 }
 
-/// T-201-10: an IPv6 literal target (ATYP 0x04) is validated like IPv4. The
+/// [T-201-10]: an IPv6 literal target (ATYP 0x04) is validated like IPv4. The
 /// loopback address ::1 is private, so REP 0x02.
 #[tokio::test]
 async fn t201_10_ipv6_literal_loopback_replies_not_allowed() {
@@ -211,7 +211,7 @@ async fn t201_10_ipv6_literal_loopback_replies_not_allowed() {
     assert_eq!(rep_code(&reply), 0x02);
 }
 
-/// T-201-11: an unsupported address type (ATYP 0x05) is refused with REP 0x08.
+/// [T-201-11]: an unsupported address type (ATYP 0x05) is refused with REP 0x08.
 #[tokio::test]
 async fn t201_11_unknown_atyp_replies_addr_not_supported() {
     let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
@@ -225,7 +225,7 @@ async fn t201_11_unknown_atyp_replies_addr_not_supported() {
     assert_eq!(rep_code(&reply), 0x08);
 }
 
-/// T-201-12: a domain that resolves to zero IPs is refused with REP 0x04
+/// [T-201-12]: a domain that resolves to zero IPs is refused with REP 0x04
 /// (host unreachable), never dialed.
 #[tokio::test]
 async fn t201_12_empty_resolution_replies_host_unreachable() {
@@ -238,7 +238,7 @@ async fn t201_12_empty_resolution_replies_host_unreachable() {
     assert_eq!(rep_code(&reply), 0x04);
 }
 
-/// T-201-13: when the validated upstream refuses the connection, the client gets
+/// [T-201-13]: when the validated upstream refuses the connection, the client gets
 /// REP 0x01 (general failure). Calls `dial_and_tunnel` directly with a closed
 /// loopback port — the validation gate is bypassed deliberately so a refused dial
 /// can be forced without a reachable public host.
@@ -268,7 +268,7 @@ async fn t201_13_upstream_dial_refused_replies_general_failure() {
     );
 }
 
-/// T-201-14: a client that connects and drops before sending the greeting makes
+/// [T-201-14]: a client that connects and drops before sending the greeting makes
 /// `handle_conn` return an error, which the accept loop logs without killing the
 /// proxy. Exercises the full `spawn_ssrf_proxy` accept path.
 #[tokio::test]
@@ -297,7 +297,7 @@ async fn t201_14_abrupt_client_disconnect_is_logged_not_fatal() {
     );
 }
 
-/// T-201-15: a client that connects but sends no SOCKS5 bytes is closed after
+/// [T-201-15]: a client that connects but sends no SOCKS5 bytes is closed after
 /// `HANDSHAKE_TIMEOUT` with no reply, rather than pinning its handler on the
 /// first `read_exact` forever. Driven over an in-memory `duplex` under a paused
 /// clock so the timeout fires in virtual time with no real wait and no socket
@@ -324,7 +324,7 @@ async fn t201_15_no_handshake_bytes_times_out_and_closes() {
     assert!(reply.is_empty(), "no reply on handshake timeout");
 }
 
-/// T-201-16: a client that sends only the greeting and then stalls before the
+/// [T-201-16]: a client that sends only the greeting and then stalls before the
 /// request is closed after `HANDSHAKE_TIMEOUT`. The deadline spans both read
 /// stages, so the stall on the request `read_exact` (a different hang point than
 /// T-201-15) is bounded too; only the greeting's method reply was written back.
