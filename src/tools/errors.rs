@@ -105,7 +105,6 @@ impl ScoutError {
         self
     }
 
-    /// sysexits.h exit code derived from `kind` per ADR-0002.
     pub fn exit_code(&self) -> u8 {
         self.kind.exit_code()
     }
@@ -114,7 +113,6 @@ impl ScoutError {
         self.retryable
     }
 
-    /// JSON-serializable error classification per ADR-0002.
     pub fn error_kind(&self) -> ErrorCode {
         self.kind
     }
@@ -125,12 +123,10 @@ impl ScoutError {
         &self.message
     }
 
-    /// Recovery hint per ADR-0002 `error.next_step`.
     pub fn next_step(&self) -> Option<&str> {
         self.next_step.as_deref()
     }
 
-    /// Correction candidates per ADR-0002 `error.candidates` (e.g., similar paths after typo).
     pub fn candidates(&self) -> &[String] {
         &self.candidates
     }
