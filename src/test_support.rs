@@ -332,7 +332,11 @@ fn scan_test_id_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
     for dir in ["src", "tests"] {
-        collect_test_id_occurrences(&crate_root.join(dir), &mut occurrences);
+        collect_occurrences(
+            &crate_root.join(dir),
+            extract_bracketed_test_ids,
+            &mut occurrences,
+        );
     }
     find_test_id_violations(&occurrences)
 }
@@ -345,7 +349,11 @@ fn scan_requirement_code_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
     for dir in ["src", "tests"] {
-        collect_requirement_code_occurrences(&crate_root.join(dir), &mut occurrences);
+        collect_occurrences(
+            &crate_root.join(dir),
+            extract_requirement_codes,
+            &mut occurrences,
+        );
     }
     find_requirement_code_violations(&occurrences)
 }
@@ -425,20 +433,16 @@ fn walk_rs_files(dir: &Path, on_file: &mut dyn FnMut(&Path, &str)) {
     }
 }
 
-fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+/// Shared by `scan_test_id_violations` and `scan_requirement_code_violations`:
+/// walk `dir`'s `.rs` files and push every match `extract` finds, tagged with
+/// its file. The two callers differ only in which `extract` they pass.
+fn collect_occurrences(
+    dir: &Path,
+    extract: fn(&str) -> Vec<String>,
+    occurrences: &mut Vec<TestIdOccurrence>,
+) {
     walk_rs_files(dir, &mut |path, contents| {
-        for id in extract_bracketed_test_ids(contents) {
-            occurrences.push(TestIdOccurrence {
-                file: path.to_path_buf(),
-                id,
-            });
-        }
-    });
-}
-
-fn collect_requirement_code_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
-    walk_rs_files(dir, &mut |path, contents| {
-        for id in extract_requirement_codes(contents) {
+        for id in extract(contents) {
             occurrences.push(TestIdOccurrence {
                 file: path.to_path_buf(),
                 id,
