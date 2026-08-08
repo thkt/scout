@@ -464,12 +464,9 @@ fn to_data_value_maps_serialize_failure_to_internal_bug() {
 
 /// [T-FETCH-OK] fetch handler returns Ok for a reachable page, exercising the
 /// success path end-to-end: page download, markdown render, and `data`
-/// serialize (query.rs `to_data_value` delegation). SSRF stays intact — the
-/// pre-flight `ssrf_check` resolves the test host to a public IP via
-/// `with_dns`, while a guard-free `fetch_http` (reqwest `.resolve()` override,
-/// no `SsrfResolver`) reaches the loopback wiremock. Production `fetch_http`
-/// keeps the connect-time guard; the SSRF contract is pinned by T-003 / T-F017,
-/// not by this test client.
+/// serialize (query.rs `to_data_value` delegation). The guard-free `fetch_http`
+/// paired with a public-IP `with_dns` is the seam `ScoutBuilder::with_fetch_http`
+/// documents; production keeps the connect-time guard.
 #[tokio::test]
 async fn fetch_returns_ok_for_reachable_page() {
     let Some(server) = try_spawn_mock_server("query::fetch_ok").await else {
