@@ -745,7 +745,7 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
     );
 }
 
-/// [T-005] api error internal_error は一度再試行され 2 回目の成功レスポンスが返る
+/// [T-SK077] api error internal_error は一度再試行され 2 回目の成功レスポンスが返る
 ///
 /// `internal_error` classifies as TempFailure (per `SlackError::classify`'s
 /// `Api` string table), so `is_retriable` must derive from `classify().kind`
@@ -780,7 +780,7 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
     );
 }
 
-/// [T-004] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
+/// [T-SK078] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
 ///
 /// `api_get`'s retry closure recaptures the same `params`, so a retry resends
 /// page 2's own cursor and never restarts from page 1, which is the recovery
@@ -831,7 +831,7 @@ async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_par
     );
 }
 
-/// [T-006] timeout でも transient でもない transport error は再試行されず 1 回で返る
+/// [T-SK079] timeout でも transient でもない transport error は再試行されず 1 回で返る
 ///
 /// A redirect loop is neither `is_timeout()` nor `is_transient_network()`,
 /// so it classifies as Unknown — `Classification::from_reqwest`'s escape
@@ -876,7 +876,7 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
     );
 }
 
-/// [T-007] 2xx の mid-stream body 切断は Network に落ち TempFailure に分類される
+/// [T-SK080] 2xx の mid-stream body 切断は Network に落ち TempFailure に分類される
 ///
 /// Mirrors `api_get_once_2xx_mid_stream_drop_returns_network` (T-SK030), and
 /// additionally pins the classification: a transport-IO drop must land in
@@ -901,7 +901,7 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
     join_server_thread(handle);
 }
 
-/// [T-009] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
+/// [T-SK081] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
 ///
 /// The seam from a real HTTP timeout through to the process exit code:
 /// a `SlackClient::api_get_once` call whose request timeout fires must reach

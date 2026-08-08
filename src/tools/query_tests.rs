@@ -9,7 +9,7 @@ use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-009]
+/// [T-TS024]
 #[tokio::test]
 async fn search_returns_plain_url_list() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -42,7 +42,7 @@ async fn search_returns_plain_url_list() {
     );
 }
 
-/// [T-009-json] search --json output schema (data.query, data.sources, no data.answer)
+/// [T-TS025] search --json output schema (data.query, data.sources, no data.answer)
 #[tokio::test]
 async fn search_json_schema_omits_answer() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -76,7 +76,7 @@ async fn search_json_schema_omits_answer() {
     assert_eq!(data["sources"][0]["description"], "d");
 }
 
-/// [T-015] search command issues exactly one Brave call (no engine::research fanout)
+/// [T-TS026] search command issues exactly one Brave call (no engine::research fanout)
 /// Engine path adds fetch + report; search must remain a single Brave round-trip.
 #[tokio::test]
 async fn search_does_not_traverse_engine_path() {
@@ -100,7 +100,7 @@ async fn search_does_not_traverse_engine_path() {
     s.search(params).await.unwrap();
 }
 
-/// [T-009-empty] search with zero results returns empty stdout and exit 0
+/// [T-TS027] search with zero results returns empty stdout and exit 0
 #[tokio::test]
 async fn search_zero_results_returns_empty() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -168,7 +168,7 @@ async fn research_success_returns_report() {
     );
 }
 
-/// [T-10] AC-4.2: --json research data schema (query, sources, fetched_pages, failed_urls)
+/// [T-TS028] AC-4.2: --json research data schema (query, sources, fetched_pages, failed_urls)
 #[tokio::test]
 async fn research_json_schema_includes_required_keys() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -218,7 +218,7 @@ async fn research_json_schema_includes_required_keys() {
     );
 }
 
-/// [T-028] (unit / FR-019)
+/// [T-TS029] (unit / FR-019)
 /// Setup: wiremock always returns HTTP 503 (still fails after retry).
 /// Action: `Scout::research(...)` is invoked.
 /// Expected: returns `Ok(CommandOutput)` (no hard-fail);
@@ -260,13 +260,13 @@ async fn research_brave_failure_returns_degraded_report() {
     );
 }
 
-/// [T-029] (unit / FR-019)
+/// [T-TS030] (unit / FR-019)
 /// Setup: wiremock always returns HTTP 401.
 /// Action: `Scout::research(...)` is invoked.
 /// Expected: returns `Err(ScoutError)` (not a degraded `Ok`), because
 /// `BraveError::Unauthorized` is a configuration error and must surface to
 /// the user instead of being silently absorbed into the degraded envelope.
-/// Companion to T-028 which covers the transient (503) degradable path.
+/// Companion to T-TS029 which covers the transient (503) degradable path.
 #[tokio::test]
 async fn research_unauthorized_propagates_as_error() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -292,7 +292,7 @@ async fn research_unauthorized_propagates_as_error() {
     );
 }
 
-/// [T-11] AC-4.3: zero results yield empty arrays, not null
+/// [T-TS031] AC-4.3: zero results yield empty arrays, not null
 #[tokio::test]
 async fn research_json_zero_results_returns_empty_arrays() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {

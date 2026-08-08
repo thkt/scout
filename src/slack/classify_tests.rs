@@ -120,7 +120,7 @@ fn rate_limited_is_temp_failure() {
 
 /// [T-SLC007] Network classifies as TempFailure (network-class hint).
 ///
-/// Superseded in kind coverage by [T-002], which also asserts the network
+/// Superseded in kind coverage by T-SLNET002, which also asserts the network
 /// hint; this fixture keeps the original connect-refused case so the
 /// `Network` variant's `From<reqwest::Error>` construction stays exercised
 /// under its own test id.
@@ -147,7 +147,7 @@ fn decode_is_internal() {
     assert_eq!(c.kind, ErrorCode::Internal);
 }
 
-/// [T-001] connect または read の timeout に由来する reqwest error は Timeout(124) に分類される。
+/// [T-SLNET001] connect または read の timeout に由来する reqwest error は Timeout(124) に分類される。
 ///
 /// `classify` delegates `Network` to `Classification::from_reqwest`, which
 /// checks `is_timeout()` before the transient check.
@@ -176,7 +176,7 @@ async fn reqwest_timeout_error_classifies_as_timeout() {
     assert_eq!(c.kind, ErrorCode::Timeout);
 }
 
-/// [T-002] 接続拒否に由来する reqwest error は TempFailure(75) と network hint に分類される。
+/// [T-SLNET002] 接続拒否に由来する reqwest error は TempFailure(75) と network hint に分類される。
 ///
 /// Companion to T-ER009, which drives the same failure through `FetchError`.
 #[tokio::test]
@@ -195,7 +195,7 @@ async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint
     );
 }
 
-/// [T-003] timeout でも transient でもない reqwest error は Unknown(104) に分類される。
+/// [T-SLNET003] timeout でも transient でもない reqwest error は Unknown(104) に分類される。
 ///
 /// A body-decode failure on a 2xx response is neither a timeout nor a
 /// transient transport fault. Companion to T-ER033.
@@ -225,7 +225,7 @@ async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
     assert_eq!(c.kind, ErrorCode::Unknown);
 }
 
-/// [T-004] URL 構築失敗は ParseUrl として Internal(70) に分類される。
+/// [T-SLNET004] URL 構築失敗は ParseUrl として Internal(70) に分類される。
 ///
 /// The why-Internal-not-DataError rationale lives on the `ParseUrl`
 /// variant's doc in `src/slack.rs`.
@@ -238,7 +238,7 @@ fn url_build_failure_classifies_as_parse_url_internal() {
     assert_eq!(c.kind, ErrorCode::Internal);
 }
 
-/// [T-001] team_added_to_org は TempFailure に分類され短い待機後の再試行を促す hint を持つ
+/// [T-SLAPI001] team_added_to_org は TempFailure に分類され短い待機後の再試行を促す hint を持つ
 #[test]
 fn team_added_to_org_classifies_as_temp_failure_with_short_delay_hint() {
     let c = SlackError::Api {
@@ -253,7 +253,7 @@ fn team_added_to_org_classifies_as_temp_failure_with_short_delay_hint() {
     );
 }
 
-/// [T-002] org_login_required は TempFailure に分類され hint が
+/// [T-SLAPI002] org_login_required は TempFailure に分類され hint が
 /// "Retry after the workspace's Enterprise migration completes" になる
 #[test]
 fn org_login_required_classifies_as_temp_failure_with_enterprise_migration_hint() {
@@ -268,7 +268,7 @@ fn org_login_required_classifies_as_temp_failure_with_enterprise_migration_hint(
     );
 }
 
-/// [T-003] invalid_cursor は TempFailure に分類され hint が
+/// [T-SLAPI003] invalid_cursor は TempFailure に分類され hint が
 /// "Re-run to restart thread paging from the first page" になる
 #[test]
 fn invalid_cursor_classifies_as_temp_failure_with_restart_paging_hint() {

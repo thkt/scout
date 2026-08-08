@@ -8,7 +8,7 @@ use std::collections::HashMap;
 // documents these vars was not retrievable via WebFetch this session; the
 // four scenarios below are the authoritative spec for the expected outputs.
 
-/// [T-001]
+/// [T-FS022]
 #[test]
 fn detects_proxied_with_the_https_proxy_value_when_both_https_proxy_and_http_proxy_are_set() {
     let env = HashMap::from([
@@ -24,7 +24,7 @@ fn detects_proxied_with_the_https_proxy_value_when_both_https_proxy_and_http_pro
     );
 }
 
-/// [T-002]
+/// [T-FS023]
 #[test]
 fn detects_proxied_with_the_http_proxy_value_when_only_http_proxy_is_set() {
     let env = HashMap::from([("HTTP_PROXY".to_owned(), "http://proxy.http:8080".to_owned())]);
@@ -34,14 +34,14 @@ fn detects_proxied_with_the_http_proxy_value_when_only_http_proxy_is_set() {
     );
 }
 
-/// [T-003]
+/// [T-FS024]
 #[test]
 fn detects_direct_when_no_proxy_env_var_is_present() {
     let env = HashMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
     assert_eq!(detect_egress_mode(&env), EgressMode::Direct);
 }
 
-/// [T-005]
+/// [T-FS025]
 ///
 /// `Proxy::all("")` is a relative-URL parse error, so returning `Proxied("")`
 /// here would fail client construction and abort every command at startup.
@@ -54,7 +54,7 @@ fn treats_a_present_but_empty_proxy_value_as_unset() {
     assert_eq!(detect_egress_mode(&env), EgressMode::Direct);
 }
 
-/// [T-006] falls through an empty value to the next candidate that has one
+/// [T-FS026] falls through an empty value to the next candidate that has one
 #[test]
 fn falls_through_an_empty_value_to_the_next_candidate() {
     let env = HashMap::from([
@@ -67,7 +67,7 @@ fn falls_through_an_empty_value_to_the_next_candidate() {
     );
 }
 
-/// [T-004]
+/// [T-FS027]
 #[test]
 fn detects_proxied_from_lowercase_https_proxy_when_uppercase_forms_are_absent() {
     let env = HashMap::from([(

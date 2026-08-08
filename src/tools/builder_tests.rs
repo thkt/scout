@@ -695,7 +695,7 @@ async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatt
 /// forward proxy and returns the body, while the injected `FailingDnsResolver`
 /// is never consulted (Proxied skips scout's DNS pre-check). This exercises the
 /// `with_egress` seam and proves `query.rs` forwards `Scout.egress` into
-/// `FetchOptions.egress`. It complements the fetch_page-level T-010/T-011: those
+/// `FetchOptions.egress`. It complements the fetch_page-level T-F073/T-F074: those
 /// pin the proxied client shape, this pins the builder → query wiring that
 /// produces it. A regression to `Direct` would consult the resolver and surface
 /// as a `DnsResolution` error instead of the body.
