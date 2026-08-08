@@ -319,12 +319,12 @@ struct TestIdOccurrence {
     id: String,
 }
 
-/// Legacy test IDs from issue #201 (`src/fetch/cdp/proxy/proxy_tests.rs` and
-/// `src/fetch/cdp/launch/cdp_launch_tests.rs`) start with a digit by design rather than
-/// following the current `PREFIX+NNN` convention. These entries are allow-listed for
-/// backward compatibility; the series is closed at 201-16. New tests in these files
-/// must adopt the current naming convention (prefixed IDs) and must not be added to
-/// this array.
+/// The T-201 ids in `src/fetch/cdp/proxy/proxy_tests.rs` and
+/// `src/fetch/cdp/launch/cdp_launch_tests.rs` number after issue #201, not after a
+/// subject prefix, so they start with a digit. Renumbering them would break the
+/// citations in ADR-0021, ADR-0012 and two audit records, so #356 allow-listed them
+/// instead. The series is closed at 201-16: a new test in either file takes a
+/// prefixed id and does not get an entry here.
 const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
     "201-1", "201-2", "201-3", "201-4", "201-5", "201-6", "201-8", "201-9", "201-10", "201-11",
     "201-12", "201-13", "201-14", "201-15", "201-16",
@@ -694,9 +694,7 @@ mod tests {
         let violations = find_test_id_violations(&occurrences);
 
         assert!(
-            !violations
-                .iter()
-                .any(|v| v.contains("201-1") && v.contains("starts with a digit")),
+            violations.is_empty(),
             "T-201-1 is allow-listed and should not be reported, got: {violations:?}"
         );
     }
