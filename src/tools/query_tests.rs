@@ -218,7 +218,7 @@ async fn research_json_schema_includes_required_keys() {
     );
 }
 
-/// [T-TS029] (unit / FR-019)
+/// [T-TS029]
 /// Setup: wiremock always returns HTTP 503 (still fails after retry).
 /// Action: `Scout::research(...)` is invoked.
 /// Expected: returns `Ok(CommandOutput)` (no hard-fail);
@@ -260,7 +260,7 @@ async fn research_brave_failure_returns_degraded_report() {
     );
 }
 
-/// [T-TS030] (unit / FR-019)
+/// [T-TS030]
 /// Setup: wiremock always returns HTTP 401.
 /// Action: `Scout::research(...)` is invoked.
 /// Expected: returns `Err(ScoutError)` (not a degraded `Ok`), because
