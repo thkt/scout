@@ -468,7 +468,7 @@ fn to_data_value_maps_serialize_failure_to_internal_bug() {
 /// pre-flight `ssrf_check` resolves the test host to a public IP via
 /// `with_dns`, while a guard-free `fetch_http` (reqwest `.resolve()` override,
 /// no `SsrfResolver`) reaches the loopback wiremock. Production `fetch_http`
-/// keeps the connect-time guard; the SSRF contract is pinned by T-003 / T-F017,
+/// keeps the connect-time guard; the SSRF contract is pinned by T-F017 / T-F072,
 /// not by this test client.
 #[tokio::test]
 async fn fetch_returns_ok_for_reachable_page() {

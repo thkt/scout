@@ -46,7 +46,7 @@ CDP 経路の非対称: chromium 経路 (js-rendering feature、default 無効�
 
 ### Confirmation
 
-rebind 回帰テスト (Spec T-003): pre-flight 用に public を、connect 用に private を別 resolver で注入し、`"blocked connect to private IP"` warn が出ることを assert する。guard が壊れていても connect 失敗で `is_err()` は真になるが warn は出ないため、ログ assert が壊れた guard を検出する (非トートロジー)。reqwest 更新時は `Resolve` が新規接続毎に consult され connector が返却アドレスのみ dial する挙動 (本 ADR の前提) を再検証する。
+rebind 回帰テスト (T-F072, `src/fetch/fetch_page_tests.rs`): pre-flight 用に public を、connect 用に private を別 resolver で注入し、`"blocked connect to private IP"` warn が出ることを assert する。guard が壊れていても connect 失敗で `is_err()` は真になるが warn は出ないため、ログ assert が壊れた guard を検出する (非トートロジー)。reqwest 更新時は `Resolve` が新規接続毎に consult され connector が返却アドレスのみ dial する挙動 (本 ADR の前提) を再検証する。
 
 ## Pros and Cons of the Options
 

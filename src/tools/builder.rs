@@ -201,7 +201,7 @@ impl ScoutBuilder {
     /// a public-IP `with_dns` so the pre-flight `ssrf_check` still passes. This
     /// seam is test-only and never weakens the production guard — `from_env`
     /// keeps `build_default_clients`. The SSRF contract stays pinned by the
-    /// dedicated T-003 / T-F017 fetch_page tests, not by this client.
+    /// dedicated T-F017 / T-F072 fetch_page tests, not by this client.
     #[cfg(test)]
     pub(crate) fn with_fetch_http(mut self, client: Client) -> Self {
         self.fetch_http = client;
