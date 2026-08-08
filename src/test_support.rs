@@ -312,21 +312,22 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
     Some((addr, handle))
 }
 
-/// One `[T-<id>]` bracket found in a source file: the file it lives in and
-/// the id text after the literal `T-` prefix.
 struct TestIdOccurrence {
     file: PathBuf,
     id: String,
 }
 
-/// T-201-8 (`src/fetch/cdp/launch/cdp_launch_tests.rs`) numbers itself after
-/// the CDP launch flag it pins rather than a `PREFIX+NNN` id, so its id
-/// starts with a digit by design. Allow-listed instead of renumbered, see #356.
-const DIGIT_LEADING_ALLOWLIST: &[&str] = &["201-8"];
+/// The T-201 ids in `src/fetch/cdp/proxy/proxy_tests.rs` and
+/// `src/fetch/cdp/launch/cdp_launch_tests.rs` number after issue #201, not after a
+/// subject prefix, so they start with a digit. Renumbering them would break the
+/// citations in ADR-0021, ADR-0012 and two audit records, so #356 allow-listed them
+/// instead. The series is closed at 201-16: a new test in either file takes a
+/// prefixed id and does not get an entry here.
+const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
+    "201-1", "201-2", "201-3", "201-4", "201-5", "201-6", "201-8", "201-9", "201-10", "201-11",
+    "201-12", "201-13", "201-14", "201-15", "201-16",
+];
 
-/// Walk `src/` and `tests/` under the crate root, collect every `[T-<id>]`
-/// bracket, and report the violations `find_test_id_violations` finds among
-/// them.
 fn scan_test_id_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
@@ -368,8 +369,6 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
     violations
 }
 
-/// Recursively visit `.rs` files under `dir`, appending one `TestIdOccurrence`
-/// per `[T-<id>]` bracket found in each file's contents.
 fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -674,6 +673,40 @@ mod tests {
                 .iter()
                 .any(|v| v.contains("SLC016") && v.to_lowercase().contains("duplicate")),
             "a duplicate inside one file should be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP011] allowlist へ足した 201-1 は違反として報告されない
+    #[test]
+    fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
+            id: "201-1".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations.is_empty(),
+            "T-201-1 is allow-listed and should not be reported, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP012] allowlist に無い 201-17 は違反として報告される
+    #[test]
+    fn t201_17_absent_from_allowlist_is_reported_as_violation() {
+        let occurrences = vec![TestIdOccurrence {
+            file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
+            id: "201-17".to_owned(),
+        }];
+
+        let violations = find_test_id_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("201-17") && v.contains("starts with a digit")),
+            "T-201-17 is not allow-listed and should be reported, got: {violations:?}"
         );
     }
 
