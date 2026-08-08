@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(secret.expose(), "abc");
     }
 
-    /// [T-RD005] FR-004 / FR-005: `validate_https` rejects any input that does not begin
+    /// [T-RD005] `validate_https` rejects any input that does not begin
     /// with `https://` (plain `http://`, empty string) and accepts a real
     /// `https://` URL.
     #[test]

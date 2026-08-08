@@ -43,7 +43,7 @@ fn mock_extract_retry_after(e: &MockErr) -> Option<u64> {
     }
 }
 
-/// [T-R001] FR-001 + FR-002: first call fails with RateLimited{retry_after: Some(1)},
+/// [T-R001] first call fails with RateLimited{retry_after: Some(1)},
 /// second call succeeds. Helper must retry exactly once, sleep ~1s
 /// (server-supplied, no jitter on the RateLimited path), and return Ok.
 #[tokio::test(start_paused = true)]
@@ -84,7 +84,7 @@ async fn retries_once_then_succeeds_with_retry_after_delay() {
     );
 }
 
-/// [T-R002] FR-002: non-RateLimited transient error always returns None from the
+/// [T-R002] non-RateLimited transient error always returns None from the
 /// extractor. Helper exhausts 1 + max_retries (=3 attempts when
 /// max_retries=2, 2 sleeps) using jittered exponential backoff. Total
 /// elapsed must fall within the backoff envelope: half + jitter for
@@ -123,7 +123,7 @@ async fn applies_jittered_backoff_when_extractor_returns_none() {
     );
 }
 
-/// [T-R003] FR-002 + cap validation rule: RateLimited{retry_after: Some(500)} is
+/// [T-R003] cap validation rule: RateLimited{retry_after: Some(500)} is
 /// above MAX_RETRY_AFTER_SECS (300). is_retriable returns false, the
 /// helper must propagate the error after exactly one invocation.
 #[tokio::test(start_paused = true)]

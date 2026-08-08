@@ -5,7 +5,7 @@ use super::*;
 /// [T-GE001]
 #[test]
 fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
-    // FR-001, BR-003
+    // Priority 1 (highest): an explicit --encoding hint (ADR-0013 detection priority)
     // "テスト" in Shift_JIS
     let bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
 
@@ -21,7 +21,7 @@ fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
 /// [T-GE002]
 #[test]
 fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
-    // FR-001, BR-003
+    // Priority 1 (highest): an explicit --encoding hint (ADR-0013 detection priority)
     // "日本語" in EUC-JP
     let bytes: &[u8] = &[0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC];
 
@@ -37,7 +37,6 @@ fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
 /// [T-GE003] decode_bytes with unknown encoding hint returns NonUtf8 error with retry guidance
 #[test]
 fn decode_bytes_with_invalid_hint_returns_non_utf8_error() {
-    // FR-002
     let result = decode_bytes(b"any", Some("zzz-invalid-encoding"));
 
     let err = result.unwrap_err();
@@ -61,7 +60,6 @@ fn decode_bytes_with_invalid_hint_returns_non_utf8_error() {
 /// [T-GE004]
 #[test]
 fn decode_bytes_without_hint_detects_shift_jis() {
-    // FR-004, FR-005
     // "テスト" in Shift_JIS — enough Japanese bytes for chardetng to detect
     let bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
 
@@ -72,12 +70,11 @@ fn decode_bytes_without_hint_detects_shift_jis() {
     assert_eq!(result.source, DetectionSource::Detected);
 }
 
-// ── ASCII-heavy Shift_JIS detected before UTF-8 (BR-001) ──
+// ── ASCII-heavy Shift_JIS detected before UTF-8 ──
 
 /// [T-GE005]
 #[test]
 fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
-    // BR-001: chardetng runs BEFORE UTF-8 check
     // Simulate a source file with English comments and Japanese string literals.
     // The ASCII portion is valid UTF-8, but the Shift_JIS bytes are not.
     let mut bytes = Vec::new();
@@ -113,7 +110,7 @@ fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
 /// [T-GE006]
 #[test]
 fn decode_bytes_with_utf16be_bom_returns_bom_source() {
-    // FR-003, BR-002
+    // Priority 2: a BOM, when no --encoding hint was given (ADR-0013 detection priority)
     // UTF-16 BE BOM (FE FF) followed by "AB" in UTF-16 BE
     let bytes: &[u8] = &[
         0xFE, 0xFF, // BOM
@@ -141,7 +138,7 @@ fn decode_bytes_with_utf16be_bom_returns_bom_source() {
 /// [T-GE007] decode_bytes returns NonUtf8 with --encoding hint when explicit encoding fails
 #[test]
 fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
-    // FR-002: bytes invalid for specified encoding → NonUtf8 with retry hint
+    // bytes invalid for specified encoding → NonUtf8 with retry hint
     // 0x83 is a valid Shift_JIS lead byte; 0x3F ('?') is NOT a valid trail byte
     // (trail must be 0x40-0x7E or 0x80-0xFC; 0x3F < 0x40).
     // Every pair is an invalid Shift_JIS 2-byte sequence → had_errors=true.
@@ -228,7 +225,6 @@ fn decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
 /// [T-GE010]
 #[test]
 fn non_utf8_error_contains_descriptive_message() {
-    // FR-011
     let err = GitHubError::NonUtf8("shift_jis not forced".into());
     let msg = err.to_string();
     assert!(
@@ -242,7 +238,6 @@ fn non_utf8_error_contains_descriptive_message() {
 /// [T-GE011] GitHubError::Decode and NonUtf8 variants produce distinct Display output
 #[test]
 fn decode_error_is_distinct_from_non_utf8() {
-    // FR-012
     let decode_err = GitHubError::Decode("bad base64".into());
     let non_utf8_err = GitHubError::NonUtf8("encoding failed".into());
 

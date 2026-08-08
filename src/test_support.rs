@@ -312,9 +312,12 @@ pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<
     Some((addr, handle))
 }
 
-struct TestIdOccurrence {
+/// One token a scan found: the file it lives in and the token text. Shared by
+/// the test-id scan and the requirement-code scan, so the field is `token`
+/// rather than either scan's own word for it.
+struct ScannedToken {
     file: PathBuf,
-    id: String,
+    token: String,
 }
 
 /// The T-201 ids in `src/fetch/cdp/proxy/proxy_tests.rs` and
@@ -332,20 +335,48 @@ fn scan_test_id_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
     for dir in ["src", "tests"] {
-        collect_test_id_occurrences(&crate_root.join(dir), &mut occurrences);
+        collect_occurrences(
+            &crate_root.join(dir),
+            extract_bracketed_test_ids,
+            &mut occurrences,
+        );
     }
     find_test_id_violations(&occurrences)
+}
+
+/// Sibling of `scan_test_id_violations`: same crate-root + `src`/`tests` walk,
+/// but collecting requirement-code citations instead of test ids. `docs/` is
+/// out of scope — ADR-0013 and audit records cite `FR-`/`BR-`/`NFR-` codes
+/// there legitimately.
+fn scan_requirement_code_violations() -> Vec<String> {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut occurrences = Vec::new();
+    for dir in ["src", "tests"] {
+        collect_occurrences(
+            &crate_root.join(dir),
+            extract_requirement_codes,
+            &mut occurrences,
+        );
+    }
+    // This file names the codes to test the check, so scanning it would make
+    // the guard cite itself. The exclusion is one file wide and is the reason
+    // the check can match the bare form everywhere else. Compared as a full
+    // path, not by file name: `ends_with` matches whole components, so any
+    // future `*/test_support.rs` would inherit the exemption.
+    let this_file = crate_root.join("src").join("test_support.rs");
+    occurrences.retain(|o| o.file != this_file);
+    find_requirement_code_violations(&occurrences)
 }
 
 /// Testable core: inject already-collected (file, id) occurrences to control
 /// which violations `scan_test_id_violations` reports, without touching the
 /// filesystem.
-fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
+fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     let mut violations = Vec::new();
     let mut first_seen: HashMap<&str, &Path> = HashMap::new();
 
     for occurrence in occurrences {
-        let id = occurrence.id.as_str();
+        let id = occurrence.token.as_str();
         let file = occurrence.file.display();
 
         if id.starts_with(|c: char| c.is_ascii_digit()) && !DIGIT_LEADING_ALLOWLIST.contains(&id) {
@@ -369,7 +400,35 @@ fn find_test_id_violations(occurrences: &[TestIdOccurrence]) -> Vec<String> {
     violations
 }
 
-fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrence>) {
+/// Testable core: inject already-collected (file, code) occurrences to control
+/// which violations `scan_requirement_code_violations` reports, without
+/// touching the filesystem.
+///
+/// Unlike `find_test_id_violations`, this checks only whether an occurrence
+/// exists — a requirement code has no digit-leading or duplicate shape to
+/// judge, presence in `src`/`tests` is itself the violation — so that
+/// judgment does not belong here.
+fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String> {
+    occurrences
+        .iter()
+        .map(|occurrence| {
+            format!(
+                "{}: requirement code `{}` should not appear in src/tests; cite it from docs/ instead (see ADR-0013)",
+                occurrence.file.display(),
+                occurrence.token
+            )
+        })
+        .collect()
+}
+
+/// Shared by `scan_test_id_violations` and `scan_requirement_code_violations`:
+/// walk `dir`'s `.rs` files and push every match `extract` finds, tagged with
+/// its file. The two callers differ only in which `extract` they pass.
+fn collect_occurrences(
+    dir: &Path,
+    extract: fn(&str) -> Vec<String>,
+    occurrences: &mut Vec<ScannedToken>,
+) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -377,15 +436,15 @@ fn collect_test_id_occurrences(dir: &Path, occurrences: &mut Vec<TestIdOccurrenc
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_test_id_occurrences(&path, occurrences);
+            collect_occurrences(&path, extract, occurrences);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             let Ok(contents) = fs::read_to_string(&path) else {
                 continue;
             };
-            for id in extract_bracketed_test_ids(&contents) {
-                occurrences.push(TestIdOccurrence {
+            for token in extract(&contents) {
+                occurrences.push(ScannedToken {
                     file: path.clone(),
-                    id,
+                    token,
                 });
             }
         }
@@ -412,6 +471,45 @@ fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     }
 
     ids
+}
+
+/// Extract every requirement code — `FR-NNN`, `BR-NNN`, `NFR-NNN` — from
+/// `contents`: one of those prefixes followed by exactly 3 digits, not run on
+/// into a longer token.
+///
+/// Deliberately matches the bare form, because that is the shape #360 removed
+/// (`// FR-002, BR-003` sitting in a test body). Restricting the match to a
+/// backtick-wrapped spelling would let the historical shape back in.
+fn extract_requirement_codes(contents: &str) -> Vec<String> {
+    const PREFIXES: [&str; 3] = ["NFR-", "FR-", "BR-"];
+    let mut codes = Vec::new();
+
+    for prefix in PREFIXES {
+        let mut offset = 0;
+        while let Some(rel) = contents[offset..].find(prefix) {
+            let start = offset + rel;
+            let after = &contents[start + prefix.len()..];
+            let digits_then_boundary = after.len() >= 3
+                && after.as_bytes()[..3].iter().all(u8::is_ascii_digit)
+                && after[3..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_ascii_digit());
+            // `FR-` also sits inside `NFR-`. `PREFIXES` lists `NFR-` first, so
+            // a letter-preceded hit was already counted under that prefix and
+            // is skipped here rather than double-counted.
+            let standalone = contents[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphabetic());
+            if digits_then_boundary && standalone {
+                codes.push(format!("{prefix}{}", &after[..3]));
+            }
+            offset = start + prefix.len();
+        }
+    }
+
+    codes
 }
 
 #[cfg(test)]
@@ -594,9 +692,9 @@ mod tests {
     /// [T-SUP006] 数字で始まる ID を含む入力は違反として報告される
     #[test]
     fn digit_leading_id_is_reported_as_violation() {
-        let occurrences = vec![TestIdOccurrence {
+        let occurrences = vec![ScannedToken {
             file: PathBuf::from("fake/digit_leading_tests.rs"),
-            id: "042ABC".to_owned(),
+            token: "042ABC".to_owned(),
         }];
 
         let violations = find_test_id_violations(&occurrences);
@@ -612,9 +710,9 @@ mod tests {
     /// [T-SUP007] T-201 系の ID は違反として報告されない
     #[test]
     fn t201_family_id_is_not_reported_as_violation() {
-        let occurrences = vec![TestIdOccurrence {
+        let occurrences = vec![ScannedToken {
             file: PathBuf::from("src/fetch/cdp/launch/cdp_launch_tests.rs"),
-            id: "201-8".to_owned(),
+            token: "201-8".to_owned(),
         }];
 
         let violations = find_test_id_violations(&occurrences);
@@ -629,13 +727,13 @@ mod tests {
     #[test]
     fn duplicate_id_across_files_is_reported_as_violation() {
         let occurrences = vec![
-            TestIdOccurrence {
+            ScannedToken {
                 file: PathBuf::from("fake/a_tests.rs"),
-                id: "FS022".to_owned(),
+                token: "FS022".to_owned(),
             },
-            TestIdOccurrence {
+            ScannedToken {
                 file: PathBuf::from("fake/b_tests.rs"),
-                id: "FS022".to_owned(),
+                token: "FS022".to_owned(),
             },
         ];
 
@@ -656,13 +754,13 @@ mod tests {
     #[test]
     fn duplicate_id_within_one_file_is_reported_as_violation() {
         let occurrences = vec![
-            TestIdOccurrence {
+            ScannedToken {
                 file: PathBuf::from("fake/a_tests.rs"),
-                id: "SLC016".to_owned(),
+                token: "SLC016".to_owned(),
             },
-            TestIdOccurrence {
+            ScannedToken {
                 file: PathBuf::from("fake/a_tests.rs"),
-                id: "SLC016".to_owned(),
+                token: "SLC016".to_owned(),
             },
         ];
 
@@ -679,9 +777,9 @@ mod tests {
     /// [T-SUP011] allowlist へ足した 201-1 は違反として報告されない
     #[test]
     fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
-        let occurrences = vec![TestIdOccurrence {
+        let occurrences = vec![ScannedToken {
             file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
-            id: "201-1".to_owned(),
+            token: "201-1".to_owned(),
         }];
 
         let violations = find_test_id_violations(&occurrences);
@@ -695,9 +793,9 @@ mod tests {
     /// [T-SUP012] allowlist に無い 201-17 は違反として報告される
     #[test]
     fn t201_17_absent_from_allowlist_is_reported_as_violation() {
-        let occurrences = vec![TestIdOccurrence {
+        let occurrences = vec![ScannedToken {
             file: PathBuf::from("src/fetch/cdp/proxy/proxy_tests.rs"),
-            id: "201-17".to_owned(),
+            token: "201-17".to_owned(),
         }];
 
         let violations = find_test_id_violations(&occurrences);
@@ -718,6 +816,66 @@ mod tests {
         assert!(
             violations.is_empty(),
             "src/ and tests/ should carry no test-id violations, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP013] FR-018 を含む入力は違反として報告される
+    #[test]
+    fn fr_requirement_code_in_input_is_reported_as_violation() {
+        let occurrences = vec![ScannedToken {
+            file: PathBuf::from("fake/req_code_tests.rs"),
+            token: "FR-018".to_owned(),
+        }];
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("FR-018")),
+            "FR-018 should be reported by file and code, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP014] BR-001 を含む入力は違反として報告される
+    #[test]
+    fn br_requirement_code_in_input_is_reported_as_violation() {
+        let occurrences = vec![ScannedToken {
+            file: PathBuf::from("fake/req_code_tests.rs"),
+            token: "BR-001".to_owned(),
+        }];
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("BR-001")),
+            "BR-001 should be reported by file and code, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP015] 要件コードを含まない入力は違反として報告されない
+    #[test]
+    fn input_without_requirement_code_is_not_reported_as_violation() {
+        let occurrences: Vec<ScannedToken> = Vec::new();
+
+        let violations = find_requirement_code_violations(&occurrences);
+
+        assert!(
+            violations.is_empty(),
+            "input without a requirement code should report no violations, got: {violations:?}"
+        );
+    }
+
+    /// [T-SUP016] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    #[test]
+    fn scanning_src_and_tests_finds_no_requirement_code_violations() {
+        let violations = scan_requirement_code_violations();
+
+        assert!(
+            violations.is_empty(),
+            "src/ and tests/ should carry no requirement-code violations, got: {violations:?}"
         );
     }
 }

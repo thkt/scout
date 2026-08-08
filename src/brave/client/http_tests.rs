@@ -208,7 +208,7 @@ async fn search_401_returns_unauthorized() {
     );
 }
 
-/// [T-BC026] (unit / FR-019)
+/// [T-BC026]
 /// Setup: wiremock always returns HTTP 403.
 /// Action: `client.search("foo", None)` is invoked.
 /// Expected: returns `BraveError::Unauthorized`; no retry (mock call count = 1)
@@ -340,7 +340,7 @@ async fn search_logs_warn_on_parse_failure() {
     );
 }
 
-/// [T-RC001] FR-001 / FR-002: closure returning `Err(VarError::NotPresent)` must surface
+/// [T-RC001] closure returning `Err(VarError::NotPresent)` must surface
 /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
 /// env path that `from_env` delegates to. Since #311 that path runs through the
 /// backend-agnostic `Redacted::from_env_var`, which does not know `BraveError`.
@@ -355,7 +355,7 @@ fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     );
 }
 
-/// [T-RC002] FR-003: whitespace-only keys stay rejected — parity with the previous
+/// [T-RC002] whitespace-only keys stay rejected — parity with the previous
 /// `trim().is_empty()` check in `from_env`.
 #[test]
 fn from_env_with_rejects_whitespace_only_key() {
@@ -367,7 +367,8 @@ fn from_env_with_rejects_whitespace_only_key() {
     );
 }
 
-/// [T-RC003] FR-001 / FR-003.
+/// [T-RC003] from_env_with builds a client whose `api_key.expose()` returns the
+/// closure's key and whose `base_url` is `API_BASE`.
 #[test]
 fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
     let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
@@ -425,7 +426,7 @@ fn response_too_large_is_not_retriable_via_classify() {
     );
 }
 
-/// [T-RC006] FR-010: production constructor path must not enable the test-only HTTPS bypass.
+/// [T-RC006] production constructor path must not enable the test-only HTTPS bypass.
 /// `skip_https_check` is a `#[cfg(test)]` field; under `cargo test` it exists and
 /// must be `false` when the client comes from `from_env_with`.
 #[test]
