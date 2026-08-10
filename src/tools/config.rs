@@ -409,6 +409,29 @@ mod tests {
         );
     }
 
+    /// [T-CFG026] The research_timeout default covers one search plus one fetch
+    ///
+    /// `research` spends a Brave request and then fetches sources, each capped
+    /// separately. Below the sum of one of each, no run could finish even with
+    /// nothing going wrong, and every failure would report the outer timeout
+    /// instead of the stage that stalled.
+    ///
+    /// It deliberately sits below the *retried* budget, as `github_timeout` does
+    /// above: three Brave attempts alone exceed it, so an upstream that keeps
+    /// hanging is cut rather than waited out.
+    #[test]
+    fn research_timeout_covers_one_search_and_one_fetch() {
+        use crate::brave::client::REQUEST_TIMEOUT;
+        use crate::search::engine::FETCH_TIMEOUT;
+
+        let research = RuntimeConfig::default().research_timeout;
+        assert!(
+            research > REQUEST_TIMEOUT + FETCH_TIMEOUT,
+            "research_timeout ({research:?}) must cover one Brave request \
+             ({REQUEST_TIMEOUT:?}) plus one page fetch ({FETCH_TIMEOUT:?})"
+        );
+    }
+
     /// [T-CFG025] The fetch_timeout default exceeds one CDP stage
     ///
     /// `fetch_with_cdp` spends `CDP_TIMEOUT` twice in series (waiting for the

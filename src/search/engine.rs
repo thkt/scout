@@ -19,7 +19,9 @@ use crate::markdown::{
 use crate::search::Lang;
 
 const MAX_PAGE_BYTES: usize = 4_500;
-const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// Per-source cap inside one research run. `pub(crate)` for the same config
+/// invariant test that reads `brave::client::REQUEST_TIMEOUT`.
+pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a research session: search hits + their fetched bodies.
 ///

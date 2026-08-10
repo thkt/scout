@@ -19,7 +19,10 @@ use crate::rng::{FastrandRng, Rng};
 use super::types::{SearchResult, WebSearchResponse};
 
 const API_BASE: &str = "https://api.search.brave.com/res/v1/web/search";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Per-request cap on one Brave call. `pub(crate)` so the config invariant test
+/// can assert `research_timeout` covers a search plus a page fetch, the way
+/// `HTTP_TIMEOUT` and `CDP_TIMEOUT` are read for their own commands.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const BODY_SNIPPET_BYTES: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
