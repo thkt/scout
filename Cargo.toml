@@ -49,8 +49,10 @@ unreachable_pub = "deny"
 [lints.clippy]
 # absolute paths
 absolute_paths = "deny"
-# idiomatic iterators
+# casts
 cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
+# idiomatic iterators
 redundant_closure_for_method_calls = "deny"
 filter_map_next = "deny"
 flat_map_option = "deny"

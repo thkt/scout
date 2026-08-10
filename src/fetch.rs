@@ -8,6 +8,10 @@ mod download;
 mod extractor;
 mod ssrf;
 
+/// Re-exported for the `tools::config` invariant test alone; `cdp` itself stays
+/// private to `fetch`, and no production path outside this module reads it.
+#[cfg(all(test, feature = "js-rendering"))]
+pub(crate) use cdp::CDP_TIMEOUT;
 use ssrf::ssrf_check;
 pub(crate) use ssrf::{
     DnsResolver, EgressMode, RedactedLogUrl, SsrfResolver, TokioDnsResolver, detect_egress_mode,

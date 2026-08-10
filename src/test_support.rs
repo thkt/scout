@@ -152,7 +152,13 @@ where
     F: Fn(&mut TcpStream) -> io::Result<()> + Send + 'static,
 {
     let listener = bind_loopback(test_name)?;
-    let addr = listener.local_addr().ok()?;
+    // `bind_loopback` already decided skip-vs-panic for this test run. A bound
+    // listener that cannot report its own address is not that decision, and
+    // returning `None` here would skip the scenario even under
+    // SCOUT_NETWORK_TESTS, which exists to stop exactly that.
+    let addr = listener
+        .local_addr()
+        .expect("a bound listener reports its address");
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = Arc::clone(&counter);
     let handle = thread::spawn(move || -> io::Result<()> {

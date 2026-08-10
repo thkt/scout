@@ -594,8 +594,12 @@ fn is_retriable(e: &SlackError) -> bool {
     }
 }
 
+/// Deserialize target for `api_get_once` tests that assert on the error arm.
+/// `ok` exists to give serde a field to bind, and no test reads it back, so
+/// `expect` rather than `allow`: the day a test does read it, the suppression
+/// itself is reported as no longer needed.
 #[cfg(test)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "field exists for serde, never read back")]
 #[derive(Debug, serde::Deserialize)]
 struct DummyBody {
     ok: bool,

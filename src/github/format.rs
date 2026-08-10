@@ -5,6 +5,13 @@ use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note
 
 const MAX_README_BYTES: usize = 24_000;
 
+/// `f64` carries 53 bits of mantissa, so the cast below is exact up to 8 PB.
+/// GitHub caps a blob at 100 MB, and the tree sizes this formats come from the
+/// same API, so no input reaches the range where the rounding would show.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "sizes come from the GitHub API and stay far below 2^53 bytes"
+)]
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")

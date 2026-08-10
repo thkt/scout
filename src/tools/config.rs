@@ -409,6 +409,26 @@ mod tests {
         );
     }
 
+    /// [T-CFG025] The fetch_timeout default exceeds one CDP stage
+    ///
+    /// `fetch_with_cdp` spends `CDP_TIMEOUT` twice in series (waiting for the
+    /// DevTools URL, then navigating), so the outer budget cannot cover both.
+    /// What it must cover is one of them: below this line a `--js` fetch could
+    /// not finish a single stage, and every render would report the outer
+    /// timeout with no indication of where it stopped. The github_timeout
+    /// hierarchy above pins the same relation for the GitHub commands.
+    #[cfg(feature = "js-rendering")]
+    #[test]
+    fn fetch_timeout_exceeds_one_cdp_stage() {
+        use crate::fetch::CDP_TIMEOUT;
+
+        let fetch = RuntimeConfig::default().fetch_timeout;
+        assert!(
+            fetch > CDP_TIMEOUT,
+            "fetch_timeout ({fetch:?}) must exceed one CDP stage ({CDP_TIMEOUT:?})"
+        );
+    }
+
     /// [T-CFG022]
     #[test]
     fn github_timeout_out_of_range_fails() {

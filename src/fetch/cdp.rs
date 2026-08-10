@@ -81,8 +81,19 @@ impl From<CdpInterceptError> for BrowserError {
     }
 }
 
+/// Per-stage cap inside a `--js` fetch: once on the wait for chromium's
+/// DevTools URL, once on the navigation. `pub(crate)` so the config invariant
+/// test can assert the outer `fetch_timeout` exceeds one stage, mirroring what
+/// `HTTP_TIMEOUT` does for `github_timeout` (issue #185); `mod cdp` stays
+/// private, so the only way in is `fetch`'s re-export.
+///
+/// The two stages are serial, so their sum (120s) exceeds the `fetch_timeout`
+/// default (95s) and the outer budget cuts a run that spends the full cap on
+/// both. That is deliberate — the outer value is the per-URL wall-clock the
+/// caller was promised — but it means the second stage's own timeout is not
+/// reachable on the default configuration.
 #[cfg(feature = "js-rendering")]
-const CDP_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Aborts the wrapped task when dropped, so the SSRF proxy is torn down on every
 /// exit path of `fetch_with_cdp` (early `return`s included). Awaiting the task to
