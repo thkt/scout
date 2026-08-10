@@ -18,7 +18,7 @@
 
 use std::env;
 use std::io::{self, Read, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::process::{Command, Output};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -64,6 +64,19 @@ fn guard_loopback_bind(
 fn bind_loopback(test_name: &str) -> Option<TcpListener> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
+}
+
+/// The address to hand back and the dial counter, for every proxy mock below.
+///
+/// Panicking rather than returning `None`: [`bind_loopback`] already decided
+/// skip-vs-panic for this test run, and a bound listener that cannot report its
+/// own address is not that decision. Skipping here would drop the scenario even
+/// under `SCOUT_NETWORK_TESTS`, which exists to stop exactly that.
+fn addr_and_counter(listener: &TcpListener) -> (SocketAddr, Arc<AtomicUsize>) {
+    let addr = listener
+        .local_addr()
+        .expect("a bound listener reports its address");
+    (addr, Arc::new(AtomicUsize::new(0)))
 }
 
 /// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
@@ -116,14 +129,7 @@ pub(crate) fn spawn_mock_proxy(
     body: &[u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
     let listener = bind_loopback("spawn_mock_proxy")?;
-    // `bind_loopback` already decided skip-vs-panic for this test run. A bound
-    // listener that cannot report its own address is not that decision, and
-    // returning `None` here would skip the scenario even under
-    // SCOUT_NETWORK_TESTS, which exists to stop exactly that.
-    let addr = listener
-        .local_addr()
-        .expect("a bound listener reports its address");
-    let connection_count = Arc::new(AtomicUsize::new(0));
+    let (addr, connection_count) = addr_and_counter(&listener);
     let counter = Arc::clone(&connection_count);
     let body = body.to_vec();
     let handle = thread::spawn(move || {
@@ -175,14 +181,7 @@ pub(crate) fn spawn_mock_proxy_raw_response(
     raw_response: &'static [u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
     let listener = bind_loopback("spawn_mock_proxy_raw_response")?;
-    // `bind_loopback` already decided skip-vs-panic for this test run. A bound
-    // listener that cannot report its own address is not that decision, and
-    // returning `None` here would skip the scenario even under
-    // SCOUT_NETWORK_TESTS, which exists to stop exactly that.
-    let addr = listener
-        .local_addr()
-        .expect("a bound listener reports its address");
-    let connection_count = Arc::new(AtomicUsize::new(0));
+    let (addr, connection_count) = addr_and_counter(&listener);
     let counter = Arc::clone(&connection_count);
     let handle = thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
