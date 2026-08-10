@@ -162,11 +162,9 @@ fn atx_heading_level(trimmed: &str) -> Option<usize> {
 ///
 /// A setext heading (`Title` over `=====`) is rewritten to its ATX equivalent
 /// before being shifted, because past h2 there is no setext form to shift into.
-/// The underline line is consumed. Measured on the READMEs of the 100
-/// most-starred repositories, 5 use setext — and two of those (`torvalds/linux`,
-/// `996icu/996.ICU`) are built almost entirely from it, so leaving them alone
-/// would drop a whole README's structure a level below the `## README` it sits
-/// under.
+/// The underline line is consumed. Some READMEs are written almost entirely in
+/// setext, so skipping the form would drop a whole document's structure a level
+/// below the `## README` it sits under.
 ///
 /// Skips lines inside fenced code blocks so that comment lines like `# TODO`
 /// are not affected.  Note: the fence toggle is simplified — it does not track
@@ -331,7 +329,7 @@ mod tests {
     ///
     /// `=` underlines an h1 and `-` an h2 (CommonMark §4.3). Past h2 there is no
     /// setext form to shift into, so both become ATX and the underline is
-    /// consumed. Measured at 5 of the 100 most-starred READMEs.
+    /// consumed.
     #[test]
     fn shift_headings_converts_setext_to_atx() {
         let input = "Title\n=====\n\nBody\n\nSection\n-------\n\nmore";

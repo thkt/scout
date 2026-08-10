@@ -4,9 +4,8 @@
 /// production code constructs one through, and it establishes the shape the
 /// accessors below promise: non-empty workspace and channel, and a ts of
 /// `<digits>.<6 digits>`. Fields are `pub(in crate::slack)` rather than private
-/// so test fixtures under [`crate::slack`] can build one directly, which means a
-/// fixture's values carry that shape by the author's care rather than by the
-/// parser.
+/// so test fixtures under [`crate::slack`] can build one directly — a fixture's
+/// values then carry that shape by the author's care, not the parser's.
 #[derive(Debug, Clone)]
 pub(crate) struct SlackUrl {
     pub(in crate::slack) workspace: String,

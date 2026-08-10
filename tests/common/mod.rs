@@ -93,31 +93,23 @@ pub(crate) fn parse_envelope(output: &Output, context: &str) -> serde_json::Valu
 /// so a client that re-dials (retry after failure, connection churn, ...)
 /// keeps getting served instead of hitting a closed listener.
 ///
-/// Mirrors `spawn_forward_proxy` in `src/test_support.rs` (bind loopback,
-/// hand the connection to a spawned thread, write a canned response), with
-/// two deviations the plan calls for: the single `listener.accept()` call
-/// becomes a loop, and the fixed 200/no-delay/text-body response becomes the
-/// caller-supplied `status` / `delay` / `body` below.
+/// Mirrors `spawn_forward_proxy` in `src/test_support.rs` with two deviations:
+/// the single `listener.accept()` becomes a loop, and the fixed
+/// 200/no-delay/text-body response becomes caller-supplied. `delay` is slept
+/// through after the request is drained and before the response is written. The
+/// reason phrase stays `OK` whatever `status` says, so a test asserting on the
+/// phrase itself needs a different helper. The body is taken as bytes rather
+/// than `spawn_forward_proxy`'s `&str`, so a non-UTF-8 payload survives.
 ///
-/// - `status`: the numeric status line code the response opens with. The
-///   reason phrase is always written as `OK` regardless of `status`; a caller
-///   asserting on the reason phrase itself needs a different helper.
-/// - `delay`: slept through after the request is drained and before the
-///   response is written.
-/// - `body`: written verbatim after a `Content-Length` header sized to it —
-///   unlike `spawn_forward_proxy`'s `&str` body, a non-UTF-8 payload survives.
-///
-/// Returns `(base_url, connection_count, join_handle)`, or `None` when
-/// `bind_loopback` above skips for an unavailable loopback bind, matching
-/// `spawn_forward_proxy`'s early return for restricted environments.
-/// `connection_count` increments once per accepted connection, so a test that
-/// drives several requests (a proxy retry, several keep-alive-less calls, ...)
-/// through the returned base URL can assert how many dials actually reached
-/// the proxy.
+/// `None` means `bind_loopback` skipped for an unavailable loopback bind,
+/// matching `spawn_forward_proxy`'s early return. The returned counter
+/// increments once per accepted connection, so a test driving several requests
+/// (a proxy retry, several keep-alive-less calls, ...) through the base URL can
+/// assert how many dials actually reached the proxy.
 ///
 /// The accept loop has no exit condition other than a fatal `accept` error
-/// (e.g. the OS closing the socket), so `join_handle` is not for a caller to
-/// `.join()` and wait on, which would hang until the test process exits.
+/// (e.g. the OS closing the socket), so the returned handle is not for a caller
+/// to `.join()` and wait on, which would hang until the test process exits.
 pub(crate) fn spawn_mock_proxy(
     status: u16,
     delay: Duration,
