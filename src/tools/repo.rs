@@ -28,20 +28,21 @@ impl Scout {
 
         info!(repository = %repository, "repo_tree");
 
-        let github = self.github().await;
-
-        // Static rejections come first, as in `repo_read`: resolving the default
-        // branch is a network round-trip and a rate-limit unit, and an invalid
-        // `--path` is knowable without either.
+        // Static rejections come first, as in `repo_read`: building the client
+        // pays a `gh auth token` subprocess (DR-0008) and resolving the default
+        // branch is a network round-trip and a rate-limit unit, while a malformed
+        // `--path` or `--ref` is knowable from the argument's shape alone.
         if let Some(ref p) = params.path {
             github::validate_path(p)?;
         }
+        if let Some(ref r) = params.ref_ {
+            github::validate_ref(r)?;
+        }
+
+        let github = self.github().await;
 
         let ref_ = match params.ref_ {
-            Some(r) => {
-                github::validate_ref(&r)?;
-                r
-            }
+            Some(r) => r,
             None => github.get_repo(owner, repo).await?.default_branch,
         };
 
@@ -195,8 +196,11 @@ impl Scout {
             &releases,
         );
 
+        // `> Note: ` is the prefix every other degradation note in scout's
+        // Markdown carries (RAW_FALLBACK_NOTE, DECODE_UNCERTAIN_NOTE, the Slack
+        // preamble), so a caller matching on it finds this one too.
         if !degradation.is_empty() {
-            markdown.push_str("\n> **Note:** ");
+            markdown.push_str("\n> Note: ");
             markdown.push_str(&degradation.notes().join(". "));
             markdown.push_str(".\n");
         }
@@ -213,7 +217,9 @@ impl Scout {
         });
 
         info!(
-            issues = issues.len(),
+            // `issues` still holds the PRs GitHub's issues endpoint mixes in, so
+            // logging its length would report a count no output field carries.
+            issues = real_issues.len(),
             pulls = pulls.len(),
             releases = releases.len(),
             has_readme = readme_content.is_some(),
@@ -427,5 +433,80 @@ mod tests {
              Recent Issues section excludes"
         );
         assert_eq!(issues_json[0]["number"], 1);
+    }
+
+    /// [T-TS037] A section that failed to load says so in the Markdown, with the
+    /// same `> Note: ` prefix the fetch and Slack paths use.
+    ///
+    /// Without `--json` the caller receives the Markdown alone (src/lib.rs), so
+    /// an overview missing its Recent Issues section is indistinguishable from a
+    /// repository that has none unless the note is in the body. The prefix is
+    /// asserted because a caller scanning for degradation reads one form, not
+    /// two.
+    #[tokio::test]
+    async fn repo_overview_states_a_failed_section_in_the_body() {
+        let Some(server) = try_spawn_mock_server("tools::repo::degraded_note").await else {
+            return;
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "full_name": "owner/repo",
+                "description": null,
+                "html_url": "https://github.com/owner/repo",
+                "default_branch": "main",
+                "language": null,
+                "stargazers_count": 0,
+                "forks_count": 0,
+                "open_issues_count": 0,
+                "topics": null,
+                "license": null
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/readme"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // 422 rather than 500: it classifies as a data error, so the retry loop
+        // does not run and the test does not wait out two backoffs.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/issues"))
+            .respond_with(ResponseTemplate::new(422))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let s = scout_with_github(&server.uri(), &server.uri());
+        let result = s
+            .repo_overview(RepoOverviewParams {
+                repository: Some("owner/repo".into()),
+            })
+            .await
+            .expect("a failed section degrades the overview rather than failing it");
+
+        assert!(
+            result.markdown().contains("> Note: Could not fetch issues"),
+            "the failed section must be stated in the body, got: {}",
+            result.markdown()
+        );
+        assert!(
+            result
+                .degraded_reasons()
+                .contains(&DegradedReason::IssuesFetchFailed),
+            "the envelope must carry the typed reason, got: {:?}",
+            result.degraded_reasons()
+        );
     }
 }

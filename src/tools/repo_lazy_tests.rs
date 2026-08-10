@@ -262,6 +262,45 @@ fn scout_lazy_github_initially_none() {
     );
 }
 
+/// [T-TS036] `repo-tree` rejects a malformed `--path` or `--ref` before the
+/// GitHub client exists.
+///
+/// Both checks read the argument's shape alone and need nothing from the
+/// network, while the first `Scout::github()` touch pays a `gh auth token`
+/// subprocess (T-TS011 / DR-0008). `repo_read` already validates first; this
+/// pins the same order for `repo_tree`, whose own comment claims it.
+#[tokio::test]
+async fn repo_tree_rejects_a_malformed_argument_before_building_the_client() {
+    for (label, params) in [
+        (
+            "path",
+            RepoTreeParams {
+                repository: Some("owner/repo".into()),
+                ref_: None,
+                path: Some("../etc/passwd".into()),
+                pattern: None,
+            },
+        ),
+        (
+            "ref",
+            RepoTreeParams {
+                repository: Some("owner/repo".into()),
+                ref_: Some("main..evil".into()),
+                path: None,
+                pattern: None,
+            },
+        ),
+    ] {
+        let s = scout_lazy("http://localhost:0");
+        let result = s.repo_tree(params).await;
+        assert!(result.is_err(), "a malformed --{label} must be rejected");
+        assert!(
+            s.github.get().is_none(),
+            "a malformed --{label} must not cost a GitHubClient build"
+        );
+    }
+}
+
 /// [T-TS012]
 #[tokio::test]
 async fn search_leaves_github_uninitialized() {
