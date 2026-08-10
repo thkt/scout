@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::connection_refused_error;
 
 /// [T-GHC001]
 #[test]
@@ -44,6 +45,9 @@ fn data_error_variants_classify_as_data_error() {
         GitHubError::InvalidLineRange("bad".into()),
         GitHubError::InvalidPattern("bad".into()),
         GitHubError::NonUtf8("bad".into()),
+        // Was the one DataError variant no test named, so its arm could have
+        // been moved or its code changed without a failure.
+        GitHubError::PathIsDirectory("src/".into()),
         GitHubError::InsecureUrl,
         GitHubError::Api {
             code: 400,
@@ -145,4 +149,57 @@ fn api_non_4xx_5xx_is_unknown() {
     }
     .classify();
     assert_eq!(c.kind, ErrorCode::Unknown);
+}
+
+/// [T-GHC011] a transport failure delegates to the shared reqwest classifier
+///
+/// `Network` was the last variant no test reached. Every other backend pins its
+/// transport arm (T-SLNET001-003 for Slack, and the fetch and Brave classify
+/// suites), so GitHub's delegation to `Classification::from_reqwest` rested on
+/// reading the code.
+#[tokio::test]
+async fn network_delegates_to_shared_reqwest_classification() {
+    let Some(err) = connection_refused_error("github::classify").await else {
+        return; // loopback bind unavailable — skip
+    };
+
+    let c = GitHubError::from(err).classify();
+
+    assert_eq!(
+        c.kind,
+        ErrorCode::TempFailure,
+        "a refused connection is transient, per Classification::from_reqwest"
+    );
+    assert!(
+        c.next_step
+            .as_deref()
+            .is_some_and(|h| h.contains("network")),
+        "expected the shared network hint, got: {:?}",
+        c.next_step
+    );
+}
+
+/// [T-GHC012] the reqwest conversion strips the request URL
+///
+/// `From<reqwest::Error>` calls `without_url` because reqwest's `Display`
+/// appends `for url (…)` with the query string, which is where a token would
+/// sit. The comment said so; nothing checked it, so dropping the call would
+/// have looked like a simplification.
+#[tokio::test]
+async fn reqwest_conversion_drops_the_url() {
+    let Some(err) = connection_refused_error("github::url_strip").await else {
+        return; // loopback bind unavailable — skip
+    };
+    let with_url = err.to_string();
+
+    let converted = GitHubError::from(err).to_string();
+
+    assert!(
+        with_url.contains("should-refuse"),
+        "the fixture must start out carrying its URL, got: {with_url}"
+    );
+    assert!(
+        !converted.contains("should-refuse"),
+        "the converted error must not carry the URL, got: {converted}"
+    );
 }
