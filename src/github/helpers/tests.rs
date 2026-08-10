@@ -314,3 +314,26 @@ fn is_valid_github_name_rejects_special() {
         assert!(!is_valid_github_name(name), "should reject: {name}");
     }
 }
+
+/// [T-GHH027] a backwards range yields nothing instead of panicking
+///
+/// `parse_line_range` rejects `end < start`, so production never assembles this
+/// pair — but `apply_line_range` is `pub(crate)` and took the two numbers
+/// separately, and `lines[start_idx..end_idx]` panics rather than returning
+/// empty when they run backwards. The guard costs one `max` call.
+#[test]
+fn apply_line_range_backwards_is_empty_not_a_panic() {
+    let content = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl";
+
+    assert_eq!(apply_line_range(content, 10, Some(5)), "");
+}
+
+/// [T-GHH028] a single-line range still returns that line
+///
+/// The companion to T-GHH027: clamping the end must not swallow `start == end`.
+#[test]
+fn apply_line_range_single_line_survives_the_clamp() {
+    let content = "a\nb\nc\nd";
+
+    assert_eq!(apply_line_range(content, 3, Some(3)), "    3\tc");
+}

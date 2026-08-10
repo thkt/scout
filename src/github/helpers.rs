@@ -131,11 +131,16 @@ pub(crate) fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), Gi
 }
 
 /// Extract a line range from content, returning numbered lines.
+///
+/// `start` is 1-based and `end` inclusive. A backwards range yields nothing
+/// rather than panicking: `parse_line_range` rejects `end < start`, so the pair
+/// only arrives reversed from a caller that assembled it some other way, and
+/// `lines[start..end]` would panic on it.
 pub(crate) fn apply_line_range(content: &str, start: usize, end: Option<usize>) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
     let start_idx = start.saturating_sub(1);
-    let end_idx = end.map(|e| e.min(total)).unwrap_or(total);
+    let end_idx = end.map_or(total, |e| e.min(total)).max(start_idx);
 
     if start_idx >= total {
         return format!("(file has {total} lines, requested start at {start})");
