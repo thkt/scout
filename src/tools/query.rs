@@ -125,9 +125,9 @@ impl Scout {
             })?;
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
 
-        // Truncate first, then prepend the cap preamble: the preamble must
-        // survive the 100KB cut, so it is added after truncation rather than
-        // counted toward the limit (issue #222 Finding A). The inline byte-count
+        // The preamble must survive the 100KB cut, so it is added after
+        // truncation rather than counted toward the limit (issue #222
+        // Finding A). The inline byte-count
         // note from `truncate_with_note` lands at the body end and covers the
         // output-truncation case on the Markdown side, so only thread/users caps
         // go into the preamble to avoid double-reporting truncation.

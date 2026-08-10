@@ -99,8 +99,8 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     }
 
     fm.push_str("---\n\n");
-    // The body is untrusted page content appended after the frontmatter; neutralize
-    // any column-0 `---`/`...` so it cannot inject a YAML document boundary.
+    // The body is untrusted page content appended after the frontmatter, so a
+    // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
     fm.push_str(&neutralize_yaml_markers(markdown));
     fm
 }

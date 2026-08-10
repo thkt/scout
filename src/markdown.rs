@@ -238,7 +238,7 @@ mod tests {
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
-        // Newlines fold to spaces so the value cannot inject a new Markdown line.
+        // Left as-is, the newline would open a new Markdown line inside the link.
         assert_eq!(escape_md_link("a\n## h"), "a ## h");
     }
 

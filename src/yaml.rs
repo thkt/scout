@@ -58,7 +58,7 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 /// neutralization table pins this escape set separately from the quoting.
 fn escape_yaml(s: &str) -> Cow<'_, str> {
     // The common frontmatter value (a plain title/author/date) carries no escapable
-    // char, so borrow it untouched instead of allocating a copy.
+    // char, so the loop below would allocate a copy identical to its input.
     if !s
         .bytes()
         .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
