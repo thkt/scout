@@ -239,15 +239,15 @@ impl GitHubClient {
                 }
             }
             _ => {
-                let message = extract_error_message(
-                    &response
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| format!("HTTP {status}")),
-                );
+                // Bounded for the same reason as the 403 arm above: this body is
+                // read only to name the failure.
+                let body = match read_body_snippet(response, MAX_ERROR_BODY_BYTES).await {
+                    Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+                    Err(_) => format!("HTTP {status}"),
+                };
                 Err(GitHubError::Api {
                     code: status.as_u16(),
-                    message,
+                    message: extract_error_message(&body),
                 })
             }
         }
