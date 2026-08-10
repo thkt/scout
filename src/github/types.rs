@@ -125,7 +125,7 @@ pub(crate) struct ReleaseInfo {
 mod tests {
     use super::*;
 
-    /// [T-GHT001] real_issues は pull_request を持つ項目を除外し issue だけを返す
+    /// [T-GHT001] real_issues drops entries carrying pull_request and returns issues only
     #[test]
     fn real_issues_excludes_pull_requests_and_returns_issues_only() {
         let issues = vec![

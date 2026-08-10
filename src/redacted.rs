@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(https, Ok(()));
     }
 
-    /// [T-RD006] 未設定の env 変数は注入された欠落エラーになる
+    /// [T-RD006] An unset env var becomes the injected missing error
     #[test]
     fn unset_env_var_becomes_the_injected_missing_error() {
         let get_var = |_: &str| Err(env::VarError::NotPresent);
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(result.err(), Some(CallerError));
     }
 
-    /// [T-RD007] 空白のみの env 値も同じ欠落エラーになる
+    /// [T-RD007] A whitespace-only env value becomes the same missing error
     #[test]
     fn whitespace_only_env_value_becomes_the_same_missing_error() {
         let get_var = |_: &str| Ok("   ".to_owned());

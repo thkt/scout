@@ -135,7 +135,7 @@ impl FetchError {
             // Priority 4: TEMP_FAILURE (non-Status variants)
             Self::DnsResolution(_) => Classification::new(ErrorCode::TempFailure)
                 .with_hint("Check the URL's domain name and your DNS resolver"),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT) and retreat: see `Classification::from_reqwest`
             Self::Http(re) => Classification::from_reqwest(re),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),

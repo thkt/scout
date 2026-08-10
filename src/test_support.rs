@@ -558,7 +558,7 @@ mod tests {
         let _result = try_spawn_with_bind("forced_panic", bind_err, true).await;
     }
 
-    /// [T-SUP001] respond 閉包が Err を返すとサーバ thread の join 結果が Err になる
+    /// [T-SUP001] When the respond closure returns Err, the server thread's join result is Err
     #[test]
     fn respond_err_makes_thread_join_result_err() {
         let Some((addr, _counter, handle)) = spawn_accept_loop(
@@ -581,7 +581,8 @@ mod tests {
         );
     }
 
-    /// [T-SUP002] respond 閉包が Err を返した接続の後も accept ループは続き接続カウンタは accept_count に達する
+    /// [T-SUP002] The accept loop continues past a connection whose respond closure
+    /// returned Err, and the counter reaches accept_count
     #[test]
     fn accept_loop_continues_past_respond_err_until_accept_count() {
         let accept_count = 3;
@@ -608,11 +609,13 @@ mod tests {
         );
     }
 
-    /// [T-SUP003] accept_count がクライアントの接続数を超えたサーバ thread は deadline 経過で accept_count を名指す panic になる
+    /// [T-SUP003] A server thread whose accept_count exceeds the client's connection
+    /// count panics naming accept_count once the deadline elapses
     ///
-    /// deadline 経過で thread は切り離されるため、listener はテスト終了の直後まで
-    /// 開いたまま残る。nextest がこれを leak-timeout (既定 100ms) 内に閉じきれず
-    /// leaky と報告することがあるが、pass 判定は変わらない。
+    /// The deadline detaches the thread, so the listener stays open until just
+    /// after the test ends. nextest sometimes cannot close it within the
+    /// leak-timeout (100ms by default) and reports the test as leaky, which does
+    /// not change the pass verdict.
     #[test]
     #[should_panic(expected = "accept_count")]
     fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
@@ -634,11 +637,12 @@ mod tests {
         join_server_thread_with_deadline(handle, Duration::from_millis(200));
     }
 
-    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
+    /// [T-SUP004] A finished server thread returns from join without waiting out the deadline
     ///
-    /// `spawn_accept_loop` を通さず thread を直接起こす。待ち方を決めるのは
-    /// handle の状態だけなので loopback は要らず、通せば bind 不可の環境用の
-    /// 早期 return が、一度も実行されない分岐として diff に残る。
+    /// The thread is spawned directly rather than through `spawn_accept_loop`.
+    /// Only the handle's state decides how long the join waits, so no loopback
+    /// is needed; routing through the helper would leave its early return for
+    /// bind-less environments in the diff as a branch that never executes.
     #[test]
     fn finished_server_thread_returns_before_deadline_elapses() {
         let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
@@ -654,11 +658,12 @@ mod tests {
         );
     }
 
-    /// [T-SUP005] Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    /// [T-SUP005] A server thread that returned Err panics with the existing message
+    /// before the deadline
     ///
-    /// respond が返した `Err` は thread の戻り値としてしか届かないので、その
-    /// 戻り値を直接置いても伝播経路は変わらない。thread を直接起こす理由は
-    /// T-SUP004 に書いた。
+    /// An `Err` from respond reaches the caller only as the thread's return
+    /// value, so placing that return value directly leaves the propagation path
+    /// unchanged. T-SUP004 states why the thread is spawned directly.
     #[test]
     fn server_thread_err_panics_with_existing_message_before_deadline() {
         let handle =
@@ -687,7 +692,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP006] 数字で始まる ID を含む入力は違反として報告される
+    /// [T-SUP006] Input carrying an ID that starts with a digit is reported as a violation
     #[test]
     fn digit_leading_id_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -705,7 +710,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP007] T-201 系の ID は違反として報告されない
+    /// [T-SUP007] An ID in the T-201 family is not reported as a violation
     #[test]
     fn t201_family_id_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -721,7 +726,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP008] 同じ ID が 2 度現れる入力は重複として報告される
+    /// [T-SUP008] Input where the same ID appears twice is reported as a duplicate
     #[test]
     fn duplicate_id_across_files_is_reported_as_violation() {
         let occurrences = vec![
@@ -745,10 +750,11 @@ mod tests {
         );
     }
 
-    /// [T-SUP010] 同じファイル内で同じ ID が 2 度現れると重複として報告される
+    /// [T-SUP010] The same ID appearing twice inside one file is reported as a duplicate
     ///
-    /// 改番前の `src/slack/classify_tests.rs` が T-002 を 3 回持っていた形。
-    /// T-SUP008 のファイル跨ぎだけでは、この経路が報告されるかを決められない。
+    /// The shape `src/slack/classify_tests.rs` had before renumbering, where
+    /// T-002 appeared three times. T-SUP008's across-files case alone cannot
+    /// settle whether this path is reported.
     #[test]
     fn duplicate_id_within_one_file_is_reported_as_violation() {
         let occurrences = vec![
@@ -772,7 +778,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP011] allowlist へ足した 201-1 は違反として報告されない
+    /// [T-SUP011] 201-1, added to the allowlist, is not reported as a violation
     #[test]
     fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -788,7 +794,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP012] allowlist に無い 201-17 は違反として報告される
+    /// [T-SUP012] 201-17, absent from the allowlist, is reported as a violation
     #[test]
     fn t201_17_absent_from_allowlist_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -806,7 +812,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP009] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    /// [T-SUP009] Scanning the real `src/` and `tests/` finds no test-id violations
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
         let violations = scan_test_id_violations();
@@ -817,7 +823,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP013] FR-018 を含む入力は違反として報告される
+    /// [T-SUP013] Input carrying FR-018 is reported as a violation
     #[test]
     fn fr_requirement_code_in_input_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -835,7 +841,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP014] BR-001 を含む入力は違反として報告される
+    /// [T-SUP014] Input carrying BR-001 is reported as a violation
     #[test]
     fn br_requirement_code_in_input_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -853,7 +859,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP015] 要件コードを含まない入力は違反として報告されない
+    /// [T-SUP015] Input carrying no requirement code is not reported as a violation
     #[test]
     fn input_without_requirement_code_is_not_reported_as_violation() {
         let occurrences: Vec<ScannedToken> = Vec::new();
@@ -866,7 +872,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP016] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    /// [T-SUP016] Scanning the real `src/` and `tests/` finds no requirement-code violations
     #[test]
     fn scanning_src_and_tests_finds_no_requirement_code_violations() {
         let violations = scan_requirement_code_violations();

@@ -240,7 +240,8 @@ mod tests {
         assert_eq!(cfg.max_retries, 2);
     }
 
-    /// [T-CFG003] SCOUT_RESEARCH_TIMEOUT_SECS override が独立に効く
+    /// [T-CFG003] The SCOUT_RESEARCH_TIMEOUT_SECS override changes research_timeout and
+    /// leaves the other fields on their defaults
     #[test]
     fn research_timeout_override() {
         let cfg =
@@ -250,7 +251,8 @@ mod tests {
         assert_eq!(cfg.max_retries, 2);
     }
 
-    /// [T-CFG004] SCOUT_SLACK_TIMEOUT_SECS override が独立に効く
+    /// [T-CFG004] The SCOUT_SLACK_TIMEOUT_SECS override changes slack_timeout and leaves
+    /// the other fields on their defaults
     #[test]
     fn slack_timeout_override() {
         let cfg =
@@ -258,21 +260,21 @@ mod tests {
         assert_eq!(cfg.slack_timeout, Duration::from_secs(10));
     }
 
-    /// [T-CFG005] SCOUT_MAX_RETRIES=5 が max_retries に反映される
+    /// [T-CFG005] SCOUT_MAX_RETRIES=5 lands in max_retries
     #[test]
     fn max_retries_override() {
         let cfg = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "5")).unwrap();
         assert_eq!(cfg.max_retries, 5);
     }
 
-    /// [T-CFG006] SCOUT_MAX_RETRIES=0 (retry 無効) を許容
+    /// [T-CFG006] SCOUT_MAX_RETRIES=0 (retry disabled) is accepted
     #[test]
     fn max_retries_zero_is_allowed() {
         let cfg = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "0")).unwrap();
         assert_eq!(cfg.max_retries, 0);
     }
 
-    /// [T-CFG010] parse 失敗（英字混入）は UsageError(64) で fail-fast
+    /// [T-CFG010] A parse failure (letters mixed into the value) fails fast with UsageError(64)
     #[test]
     fn non_integer_value_fails_fast() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_FETCH_TIMEOUT_SECS", "abc"))
@@ -286,14 +288,14 @@ mod tests {
         );
     }
 
-    /// [T-CFG011] 空文字列は parse 失敗扱いで UsageError
+    /// [T-CFG011] An empty string counts as a parse failure and yields UsageError
     #[test]
     fn empty_value_fails_fast() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "")).unwrap_err();
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG012] 範囲外 timeout (0) は UsageError
+    /// [T-CFG012] An out-of-range timeout (0) yields UsageError
     #[test]
     fn timeout_below_min_fails() {
         let err =
@@ -314,7 +316,7 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG014] 範囲外 retries (11) は UsageError
+    /// [T-CFG014] An out-of-range retry count (11) yields UsageError
     #[test]
     fn max_retries_above_cap_fails() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "11")).unwrap_err();
@@ -326,7 +328,7 @@ mod tests {
         );
     }
 
-    /// [T-CFG015] 負数は u64 parse 失敗で UsageError
+    /// [T-CFG015] A negative number fails the u64 parse and yields UsageError
     #[test]
     fn negative_value_fails() {
         let err =
@@ -384,11 +386,13 @@ mod tests {
         assert_eq!(from_empty.max_retries, from_default.max_retries);
     }
 
-    /// [T-CFG021] github_timeout の既定は内側の HTTP / 候補取得 timeout を上回る
+    /// [T-CFG021] The github_timeout default exceeds the inner HTTP and candidate-fetch timeouts
     ///
-    /// 外側の GitHub コマンド timeout が内側の per-request timeout 以下だと、
-    /// 1 リクエストの正常完了前に外側が切れる。階層 (外側 > 内側) を値で固定し、
-    /// 内側定数を縮めた将来の変更がこの不等式を壊したら検知する (issue #185)。
+    /// When the outer GitHub-command timeout is at or below the inner
+    /// per-request timeout, the outer one fires before a single request can
+    /// finish. Pinning the hierarchy (outer > inner) as values catches a future
+    /// change that shrinks an inner constant and breaks the inequality
+    /// (issue #185).
     #[test]
     fn github_timeout_exceeds_inner_request_timeouts() {
         use crate::tools::builder::HTTP_TIMEOUT;

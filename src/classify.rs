@@ -66,7 +66,7 @@ impl Classification {
             404 => Self::new(ErrorCode::NotFound),
             401 | 403 => Self::new(ErrorCode::UsageError),
             400..=499 => Self::new(ErrorCode::DataError),
-            // 退避: 1xx/3xx reaching an error path is not a status this table
+            // Retreat: 1xx/3xx reaching an error path is not a status this table
             // describes, so it becomes the signal rather than a guess.
             _ => Self::new(ErrorCode::Unknown),
         }
@@ -93,7 +93,7 @@ impl Classification {
         if is_transient_network(e) {
             return Self::transient_network();
         }
-        // 退避: unclassifiable transport failure
+        // Retreat: unclassifiable transport failure
         Self::new(ErrorCode::Unknown)
     }
 }

@@ -46,7 +46,8 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
     join_server_thread(handle);
 }
 
-/// [T-BL001] Content-Length が cap を超えるヘッダのみのレスポンスは body を読まずに too_large になる
+/// [T-BL001] A header-only response whose Content-Length exceeds the cap becomes
+/// too_large without the body being read
 ///
 /// (TC-006 gap) The server writes only a `Content-Length: cap+1` header,
 /// then closes without a single body byte. If `read_body_capped` reached the
@@ -82,7 +83,7 @@ async fn content_length_over_cap_with_no_body_rejects_too_large_without_reading_
     join_server_thread(handle);
 }
 
-/// [T-BL002] ちょうど cap バイトの body は全量が返る
+/// [T-BL002] A body of exactly cap bytes returns in full
 #[tokio::test]
 async fn body_of_exactly_cap_bytes_returns_in_full() {
     const CAP: usize = 16;

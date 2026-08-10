@@ -169,7 +169,7 @@ impl SlackError {
                 // params, so neither shape reaches scout. ADR-0011's note
                 // lists them.
                 //
-                // 退避: Unknown (ADR-0011 — not a numbered priority slot).
+                // Retreat: Unknown (ADR-0011 — not a numbered priority slot).
                 // A string this table does not classify, including one Slack
                 // adds later, surfaces as a classification gap rather than as
                 // a caller mistake.
@@ -177,7 +177,7 @@ impl SlackError {
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT) and retreat: see `Classification::from_reqwest`
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),

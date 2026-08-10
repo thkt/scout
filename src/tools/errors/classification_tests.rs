@@ -313,7 +313,7 @@ fn github_401_classifies_as_usage_error_with_auth_hint() {
 /// [T-ER026] UNKNOWN (104) is the escape hatch for Api codes that match
 /// neither 4xx (priority 2) nor 5xx (priority 4). Exit 104 is the PJ
 /// extension reserved per ADR-0002, populated via ADR-0011 §Classification
-/// Priority Table 退避 slot. A rising rate of Unknown signals the
+/// Priority Table retreat slot. A rising rate of Unknown signals the
 /// classification design needs revisiting.
 #[test]
 fn unclassified_api_classifies_as_unknown_exit_104() {
