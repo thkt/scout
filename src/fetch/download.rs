@@ -204,16 +204,30 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
     Some(decoded.into_owned())
 }
 
+/// Gate the download on whether the response is text scout can convert.
+///
+/// Outside `text/*`, the rule is the RFC 6839 `+xml` structured syntax suffix
+/// rather than a list of names. A feed is the same document whether the server
+/// labels it `text/xml`, `application/xml`, or `application/rss+xml`, and
+/// listing names accepted the first two while rejecting the third — the label,
+/// not the content, decided. `application/xhtml+xml` needs no arm of its own
+/// under that rule.
+///
+/// The suffix is honoured under `application/` alone, so `image/svg+xml` stays
+/// out: it is an image whose serialization happens to be XML.
+///
+/// An empty mime (a bare `; charset=utf-8`) passes. The server declared nothing
+/// about the type, so there is nothing to reject on.
 fn check_content_type(content_type: &str) -> Result<(), FetchError> {
     let mime = content_type
         .split_once(';')
         .map_or(content_type, |(mime, _params)| mime)
         .trim();
-    if !mime.is_empty()
-        && !mime.starts_with("text/")
-        && mime != "application/xhtml+xml"
-        && mime != "application/xml"
-    {
+    let accepted = mime.is_empty()
+        || mime.starts_with("text/")
+        || mime == "application/xml"
+        || (mime.starts_with("application/") && mime.ends_with("+xml"));
+    if !accepted {
         return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
     Ok(())

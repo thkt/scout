@@ -336,6 +336,19 @@ fn visible_text_len(html: &str, limit: usize) -> usize {
 /// check on a third of the text an English one needed.
 const BODY_TEXT_THRESHOLD: usize = 100;
 
+/// Markers of a client-rendered shell, listed in the double-quoted form only.
+///
+/// The list decides nothing for a page carrying `<script`, since that arm of
+/// [`is_js_dependent`] short-circuits first. It is consulted only for a thin
+/// body with no script tag anywhere, where the shell marker is the sole evidence
+/// the page is an app (T-F023).
+///
+/// The single-quoted (`id='root'`) and unquoted (`id=root`) forms are left out
+/// rather than overlooked: the templates and server renderers that emit these
+/// ids write double quotes, and the form that strips them is an HTML minifier,
+/// whose output ships the bundle's `<script` tag for the other arm to catch.
+/// Attribute values are also case-sensitive, unlike the tag names
+/// [`contains_ignore_ascii_case`] folds.
 const SPA_ROOT_IDS: &[&str] = &[
     r#"id="root""#,
     r#"id="app""#,
