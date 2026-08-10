@@ -288,17 +288,30 @@ fn decode_base64_invalid_input_returns_decode_error() {
 
 // ── Fallback logging (issue #189) ──
 
-/// [T-GE015]
+/// [T-GE015] a BOM whose bytes do not decode is an error, not a lossy success
+///
+/// The three decode paths used to disagree about `had_errors`: `decode_explicit`
+/// failed on it, `decode_detect` fell through to the next strategy, and
+/// `decode_bom` returned the replacement characters under
+/// `DetectionSource::Bom`. That made the weakest declaration (a BOM in the file)
+/// the most permissive, and left the caller reading a settled encoding off a
+/// mojibake body — the GitHub path has no counterpart to fetch's
+/// `decode_uncertain` to signal otherwise. ADR-0013 ends this path in a
+/// `NonUtf8` error with a retry hint, and now it does.
 #[tracing_test::traced_test]
 #[test]
-fn decode_bom_logs_debug_on_replacement_characters() {
+fn decode_bom_that_does_not_decode_is_an_error() {
     // UTF-16BE BOM (FE FF) + lone high surrogate (D8 00) with no trailing low
     // surrogate → encoding_rs substitutes U+FFFD and sets had_errors=true.
     let bytes: &[u8] = &[0xFE, 0xFF, 0xD8, 0x00];
 
-    let result = decode_bytes(bytes, None).unwrap();
+    let err = decode_bytes(bytes, None).expect_err("a BOM that does not decode must fail");
 
-    assert_eq!(result.source, DetectionSource::Bom);
+    let message = err.to_string();
+    assert!(
+        message.contains("UTF-16BE") && message.contains("--encoding"),
+        "error must name the declared encoding and how to retry, got: {message}"
+    );
     assert!(
         logs_contain("BOM-identified encoding produced replacement characters"),
         "expected the BOM replacement-character debug event"
@@ -308,10 +321,22 @@ fn decode_bom_logs_debug_on_replacement_characters() {
         logs_contain("had_errors=true"),
         "had_errors field should be true"
     );
-    assert!(
-        logs_contain("UTF-16BE"),
-        "encoding field should name the BOM encoding"
-    );
+}
+
+/// [T-GE016] a BOM whose bytes decode cleanly still returns the Bom source
+///
+/// The companion to T-GE015: tightening the failure case must not turn the
+/// ordinary BOM path into an error.
+#[test]
+fn decode_bom_that_decodes_cleanly_still_succeeds() {
+    // UTF-16BE BOM (FE FF) + "Hi" in UTF-16BE.
+    let bytes: &[u8] = &[0xFE, 0xFF, 0x00, 0x48, 0x00, 0x69];
+
+    let result = decode_bytes(bytes, None).expect("a well-formed BOM body must decode");
+
+    assert_eq!(result.text, "Hi");
+    assert_eq!(result.source, DetectionSource::Bom);
+    assert_eq!(result.encoding, "utf-16be");
 }
 
 // ── Helper ──

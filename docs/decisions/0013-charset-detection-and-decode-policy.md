@@ -44,7 +44,7 @@ Option B は server/user の宣言意図を捨て、正しい label を無視す
 
 ### Confirmation
 
-fetch 経路は `src/fetch/download/charset_tests.rs` が label 尊重・多バイトリカバリ・単バイト uncertain を網羅する (T-F063, T-F068 系)。GitHub 経路は `src/github/encoding/tests.rs` が explicit hint・BOM 優先・chardetng 先行・binary 弾き・hard error を網羅する。共有ゲートの 8 種 whitelist は `src/charset.rs` の定義が単一の真実源で、同ファイルの `[T-CS001..T-CS003]` が直接 pin する。両経路のテストは間接的にしか触れず、実際 `ISO_2022_JP` / `BIG5` / `GB18030` はどちらの経路のテストにも現れなかったため、whitelist から落としても 1 件も失敗しない状態だった。chardetng / encoding_rs を更新する際は、`encoding.decode` が BOM を honor する挙動 (fetch 経路の前提) と `decode_without_bom_handling` の挙動 (GitHub 経路の前提) を再検証する。
+fetch 経路は `src/fetch/download/charset_tests.rs` が label 尊重・多バイトリカバリ・単バイト uncertain を網羅する (T-F063, T-F068 系)。GitHub 経路は `src/github/encoding/tests.rs` が explicit hint・BOM 優先・chardetng 先行・binary 弾き・hard error を網羅する。`[T-GE015]` は BOM が宣言したエンコーディングで復号できない本文を error にすること、`[T-GE016]` は正常な BOM 経路が変わらないことを assert する。この 2 件が入るまで `decode_bom` だけが `had_errors` を捨てて置換文字入りの本文を `DetectionSource::Bom` で返しており、最も弱い宣言 (ファイル内の BOM) が最も寛容という逆転が残っていた。共有ゲートの 8 種 whitelist は `src/charset.rs` の定義が単一の真実源で、同ファイルの `[T-CS001..T-CS003]` が直接 pin する。両経路のテストは間接的にしか触れず、実際 `ISO_2022_JP` / `BIG5` / `GB18030` はどちらの経路のテストにも現れなかったため、whitelist から落としても 1 件も失敗しない状態だった。chardetng / encoding_rs を更新する際は、`encoding.decode` が BOM を honor する挙動 (fetch 経路の前提) と `decode_without_bom_handling` の挙動 (GitHub 経路の前提) を再検証する。
 
 ## Pros and Cons of the Options
 
@@ -89,7 +89,7 @@ GitHub 経路 `decode_bytes` (src/github/encoding.rs:60-161):
 | 優先 | 処理                                                                 | source      |
 | ---- | -------------------------------------------------------------------- | ----------- |
 | 1    | `--encoding` hint があれば `decode_explicit`、失敗は `NonUtf8` error | Explicit    |
-| 2    | BOM があれば `decode_bom`                                            | Bom         |
+| 2    | BOM があれば `decode_bom`、失敗は `NonUtf8` error                     | Bom         |
 | 3    | null byte を含めば binary として `NonUtf8` error                     | —           |
 | 4    | 信頼ゲート通過の chardetng が clean decode                           | Detected    |
 | 5    | strict UTF-8 検証 (実質到達不能の defensive backstop)                | AssumedUtf8 |
