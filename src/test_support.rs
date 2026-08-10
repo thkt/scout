@@ -17,6 +17,18 @@
 //! Cite another test **without** brackets: `Companion to T-TS020`. Brackets mark a
 //! definition, so a bracketed citation is indistinguishable from a second
 //! definition — by grep, and by a reader scanning for where an id lives.
+//!
+//! # What the prose under an id carries
+//!
+//! It says what breaks if the test is deleted: the edit that would otherwise
+//! pass. Where naming that needs a premise the code's own doc already states,
+//! restate the premise and go on — someone reading a failure should not have to
+//! open the implementation to see what the test defends, and the two audiences
+//! are different enough that the overlap earns its keep.
+//!
+//! What does not belong is the implementation's rationale retold whole. If the
+//! prose says nothing the code's doc does not, name the item and cut it: two
+//! copies of one rationale is one that a later change can leave behind.
 
 use std::collections::HashMap;
 use std::env;

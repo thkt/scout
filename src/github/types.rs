@@ -167,11 +167,9 @@ mod tests {
 
     /// [T-GHT002] only a listing array reads as a directory
     ///
-    /// `Directory` held a bare `IgnoredAny`, which matches any JSON at all, so
-    /// every body that was not a file landed there and the caller reported
-    /// `PathIsDirectory` — "'x' is a directory, not a file" about an error
-    /// object, a bare string, or `null`. The doc claimed a body matching neither
-    /// shape surfaces as a decode failure; this is what makes that true.
+    /// The `Vec` in [`ContentsPayload::Directory`] is load-bearing for the
+    /// reason given there. Narrowing it back to a bare `IgnoredAny` passes every
+    /// other test in this suite, which is what this one exists to stop.
     #[test]
     fn only_an_array_reads_as_a_directory() {
         let listing = r#"[{"name":"a.rs"},{"name":"b.rs"}]"#;
