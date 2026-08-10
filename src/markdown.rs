@@ -3,7 +3,12 @@ use std::borrow::Cow;
 /// Escape characters that break Markdown link syntax: `[`, `]`, `(`, `)`.
 /// Newlines are folded to spaces so an untrusted value cannot break onto a new
 /// line and inject block Markdown (a heading or list item).
-pub(crate) fn escape_md_link(s: &str) -> String {
+///
+/// For a link target only — `|` is deliberately absent, since a URL inside
+/// `[](…)` has no table column to break out of. Text that is not a link target
+/// wants [`escape_md_inline`], which does escape it; that is why this is private
+/// to the module and reachable only through [`md_link`].
+fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
