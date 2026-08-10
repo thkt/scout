@@ -179,7 +179,7 @@ impl SlackError {
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
-            // Priority 4 (TIMEOUT) and retreat: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),
