@@ -348,3 +348,28 @@ fn unlisted_unknown_string_classifies_as_unknown() {
     .classify();
     assert_eq!(c.kind, ErrorCode::Unknown);
 }
+
+/// [T-SLC016] every non-2xx status is transient, including ones the shared
+/// table would read as terminal
+///
+/// This is the one arm that departs from ADR-0003's HTTP-status table, and the
+/// variant's doc says why: Slack reports its own failures as `ok: false` inside
+/// a 200, so a non-2xx came from something between scout and Slack. Reading 404
+/// through the shared table would report a gateway's error as a missing message,
+/// and 401/403 as the caller's credentials rather than the proxy's.
+///
+/// The declaration existed; nothing held it. "Route Server through
+/// `from_http_status` like the other backends" is a plausible tidy-up that this
+/// now stops.
+#[test]
+fn server_status_is_always_transient_never_the_shared_table() {
+    for status in [400, 401, 403, 404, 408, 500, 502, 503] {
+        let c = SlackError::Server(status).classify();
+        assert_eq!(
+            c.kind,
+            ErrorCode::TempFailure,
+            "HTTP {status} came from an intermediary, not from Slack, so it must not \
+             take its meaning from the shared status table"
+        );
+    }
+}
