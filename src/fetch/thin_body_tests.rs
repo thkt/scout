@@ -44,3 +44,30 @@ fn whitespace_only_body_is_thin() {
     let html = "<html><body>   \n\t  \n   </body></html>";
     assert!(has_thin_body(html));
 }
+
+/// [T-F078] the threshold counts characters, so a script does not shift it
+///
+/// It counted bytes until now, which put the same prose on opposite sides of the
+/// line depending on the writing system: 34 CJK characters are 102 bytes and
+/// cleared a 100-byte bar that 34 Latin characters (34 bytes) did not. A
+/// Japanese SPA therefore passed as "has content" on a third of the text an
+/// English one needed, and never reached the JS-rendering fallback. Every other
+/// test here feeds `"x".repeat(...)`, where the two units coincide.
+#[test]
+fn threshold_is_the_same_length_in_any_script() {
+    let page = |body: &str| format!("<html><body><p>{body}</p></body></html>");
+    let below = BODY_TEXT_THRESHOLD - 1;
+
+    assert!(
+        has_thin_body(&page(&"a".repeat(below))),
+        "Latin text below the threshold is thin"
+    );
+    assert!(
+        has_thin_body(&page(&"\u{3042}".repeat(below))),
+        "the same number of CJK characters must also be thin"
+    );
+    assert!(
+        !has_thin_body(&page(&"\u{3042}".repeat(BODY_TEXT_THRESHOLD))),
+        "and reaching the threshold must clear it, in either script"
+    );
+}

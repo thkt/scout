@@ -6,7 +6,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
-use crate::fetch::{MAX_REDIRECTS, ssrf};
+use crate::fetch::{FETCH_MAX_REDIRECTS, ssrf};
 use crate::test_support::{no_redirect_client, try_spawn_mock_server};
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -43,7 +43,7 @@ async fn download_default(
     download(
         &client,
         &validated(&format!("{uri}{path}")),
-        MAX_REDIRECTS,
+        FETCH_MAX_REDIRECTS,
         &public_resolver(),
         &ssrf::EgressMode::Direct,
     )
@@ -245,7 +245,7 @@ async fn redirect_to_dns_private_ip_blocked() {
     let result = download(
         &client,
         &validated(&format!("{}/redir", server.uri())),
-        MAX_REDIRECTS,
+        FETCH_MAX_REDIRECTS,
         &private_resolver,
         &ssrf::EgressMode::Direct,
     )
@@ -415,7 +415,7 @@ async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_
     let result = download(
         &client,
         &validated(&format!("{}/redir", server.uri())),
-        MAX_REDIRECTS,
+        FETCH_MAX_REDIRECTS,
         &public_resolver(),
         &ssrf::EgressMode::Proxied("http://proxy.example:8080".to_owned()),
     )
