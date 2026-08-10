@@ -223,7 +223,6 @@ impl Scout {
 /// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
 pub(crate) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Maximum OSA distance and number of suggestions returned per error.
 const CANDIDATE_MAX_DISTANCE: usize = 3;
 const CANDIDATE_TOP_N: usize = 3;
 

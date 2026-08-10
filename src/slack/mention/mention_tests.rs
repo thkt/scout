@@ -79,7 +79,6 @@ fn t005_unclosed_mention_breaks_early() {
 /// [T-SK020] parse_mentions yields correct byte offsets across multibyte characters
 #[test]
 fn t006_multibyte_characters_correct_offsets() {
-    // CJK characters are 3 bytes each in UTF-8
     let text = "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}<@UCJK>end";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 1);

@@ -167,8 +167,6 @@ async fn repo_overview_404_skips_remaining_apis() {
 
     let result = s.repo_overview(params).await;
     assert!(result.is_err(), "repo_overview should fail on 404");
-
-    // wiremock verifies expect(0) on server drop
 }
 
 /// [T-TS010] repo_overview: after get_repo succeeds, readme/issues/pulls/

@@ -39,7 +39,6 @@ pub(crate) struct FailedUrl {
     pub(crate) reason: String,
 }
 
-/// Parameters for a research session.
 pub(crate) struct ResearchRequest<'a> {
     pub(crate) query: &'a str,
     pub(crate) depth: u8,

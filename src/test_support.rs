@@ -115,13 +115,11 @@ fn guard_loopback_bind(
     }
 }
 
-/// Bind a loopback listener under the shared guard policy.
 fn bind_loopback(test_name: &str) -> Option<TcpListener> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
 }
 
-/// Spawn a wiremock server, returning `None` if loopback bind is unavailable.
 pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await

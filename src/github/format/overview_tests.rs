@@ -339,7 +339,6 @@ fn readme_truncation_multibyte_no_mid_char_cut() {
 /// [T-GF025] README truncation snaps to newline on multibyte character boundary
 #[test]
 fn readme_truncation_multibyte_with_newlines() {
-    // TC-003 fix: exercises both floor_char_boundary AND rfind('\n') on CJK
     let repo = sample_repo();
     let line = "\u{4E16}\u{754C}\u{3053}\n"; // "世界こ\n" = 10 bytes
     let repeat_count = (super::MAX_README_BYTES / line.len()) + 50;
@@ -360,7 +359,6 @@ fn readme_truncation_multibyte_with_newlines() {
 /// [T-GF036] README truncation note is appended after heading shift so it is not rewritten
 #[test]
 fn readme_truncation_note_not_heading_shifted() {
-    // TC-004 fix
     let repo = sample_repo();
     let readme = format!("# Title\n{}", "x\n".repeat(super::MAX_README_BYTES));
     let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
