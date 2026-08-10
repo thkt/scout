@@ -137,8 +137,16 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+
       - name: Deny check
         run: cargo deny check
 
       - name: Audit
         run: cargo audit
+
+      # --with-metadata resolves package name -> lib name. Without it, a crate
+      # whose lib name differs from its package name is reported as unused.
+      - name: Unused dependencies
+        run: cargo machete --with-metadata
