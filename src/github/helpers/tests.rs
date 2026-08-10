@@ -337,3 +337,52 @@ fn apply_line_range_single_line_survives_the_clamp() {
 
     assert_eq!(apply_line_range(content, 3, Some(3)), "    3\tc");
 }
+
+/// [T-GHH029] the line gutter widens with the file instead of breaking at 100k
+///
+/// The width was a fixed 5, which stops lining up at line 100,000 — reachable
+/// well inside `MAX_GITHUB_RESPONSE_BYTES`, since 100k short lines are about
+/// 1 MB against a 10 MB cap.
+#[test]
+fn apply_line_range_gutter_widens_past_five_digits() {
+    let content: String = (1..=100_001).map(|i| format!("line {i}\n")).collect();
+
+    let out = apply_line_range(&content, 99_999, Some(100_001));
+    let widths: Vec<usize> = out
+        .lines()
+        .map(|l| l.split('\t').next().expect("gutter").len())
+        .collect();
+
+    assert_eq!(
+        widths,
+        vec![6, 6, 6],
+        "every gutter in one response must be the same width, got: {out}"
+    );
+}
+
+/// [T-GHH030] a file under 100k lines keeps the 5-wide gutter
+///
+/// The width is derived, so this pins that deriving it did not change the shape
+/// every existing repo-read response already has.
+#[test]
+fn apply_line_range_gutter_stays_five_wide_for_small_files() {
+    assert_eq!(apply_line_range("a\nb\nc", 2, Some(2)), "    2\tb");
+}
+
+/// [T-GHH031] `..` and `.` are refused as whole owner or repo segments
+///
+/// These two are the only names a URL normalizer acts on, and `owner`/`repo`
+/// reach the request path without `encode_path`. Names that merely contain dots
+/// are GitHub's to reject.
+#[test]
+fn parse_repo_refuses_dot_segments_but_not_dotted_names() {
+    for bad in ["../repo", "./repo", "owner/..", "owner/."] {
+        assert!(parse_repo(bad).is_err(), "must be refused: {bad}");
+    }
+    for ok in [".../repo", "..a/repo", "a../repo", "owner/a.b.c"] {
+        assert!(
+            parse_repo(ok).is_ok(),
+            "carries no normalizer meaning, leave it to GitHub: {ok}"
+        );
+    }
+}
