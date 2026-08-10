@@ -12,7 +12,7 @@ use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info, warn};
 
-use crate::body_limit::read_body_capped;
+use crate::body_limit::{MAX_ERROR_BODY_BYTES, read_body_capped, read_body_snippet};
 use crate::clock::{Clock, SystemClock};
 use crate::redacted::{Redacted, validate_https};
 #[cfg(test)]
@@ -220,8 +220,13 @@ impl GitHubClient {
                 let retry_after = self.rate_limit_delay(response.headers());
                 match remaining {
                     Some(r) if r > 0 => {
-                        let message =
-                            extract_error_message(&response.text().await.unwrap_or_default());
+                        // Bounded rather than `text()`: the body is read only to
+                        // name the failure, and an error response can be as large
+                        // as a successful one that `read_body_capped` guards.
+                        let raw = read_body_snippet(response, MAX_ERROR_BODY_BYTES)
+                            .await
+                            .unwrap_or_default();
+                        let message = extract_error_message(&String::from_utf8_lossy(&raw));
                         Err(GitHubError::Forbidden(message))
                     }
                     _ => {
