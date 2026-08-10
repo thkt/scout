@@ -134,10 +134,12 @@ impl SlackError {
                 // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
                 // codes; the space forms are scout's own strings from
                 // `fetch_message`: bare "message not found" (resolved list empty)
-                // and "message {ts} not found in thread" (target absent or in a
-                // truncated page). The latter interpolates `{ts}`, so it can't be
-                // exact-matched — the `starts_with`/`contains` guard catches the
-                // whole "message … not found …" family (issue #224). Slack-native
+                // and "message {ts} not found in thread", which gains a trailing
+                // clause when paging stopped at the page cap. Neither of the
+                // latter two can be exact-matched — one interpolates `{ts}`, the
+                // other varies by cause — so the `starts_with`/`contains` guard
+                // catches the whole "message … not found …" family (issue #224).
+                // Slack-native
                 // codes are snake_case and never start with "message " (space),
                 // so they fall through to their own arms below.
                 "channel_not_found" | "message_not_found" | "thread_not_found" => {

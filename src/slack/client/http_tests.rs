@@ -567,6 +567,61 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
     assert!(logs_contain("WARN"));
 }
 
+/// [T-SK087] When the target message is missing *and* paging stopped at
+/// `SLACK_MAX_REPLY_PAGES`, the error says the thread was cut short.
+///
+/// The two causes of a missing target are indistinguishable in the message
+/// otherwise: a permalink to a deleted message and a permalink to reply 10,001
+/// both read "message … not found in thread". Only the second is worth acting
+/// on, and the page cap is the reason. `SlackError::classify` still routes the
+/// longer string to NotFound, since its guard matches the "message … not found"
+/// family rather than an exact string.
+#[tokio::test]
+async fn missing_target_in_a_capped_thread_names_the_page_cap() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Every page advertises another, so paging ends at the cap; the target ts
+    // appears on none of them.
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "parent", "ts": parent_ts}],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })),
+    )
+    .await;
+    mount_users_info_resolving(&server).await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = slack_url("9999.999999", Some(parent_ts));
+    let Err(err) = client.fetch_message(&url).await else {
+        panic!("a target absent from every fetched page cannot resolve");
+    };
+
+    let SlackError::Api { ref error } = err else {
+        panic!("expected an Api error naming the missing message, got: {err}");
+    };
+    assert!(
+        error.contains("9999.999999") && error.contains("not found"),
+        "the error must still name the missing message, got: {error}"
+    );
+    assert!(
+        error.contains("page cap"),
+        "a capped thread must say so, or the caller cannot tell a deleted \
+         message from an unfetched one, got: {error}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::NotFound,
+        "the longer string must still classify as NotFound"
+    );
+}
+
 /// [T-SK047] A message-permalink URL (no thread_ts) whose target has replies
 /// triggers the conversations.history reply_count probe; when reply_count > 0
 /// fetch_thread re-fetches the full thread via conversations.replies and marks

@@ -563,9 +563,21 @@ impl SlackClient {
 
         let resolved = resolve_messages(&fetched.messages, &users);
 
+        // A missing target has two causes that read alike: the message is gone,
+        // or it sits past the page cap and was never fetched. Only the second is
+        // worth acting on, so say which one happened. `classify` matches the
+        // "message … not found" family rather than an exact string, so the
+        // longer form still routes to NotFound.
         let (first, resolved) =
             extract_target(resolved, &slack_url.ts).ok_or_else(|| SlackError::Api {
-                error: format!("message {} not found in thread", slack_url.ts),
+                error: if fetched.truncated {
+                    format!(
+                        "message {} not found in thread (paging stopped at the {SLACK_MAX_REPLY_PAGES}-page cap, so later replies were never fetched)",
+                        slack_url.ts
+                    )
+                } else {
+                    format!("message {} not found in thread", slack_url.ts)
+                },
             })?;
         let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
         let output = format_slack_output(slack_url, &channel_name, &first, replies);
