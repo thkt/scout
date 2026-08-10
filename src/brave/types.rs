@@ -19,18 +19,18 @@ pub(crate) struct SearchResult {
 /// `None` because the field is `Option`, and [`Self::into_results`] maps that to
 /// an empty result list.
 #[derive(Debug, Deserialize)]
-pub(crate) struct WebSearchResponse {
-    pub(crate) web: Option<WebSearch>,
+pub(super) struct WebSearchResponse {
+    pub(super) web: Option<WebSearch>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct WebSearch {
+pub(super) struct WebSearch {
     #[serde(default)]
-    pub(crate) results: Vec<SearchResult>,
+    pub(super) results: Vec<SearchResult>,
 }
 
 impl WebSearchResponse {
-    pub(crate) fn into_results(self) -> Vec<SearchResult> {
+    pub(super) fn into_results(self) -> Vec<SearchResult> {
         self.web.map(|w| w.results).unwrap_or_default()
     }
 }

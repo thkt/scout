@@ -15,7 +15,7 @@ use crate::redacted::Redacted;
 const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Object-safe boxed future returned by [`TokenSource::fetch`].
-pub(crate) type TokenFuture<'a> = Pin<Box<dyn Future<Output = Option<Redacted>> + Send + 'a>>;
+type TokenFuture<'a> = Pin<Box<dyn Future<Output = Option<Redacted>> + Send + 'a>>;
 
 /// Resolves an optional GitHub bearer token. `Send + Sync` so implementations
 /// can sit behind an `Arc<dyn TokenSource>` shared across async tasks.

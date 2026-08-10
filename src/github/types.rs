@@ -17,7 +17,7 @@ pub(crate) struct RepoInfo {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct LicenseInfo {
+pub(super) struct LicenseInfo {
     pub(super) spdx_id: Option<String>,
     pub(super) name: String,
 }
@@ -63,7 +63,7 @@ pub(crate) struct ContentsResponse {
 /// reads directories, and here the shape alone answers "was this a file?".
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
-pub(crate) enum ContentsPayload {
+pub(super) enum ContentsPayload {
     File(ContentsResponse),
     Directory(IgnoredAny),
 }
@@ -94,7 +94,7 @@ pub(crate) fn real_issues(issues: &[IssueInfo]) -> Vec<&IssueInfo> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct LabelInfo {
+pub(super) struct LabelInfo {
     pub(super) name: String,
 }
 
@@ -108,7 +108,7 @@ pub(crate) struct PullInfo {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub(crate) struct UserInfo {
+pub(super) struct UserInfo {
     pub(super) login: String,
 }
 

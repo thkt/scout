@@ -9,8 +9,8 @@ mod typo;
 pub(crate) use errors::ScoutError;
 pub(crate) use params::Command;
 
-pub(crate) use builder::ScoutBuilder;
-pub(crate) use config::RuntimeConfig;
+use builder::ScoutBuilder;
+use config::RuntimeConfig;
 
 use std::future::Future;
 use std::io::{IsTerminal, stdin};

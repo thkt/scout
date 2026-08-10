@@ -84,7 +84,7 @@ pub(crate) struct FetchParams {
 impl FetchParams {
     /// Named rather than `Default` so a test that cares about `js` or `raw` has to
     /// set the flag visibly.
-    pub(crate) fn for_test(url: &str) -> Self {
+    pub(super) fn for_test(url: &str) -> Self {
         Self {
             url: Some(url.to_owned()),
             js: false,

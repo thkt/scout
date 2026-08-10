@@ -156,11 +156,7 @@ impl BraveClient {
     /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
     /// tests can exercise the env-not-set / whitespace branches without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    pub(crate) fn from_env_with<F>(
-        http: Client,
-        max_retries: u32,
-        get_var: F,
-    ) -> Result<Self, BraveError>
+    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, BraveError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {

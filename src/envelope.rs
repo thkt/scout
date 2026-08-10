@@ -214,11 +214,11 @@ impl ErrorCode {
 /// `degraded_reasons` as an additive field (omitted from JSON when empty).
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
-    pub(crate) data: serde_json::Value,
-    pub(crate) degraded: bool,
-    pub(crate) notes: Vec<String>,
+    data: serde_json::Value,
+    degraded: bool,
+    notes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) degraded_reasons: Vec<DegradedReason>,
+    degraded_reasons: Vec<DegradedReason>,
 }
 
 /// Error envelope per ADR-0010. Wraps the payload under an `error` key so

@@ -47,12 +47,12 @@ const RETRIES_CAP: u32 = 10;
 /// hard-coded default and validates against a min/max range so a
 /// misconfigured agent fails fast instead of running with an extreme value.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RuntimeConfig {
-    pub(crate) fetch_timeout: Duration,
-    pub(crate) research_timeout: Duration,
-    pub(crate) slack_timeout: Duration,
-    pub(crate) github_timeout: Duration,
-    pub(crate) max_retries: u32,
+pub(super) struct RuntimeConfig {
+    pub(super) fetch_timeout: Duration,
+    pub(super) research_timeout: Duration,
+    pub(super) slack_timeout: Duration,
+    pub(super) github_timeout: Duration,
+    pub(super) max_retries: u32,
 }
 
 impl Default for RuntimeConfig {
@@ -68,14 +68,14 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    pub(crate) fn from_env() -> Result<Self, ScoutError> {
+    pub(super) fn from_env() -> Result<Self, ScoutError> {
         Self::from_env_with(|k| env::var(k))
     }
 
     /// Wraps [`Self::from_env`] with a caller-supplied env reader so tests
     /// can exercise parse and range failures without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    pub(crate) fn from_env_with<F>(get_var: F) -> Result<Self, ScoutError>
+    fn from_env_with<F>(get_var: F) -> Result<Self, ScoutError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {

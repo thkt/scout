@@ -56,7 +56,7 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 /// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
 /// frontmatter field reaches for that function instead. ADR-0014's
 /// neutralization table pins this escape set separately from the quoting.
-pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {
+fn escape_yaml(s: &str) -> Cow<'_, str> {
     // The common frontmatter value (a plain title/author/date) carries no escapable
     // char, so borrow it untouched instead of allocating a copy.
     if !s

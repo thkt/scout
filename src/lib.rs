@@ -19,7 +19,7 @@ mod token_source;
 mod tools;
 mod yaml;
 
-pub(crate) const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
 use std::env;
 use std::io::{self, ErrorKind, Write, stderr, stdout};
@@ -93,7 +93,7 @@ Tuning (override built-in timeouts and retry budget):
 
 Invalid tuning values fail with exit 64 (usage error) before any request is made."
 )]
-pub(crate) struct Cli {
+struct Cli {
     /// Emit output as a JSON envelope (one line) on stdout
     /// instead of Markdown. Errors print a JSON envelope on stderr.
     #[arg(long, global = true)]

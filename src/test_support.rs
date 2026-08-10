@@ -143,7 +143,7 @@ async fn try_spawn_with_bind(
 /// `accept_count` connections accepted and counted even when a mid-loop
 /// write fails, so the loop runs to completion and the *first* error
 /// surfaces afterwards.
-pub(crate) fn spawn_accept_loop<F>(
+fn spawn_accept_loop<F>(
     test_name: &str,
     accept_count: usize,
     respond: F,
@@ -191,10 +191,7 @@ pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
 ///
 /// The elapsed handle is dropped, not joined: joining a still-running thread
 /// blocks again, which is the hang this guards against.
-pub(crate) fn join_server_thread_with_deadline(
-    handle: JoinHandle<io::Result<()>>,
-    deadline: Duration,
-) {
+fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline: Duration) {
     let started = Instant::now();
     while !handle.is_finished() {
         if started.elapsed() >= deadline {

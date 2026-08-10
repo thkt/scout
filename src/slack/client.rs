@@ -132,11 +132,7 @@ impl SlackClient {
     /// tests can exercise the token-not-set / whitespace branches without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
     /// Mirrors [`crate::brave::client::BraveClient::from_env_with`] (ADR-0007).
-    pub(crate) fn from_env_with<F>(
-        http: Client,
-        max_retries: u32,
-        get_var: F,
-    ) -> Result<Self, SlackError>
+    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, SlackError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {

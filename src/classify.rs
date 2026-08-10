@@ -39,7 +39,7 @@ impl Classification {
     }
 
     /// For connect-level network failures where retry alone will not help.
-    pub(crate) fn transient_network() -> Self {
+    fn transient_network() -> Self {
         Self::new(ErrorCode::TempFailure).with_hint(HINT_CHECK_NETWORK)
     }
 

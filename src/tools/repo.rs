@@ -221,7 +221,7 @@ impl Scout {
 /// error path. The user is already waiting on a failure; we'd rather skip
 /// candidates than block them on a slow tree fetch. `pub(crate)` so the config
 /// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
-pub(crate) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CANDIDATE_MAX_DISTANCE: usize = 3;
 const CANDIDATE_TOP_N: usize = 3;
