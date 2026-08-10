@@ -44,7 +44,7 @@ Option B は server/user の宣言意図を捨て、正しい label を無視す
 
 ### Confirmation
 
-fetch 経路は `src/fetch/download/charset_tests.rs` が label 尊重・多バイトリカバリ・単バイト uncertain を網羅する (T-F063, T-F068 系)。GitHub 経路は `src/github/encoding/tests.rs` が explicit hint・BOM 優先・chardetng 先行・binary 弾き・hard error を網羅する。共有ゲートの 8 種 whitelist は `src/charset.rs` の定義が単一の真実源で、両経路のテストが間接的に pin する。chardetng / encoding_rs を更新する際は、`encoding.decode` が BOM を honor する挙動 (fetch 経路の前提) と `decode_without_bom_handling` の挙動 (GitHub 経路の前提) を再検証する。
+fetch 経路は `src/fetch/download/charset_tests.rs` が label 尊重・多バイトリカバリ・単バイト uncertain を網羅する (T-F063, T-F068 系)。GitHub 経路は `src/github/encoding/tests.rs` が explicit hint・BOM 優先・chardetng 先行・binary 弾き・hard error を網羅する。共有ゲートの 8 種 whitelist は `src/charset.rs` の定義が単一の真実源で、同ファイルの `[T-CS001..T-CS003]` が直接 pin する。両経路のテストは間接的にしか触れず、実際 `ISO_2022_JP` / `BIG5` / `GB18030` はどちらの経路のテストにも現れなかったため、whitelist から落としても 1 件も失敗しない状態だった。chardetng / encoding_rs を更新する際は、`encoding.decode` が BOM を honor する挙動 (fetch 経路の前提) と `decode_without_bom_handling` の挙動 (GitHub 経路の前提) を再検証する。
 
 ## Pros and Cons of the Options
 
