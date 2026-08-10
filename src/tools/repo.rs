@@ -89,6 +89,16 @@ impl Scout {
         if let Some(ref r) = params.ref_ {
             github::validate_ref(r)?;
         }
+        // Same rule as `repo_tree` above: a rejection that needs nothing from the
+        // network happens before it. Every check inside `parse_line_range` is
+        // about the string's shape, never the file's length, so a malformed
+        // `--lines` should not cost a contents call, the blob call that can
+        // follow, and a decode before it is reported.
+        let line_range = params
+            .lines
+            .as_deref()
+            .map(github::parse_line_range)
+            .transpose()?;
 
         let github = self.github().await;
 
@@ -128,12 +138,8 @@ impl Scout {
         let raw = decode_result.text;
 
         let total = raw.lines().count();
-        let content = if let Some(ref range) = params.lines {
-            let (start, end) = github::parse_line_range(range)?;
-            github::apply_line_range(&raw, start, end)
-        } else {
-            github::apply_line_range(&raw, 1, None)
-        };
+        let (start, end) = line_range.unwrap_or((1, None));
+        let content = github::apply_line_range(&raw, start, end);
 
         let markdown =
             github::format::format_file_content(&path, total, &content, encoding_label.as_deref());
