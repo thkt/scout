@@ -31,7 +31,7 @@ use crate::envelope::ErrorCode;
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
 use converter::{FetchResult, to_fetch_result};
-use download::download;
+use download::{DownloadedPage, download};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
@@ -198,7 +198,11 @@ pub(crate) async fn fetch_page(
     // cleared whenever CDP output replaces the body below, because the headless
     // browser re-decodes the page from its own response handling.
     #[cfg(feature = "js-rendering")]
-    let (final_url, mut html, mut decode_uncertain) = download(
+    let DownloadedPage {
+        url: final_url,
+        text: mut html,
+        mut decode_uncertain,
+    } = download(
         client,
         &validated,
         FETCH_MAX_REDIRECTS,
@@ -207,7 +211,11 @@ pub(crate) async fn fetch_page(
     )
     .await?;
     #[cfg(not(feature = "js-rendering"))]
-    let (final_url, html, decode_uncertain) = download(
+    let DownloadedPage {
+        url: final_url,
+        text: html,
+        decode_uncertain,
+    } = download(
         client,
         &validated,
         FETCH_MAX_REDIRECTS,

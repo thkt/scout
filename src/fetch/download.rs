@@ -10,6 +10,21 @@ use super::{FetchError, MAX_RESPONSE_BYTES};
 use crate::body_limit::read_body_capped;
 use crate::charset::is_reliable_detection;
 
+/// A page as it came off the wire: which URL actually served it, the decoded
+/// body, and whether that decode was a best-effort fallback.
+///
+/// `url` is the last hop, not the one the caller asked for, and every hop in
+/// between passed `ssrf_check` — so it is the URL that later stages resolve
+/// relative links against. `decode_uncertain` travels with the text rather than
+/// beside it because a caller that reads one without the other reports a body it
+/// cannot vouch for as clean (issue #241).
+#[derive(Debug)]
+pub(super) struct DownloadedPage {
+    pub(super) url: ValidatedUrl,
+    pub(super) text: String,
+    pub(super) decode_uncertain: bool,
+}
+
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
 ///
 /// `reqwest::redirect::Policy::limited(n)` is not acceptable: it follows
@@ -29,7 +44,7 @@ pub(super) async fn download(
     max_redirects: usize,
     resolver: &dyn DnsResolver,
     mode: &EgressMode,
-) -> Result<(ValidatedUrl, String, bool), FetchError> {
+) -> Result<DownloadedPage, FetchError> {
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
@@ -84,7 +99,11 @@ pub(super) async fn download(
         )
         .await?;
         let decoded = decode_body(&body, charset.as_deref());
-        return Ok((current_url, decoded.text, decoded.uncertain));
+        return Ok(DownloadedPage {
+            url: current_url,
+            text: decoded.text,
+            decode_uncertain: decoded.uncertain,
+        });
     }
 
     // CALIBRATION (issue #145 / #148 follow-up): structured fields below let

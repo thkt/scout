@@ -35,10 +35,7 @@ fn public_resolver() -> ssrf::StaticDnsResolver {
 /// redirects, the standard hop cap, a resolver that answers public, direct
 /// egress. A test that varies one of those calls `download` directly, so the
 /// variation stays visible at the call site.
-async fn download_default(
-    uri: &str,
-    path: &str,
-) -> Result<(ValidatedUrl, String, bool), FetchError> {
+async fn download_default(uri: &str, path: &str) -> Result<DownloadedPage, FetchError> {
     let client = no_redirect_client();
     download(
         &client,
@@ -64,10 +61,10 @@ async fn download_success_returns_html() {
         .mount(&server)
         .await;
 
-    let (final_url, html, _uncertain) = download_default(&server.uri(), "/page").await.unwrap();
+    let page = download_default(&server.uri(), "/page").await.unwrap();
 
-    assert!(final_url.as_str().contains("/page"));
-    assert!(html.contains("hello"));
+    assert!(page.url.as_str().contains("/page"));
+    assert!(page.text.contains("hello"));
 }
 
 /// [T-F067] download flags `decode_uncertain` for a body that cannot be decoded
@@ -93,11 +90,14 @@ async fn download_flags_decode_uncertain_for_undecodable_body() {
         .mount(&server)
         .await;
 
-    let (_final_url, html, uncertain) = download_default(&server.uri(), "/mojibake").await.unwrap();
+    let page = download_default(&server.uri(), "/mojibake").await.unwrap();
 
-    assert!(uncertain, "undecodable body must set decode_uncertain");
     assert!(
-        !html.is_empty(),
+        page.decode_uncertain,
+        "undecodable body must set decode_uncertain"
+    );
+    assert!(
+        !page.text.is_empty(),
         "a best-effort body must still be returned"
     );
 }
@@ -123,15 +123,16 @@ async fn download_recovers_mislabeled_multibyte_without_uncertain() {
         .mount(&server)
         .await;
 
-    let (_final_url, html, uncertain) = download_default(&server.uri(), "/sjis").await.unwrap();
+    let page = download_default(&server.uri(), "/sjis").await.unwrap();
 
     assert!(
-        !uncertain,
+        !page.decode_uncertain,
         "recovered multi-byte body must not be flagged uncertain"
     );
     assert!(
-        html.contains("日本語の本文"),
-        "recovered text should be present, got: {html}"
+        page.text.contains("日本語の本文"),
+        "recovered text should be present, got: {}",
+        page.text
     );
 }
 
@@ -360,11 +361,12 @@ async fn download_transparently_decodes_gzip_response() {
         .mount(&server)
         .await;
 
-    let (_final_url, body, _uncertain) = download_default(&server.uri(), "/gz").await.unwrap();
+    let page = download_default(&server.uri(), "/gz").await.unwrap();
 
     assert!(
-        body.contains("hello"),
-        "gzip body should be transparently decompressed, got: {body:?}"
+        page.text.contains("hello"),
+        "gzip body should be transparently decompressed, got: {:?}",
+        page.text
     );
 }
 
@@ -389,11 +391,12 @@ async fn download_transparently_decodes_deflate_response() {
         .mount(&server)
         .await;
 
-    let (_final_url, body, _uncertain) = download_default(&server.uri(), "/df").await.unwrap();
+    let page = download_default(&server.uri(), "/df").await.unwrap();
 
     assert!(
-        body.contains("hello"),
-        "deflate body should be transparently decompressed, got: {body:?}"
+        page.text.contains("hello"),
+        "deflate body should be transparently decompressed, got: {:?}",
+        page.text
     );
 }
 

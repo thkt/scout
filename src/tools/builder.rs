@@ -83,6 +83,12 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
 
+    // `Policy::none()` is load-bearing, not a default: `fetch::download` walks
+    // the redirect chain itself so it can run `ssrf_check` on every hop
+    // (ADR-0001). Letting reqwest follow them would land on the final URL with
+    // only the first one validated, and nothing in the type system says so —
+    // `download` states the requirement in prose and this is the call site that
+    // has to keep it.
     let fetch_builder = Client::builder()
         .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
