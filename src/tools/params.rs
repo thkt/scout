@@ -67,8 +67,12 @@ Examples:
   scout fetch https://example.com
   scout fetch https://example.com --js
   scout fetch https://example.com --raw
+  scout fetch https://acme.slack.com/archives/C123/p1700000000000000
   echo \"https://example.com\" | scout fetch
-  scout fetch -")]
+  scout fetch -
+
+Environment:
+  SLACK_TOKEN  Required when the URL is a Slack permalink. User OAuth token (xoxp-…).")]
 pub(crate) struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub(super) url: Option<String>,
@@ -189,6 +193,8 @@ pub(crate) struct RepoOverviewParams {
 
 #[cfg(test)]
 mod tests {
+    use std::{iter, mem};
+
     use clap::Args;
 
     use super::resolve_input;
@@ -213,10 +219,15 @@ mod tests {
         assert_help_sections::<super::SearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
-    /// [T-H002] fetch --help contains Examples: section
+    /// [T-H002] fetch --help contains Examples: and Environment: sections
+    ///
+    /// `fetch` was the one subcommand whose help named no environment variable,
+    /// yet a Slack permalink fails without `SLACK_TOKEN`. Only the root help
+    /// carried it, so an agent that read `scout fetch --help` after that failure
+    /// found nothing to act on.
     #[test]
-    fn fetch_help_contains_examples() {
-        assert_help_sections::<super::FetchParams>(None);
+    fn fetch_help_contains_examples_and_environment() {
+        assert_help_sections::<super::FetchParams>(Some("SLACK_TOKEN"));
     }
 
     /// [T-H003] research --help contains Examples: and Environment: sections
@@ -268,6 +279,92 @@ mod tests {
                 "{name} help missing stdin example '{pattern}'"
             );
         }
+    }
+
+    /// Split an example line the way a shell would. Only double quotes appear in
+    /// these examples, so nothing else is handled.
+    fn shell_split(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        for ch in s.chars() {
+            match ch {
+                '"' => quoted = !quoted,
+                c if c.is_whitespace() && !quoted => {
+                    if !current.is_empty() {
+                        out.push(mem::take(&mut current));
+                    }
+                }
+                c => current.push(c),
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+        out
+    }
+
+    /// The argv of every line in the help's `Examples:` block, taken from the
+    /// last `scout ` on the line so a piped example contributes the command and
+    /// not the `echo` in front of it.
+    fn example_argvs(help: &str) -> Vec<Vec<String>> {
+        help.lines()
+            .skip_while(|line| !line.trim_start().starts_with("Examples:"))
+            .skip(1)
+            .take_while(|line| !line.trim().is_empty())
+            .filter_map(|line| {
+                line.rsplit_once("scout ")
+                    .map(|(_, rest)| shell_split(rest))
+            })
+            .collect()
+    }
+
+    /// [T-H011] every example printed in a subcommand's help parses
+    ///
+    /// The other help tests assert that an `Examples:` block exists, not that
+    /// what it shows works — a renamed flag or a mistyped subcommand left them
+    /// all passing while the help told an agent to run something that exits 64.
+    /// Parsing is the whole check: it needs no network, and the examples carry
+    /// no shell syntax beyond quoting.
+    #[test]
+    fn help_examples_parse() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: super::Command,
+        }
+
+        let helps = [
+            help_text::<super::SearchParams>(),
+            help_text::<super::FetchParams>(),
+            help_text::<super::ResearchParams>(),
+            help_text::<super::RepoTreeParams>(),
+            help_text::<super::RepoReadParams>(),
+            help_text::<super::RepoOverviewParams>(),
+        ];
+
+        let mut checked = 0;
+        for help in &helps {
+            for argv in example_argvs(help) {
+                let full: Vec<String> = iter::once("scout".to_owned())
+                    .chain(argv.iter().cloned())
+                    .collect();
+                assert!(
+                    Cli::try_parse_from(&full).is_ok(),
+                    "help shows an example that does not parse: scout {}",
+                    argv.join(" ")
+                );
+                checked += 1;
+            }
+        }
+        // Guards the extraction itself: a change to the help layout that stopped
+        // matching would otherwise leave this test passing on zero examples.
+        assert!(
+            checked >= 25,
+            "expected every subcommand's examples to be checked, got {checked}"
+        );
     }
 
     /// [T-P001] research --depth accepts valid range 1..=10 and rejects out-of-range
