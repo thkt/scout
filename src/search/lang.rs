@@ -1,10 +1,9 @@
 use clap::ValueEnum;
 
-#[derive(ValueEnum, Clone, Copy, Default)]
+#[derive(ValueEnum, Clone, Copy)]
 pub(crate) enum Lang {
     Ja,
     En,
-    #[default]
     Auto,
 }
 
