@@ -68,6 +68,11 @@ pub(super) fn to_fetch_result(
     url: String,
     decode_uncertain: bool,
 ) -> FetchResult {
+    // The bare `false` is fast_html2md 0.0.62's `commonmark` parameter, which its
+    // rustdoc describes as "adjusting markdown output to commonmark". Naming it
+    // here because the literal alone says nothing at the call site; what scout
+    // gains by leaving it off is not recorded anywhere.
+    // https://docs.rs/fast_html2md/0.0.62/fast_html2md/fn.rewrite_html.html
     let markdown = html2md::rewrite_html(&article.content_html, false);
     let output = format_with_frontmatter(article, &markdown);
 
@@ -162,5 +167,49 @@ mod tests {
             "page body must not introduce a bare YAML document marker:\n{out}"
         );
         assert!(after_fm.contains("injected: pwned"));
+    }
+
+    /// [T-FC014] to_fetch_result carries both internal flags from their sources
+    ///
+    /// `used_raw_fallback` arrives on the article (Readability decided it) and
+    /// `decode_uncertain` as an argument (the download layer decided it), so the
+    /// two are easy to swap. Both reach the caller as `notes` / `degraded_reasons`
+    /// entries, and T-FC001/T-FC002 assert only the frontmatter — a swap, or
+    /// either field pinned to `false`, passes every other test in this file.
+    #[test]
+    fn to_fetch_result_carries_both_flags() {
+        let raw_fallback_only = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<p>x</p>".into(),
+            used_raw_fallback: true,
+        };
+        let result = to_fetch_result(&raw_fallback_only, "https://example.com".into(), false);
+        assert!(
+            result.used_raw_fallback(),
+            "the article's raw-fallback flag must reach the result"
+        );
+        assert!(
+            !result.decode_uncertain(),
+            "the caller passed decode_uncertain=false"
+        );
+
+        let decode_uncertain_only = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<p>x</p>".into(),
+            used_raw_fallback: false,
+        };
+        let result = to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true);
+        assert!(
+            !result.used_raw_fallback(),
+            "the article carried no raw-fallback flag"
+        );
+        assert!(
+            result.decode_uncertain(),
+            "the caller's decode_uncertain must reach the result"
+        );
     }
 }

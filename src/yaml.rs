@@ -111,6 +111,26 @@ mod tests {
         assert!(matches!(escape_yaml("plain title 2026"), Cow::Borrowed(_)));
     }
 
+    /// [T-FC013] C0 control characters other than `\0\n\r\t` pass through
+    ///
+    /// ADR-0014 accepts this: the escape set covers what breaks out of a
+    /// double-quoted scalar, and the primary consumer is an agent rather than a
+    /// terminal. Two things follow that the ADR does not state — the value stays
+    /// borrowed (ESC is not in the escape scan), and the emitted scalar carries a
+    /// byte YAML 1.2 excludes from c-printable, so a strict parser rejects it.
+    /// Pinned here so a later change to either behaviour has to revisit the ADR
+    /// rather than pass unnoticed.
+    #[test]
+    fn escape_yaml_passes_control_characters_through() {
+        let with_esc = "title\u{1b}[31m";
+        assert!(
+            matches!(escape_yaml(with_esc), Cow::Borrowed(_)),
+            "ESC is outside the escape scan, so the value is not copied"
+        );
+        assert_eq!(escape_yaml(with_esc), with_esc);
+        assert_eq!(escape_yaml("bell\u{7}"), "bell\u{7}");
+    }
+
     /// [T-FC005] neutralize_yaml_markers rewrites bare ---/... lines to ***
     #[test]
     fn neutralize_yaml_markers_rewrites_bare_doc_markers() {
