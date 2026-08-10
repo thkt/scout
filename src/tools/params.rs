@@ -28,7 +28,7 @@ pub(super) fn resolve_input(
 }
 
 #[derive(Subcommand)]
-pub enum Command {
+pub(crate) enum Command {
     /// Search the web using Brave Search API
     Search(SearchParams),
     /// Fetch a web page and convert it to clean Markdown
@@ -53,12 +53,12 @@ Examples:
 
 Environment:
   BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
-pub struct SearchParams {
+pub(crate) struct SearchParams {
     /// Search query
-    pub query: Option<String>,
+    pub(super) query: Option<String>,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
-    pub lang: Lang,
+    pub(super) lang: Lang,
 }
 
 #[derive(Args)]
@@ -69,15 +69,15 @@ Examples:
   scout fetch https://example.com --raw
   echo \"https://example.com\" | scout fetch
   scout fetch -")]
-pub struct FetchParams {
+pub(crate) struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
-    pub url: Option<String>,
+    pub(super) url: Option<String>,
     /// Force JavaScript rendering via headless Chrome / CDP (requires the `js-rendering` build feature and Chrome/Chromium). Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
-    pub js: bool,
+    pub(super) js: bool,
     /// Skip Readability extraction and convert entire page
     #[arg(long)]
-    pub raw: bool,
+    pub(super) raw: bool,
 }
 
 #[cfg(test)]
@@ -104,15 +104,15 @@ Examples:
 
 Environment:
   BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
-pub struct ResearchParams {
+pub(crate) struct ResearchParams {
     /// Research query
-    pub query: Option<String>,
+    pub(super) query: Option<String>,
     /// Number of URLs to fetch for deep analysis (1-10)
     #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=10))]
-    pub depth: u8,
+    pub(super) depth: u8,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
-    pub lang: Lang,
+    pub(super) lang: Lang,
 }
 
 #[derive(Args)]
@@ -127,18 +127,18 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoTreeParams {
+pub(crate) struct RepoTreeParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
-    pub ref_: Option<String>,
+    pub(super) ref_: Option<String>,
     /// Filter to files under this path prefix (e.g., "src/components/")
     #[arg(short, long)]
-    pub path: Option<String>,
+    pub(super) path: Option<String>,
     /// Glob pattern to filter filenames (e.g., "*.rs", "*.{ts,tsx}")
     #[arg(long)]
-    pub pattern: Option<String>,
+    pub(super) pattern: Option<String>,
 }
 
 #[derive(Args)]
@@ -153,23 +153,23 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoReadParams {
+pub(crate) struct RepoReadParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
     /// File path within the repository (e.g., "src/index.ts")
-    pub path: Option<String>,
+    pub(super) path: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
-    pub ref_: Option<String>,
+    pub(super) ref_: Option<String>,
     /// Line range: "1-80", "50-", or "100" (first N lines)
     #[arg(short, long)]
-    pub lines: Option<String>,
+    pub(super) lines: Option<String>,
     /// Character encoding label (e.g., shift_jis, euc-jp, gbk).
     /// When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other
     /// multi-byte encodings via BOM and chardetng. Single-byte encodings (windows-1252,
     /// ISO-8859-*, etc.) require explicit --encoding.
     #[arg(long)]
-    pub encoding: Option<String>,
+    pub(super) encoding: Option<String>,
 }
 
 #[derive(Args)]
@@ -182,9 +182,9 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoOverviewParams {
+pub(crate) struct RepoOverviewParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
 }
 
 #[cfg(test)]

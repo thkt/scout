@@ -10,12 +10,12 @@ fn log_url(url: Option<&str>) -> String {
 }
 
 pub(super) struct ExtractedArticle {
-    pub title: Option<String>,
-    pub byline: Option<String>,
-    pub published_time: Option<String>,
-    pub content_html: String,
+    pub(super) title: Option<String>,
+    pub(super) byline: Option<String>,
+    pub(super) published_time: Option<String>,
+    pub(super) content_html: String,
     /// False for both successful extraction and explicit raw mode.
-    pub used_raw_fallback: bool,
+    pub(super) used_raw_fallback: bool,
 }
 
 pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {

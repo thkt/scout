@@ -11,7 +11,7 @@ use crate::github;
 use crate::slack::SlackError;
 
 #[derive(Debug)]
-pub struct ScoutError {
+pub(crate) struct ScoutError {
     message: String,
     retryable: bool,
     kind: ErrorCode,
@@ -105,29 +105,29 @@ impl ScoutError {
         self
     }
 
-    pub fn exit_code(&self) -> u8 {
+    pub(crate) fn exit_code(&self) -> u8 {
         self.kind.exit_code()
     }
 
-    pub fn retryable(&self) -> bool {
+    pub(crate) fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn error_kind(&self) -> ErrorCode {
+    pub(crate) fn error_kind(&self) -> ErrorCode {
         self.kind
     }
 
     /// Plain message without next_step / retry hints. Use for JSON `error.message`
     /// where `error.next_step` and `error.retryable` are surfaced separately.
-    pub fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         &self.message
     }
 
-    pub fn next_step(&self) -> Option<&str> {
+    pub(crate) fn next_step(&self) -> Option<&str> {
         self.next_step.as_deref()
     }
 
-    pub fn candidates(&self) -> &[String] {
+    pub(crate) fn candidates(&self) -> &[String] {
         &self.candidates
     }
 }

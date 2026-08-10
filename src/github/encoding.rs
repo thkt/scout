@@ -24,10 +24,10 @@ pub(crate) enum DetectionSource {
 /// Result of decoding raw bytes into Unicode text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DecodeResult {
-    pub text: String,
+    pub(crate) text: String,
     /// The encoding label in lowercase (e.g. "shift_jis", "utf-8").
-    pub encoding: String,
-    pub source: DetectionSource,
+    pub(crate) encoding: String,
+    pub(crate) source: DetectionSource,
 }
 
 /// Decode a base64-encoded string into raw bytes.

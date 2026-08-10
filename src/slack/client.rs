@@ -38,12 +38,12 @@ struct FetchedThread {
 /// channel. A bare `String` return hid these, so caps were invisible to callers
 /// (issue #222).
 pub(crate) struct SlackFetchOutcome {
-    pub markdown: String,
+    pub(crate) markdown: String,
     /// `conversations.replies` hit the page cap; replies past it are omitted.
-    pub thread_truncated: bool,
+    pub(crate) thread_truncated: bool,
     /// Distinct user IDs exceeded `SLACK_MAX_USER_LOOKUPS`; the excess render
     /// as raw `<@UID>` instead of resolved names.
-    pub users_capped: bool,
+    pub(crate) users_capped: bool,
     /// The `conversations.info` call or at least one in-cap `users.info` call
     /// returned an error; that ID renders raw even though the cap did not drop
     /// it. Kept distinct from `users_capped` so a caller can tell "resolution
@@ -51,7 +51,7 @@ pub(crate) struct SlackFetchOutcome {
     ///
     /// A 200 carrying no name does not count: the lookup reached Slack, which
     /// had no name to give, so there is nothing for the caller to retry.
-    pub lookups_failed: bool,
+    pub(crate) lookups_failed: bool,
 }
 
 pub(crate) struct SlackClient {
@@ -111,7 +111,7 @@ const SLACK_MAX_REPLY_PAGES: usize = 50;
 const SLACK_MAX_USER_LOOKUPS: usize = 50;
 
 impl SlackClient {
-    pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
+    fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
             http,
             token,
@@ -510,7 +510,7 @@ impl SlackClient {
         }
     }
 
-    pub async fn fetch_message(
+    pub(crate) async fn fetch_message(
         &self,
         slack_url: &SlackUrl,
     ) -> Result<SlackFetchOutcome, SlackError> {

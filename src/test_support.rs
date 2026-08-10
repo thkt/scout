@@ -120,13 +120,13 @@ fn bind_loopback(test_name: &str) -> Option<TcpListener> {
     guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
 }
 
-pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
+pub(crate) async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
 }
 
 /// Testable core: inject bind result and force flag to control skip-vs-panic.
-pub async fn try_spawn_with_bind(
+async fn try_spawn_with_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
     force: bool,
@@ -228,7 +228,7 @@ pub(crate) fn join_server_thread_with_deadline(
 /// passing a larger value blocks the spawned thread on `listener.accept()`.
 /// `join_server_thread` no longer hangs on that: it panics naming
 /// `accept_count` once its deadline elapses (`join_server_thread_with_deadline`).
-pub fn spawn_mid_stream_drop_server(
+pub(crate) fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
     spawn_accept_loop("spawn_mid_stream_drop_server", accept_count, |stream| {
@@ -247,7 +247,7 @@ pub fn spawn_mid_stream_drop_server(
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
 /// `spawn_mid_stream_drop_server`.
-pub fn spawn_close_delimited_body_server(
+pub(crate) fn spawn_close_delimited_body_server(
     body_size: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let (addr, _counter, handle) =
@@ -275,7 +275,7 @@ pub fn spawn_close_delimited_body_server(
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
 /// `spawn_close_delimited_body_server`.
-pub fn spawn_declared_length_no_body_server(
+pub(crate) fn spawn_declared_length_no_body_server(
     declared_len: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let (addr, _counter, handle) =
@@ -297,7 +297,7 @@ pub fn spawn_declared_length_no_body_server(
 ///
 /// Returns `None` when loopback bind is unavailable so callers can early-return
 /// in restricted environments, matching `spawn_close_delimited_body_server`.
-pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
+pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let body = body.to_owned();
     let (addr, _counter, handle) = spawn_accept_loop("spawn_forward_proxy", 1, move |stream| {
         let response = format!(

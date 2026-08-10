@@ -10,7 +10,7 @@ pub(crate) struct Redacted(String);
 impl Redacted {
     /// Construct a redacted secret. Returns `None` when `s` is empty or
     /// contains only whitespace; otherwise stores the trimmed value.
-    pub fn new(s: &str) -> Option<Self> {
+    pub(crate) fn new(s: &str) -> Option<Self> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             None
@@ -19,7 +19,7 @@ impl Redacted {
         }
     }
 
-    pub fn expose(&self) -> &str {
+    pub(crate) fn expose(&self) -> &str {
         &self.0
     }
 

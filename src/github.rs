@@ -248,11 +248,11 @@ impl GitHubClient {
         }
     }
 
-    pub async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoInfo, GitHubError> {
+    pub(crate) async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoInfo, GitHubError> {
         self.get_json(&format!("/repos/{owner}/{repo}")).await
     }
 
-    pub async fn get_tree(
+    pub(crate) async fn get_tree(
         &self,
         owner: &str,
         repo: &str,
@@ -271,7 +271,7 @@ impl GitHubClient {
     /// `Decode` error, which classifies as a scout-side bug (70) — wrong for what
     /// is ordinary caller input, `repo-tree` being the step that hands directory
     /// paths to the user in the first place.
-    pub async fn get_contents(
+    pub(crate) async fn get_contents(
         &self,
         owner: &str,
         repo: &str,
@@ -291,7 +291,7 @@ impl GitHubClient {
         }
     }
 
-    pub async fn get_blob(
+    pub(crate) async fn get_blob(
         &self,
         owner: &str,
         repo: &str,
@@ -301,7 +301,7 @@ impl GitHubClient {
             .await
     }
 
-    pub async fn get_readme(
+    pub(crate) async fn get_readme(
         &self,
         owner: &str,
         repo: &str,
@@ -310,7 +310,7 @@ impl GitHubClient {
             .await
     }
 
-    pub async fn get_issues(
+    pub(crate) async fn get_issues(
         &self,
         owner: &str,
         repo: &str,
@@ -322,7 +322,7 @@ impl GitHubClient {
         .await
     }
 
-    pub async fn get_pulls(
+    pub(crate) async fn get_pulls(
         &self,
         owner: &str,
         repo: &str,
@@ -334,7 +334,7 @@ impl GitHubClient {
         .await
     }
 
-    pub async fn get_releases(
+    pub(crate) async fn get_releases(
         &self,
         owner: &str,
         repo: &str,
@@ -358,7 +358,7 @@ impl PerPage {
     /// Compile-time validated constructor. The `assert!` panics at compile
     /// time when called from a `const` context with an out-of-range literal,
     /// and at runtime for non-`const` callers.
-    pub const fn new(value: u8) -> Self {
+    pub(crate) const fn new(value: u8) -> Self {
         assert!(
             value >= 1 && value <= 100,
             "PerPage must be 1..=100 (GitHub API limit)"

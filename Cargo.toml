@@ -42,6 +42,9 @@ flate2 = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
+# `lib::run` is the crate's only external entry point, so a `pub` anywhere
+# else claims a reach it does not have. Fields are outside this lint's scope.
+unreachable_pub = "deny"
 
 [lints.clippy]
 # absolute paths

@@ -37,13 +37,13 @@ use extractor::{extract_article, extract_raw};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
-    pub js: bool,
+    pub(crate) js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
-    pub raw: bool,
+    pub(crate) raw: bool,
     /// Egress routing for this fetch. `Direct` (the default) runs scout's DNS
     /// pre-check and dials the host directly; `Proxied` skips the pre-check and
     /// routes via the configured HTTP proxy (which resolves and dials instead).
-    pub egress: EgressMode,
+    pub(crate) egress: EgressMode,
 }
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;

@@ -6,8 +6,8 @@ mod query;
 mod repo;
 mod typo;
 
-pub use errors::ScoutError;
-pub use params::Command;
+pub(crate) use errors::ScoutError;
+pub(crate) use params::Command;
 
 pub(crate) use builder::ScoutBuilder;
 pub(crate) use config::RuntimeConfig;
@@ -157,7 +157,7 @@ async fn resolve_stdin_arg(
 
 const MAX_FETCH_OUTPUT_BYTES: usize = 100_000;
 
-pub struct Scout {
+pub(crate) struct Scout {
     http: Client,
     /// HTTP client with redirect following disabled for SSRF-safe fetching.
     /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
@@ -204,7 +204,7 @@ pub struct Scout {
 impl Scout {
     /// Production entry point. Sugar for `ScoutBuilder::from_env()?.build()`;
     /// kept async so existing `Scout::new().await` callsites compile unchanged.
-    pub async fn new() -> Result<Self, ScoutError> {
+    pub(crate) async fn new() -> Result<Self, ScoutError> {
         Ok(ScoutBuilder::from_env()?.build())
     }
 
@@ -212,7 +212,7 @@ impl Scout {
     /// cancellation flag without keeping a reference to `Scout`. The clone
     /// shares state with every receiver subscribed from the underlying
     /// fetch paths.
-    pub fn cancel_handle(&self) -> watch::Sender<bool> {
+    pub(crate) fn cancel_handle(&self) -> watch::Sender<bool> {
         self.cancel.clone()
     }
 
@@ -278,7 +278,7 @@ impl Scout {
             })
     }
 
-    pub async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
+    pub(crate) async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
         match cmd {
             Command::Search(params) => self.search(params).await,
             Command::Fetch(params) => self.fetch(params).await,

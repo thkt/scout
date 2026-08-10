@@ -30,7 +30,7 @@ pub(crate) struct SeededRng(Mutex<fastrand::Rng>);
 
 #[cfg(test)]
 impl SeededRng {
-    pub fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self(Mutex::new(fastrand::Rng::with_seed(seed)))
     }
 }

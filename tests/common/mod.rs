@@ -69,7 +69,7 @@ fn bind_loopback(test_name: &str) -> Option<TcpListener> {
 /// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
 /// the lookup rule (`CARGO_BIN_EXE_scout`, set by Cargo for integration
 /// tests) lives in one place instead of once per test binary.
-pub fn scout() -> Command {
+pub(crate) fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
 }
 
@@ -77,7 +77,7 @@ pub fn scout() -> Command {
 /// anything, so the rule for finding it — scan stderr line by line for the
 /// first line that parses as JSON, because `init_tracing`'s WARN/INFO lines
 /// share stderr with the envelope — lives here once.
-pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
+pub(crate) fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
         .lines()
@@ -118,7 +118,7 @@ pub fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
 /// The accept loop has no exit condition other than a fatal `accept` error
 /// (e.g. the OS closing the socket), so `join_handle` is not for a caller to
 /// `.join()` and wait on, which would hang until the test process exits.
-pub fn spawn_mock_proxy(
+pub(crate) fn spawn_mock_proxy(
     status: u16,
     delay: Duration,
     body: &[u8],
@@ -173,7 +173,7 @@ pub fn spawn_mock_proxy(
 /// Returns `(base_url, connection_count, join_handle)`, or `None` when
 /// `bind_loopback` above skips for an unavailable loopback bind, matching
 /// `spawn_mock_proxy`.
-pub fn spawn_mock_proxy_raw_response(
+pub(crate) fn spawn_mock_proxy_raw_response(
     raw_response: &'static [u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
     let listener = bind_loopback("spawn_mock_proxy_raw_response")?;
@@ -204,7 +204,7 @@ pub fn spawn_mock_proxy_raw_response(
 /// `HOME` is deliberately not restored: neither `src/` nor any crate in
 /// `Cargo.lock` reads it. The macOS proxy lookup goes through
 /// `system-configuration` and the Linux one reads proxy env vars only.
-pub fn scout_with_clean_env() -> Command {
+pub(crate) fn scout_with_clean_env() -> Command {
     let mut cmd = scout_with_env(&env::var("PATH").unwrap_or_default());
     forward_coverage_profile(&mut cmd);
     cmd
@@ -215,7 +215,7 @@ pub fn scout_with_clean_env() -> Command {
 /// drives disappears from the report. It is separate from
 /// `scout_with_clean_env` because `tests/cli_integration.rs` clears the
 /// environment without restoring `PATH`, and so cannot use that builder.
-pub fn forward_coverage_profile(cmd: &mut Command) {
+pub(crate) fn forward_coverage_profile(cmd: &mut Command) {
     set_coverage_profile(cmd, env::var("LLVM_PROFILE_FILE").ok().as_deref());
 }
 
@@ -223,7 +223,7 @@ pub fn forward_coverage_profile(cmd: &mut Command) {
 /// parameter rather than being read here because `unsafe_code = "forbid"`
 /// (Cargo.toml) blocks a test from mutating the real process env, which would
 /// otherwise be the only way to reach either branch.
-pub fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
+pub(crate) fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
     if let Some(profile) = profile {
         cmd.env("LLVM_PROFILE_FILE", profile);
     }
@@ -232,7 +232,7 @@ pub fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
 /// Testable core `scout_with_clean_env` wraps. `path` arrives as a parameter
 /// rather than being read here because `unsafe_code = "forbid"` (Cargo.toml)
 /// blocks a test from mutating the real process env.
-pub fn scout_with_env(path: &str) -> Command {
+pub(crate) fn scout_with_env(path: &str) -> Command {
     let mut cmd = scout();
     cmd.env_clear().env("PATH", path);
     cmd
@@ -243,7 +243,11 @@ pub fn scout_with_env(path: &str) -> Command {
 /// landing on the same result by coincidence) fails instead of passing as a
 /// false positive. `consequence` stays a parameter so the panic names what
 /// the caller's own assertions rest on, which differs per call site.
-pub fn assert_proxy_was_dialed(connection_count: &AtomicUsize, context: &str, consequence: &str) {
+pub(crate) fn assert_proxy_was_dialed(
+    connection_count: &AtomicUsize,
+    context: &str,
+    consequence: &str,
+) {
     assert!(
         connection_count.load(Ordering::SeqCst) >= 1,
         "{context}: no connection reached the mock proxy, so {consequence}"

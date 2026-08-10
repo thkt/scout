@@ -4,29 +4,29 @@ use serde::{Deserialize, Serialize};
 /// Repository metadata from `GET /repos/{owner}/{repo}`.
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct RepoInfo {
-    pub full_name: String,
-    pub description: Option<String>,
-    pub html_url: String,
-    pub default_branch: String,
-    pub language: Option<String>,
-    pub stargazers_count: u64,
-    pub forks_count: u64,
-    pub open_issues_count: u64,
-    pub topics: Option<Vec<String>>,
-    pub license: Option<LicenseInfo>,
+    pub(super) full_name: String,
+    pub(super) description: Option<String>,
+    pub(super) html_url: String,
+    pub(crate) default_branch: String,
+    pub(super) language: Option<String>,
+    pub(super) stargazers_count: u64,
+    pub(super) forks_count: u64,
+    pub(super) open_issues_count: u64,
+    pub(super) topics: Option<Vec<String>>,
+    pub(super) license: Option<LicenseInfo>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct LicenseInfo {
-    pub spdx_id: Option<String>,
-    pub name: String,
+    pub(super) spdx_id: Option<String>,
+    pub(super) name: String,
 }
 
 /// Response from `GET /repos/{owner}/{repo}/git/trees/{ref}?recursive=1`.
 #[derive(Deserialize, Debug)]
 pub(crate) struct TreeResponse {
-    pub tree: Vec<TreeEntry>,
-    pub truncated: bool,
+    pub(crate) tree: Vec<TreeEntry>,
+    pub(crate) truncated: bool,
 }
 
 /// Git object type. `Other` captures unknown types via `#[serde(other)]` for forward compat.
@@ -43,17 +43,17 @@ pub(crate) enum EntryType {
 /// A single entry in a git tree (file, directory, or submodule).
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct TreeEntry {
-    pub path: String,
+    pub(crate) path: String,
     #[serde(rename = "type")]
-    pub entry_type: EntryType,
-    pub size: Option<u64>,
+    pub(crate) entry_type: EntryType,
+    pub(super) size: Option<u64>,
 }
 
 /// Response from `GET /repos/{owner}/{repo}/contents/{path}`.
 #[derive(Deserialize, Debug)]
 pub(crate) struct ContentsResponse {
-    pub sha: String,
-    pub content: Option<String>,
+    pub(crate) sha: String,
+    pub(crate) content: Option<String>,
 }
 
 /// Either shape the contents endpoint can answer with. A file yields an object,
@@ -71,20 +71,20 @@ pub(crate) enum ContentsPayload {
 /// Response from `GET /repos/{owner}/{repo}/git/blobs/{sha}`.
 #[derive(Deserialize, Debug)]
 pub(crate) struct BlobResponse {
-    pub content: String,
+    pub(crate) content: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct IssueInfo {
-    pub number: u64,
-    pub title: String,
-    pub html_url: String,
-    pub labels: Vec<LabelInfo>,
-    pub user: Option<UserInfo>,
+    pub(super) number: u64,
+    pub(super) title: String,
+    pub(super) html_url: String,
+    pub(super) labels: Vec<LabelInfo>,
+    pub(super) user: Option<UserInfo>,
     /// Internal: present when GitHub's issues endpoint returns a PR.
     /// Not part of scout's public JSON output (#67/ADR-0010).
     #[serde(skip_serializing)]
-    pub pull_request: Option<serde_json::Value>,
+    pub(super) pull_request: Option<serde_json::Value>,
 }
 
 /// GitHub's `GET /repos/{owner}/{repo}/issues` endpoint returns PRs alongside
@@ -95,30 +95,30 @@ pub(crate) fn real_issues(issues: &[IssueInfo]) -> Vec<&IssueInfo> {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct LabelInfo {
-    pub name: String,
+    pub(super) name: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct PullInfo {
-    pub number: u64,
-    pub title: String,
-    pub html_url: String,
-    pub draft: Option<bool>,
-    pub user: Option<UserInfo>,
+    pub(super) number: u64,
+    pub(super) title: String,
+    pub(super) html_url: String,
+    pub(super) draft: Option<bool>,
+    pub(super) user: Option<UserInfo>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct UserInfo {
-    pub login: String,
+    pub(super) login: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct ReleaseInfo {
-    pub tag_name: String,
-    pub name: Option<String>,
-    pub html_url: String,
-    pub published_at: Option<String>,
-    pub prerelease: bool,
+    pub(super) tag_name: String,
+    pub(super) name: Option<String>,
+    pub(super) html_url: String,
+    pub(super) published_at: Option<String>,
+    pub(super) prerelease: bool,
 }
 
 #[cfg(test)]

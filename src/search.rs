@@ -3,4 +3,4 @@
 pub(crate) mod engine;
 mod lang;
 
-pub use lang::Lang;
+pub(crate) use lang::Lang;
