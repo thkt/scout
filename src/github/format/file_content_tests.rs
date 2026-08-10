@@ -126,7 +126,6 @@ fn format_file_content_fence_does_not_collide_with_inner_backticks() {
 fn format_file_content_uses_empty_lang_for_extensionless_path() {
     let output = format_file_content("config", 1, "    1\tkey=val", None);
     let lines: Vec<&str> = output.lines().collect();
-    // line 2 is the opening fence
     assert_eq!(
         lines[2], "```",
         "fence line should be exactly ``` with no language suffix"
@@ -136,7 +135,6 @@ fn format_file_content_uses_empty_lang_for_extensionless_path() {
 /// [T-GF034] format_file_content appends the encoding label to the header when provided
 #[test]
 fn format_file_content_includes_encoding_label_in_header() {
-    // encoding label appended to header when provided
     let output = format_file_content("file.txt", 2, "    1\thello\n", Some("shift_jis"));
     assert!(
         output.starts_with("file.txt (2 lines) [encoding: shift_jis]\n\n"),
@@ -147,7 +145,6 @@ fn format_file_content_includes_encoding_label_in_header() {
 /// [T-GF035] format_file_content omits the encoding label when none is given
 #[test]
 fn format_file_content_omits_encoding_when_none() {
-    // no encoding label when None
     let output = format_file_content("file.txt", 1, "    1\thello\n", None);
     assert!(
         output.starts_with("file.txt (1 lines)\n\n"),

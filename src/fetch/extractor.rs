@@ -14,7 +14,6 @@ pub(super) struct ExtractedArticle {
     pub byline: Option<String>,
     pub published_time: Option<String>,
     pub content_html: String,
-    /// True when readability extraction failed and raw HTML was used as fallback.
     /// False for both successful extraction and explicit raw mode.
     pub used_raw_fallback: bool,
 }

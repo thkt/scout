@@ -4,7 +4,6 @@ use crate::search::Lang;
 
 use super::errors::ScoutError;
 
-/// Resolve a CLI positional with stdin fallback.
 pub(super) fn resolve_input(
     value: Option<String>,
     stdin: Option<&str>,

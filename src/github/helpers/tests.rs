@@ -172,7 +172,6 @@ fn decode_content_handles_base64() {
 /// [T-GHH015]
 #[test]
 fn decode_content_decodes_shift_jis_without_hint() {
-    // [Phase 1-B] delegate to decode_bytes: chardetng auto-detects Shift_JIS
     // "テスト" in Shift_JIS — would fail with old UTF-8-only decode_content
     let shift_jis_bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
     let result = decode_content(&STANDARD.encode(shift_jis_bytes), None).unwrap();
@@ -182,7 +181,6 @@ fn decode_content_decodes_shift_jis_without_hint() {
 /// [T-GHH016]
 #[test]
 fn decode_content_decodes_euc_jp_with_hint() {
-    // [Phase 1-B] delegate to decode_bytes: explicit encoding hint passed through
     // "日本語" in EUC-JP
     let euc_jp_bytes: &[u8] = &[0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC];
     let result = decode_content(&STANDARD.encode(euc_jp_bytes), Some("euc-jp")).unwrap();
