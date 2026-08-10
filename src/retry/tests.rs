@@ -230,6 +230,10 @@ fn backoff_is_capped_at_max_retry_after() {
 /// source chain. is_transient_network must classify this as transient
 /// so the retry loop attempts recovery; left untreated it falls into
 /// GitHubError::Decode → Internal(70), retryable=false.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the decode failure is the fixture: the server drops the connection mid-body"
+)]
 #[tokio::test]
 async fn is_transient_network_recognizes_mid_stream_body_drop() {
     let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
@@ -256,6 +260,10 @@ async fn is_transient_network_recognizes_mid_stream_body_drop() {
 /// `is_decode() == true` but the source chain is a serde_json::Error,
 /// not an io::Error. is_transient_network must keep returning false
 /// so the error stays on the Decode → Internal(70) non-retry path.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the decode failure is the fixture, not a body this test wants; the mock serves 15 bytes"
+)]
 #[tokio::test]
 async fn is_transient_network_rejects_schema_fail() {
     let Some(server) = try_spawn_mock_server("retry::is_transient_network_schema").await else {

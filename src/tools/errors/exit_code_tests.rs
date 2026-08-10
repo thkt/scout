@@ -216,6 +216,10 @@ async fn fetch_error_http_connection_refused_is_transient() {
 /// retryable buries it instead. github and brave used to blanket-map this to
 /// TempFailure, each in its own arm — the shared `Classification::from_reqwest`
 /// is what keeps the three answers the same from here on.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the decode failure is the fixture, not a body this test wants; the mock serves 8 bytes"
+)]
 #[tokio::test]
 async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
     use reqwest::Client;

@@ -33,8 +33,12 @@ pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 /// response can exhaust memory exactly as a successful one can, and the cap
 /// used to apply only where the body was expected to be useful.
 ///
-/// Stops after the first chunk that reaches `limit`, so peak memory is
-/// `limit + one chunk`.
+/// Stops after the first chunk that reaches `limit`, so the bytes read are
+/// bounded by `limit + one chunk` no matter how much the server sends. The
+/// allocation is the looser bound: `body` starts empty and grows by doubling,
+/// so its capacity can pass `limit` before the loop exits, and `truncate` cuts
+/// the length without returning the capacity. Both bounds are constants — the
+/// response's own size enters neither.
 pub(crate) async fn read_body_snippet(
     mut response: reqwest::Response,
     limit: usize,
@@ -60,9 +64,12 @@ pub(crate) async fn read_body_snippet(
 /// `cap` applies to *decoded* bytes: with reqwest's compression features enabled,
 /// `chunk()` yields already-decompressed data and `content_length()` returns
 /// `None` for compressed responses (so the pre-check goes inert and the chunk
-/// loop is the live guard). This bounds peak memory to `cap + one chunk` even
-/// against a decompression bomb, at the cost of rejecting a legitimately large
-/// page whose decompressed size exceeds the cap.
+/// loop is the live guard). This bounds the bytes read to `cap + one chunk`
+/// even against a decompression bomb, at the cost of rejecting a legitimately
+/// large page whose decompressed size exceeds the cap. The allocation follows
+/// `cap` rather than the response: with Content-Length it is reserved once at
+/// `min(len, cap)`, and without it the `Vec` doubles from 8 KiB until the loop
+/// rejects.
 pub(crate) async fn read_body_capped<E>(
     response: reqwest::Response,
     cap: usize,

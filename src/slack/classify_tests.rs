@@ -201,6 +201,10 @@ async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint
 ///
 /// A body-decode failure on a 2xx response is neither a timeout nor a
 /// transient transport fault. Companion to T-ER033.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the decode failure is the fixture, not a body this test wants; the mock serves 8 bytes"
+)]
 #[tokio::test]
 async fn reqwest_error_neither_timeout_nor_transient_classifies_as_unknown() {
     let Some(server) = try_spawn_mock_server("slack::classify::unknown").await else {

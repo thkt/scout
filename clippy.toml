@@ -1,0 +1,13 @@
+# Reading an HTTP body without a cap is the one mistake this codebase has made
+# more than once: the success path was guarded while the error path called
+# `text()` and read whatever the server sent. The helpers in `src/body_limit.rs`
+# are the fix, and this lint is what keeps a later edit from routing around
+# them — a reintroduced `text()` fails the build instead of passing every test.
+#
+# Tests that read a body they themselves served are the legitimate exception and
+# carry a local `#[expect(clippy::disallowed_methods, reason = "...")]`.
+disallowed-methods = [
+  { path = "reqwest::Response::text", reason = "reads the whole body; use body_limit::read_body_capped for a payload or read_body_snippet for a diagnostic" },
+  { path = "reqwest::Response::bytes", reason = "reads the whole body; use body_limit::read_body_capped for a payload or read_body_snippet for a diagnostic" },
+  { path = "reqwest::Response::json", reason = "reads the whole body; use body_limit::read_body_capped, then serde_json::from_slice" },
+]

@@ -65,6 +65,8 @@ enum_glob_use = "deny"
 str_to_string = "deny"
 # arguments
 needless_pass_by_value = "deny"
+# uncapped reads (list and rationale in clippy.toml)
+disallowed_methods = "deny"
 
 [profile.release]
 opt-level = 3
