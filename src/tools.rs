@@ -28,7 +28,7 @@ use params::resolve_input;
 use crate::brave::client::{BraveClient, BraveError};
 use crate::clock::Clock;
 use crate::envelope::CommandOutput;
-use crate::fetch::converter::{FetchResult, RAW_FALLBACK_NOTE};
+use crate::fetch::converter::{DECODE_UNCERTAIN_NOTE, FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
 use crate::markdown::{shift_headings, truncate_with_note};
@@ -299,13 +299,23 @@ impl Scout {
     }
 }
 
+/// Both notes ride in the body, not in the envelope alone: without `--json` the
+/// caller receives `into_markdown()` and nothing else (`src/lib.rs`), so a
+/// degradation recorded only in `degraded_reasons` reaches no one. The decode
+/// note used to be pushed to the envelope without a body counterpart, which left
+/// a default-mode reader holding a possibly garbled page with no sign of it —
+/// while the same page through `research` was labelled. The order matches
+/// `format_fetched_pages`: what produced the text, then what the text may suffer
+/// from.
 fn format_fetch_output(result: &FetchResult) -> String {
-    let shifted = shift_headings(result.markdown(), 2);
-    let output = if result.used_raw_fallback() {
-        format!("{RAW_FALLBACK_NOTE}{shifted}")
-    } else {
-        shifted
-    };
+    let mut output = String::new();
+    if result.used_raw_fallback() {
+        output.push_str(RAW_FALLBACK_NOTE);
+    }
+    if result.decode_uncertain() {
+        output.push_str(DECODE_UNCERTAIN_NOTE);
+    }
+    output.push_str(&shift_headings(result.markdown(), 2));
 
     truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
 }

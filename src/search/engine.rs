@@ -25,9 +25,10 @@ pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a research session: search hits + their fetched bodies.
 ///
-/// `Default` is the empty report — a real state (a run that found nothing), and
-/// what lets a test name only the field it is about instead of spelling out the
-/// other two as `vec![]`.
+/// `Default` is the empty report — a real state, and the one `research` returns
+/// when a degradable Brave failure leaves nothing to report. It also lets a test
+/// name only the field it is about instead of spelling out the other two as
+/// `vec![]`.
 #[derive(Debug, Default, serde::Serialize)]
 pub(crate) struct ResearchReport {
     pub(crate) fetched_pages: Vec<FetchResult>,

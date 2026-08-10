@@ -402,6 +402,41 @@ fn fetch_output_shifts_headings_with_raw_fallback() {
     assert!(output.contains("### Raw Title"), "h1 should shift to h3");
 }
 
+/// [T-TS034] A body scout could not confidently decode says so in the Markdown
+/// itself. Without `--json` the envelope's `degraded_reasons` never reach the
+/// caller (src/lib.rs writes `into_markdown()` alone), so the note in the body
+/// is the only place a default-mode reader learns the text may be garbled.
+/// `research` already labels such a page in `format_fetched_pages`.
+#[test]
+fn fetch_output_marks_an_uncertain_decode() {
+    let result = FetchResult::for_test("https://example.com".into(), "# Title\nBody".into(), false)
+        .with_decode_uncertain(true);
+    let output = format_fetch_output(&result);
+    assert!(
+        output.starts_with(DECODE_UNCERTAIN_NOTE.trim_end()),
+        "an uncertain decode must be stated in the body, got: {output}"
+    );
+}
+
+/// [T-TS035] Both notes fire together in the order `research` uses: what
+/// produced the text (raw fallback) before what the text may suffer from
+/// (garbled decode).
+#[test]
+fn fetch_output_orders_the_fallback_note_before_the_decode_note() {
+    let result = FetchResult::for_test("https://example.com".into(), "# Title\nBody".into(), true)
+        .with_decode_uncertain(true);
+    let output = format_fetch_output(&result);
+    assert_eq!(
+        output.find(RAW_FALLBACK_NOTE.trim_end()),
+        Some(0),
+        "the fallback note must open the body, got: {output}"
+    );
+    assert!(
+        output.find(DECODE_UNCERTAIN_NOTE.trim_end()) > output.find(RAW_FALLBACK_NOTE.trim_end()),
+        "the decode note must follow the fallback note, got: {output}"
+    );
+}
+
 /// [T-TS005]
 #[test]
 fn fetch_output_truncates_long_content() {

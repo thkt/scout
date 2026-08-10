@@ -212,11 +212,7 @@ impl Scout {
                     format!("Brave search failed: {e}"),
                     DegradedReason::BraveSearchFailed,
                 );
-                engine::ResearchReport {
-                    fetched_pages: vec![],
-                    failed_urls: vec![],
-                    sources: vec![],
-                }
+                engine::ResearchReport::default()
             }
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
