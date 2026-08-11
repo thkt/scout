@@ -154,6 +154,34 @@ fn atx_heading_level(trimmed: &str) -> Option<usize> {
     (rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')).then_some(hashes)
 }
 
+/// Build a safe fenced code block delimiter that is longer than any backtick
+/// run found in `content`.
+pub(crate) fn fence_delimiter(content: &str) -> String {
+    let max_run = content
+        .bytes()
+        .fold((0usize, 0usize), |(longest, run), b| {
+            if b == b'`' {
+                let next = run + 1;
+                (longest.max(next), next)
+            } else {
+                (longest, 0)
+            }
+        })
+        .0;
+    "`".repeat(max_run.max(2) + 1)
+}
+
+/// Return the fence character and run length if `trimmed` opens or closes a
+/// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
+fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
+    let c = trimmed.chars().next()?;
+    if c != '`' && c != '~' {
+        return None;
+    }
+    let run = trimmed.chars().take_while(|&x| x == c).count();
+    (run >= 3).then_some((c, run))
+}
+
 /// Shift all Markdown heading levels deeper by `levels` (e.g., `# Foo` → `#### Foo`
 /// with `levels = 3`).  Clamps output at h6 (CommonMark maximum).
 ///
@@ -167,16 +195,17 @@ fn atx_heading_level(trimmed: &str) -> Option<usize> {
 /// below the `## README` it sits under.
 ///
 /// Skips lines inside fenced code blocks so that comment lines like `# TODO`
-/// are not affected.  Note: the fence toggle is simplified — it does not track
-/// opening fence character or length, so a 4-backtick fence closed by 3 backticks
-/// would mis-toggle.  This is acceptable for LLM/web-fetched markdown input.
+/// are not affected.  The fence tracks the opening marker's character and
+/// length (CommonMark §4.5): a fence only closes at a line whose run of the
+/// same character is at least as long as the one that opened it, so a
+/// 4-backtick fence stays open through a nested 3-backtick line.
 pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
     if levels == 0 {
         return markdown.to_owned();
     }
     let lines: Vec<&str> = markdown.lines().collect();
     let body_start = frontmatter_len(&lines);
-    let mut in_code_block = false;
+    let mut fence: Option<(char, usize)> = None;
     let mut out = String::with_capacity(markdown.len() + levels * 40);
     let mut first = true;
     let mut skip_underline = false;
@@ -197,10 +226,15 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
         }
 
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code_block = !in_code_block;
+        let marker = fence_marker(trimmed);
+        match (fence, marker) {
+            (None, Some((c, len))) => fence = Some((c, len)),
+            (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
+                fence = None;
+            }
+            _ => {}
         }
-        if in_code_block {
+        if fence.is_some() || marker.is_some() {
             out.push_str(line);
             continue;
         }
@@ -499,6 +533,44 @@ mod tests {
         assert!(
             result.contains("showing 99 / 150 bytes"),
             "cut must snap to the boundary below 100, got: {result}"
+        );
+    }
+
+    /// [T-MD028] 最長 4 個のバッククォート列を含む内容に対して区切りは 5 個になる
+    #[test]
+    fn fence_delimiter_returns_five_backticks_for_content_with_longest_run_of_four() {
+        let content = "some ```` text";
+        let delim = fence_delimiter(content);
+        assert_eq!(delim, "`".repeat(5));
+    }
+
+    /// [T-MD029] バッククォートを含まない内容に対して区切りは 3 個になる
+    #[test]
+    fn fence_delimiter_returns_three_backticks_for_content_without_backticks() {
+        assert_eq!(fence_delimiter("plain content, no backticks here"), "```");
+    }
+
+    /// [T-MD030] 4 個のフェンスで囲まれた中の 3 個のバッククォート行が閉じ扱いされない
+    #[test]
+    fn shift_headings_does_not_close_four_backtick_fence_on_shorter_backtick_run() {
+        let input = "````\n```\ncontent\n````\n## After";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result, "````\n```\ncontent\n````\n#### After",
+            "the fence should close only at the matching 4-backtick line, so \
+             '## After' sits outside the fence and must shift, got: {result}"
+        );
+    }
+
+    /// [T-MD031] 4 個のフェンスの中にある見出し記法の行が見出しとして繰り下げられない
+    #[test]
+    fn shift_headings_leaves_heading_syntax_line_inside_four_backtick_fence_unshifted() {
+        let input = "````\n```\n## Not a heading\n````";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result, input,
+            "the heading-syntax line remains inside the still-open fence and \
+             must not shift, got: {result}"
         );
     }
 }

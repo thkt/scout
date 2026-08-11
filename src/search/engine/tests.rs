@@ -401,6 +401,86 @@ async fn source_fetch_timeout_states_the_timeout_once() {
     );
 }
 
+/// [T-SE019] 4 個のフェンスを含むページを結合した research 出力で各ページのコードブロックが独立したフェンスを保つ
+///
+/// Each page's Markdown is independently well-formed (every fence it opens,
+/// it also closes), so `format_fetched_pages` concatenating several such
+/// pages — with `shift_headings` run fresh per page rather than over the
+/// combined string — must not let one page's fence swallow the next page's
+/// heading or code content when the combined report is read as one Markdown
+/// document.
+#[test]
+fn combined_research_output_keeps_each_pages_code_fences_independent() {
+    let page1 = FetchResult::for_test(
+        "https://page1.example".into(),
+        "intro\n\n```\nfence one\n```\n\nmiddle\n\n```\nfence two\n```\n".into(),
+        false,
+    );
+    let page2 = FetchResult::for_test(
+        "https://page2.example".into(),
+        "intro\n\n```\nfence three\n```\n\nmiddle\n\n```\nfence four\n```\n".into(),
+        false,
+    );
+    let report = ResearchReport {
+        fetched_pages: vec![page1, page2],
+        ..Default::default()
+    };
+
+    let text = format_report(&report, "q");
+
+    assert_eq!(
+        text.matches("```").count(),
+        8,
+        "4 fenced code blocks across 2 pages must stay 8 well-paired fence \
+         delimiter lines in the combined output, got:\n{text}"
+    );
+    assert!(
+        text.contains("### https://page2.example"),
+        "the second page's heading must survive as a literal heading, not be \
+         swallowed inside the first page's fence, got:\n{text}"
+    );
+    for needle in ["fence one", "fence two", "fence three", "fence four"] {
+        assert_eq!(
+            text.matches(needle).count(),
+            1,
+            "{needle} must appear exactly once in the combined output, got:\n{text}"
+        );
+    }
+}
+
+/// [T-SE020] 4 個のフェンスの内側にある 3 個のバッククォート行が research 出力でも閉じ扱いされない
+///
+/// `format_fetched_pages` runs `shift_headings` per page, so the fence-length
+/// tracking has to hold on the path the report takes, not only on a direct
+/// `shift_headings` call: a heading-syntax line inside the 4-backtick fence
+/// stays literal, and only the line after the matching 4-backtick close takes
+/// the page-level shift.
+#[test]
+fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
+    let page = FetchResult::for_test(
+        "https://page1.example".into(),
+        "````\n```\n## Not a heading\n````\n\n## After\n".into(),
+        false,
+    );
+    let report = ResearchReport {
+        fetched_pages: vec![page],
+        ..Default::default()
+    };
+
+    let text = format_report(&report, "q");
+
+    assert!(
+        text.contains("````\n```\n## Not a heading\n````"),
+        "the heading-syntax line inside the 4-backtick fence must stay \
+         literal, got:\n{text}"
+    );
+    assert!(
+        text.contains("##### After"),
+        "the heading after the matching 4-backtick close sits outside the \
+         fence and must take the page-level shift, got:\n{text}"
+    );
+}
+
 /// [T-SE018] both halves of a failed-URL line take the same escape
 ///
 /// The URL went through `escape_md_link` and the reason through

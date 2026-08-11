@@ -104,3 +104,15 @@ fn browser_failed_is_io_error() {
     let c = FetchError::BrowserFailed("CDP error".into()).classify();
     assert_eq!(c.kind, ErrorCode::IoError);
 }
+
+/// [T-FC018] 変換が失敗したとき exit code 65 で終わる
+///
+/// `MarkdownConversion` carries the htmd conversion failure (fail-close, per
+/// U-002's contract) and must classify the same way `UnsupportedContentType`
+/// does: `Classification::DataError`, which `ErrorCode::exit_code`
+/// (src/envelope.rs) maps to process exit code 65 (EX_DATAERR).
+#[test]
+fn markdown_conversion_failure_is_data_error() {
+    let c = FetchError::MarkdownConversion("unexpected end of input".into()).classify();
+    assert_eq!(c.kind, ErrorCode::DataError);
+}

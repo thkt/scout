@@ -87,7 +87,7 @@ fn extract_title_from_html(html: &str) -> Option<String> {
 /// dom_smoothie hands back an already-decoded title, so without this the same
 /// page reads `A & B` or `A &amp; B` in the frontmatter depending on whether
 /// Readability succeeded — and the body never shows the difference, because
-/// `fast_html2md` decodes it on the way to Markdown. Running the title through
+/// `htmd` decodes it on the way to Markdown. Running the title through
 /// that same converter would decode it too, but it also applies Markdown
 /// escaping (`&lt;` becomes `\<`), which has no business in a YAML scalar.
 ///
@@ -276,7 +276,7 @@ mod tests {
 
     /// [T-FX013] the raw-fallback title decodes character references
     ///
-    /// dom_smoothie decodes the title it returns, and `fast_html2md` decodes the
+    /// dom_smoothie decodes the title it returns, and `htmd` decodes the
     /// body on the way to Markdown — so without this the frontmatter was the one
     /// place a page read differently depending on whether Readability succeeded.
     #[test]

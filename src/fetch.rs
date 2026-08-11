@@ -88,6 +88,9 @@ pub(crate) enum FetchError {
     #[error("unsupported content type: {0} (expected text/HTML)")]
     UnsupportedContentType(String),
 
+    #[error("markdown conversion failed: {0}")]
+    MarkdownConversion(String),
+
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
 
@@ -124,6 +127,7 @@ impl FetchError {
                 .with_hint("URL must point to an external host (private IPs are blocked)"),
             Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must serve HTML or text content"),
+            Self::MarkdownConversion(_) => Classification::new(ErrorCode::DataError),
             Self::RedirectMissingLocation => Classification::new(ErrorCode::DataError),
             Self::TooLarge => {
                 Classification::new(ErrorCode::DataError).with_hint("fetch a smaller resource")
@@ -296,11 +300,7 @@ pub(crate) async fn fetch_page(
     }
 
     debug!(url = %RedactedLogUrl(final_url.as_str()), bytes = html.len(), "page fetched");
-    Ok(to_fetch_result(
-        &article,
-        final_url.as_str().to_owned(),
-        decode_uncertain,
-    ))
+    to_fetch_result(&article, final_url.as_str().to_owned(), decode_uncertain)
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates

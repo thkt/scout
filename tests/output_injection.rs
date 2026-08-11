@@ -9,9 +9,9 @@
 //! contract, not a gap to close: `neutralize_yaml_markers` rewrites every
 //! column-0 marker line by its literal text alone, with no state tracking
 //! whether the line sits inside a fenced code block. `T-C032` proves this by
-//! injecting a marker inside a `<pre>` element (which `html2md::rewrite_html`
-//! renders as a fenced code block) and asserting it is rewritten exactly like
-//! the bare-paragraph cases `T-C029`/`T-C030` are.
+//! injecting a marker inside a `<pre><code>` element (which htmd renders as a
+//! fenced code block) and asserting it is rewritten exactly like the
+//! bare-paragraph cases `T-C029`/`T-C030` are.
 //!
 //! Every scenario's fixture is a Readability-friendly article (title, byline,
 //! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
@@ -241,9 +241,10 @@ fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
 #[test]
 fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
     let context = "pre element marker";
-    let Some(markdown) =
-        fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
-    else {
+    let Some(markdown) = fetch_markdown(
+        &article_html("<pre><code>---\nevil: true\n...\n</code></pre>"),
+        context,
+    ) else {
         return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
@@ -253,6 +254,38 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
         body.contains("```\n***\nevil: true\n***\n```"),
         "column-0 markers inside a <pre>-derived fenced code block must be \
          rewritten to *** the same as markers outside a code fence, got body:\n{body}"
+    );
+    assert!(
+        !body.lines().any(|l| l == "---" || l == "..."),
+        "no bare --- or ... line should survive anywhere in the body, \
+         inside or outside the code fence, got body:\n{body}"
+    );
+}
+
+// T-C039: bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten
+//
+// T-C032 pins the <pre><code> case, which htmd's built-in `code_handler`
+// already wraps in a fence before `neutralize_yaml_markers` ever sees the
+// converted Markdown. This scenario swaps in a bare <pre> with no <code>
+// child instead, which only gets fenced because the `pre` handler
+// `to_fetch_result` registers on top of htmd's defaults (T-FC019) wraps it.
+// The two run on different code paths inside the same `markdown_converter`
+// pipeline.
+#[test]
+fn bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten() {
+    let context = "bare pre element marker";
+    let Some(markdown) =
+        fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
+    else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    assert!(
+        body.contains("```\n***\nevil: true\n***\n```"),
+        "a bare <pre> (no <code> child) must be wrapped in a fence by the added \
+         pre handler AND have its column-0 YAML markers rewritten to ***, the \
+         same combination T-C032 pins for <pre><code>, got body:\n{body}"
     );
     assert!(
         !body.lines().any(|l| l == "---" || l == "..."),
