@@ -152,14 +152,20 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// that first character back off the DOM inverts the escape exactly: source
 /// text that already opens with `` \` `` produces the same walked bytes and
 /// must keep its backslash.
+///
+/// The first *text* child is the one to read, since a comment or any other
+/// non-text node can precede it. When an element precedes it instead, that
+/// element's own output opens the content, so the strip finds no leading
+/// backslash to take and the answer here does not matter.
 fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
     node.children
         .borrow()
-        .first()
-        .is_some_and(|first| match &first.data {
-            NodeData::Text { contents } => contents.borrow().starts_with(['`', '~']),
-            _ => false,
+        .iter()
+        .find_map(|child| match &child.data {
+            NodeData::Text { contents } => Some(contents.borrow().starts_with(['`', '~'])),
+            _ => None,
         })
+        .unwrap_or(false)
 }
 
 pub(super) fn to_fetch_result(
@@ -635,6 +641,24 @@ mod tests {
         assert!(
             result.markdown().contains("```\n\\`hello\n```"),
             "a source backslash before the leading backtick must survive as written:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC029] コメントノードが先行しても htmd のエスケープはフェンス内に残らない
+    ///
+    /// The escape lands on the first *text* child, which a comment or any other
+    /// non-text node can precede. Looking only at the element's first child
+    /// would read that node instead and leave the backslash in place.
+    #[test]
+    fn htmd_leading_backslash_is_stripped_when_a_comment_precedes_the_text() {
+        let article = article("<pre><!-- c -->`hello</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            !result.markdown().contains("\\`hello"),
+            "htmd's escape must be stripped even when a comment node comes first:\n{}",
             result.markdown()
         );
     }
