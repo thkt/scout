@@ -56,9 +56,9 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 /// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
 /// frontmatter field reaches for that function instead. ADR-0014's
 /// neutralization table pins this escape set separately from the quoting.
-pub(crate) fn escape_yaml(s: &str) -> Cow<'_, str> {
+fn escape_yaml(s: &str) -> Cow<'_, str> {
     // The common frontmatter value (a plain title/author/date) carries no escapable
-    // char, so borrow it untouched instead of allocating a copy.
+    // char, so the loop below would allocate a copy identical to its input.
     if !s
         .bytes()
         .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
@@ -109,6 +109,26 @@ mod tests {
     #[test]
     fn escape_yaml_borrows_when_no_escape_needed() {
         assert!(matches!(escape_yaml("plain title 2026"), Cow::Borrowed(_)));
+    }
+
+    /// [T-FC013] C0 control characters other than `\0\n\r\t` pass through
+    ///
+    /// ADR-0014 accepts this: the escape set covers what breaks out of a
+    /// double-quoted scalar, and the primary consumer is an agent rather than a
+    /// terminal. Two things follow that the ADR does not state — the value stays
+    /// borrowed (ESC is not in the escape scan), and the emitted scalar carries a
+    /// byte YAML 1.2 excludes from c-printable, so a strict parser rejects it.
+    /// Pinned here so a later change to either behaviour has to revisit the ADR
+    /// rather than pass unnoticed.
+    #[test]
+    fn escape_yaml_passes_control_characters_through() {
+        let with_esc = "title\u{1b}[31m";
+        assert!(
+            matches!(escape_yaml(with_esc), Cow::Borrowed(_)),
+            "ESC is outside the escape scan, so the value is not copied"
+        );
+        assert_eq!(escape_yaml(with_esc), with_esc);
+        assert_eq!(escape_yaml("bell\u{7}"), "bell\u{7}");
     }
 
     /// [T-FC005] neutralize_yaml_markers rewrites bare ---/... lines to ***

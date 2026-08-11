@@ -14,18 +14,21 @@ use crate::fetch;
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::markdown::{
-    escape_md_inline, escape_md_link, md_link, sanitize_heading, shift_headings, truncate_with_note,
+    escape_md_inline, md_link, sanitize_heading, shift_headings, truncate_with_note,
 };
 use crate::search::Lang;
 
 const MAX_PAGE_BYTES: usize = 4_500;
-const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// Per-source cap inside one research run. `pub(crate)` for the same config
+/// invariant test that reads `brave::client::REQUEST_TIMEOUT`.
+pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Aggregated output of a research session: search hits + their fetched bodies.
 ///
-/// `Default` is the empty report — a real state (a run that found nothing), and
-/// what lets a test name only the field it is about instead of spelling out the
-/// other two as `vec![]`.
+/// `Default` is the empty report — a real state, and the one `research` returns
+/// when a degradable Brave failure leaves nothing to report. It also lets a test
+/// name only the field it is about instead of spelling out the other two as
+/// `vec![]`.
 #[derive(Debug, Default, serde::Serialize)]
 pub(crate) struct ResearchReport {
     pub(crate) fetched_pages: Vec<FetchResult>,
@@ -189,14 +192,22 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         if page.decode_uncertain() {
             out.push_str(fetch::converter::DECODE_UNCERTAIN_NOTE);
         }
-        // Shift headings by 3 levels so page content (h1->h4, h2->h5, ...)
-        // does not collide with the report's own heading hierarchy.
+        // h1->h4, h2->h5, ...: unshifted, a page's own headings would collide
+        // with the report's hierarchy.
         let content = shift_headings(page.markdown(), 3);
         out.push_str(&truncate_with_note(&content, MAX_PAGE_BYTES));
         out.push_str("\n\n");
     }
 }
 
+/// Unlike `## Sources`, these URLs are rendered as text rather than through
+/// [`md_link`]: the fetch behind each one already failed, so offering it as
+/// something to follow points the reader at the failure again.
+///
+/// Both halves of the line take the same escape. They used to differ — the URL
+/// went through `escape_md_link`, which leaves `|` alone because a link target
+/// has no column to break — but nothing here sits inside a link, so the two
+/// fields ended up disagreeing about `|` within one line.
 fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     if failed.is_empty() {
         return;
@@ -206,7 +217,7 @@ fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
         let _ = writeln!(
             out,
             "- {} ({})",
-            escape_md_link(&f.url),
+            escape_md_inline(&f.url),
             escape_md_inline(&f.reason)
         );
     }

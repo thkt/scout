@@ -26,8 +26,8 @@ async fn mount_channel_info(server: &wiremock::MockServer) {
         .await;
 }
 
-/// [T-SB001] `ScoutBuilder::with_clock` で渡した `Arc` が `Scout.clock` まで
-/// 届く injection slot の最小証明。end-to-end な plumbing 確認は T-SB004。
+/// [T-SB001] Minimal proof that the `Arc` handed to `ScoutBuilder::with_clock`
+/// reaches `Scout.clock`. The end-to-end plumbing check is T-SB004.
 #[test]
 fn scout_builder_with_clock_routes_arc_into_scout() {
     let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
@@ -40,8 +40,8 @@ fn scout_builder_with_clock_routes_arc_into_scout() {
     );
 }
 
-/// [T-SB002] `ScoutBuilder::with_rng` で渡した `Arc` が `Scout.rng` まで
-/// 届く injection slot の最小証明。
+/// [T-SB002] Minimal proof that the `Arc` handed to `ScoutBuilder::with_rng`
+/// reaches `Scout.rng`.
 #[test]
 fn scout_builder_with_rng_routes_arc_into_scout() {
     let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
@@ -52,8 +52,8 @@ fn scout_builder_with_rng_routes_arc_into_scout() {
     );
 }
 
-/// [T-SB003] `ScoutBuilder::with_token_source` で渡した `Arc` が
-/// `Scout.token_source` まで届く injection slot の最小証明。
+/// [T-SB003] Minimal proof that the `Arc` handed to
+/// `ScoutBuilder::with_token_source` reaches `Scout.token_source`.
 #[test]
 fn scout_builder_with_token_source_routes_arc_into_scout() {
     let injected: Arc<dyn TokenSource> = Arc::new(StaticTokenSource(None));
@@ -66,15 +66,15 @@ fn scout_builder_with_token_source_routes_arc_into_scout() {
     );
 }
 
-/// [T-DNS001] `ScoutBuilder::with_dns` で渡した `Arc<dyn DnsResolver>` が
-/// `Scout.dns` slot に届き、かつ `Scout::fetch` の SSRF 経路で実際に
-/// consult されることを end-to-end で確認する。
+/// [T-DNS001] End-to-end check that the `Arc<dyn DnsResolver>` handed to
+/// `ScoutBuilder::with_dns` reaches the `Scout.dns` slot and is consulted on
+/// `Scout::fetch`'s SSRF path.
 ///
-/// 注入した `StaticDnsResolver(10.0.0.1)` が `https://example.com` の
-/// DNS lookup を override すれば、`ssrf_check` の private-IP 判定が
-/// `FetchError::InternalHost` を即座に返す。default の `TokioDnsResolver`
-/// なら `example.com` は public IP を返すため、この assert は
-/// injection が wire できていない場合に必ず落ちる。
+/// Once the injected `StaticDnsResolver(10.0.0.1)` overrides the DNS lookup
+/// for `https://example.com`, `ssrf_check`'s private-IP test returns
+/// `FetchError::InternalHost` immediately. The default `TokioDnsResolver`
+/// answers `example.com` with a public IP, so this assert fails whenever the
+/// injection is not wired.
 #[tokio::test]
 async fn scout_builder_with_dns_blocks_fetch_via_injected_private_ip() {
     let injected: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("10.0.0.1"));
@@ -101,9 +101,9 @@ async fn scout_builder_with_dns_blocks_fetch_via_injected_private_ip() {
     );
 }
 
-/// [T-DNS002] `FailingDnsResolver` を inject すると `Scout::fetch` が
-/// `FetchError::DnsResolution` 由来の `ScoutError` を返すことを確認する。
-/// resolver の失敗パスが SSRF 経路に正しく伝播することを保証する。
+/// [T-DNS002] Injecting a `FailingDnsResolver` makes `Scout::fetch` return a
+/// `ScoutError` originating in `FetchError::DnsResolution`, which pins that the
+/// resolver's failure path propagates through the SSRF route.
 #[tokio::test]
 async fn scout_builder_with_dns_propagates_resolver_failure() {
     let injected: Arc<dyn DnsResolver> =
@@ -121,16 +121,17 @@ async fn scout_builder_with_dns_propagates_resolver_failure() {
     );
 }
 
-/// [T-SB004] `with_clock` で inject した `FixedClock` が `Scout::github()`
-/// 経由で初期化される `GitHubClient` まで届くことを end-to-end で確認する。
-/// `Arc::ptr_eq` 単体テスト (T-SB001) では `github()` の plumbing バグ
-/// (例: clone 忘れ、async move への束縛漏れ) を catch できないので、
-/// wiremock 越しに `secs_until_ratelimit_reset` の算出値を assert する。
+/// [T-SB004] End-to-end check that the `FixedClock` injected via `with_clock`
+/// reaches the `GitHubClient` that `Scout::github()` initializes. The
+/// `Arc::ptr_eq` unit test (T-SB001) cannot catch a plumbing bug inside
+/// `github()` (a missed clone, a binding that never enters the `async move`),
+/// so this asserts the `secs_until_ratelimit_reset` arithmetic across wiremock.
 ///
-/// reset = 1600, clock = 1000 → retry_after = 600 が `MAX_RETRY_AFTER_SECS`
-/// (300) を超えるため `is_retriable = false` で retry loop はスキップ。
-/// `start_paused` を併用すると wiremock の TCP listener も止まり connect が
-/// timeout するので、retry を走らせない算術にする方が安定する。
+/// reset = 1600, clock = 1000 → retry_after = 600 exceeds
+/// `MAX_RETRY_AFTER_SECS` (300), so `is_retriable = false` and the retry loop
+/// is skipped. Pairing this with `start_paused` would also stop wiremock's TCP
+/// listener and time the connect out, so arithmetic that runs no retry is the
+/// stabler choice.
 #[tokio::test]
 async fn scout_builder_clock_reaches_github_client_via_seam() {
     let Some(server) = try_spawn_mock_server("tools::scout_builder_seam").await else {
@@ -164,13 +165,13 @@ async fn scout_builder_clock_reaches_github_client_via_seam() {
     );
 }
 
-/// [T-SB005] `with_slack_endpoint` で inject した wiremock endpoint が
-/// `fetch`(slack permalink) → `fetch_slack` → `slack()` の production 経路で
-/// 構築される `SlackClient` まで届くことを end-to-end で確認する。`slack()` の
-/// `OnceCell` を build() で pre-set するため `SLACK_TOKEN` 未設定でも注入
-/// クライアントが使われ、`conversations.history` に到達して本文を取得できる。
-/// 注入が wire できていなければ `from_env` が `TokenNotSet` を返し落ちる
-/// (issue #191)。
+/// [T-SB005] End-to-end check that the wiremock endpoint injected via
+/// `with_slack_endpoint` reaches the `SlackClient` built on the production path
+/// `fetch` (slack permalink) → `fetch_slack` → `slack()`. Because `build()`
+/// pre-sets `slack()`'s `OnceCell`, the injected client is used even with
+/// `SLACK_TOKEN` unset, so the call reaches `conversations.history` and returns
+/// the body. When the injection is not wired, `from_env` answers `TokenNotSet`
+/// and the test fails (issue #191).
 #[tokio::test]
 async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
     let Some(server) = try_spawn_mock_server("tools::scout_builder_slack_seam").await else {
@@ -318,7 +319,7 @@ async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
     );
 }
 
-/// [T-SK075] users.info が失敗した fetch は degraded_reasons に SlackLookupFailed を含む
+/// [T-SK075] A fetch whose users.info lookup failed carries SlackLookupFailed in degraded_reasons
 ///
 /// A single distinct author ID triggers exactly one `users.info` lookup; that
 /// count stays far under `SLACK_MAX_USER_LOOKUPS`, so `SLACK_USERS_CAPPED`
@@ -366,7 +367,8 @@ async fn fetch_slack_users_info_failure_sets_lookup_failed_reason() {
     );
 }
 
-/// [T-SK076] users.info が成功した fetch は degraded_reasons に SlackLookupFailed を含まない
+/// [T-SK076] A fetch whose users.info lookup succeeded carries no SlackLookupFailed in
+/// degraded_reasons
 ///
 /// Without this negative case, T-SK075 alone cannot rule out
 /// `SlackLookupFailed` firing on every fetch regardless of lookup outcome.

@@ -93,7 +93,7 @@ fn build_launch_args(proxy_port: u16) -> Vec<String> {
 ///
 /// See ADR-0001 for the SSRF defense architecture.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
-pub(crate) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
+pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
         Cow::Borrowed(url)
     } else if let Some(rest) = url.strip_prefix("ws://") {

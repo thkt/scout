@@ -101,7 +101,7 @@ impl GitHubError {
                     ),
                     None => "Set GITHUB_TOKEN to increase rate limit".to_owned(),
                 }),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
             // response that overran the byte cap (issue #186; peer to

@@ -28,7 +28,7 @@ pub(super) fn resolve_input(
 }
 
 #[derive(Subcommand)]
-pub enum Command {
+pub(crate) enum Command {
     /// Search the web using Brave Search API
     Search(SearchParams),
     /// Fetch a web page and convert it to clean Markdown
@@ -53,12 +53,12 @@ Examples:
 
 Environment:
   BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
-pub struct SearchParams {
+pub(crate) struct SearchParams {
     /// Search query
-    pub query: Option<String>,
+    pub(super) query: Option<String>,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
-    pub lang: Lang,
+    pub(super) lang: Lang,
 }
 
 #[derive(Args)]
@@ -67,24 +67,28 @@ Examples:
   scout fetch https://example.com
   scout fetch https://example.com --js
   scout fetch https://example.com --raw
+  scout fetch https://acme.slack.com/archives/C123/p1700000000000000
   echo \"https://example.com\" | scout fetch
-  scout fetch -")]
-pub struct FetchParams {
+  scout fetch -
+
+Environment:
+  SLACK_TOKEN  Required when the URL is a Slack permalink. User OAuth token (xoxp-…).")]
+pub(crate) struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
-    pub url: Option<String>,
+    pub(super) url: Option<String>,
     /// Force JavaScript rendering via headless Chrome / CDP (requires the `js-rendering` build feature and Chrome/Chromium). Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
-    pub js: bool,
+    pub(super) js: bool,
     /// Skip Readability extraction and convert entire page
     #[arg(long)]
-    pub raw: bool,
+    pub(super) raw: bool,
 }
 
 #[cfg(test)]
 impl FetchParams {
     /// Named rather than `Default` so a test that cares about `js` or `raw` has to
     /// set the flag visibly.
-    pub(crate) fn for_test(url: &str) -> Self {
+    pub(super) fn for_test(url: &str) -> Self {
         Self {
             url: Some(url.to_owned()),
             js: false,
@@ -104,15 +108,15 @@ Examples:
 
 Environment:
   BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
-pub struct ResearchParams {
+pub(crate) struct ResearchParams {
     /// Research query
-    pub query: Option<String>,
+    pub(super) query: Option<String>,
     /// Number of URLs to fetch for deep analysis (1-10)
     #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=10))]
-    pub depth: u8,
+    pub(super) depth: u8,
     /// Search language
     #[arg(short, long, value_enum, default_value_t = Lang::Auto)]
-    pub lang: Lang,
+    pub(super) lang: Lang,
 }
 
 #[derive(Args)]
@@ -127,18 +131,18 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoTreeParams {
+pub(crate) struct RepoTreeParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
-    pub ref_: Option<String>,
+    pub(super) ref_: Option<String>,
     /// Filter to files under this path prefix (e.g., "src/components/")
     #[arg(short, long)]
-    pub path: Option<String>,
+    pub(super) path: Option<String>,
     /// Glob pattern to filter filenames (e.g., "*.rs", "*.{ts,tsx}")
     #[arg(long)]
-    pub pattern: Option<String>,
+    pub(super) pattern: Option<String>,
 }
 
 #[derive(Args)]
@@ -153,23 +157,23 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoReadParams {
+pub(crate) struct RepoReadParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
     /// File path within the repository (e.g., "src/index.ts")
-    pub path: Option<String>,
+    pub(super) path: Option<String>,
     /// Git ref: branch name, tag, or commit SHA
     #[arg(long, name = "ref")]
-    pub ref_: Option<String>,
+    pub(super) ref_: Option<String>,
     /// Line range: "1-80", "50-", or "100" (first N lines)
     #[arg(short, long)]
-    pub lines: Option<String>,
+    pub(super) lines: Option<String>,
     /// Character encoding label (e.g., shift_jis, euc-jp, gbk).
     /// When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other
     /// multi-byte encodings via BOM and chardetng. Single-byte encodings (windows-1252,
     /// ISO-8859-*, etc.) require explicit --encoding.
     #[arg(long)]
-    pub encoding: Option<String>,
+    pub(super) encoding: Option<String>,
 }
 
 #[derive(Args)]
@@ -182,13 +186,15 @@ Examples:
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
-pub struct RepoOverviewParams {
+pub(crate) struct RepoOverviewParams {
     /// GitHub repository in "owner/repo" format (e.g., "facebook/react")
-    pub repository: Option<String>,
+    pub(super) repository: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{iter, mem};
+
     use clap::Args;
 
     use super::resolve_input;
@@ -213,10 +219,15 @@ mod tests {
         assert_help_sections::<super::SearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
-    /// [T-H002] fetch --help contains Examples: section
+    /// [T-H002] fetch --help contains Examples: and Environment: sections
+    ///
+    /// `fetch` was the one subcommand whose help named no environment variable,
+    /// yet a Slack permalink fails without `SLACK_TOKEN`. Only the root help
+    /// carried it, so an agent that read `scout fetch --help` after that failure
+    /// found nothing to act on.
     #[test]
-    fn fetch_help_contains_examples() {
-        assert_help_sections::<super::FetchParams>(None);
+    fn fetch_help_contains_examples_and_environment() {
+        assert_help_sections::<super::FetchParams>(Some("SLACK_TOKEN"));
     }
 
     /// [T-H003] research --help contains Examples: and Environment: sections
@@ -268,6 +279,92 @@ mod tests {
                 "{name} help missing stdin example '{pattern}'"
             );
         }
+    }
+
+    /// Split an example line the way a shell would. Only double quotes appear in
+    /// these examples, so nothing else is handled.
+    fn shell_split(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        for ch in s.chars() {
+            match ch {
+                '"' => quoted = !quoted,
+                c if c.is_whitespace() && !quoted => {
+                    if !current.is_empty() {
+                        out.push(mem::take(&mut current));
+                    }
+                }
+                c => current.push(c),
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+        out
+    }
+
+    /// The argv of every line in the help's `Examples:` block, taken from the
+    /// last `scout ` on the line so a piped example contributes the command and
+    /// not the `echo` in front of it.
+    fn example_argvs(help: &str) -> Vec<Vec<String>> {
+        help.lines()
+            .skip_while(|line| !line.trim_start().starts_with("Examples:"))
+            .skip(1)
+            .take_while(|line| !line.trim().is_empty())
+            .filter_map(|line| {
+                line.rsplit_once("scout ")
+                    .map(|(_, rest)| shell_split(rest))
+            })
+            .collect()
+    }
+
+    /// [T-H011] every example printed in a subcommand's help parses
+    ///
+    /// The other help tests assert that an `Examples:` block exists, not that
+    /// what it shows works — a renamed flag or a mistyped subcommand left them
+    /// all passing while the help told an agent to run something that exits 64.
+    /// Parsing is the whole check: it needs no network, and the examples carry
+    /// no shell syntax beyond quoting.
+    #[test]
+    fn help_examples_parse() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: super::Command,
+        }
+
+        let helps = [
+            help_text::<super::SearchParams>(),
+            help_text::<super::FetchParams>(),
+            help_text::<super::ResearchParams>(),
+            help_text::<super::RepoTreeParams>(),
+            help_text::<super::RepoReadParams>(),
+            help_text::<super::RepoOverviewParams>(),
+        ];
+
+        let mut checked = 0;
+        for help in &helps {
+            for argv in example_argvs(help) {
+                let full: Vec<String> = iter::once("scout".to_owned())
+                    .chain(argv.iter().cloned())
+                    .collect();
+                assert!(
+                    Cli::try_parse_from(&full).is_ok(),
+                    "help shows an example that does not parse: scout {}",
+                    argv.join(" ")
+                );
+                checked += 1;
+            }
+        }
+        // Guards the extraction itself: a change to the help layout that stopped
+        // matching would otherwise leave this test passing on zero examples.
+        assert!(
+            checked >= 25,
+            "expected every subcommand's examples to be checked, got {checked}"
+        );
     }
 
     /// [T-P001] research --depth accepts valid range 1..=10 and rejects out-of-range

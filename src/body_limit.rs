@@ -18,6 +18,42 @@
 /// not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// Upper bound on how much of a *failed* response's body is read to build a
+/// diagnostic message. Generous beside the few hundred bytes GitHub and Brave
+/// actually send on an error, and small enough that the error path cannot cost
+/// what the success path is capped against.
+pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// Read up to `limit` bytes of `response`'s body for a diagnostic snippet.
+///
+/// Separate from [`read_body_capped`] because exceeding the limit is not an
+/// error here: the caller wants whatever prefix explains the failure, and the
+/// status it already has is the finding. What the two share is the reason for
+/// existing at all — `Response::text()` reads the whole body, so an error
+/// response can exhaust memory exactly as a successful one can, and the cap
+/// used to apply only where the body was expected to be useful.
+///
+/// Stops after the first chunk that reaches `limit`, so the bytes read are
+/// bounded by `limit + one chunk` no matter how much the server sends. The
+/// allocation is the looser bound: `body` starts empty and grows by doubling,
+/// so its capacity can pass `limit` before the loop exits, and `truncate` cuts
+/// the length without returning the capacity. Both bounds are constants — the
+/// response's own size enters neither.
+pub(crate) async fn read_body_snippet(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, reqwest::Error> {
+    let mut body = Vec::new();
+    while body.len() < limit {
+        match response.chunk().await? {
+            Some(chunk) => body.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    body.truncate(limit);
+    Ok(body)
+}
+
 /// Drain `response` into a `Vec<u8>` while enforcing `cap` bytes. Content-Length
 /// is pre-checked before any allocation; the chunk loop also rejects bodies that
 /// exceed the cap when the header is absent or lies. Callers pass the cap that
@@ -28,9 +64,12 @@ pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 /// `cap` applies to *decoded* bytes: with reqwest's compression features enabled,
 /// `chunk()` yields already-decompressed data and `content_length()` returns
 /// `None` for compressed responses (so the pre-check goes inert and the chunk
-/// loop is the live guard). This bounds peak memory to `cap + one chunk` even
-/// against a decompression bomb, at the cost of rejecting a legitimately large
-/// page whose decompressed size exceeds the cap.
+/// loop is the live guard). This bounds the bytes read to `cap + one chunk`
+/// even against a decompression bomb, at the cost of rejecting a legitimately
+/// large page whose decompressed size exceeds the cap. The allocation follows
+/// `cap` rather than the response: with Content-Length it is reserved once at
+/// `min(len, cap)`, and without it the `Vec` doubles from 8 KiB until the loop
+/// rejects.
 pub(crate) async fn read_body_capped<E>(
     response: reqwest::Response,
     cap: usize,

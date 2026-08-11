@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use dom_smoothie::{Config, Readability};
 use tracing::warn;
 
@@ -10,12 +12,12 @@ fn log_url(url: Option<&str>) -> String {
 }
 
 pub(super) struct ExtractedArticle {
-    pub title: Option<String>,
-    pub byline: Option<String>,
-    pub published_time: Option<String>,
-    pub content_html: String,
+    pub(super) title: Option<String>,
+    pub(super) byline: Option<String>,
+    pub(super) published_time: Option<String>,
+    pub(super) content_html: String,
     /// False for both successful extraction and explicit raw mode.
-    pub used_raw_fallback: bool,
+    pub(super) used_raw_fallback: bool,
 }
 
 pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
@@ -72,8 +74,74 @@ fn extract_title_from_html(html: &str) -> Option<String> {
     // `>` is ASCII, so a byte search is exact even inside multi-byte UTF-8 content.
     let content_start = tag_start + bytes[tag_start..].iter().position(|&b| b == b'>')? + 1;
     let content_end = content_start + find_ascii_ci(&bytes[content_start..], b"</title>")?;
-    let title = html[content_start..content_end].trim();
+    // Trim again after decoding: `&nbsp;` becomes U+00A0, which the first trim
+    // could not see and which `str::trim` does treat as whitespace.
+    let decoded = decode_char_refs(html[content_start..content_end].trim());
+    let title = decoded.trim();
     (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// Decode the HTML character references that realistically reach a `<title>`:
+/// the five XML predefined names, `&nbsp;`, and numeric references.
+///
+/// dom_smoothie hands back an already-decoded title, so without this the same
+/// page reads `A & B` or `A &amp; B` in the frontmatter depending on whether
+/// Readability succeeded — and the body never shows the difference, because
+/// `fast_html2md` decodes it on the way to Markdown. Running the title through
+/// that same converter would decode it too, but it also applies Markdown
+/// escaping (`&lt;` becomes `\<`), which has no business in a YAML scalar.
+///
+/// Names outside this set stay literal. The HTML5 table has over 2000 entries,
+/// and a title carrying one of the rest is rarer than the cost of shipping the
+/// table to catch it.
+fn decode_char_refs(s: &str) -> Cow<'_, str> {
+    if !s.contains('&') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        // The longest form handled here is `&#x10FFFF;` at 10 bytes; a `;` further
+        // out belongs to some later construct, so the `&` stays literal.
+        match after.find(';').filter(|&semi| semi <= 10) {
+            Some(semi) => {
+                match decode_one_ref(&after[1..semi]) {
+                    Some(ch) => out.push(ch),
+                    None => out.push_str(&after[..=semi]),
+                }
+                rest = &after[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// The body of one character reference (between `&` and `;`), or `None` when it
+/// is a name this does not carry or a number outside Unicode.
+fn decode_one_ref(body: &str) -> Option<char> {
+    match body {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "nbsp" => Some('\u{a0}'),
+        _ => {
+            let digits = body.strip_prefix('#')?;
+            let code = match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => digits.parse().ok()?,
+            };
+            char::from_u32(code)
+        }
+    }
 }
 
 /// Byte offset of the first case-insensitive (ASCII) match of `needle` in `haystack`,
@@ -204,6 +272,79 @@ mod tests {
         // (İ, U+0130, 2 bytes) stays on a char boundary and does not panic.
         let html = "<html><head><TITLE>My Title</TITLE></head><body>İİİ</body></html>";
         assert_eq!(extract_title_from_html(html), Some("My Title".to_owned()));
+    }
+
+    /// [T-FX013] the raw-fallback title decodes character references
+    ///
+    /// dom_smoothie decodes the title it returns, and `fast_html2md` decodes the
+    /// body on the way to Markdown — so without this the frontmatter was the one
+    /// place a page read differently depending on whether Readability succeeded.
+    #[test]
+    fn raw_title_decodes_character_references() {
+        let cases = [
+            ("A &amp; B", "A & B"),
+            ("&lt;script&gt;", "<script>"),
+            ("it&#39;s", "it's"),
+            ("&quot;quoted&quot;", "\"quoted\""),
+            ("&#x3042;", "\u{3042}"),
+            ("A &unknownref; B", "A &unknownref; B"),
+            ("Tom &amp; Jerry &lt;3", "Tom & Jerry <3"),
+        ];
+        for (input, expected) in cases {
+            let html = format!("<html><head><title>{input}</title></head></html>");
+            assert_eq!(
+                extract_title_from_html(&html).as_deref(),
+                Some(expected),
+                "input: {input}"
+            );
+        }
+    }
+
+    /// [T-FX014] a lone `&` and an unterminated reference stay literal
+    #[test]
+    fn raw_title_leaves_bare_ampersand_alone() {
+        for input in ["R&D", "AT&T rules", "&", "&amp"] {
+            let html = format!("<html><head><title>{input}</title></head></html>");
+            assert_eq!(
+                extract_title_from_html(&html).as_deref(),
+                Some(input),
+                "input: {input}"
+            );
+        }
+    }
+
+    /// [T-FX015] `&nbsp;` decodes and then trims away on its own
+    #[test]
+    fn raw_title_of_only_nbsp_is_none() {
+        let html = "<html><head><title>&nbsp;</title></head></html>";
+        assert_eq!(extract_title_from_html(html), None);
+    }
+
+    /// [T-FX016] Readability drops chrome and keeps the article body
+    ///
+    /// ADR-0014 delegates active-markup removal to dom_smoothie, and nothing
+    /// asserted that the delegate actually does it — a library upgrade could
+    /// start returning the full page and every test here would still pass.
+    #[test]
+    fn readability_removes_nav_and_footer() {
+        let result = extract_article(BLOG_HTML, None);
+
+        assert!(
+            !result.used_raw_fallback,
+            "this fixture must extract cleanly"
+        );
+        assert!(
+            result.content_html.contains("ownership system"),
+            "article body must survive: {}",
+            result.content_html
+        );
+        for chrome in ["<nav>", "Navigation links", "Site footer"] {
+            assert!(
+                !result.content_html.contains(chrome),
+                "{chrome} should have been dropped: {}",
+                result.content_html
+            );
+        }
     }
 
     /// [T-FX011] (issue #189) readability fallback emits a WARN event whose `url`

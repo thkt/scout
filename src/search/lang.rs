@@ -1,10 +1,9 @@
 use clap::ValueEnum;
 
-#[derive(ValueEnum, Clone, Copy, Default)]
-pub enum Lang {
+#[derive(ValueEnum, Clone, Copy)]
+pub(crate) enum Lang {
     Ja,
     En,
-    #[default]
     Auto,
 }
 
@@ -12,7 +11,7 @@ impl Lang {
     /// Maps `Lang` to the Brave Web Search API's `search_lang` query parameter
     /// (ISO 639-1 code). `Auto` returns `None` so the request omits the parameter
     /// and lets Brave detect the language from the query / IP heuristics.
-    pub fn to_brave_param(self) -> Option<&'static str> {
+    pub(crate) fn to_brave_param(self) -> Option<&'static str> {
         match self {
             Lang::Ja => Some("ja"),
             Lang::En => Some("en"),

@@ -162,3 +162,50 @@ fn t028_cache_hit_takes_priority_over_label() {
     let result = substitute_mentions("cc <@U123|alice>", &cache);
     assert_eq!(result, "cc @Bob");
 }
+
+/// [T-SK084] `<@…>` holding something that cannot be a user id is left alone
+///
+/// Slack ids carry no whitespace and no `<`, so these are some other use of the
+/// sequence. Substituting them rewrote text the author did not write as a
+/// mention (`<@U1 hi>` became `@U1 hi`, losing the brackets) and put the
+/// non-id into the lookup queue, where it consumed one of the 50
+/// `SLACK_MAX_USER_LOOKUPS` slots and could cap out the real mentions behind it.
+#[test]
+fn malformed_mention_tokens_are_left_verbatim() {
+    let cache = HashMap::new();
+    for text in [
+        "hi <@U123 hello> there",
+        "hi <@> there",
+        "hi <@U123<@U456> there",
+    ] {
+        assert_eq!(
+            substitute_mentions(text, &cache),
+            text,
+            "must pass through untouched: {text}"
+        );
+    }
+}
+
+/// [T-SK085] a malformed token contributes no id to the lookup queue
+#[test]
+fn malformed_mention_tokens_are_not_collected() {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    collect_mention_ids_ordered("<@U1 hi> <@> <@REAL>", &mut seen, &mut out);
+
+    assert_eq!(out, vec!["REAL".to_owned()], "only the real id is queued");
+}
+
+/// [T-SK086] a well-formed mention after a malformed one still resolves
+///
+/// The scan resumes past the rejected token rather than abandoning the line.
+#[test]
+fn mention_after_malformed_token_still_substitutes() {
+    let mut cache = HashMap::new();
+    cache.insert("U456".to_owned(), "Alice".to_owned());
+
+    assert_eq!(
+        substitute_mentions("<@U123 bad> and <@U456>", &cache),
+        "<@U123 bad> and @Alice"
+    );
+}

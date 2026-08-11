@@ -47,12 +47,12 @@ const RETRIES_CAP: u32 = 10;
 /// hard-coded default and validates against a min/max range so a
 /// misconfigured agent fails fast instead of running with an extreme value.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RuntimeConfig {
-    pub(crate) fetch_timeout: Duration,
-    pub(crate) research_timeout: Duration,
-    pub(crate) slack_timeout: Duration,
-    pub(crate) github_timeout: Duration,
-    pub(crate) max_retries: u32,
+pub(super) struct RuntimeConfig {
+    pub(super) fetch_timeout: Duration,
+    pub(super) research_timeout: Duration,
+    pub(super) slack_timeout: Duration,
+    pub(super) github_timeout: Duration,
+    pub(super) max_retries: u32,
 }
 
 impl Default for RuntimeConfig {
@@ -68,14 +68,14 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    pub(crate) fn from_env() -> Result<Self, ScoutError> {
+    pub(super) fn from_env() -> Result<Self, ScoutError> {
         Self::from_env_with(|k| env::var(k))
     }
 
     /// Wraps [`Self::from_env`] with a caller-supplied env reader so tests
     /// can exercise parse and range failures without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    pub(crate) fn from_env_with<F>(get_var: F) -> Result<Self, ScoutError>
+    fn from_env_with<F>(get_var: F) -> Result<Self, ScoutError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
@@ -240,7 +240,8 @@ mod tests {
         assert_eq!(cfg.max_retries, 2);
     }
 
-    /// [T-CFG003] SCOUT_RESEARCH_TIMEOUT_SECS override が独立に効く
+    /// [T-CFG003] The SCOUT_RESEARCH_TIMEOUT_SECS override changes research_timeout and
+    /// leaves the other fields on their defaults
     #[test]
     fn research_timeout_override() {
         let cfg =
@@ -250,7 +251,8 @@ mod tests {
         assert_eq!(cfg.max_retries, 2);
     }
 
-    /// [T-CFG004] SCOUT_SLACK_TIMEOUT_SECS override が独立に効く
+    /// [T-CFG004] The SCOUT_SLACK_TIMEOUT_SECS override changes slack_timeout and leaves
+    /// the other fields on their defaults
     #[test]
     fn slack_timeout_override() {
         let cfg =
@@ -258,21 +260,21 @@ mod tests {
         assert_eq!(cfg.slack_timeout, Duration::from_secs(10));
     }
 
-    /// [T-CFG005] SCOUT_MAX_RETRIES=5 が max_retries に反映される
+    /// [T-CFG005] SCOUT_MAX_RETRIES=5 lands in max_retries
     #[test]
     fn max_retries_override() {
         let cfg = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "5")).unwrap();
         assert_eq!(cfg.max_retries, 5);
     }
 
-    /// [T-CFG006] SCOUT_MAX_RETRIES=0 (retry 無効) を許容
+    /// [T-CFG006] SCOUT_MAX_RETRIES=0 (retry disabled) is accepted
     #[test]
     fn max_retries_zero_is_allowed() {
         let cfg = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "0")).unwrap();
         assert_eq!(cfg.max_retries, 0);
     }
 
-    /// [T-CFG010] parse 失敗（英字混入）は UsageError(64) で fail-fast
+    /// [T-CFG010] A parse failure (letters mixed into the value) fails fast with UsageError(64)
     #[test]
     fn non_integer_value_fails_fast() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_FETCH_TIMEOUT_SECS", "abc"))
@@ -286,14 +288,14 @@ mod tests {
         );
     }
 
-    /// [T-CFG011] 空文字列は parse 失敗扱いで UsageError
+    /// [T-CFG011] An empty string counts as a parse failure and yields UsageError
     #[test]
     fn empty_value_fails_fast() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "")).unwrap_err();
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG012] 範囲外 timeout (0) は UsageError
+    /// [T-CFG012] An out-of-range timeout (0) yields UsageError
     #[test]
     fn timeout_below_min_fails() {
         let err =
@@ -314,7 +316,7 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG014] 範囲外 retries (11) は UsageError
+    /// [T-CFG014] An out-of-range retry count (11) yields UsageError
     #[test]
     fn max_retries_above_cap_fails() {
         let err = RuntimeConfig::from_env_with(single_env("SCOUT_MAX_RETRIES", "11")).unwrap_err();
@@ -326,7 +328,7 @@ mod tests {
         );
     }
 
-    /// [T-CFG015] 負数は u64 parse 失敗で UsageError
+    /// [T-CFG015] A negative number fails the u64 parse and yields UsageError
     #[test]
     fn negative_value_fails() {
         let err =
@@ -384,11 +386,13 @@ mod tests {
         assert_eq!(from_empty.max_retries, from_default.max_retries);
     }
 
-    /// [T-CFG021] github_timeout の既定は内側の HTTP / 候補取得 timeout を上回る
+    /// [T-CFG021] The github_timeout default exceeds the inner HTTP and candidate-fetch timeouts
     ///
-    /// 外側の GitHub コマンド timeout が内側の per-request timeout 以下だと、
-    /// 1 リクエストの正常完了前に外側が切れる。階層 (外側 > 内側) を値で固定し、
-    /// 内側定数を縮めた将来の変更がこの不等式を壊したら検知する (issue #185)。
+    /// When the outer GitHub-command timeout is at or below the inner
+    /// per-request timeout, the outer one fires before a single request can
+    /// finish. Pinning the hierarchy (outer > inner) as values catches a future
+    /// change that shrinks an inner constant and breaks the inequality
+    /// (issue #185).
     #[test]
     fn github_timeout_exceeds_inner_request_timeouts() {
         use crate::tools::builder::HTTP_TIMEOUT;
@@ -402,6 +406,49 @@ mod tests {
         assert!(
             github > CANDIDATE_FETCH_TIMEOUT,
             "github_timeout ({github:?}) must exceed CANDIDATE_FETCH_TIMEOUT"
+        );
+    }
+
+    /// [T-CFG026] The research_timeout default covers one search plus one fetch
+    ///
+    /// `research` spends a Brave request and then fetches sources, each capped
+    /// separately. Below the sum of one of each, no run could finish even with
+    /// nothing going wrong, and every failure would report the outer timeout
+    /// instead of the stage that stalled.
+    ///
+    /// It deliberately sits below the *retried* budget, as `github_timeout` does
+    /// above: three Brave attempts alone exceed it, so an upstream that keeps
+    /// hanging is cut rather than waited out.
+    #[test]
+    fn research_timeout_covers_one_search_and_one_fetch() {
+        use crate::brave::client::REQUEST_TIMEOUT;
+        use crate::search::engine::FETCH_TIMEOUT;
+
+        let research = RuntimeConfig::default().research_timeout;
+        assert!(
+            research > REQUEST_TIMEOUT + FETCH_TIMEOUT,
+            "research_timeout ({research:?}) must cover one Brave request \
+             ({REQUEST_TIMEOUT:?}) plus one page fetch ({FETCH_TIMEOUT:?})"
+        );
+    }
+
+    /// [T-CFG025] The fetch_timeout default exceeds one CDP stage
+    ///
+    /// `fetch_with_cdp` spends `CDP_TIMEOUT` twice in series (waiting for the
+    /// DevTools URL, then navigating), so the outer budget cannot cover both.
+    /// What it must cover is one of them: below this line a `--js` fetch could
+    /// not finish a single stage, and every render would report the outer
+    /// timeout with no indication of where it stopped. The github_timeout
+    /// hierarchy above pins the same relation for the GitHub commands.
+    #[cfg(feature = "js-rendering")]
+    #[test]
+    fn fetch_timeout_exceeds_one_cdp_stage() {
+        use crate::fetch::CDP_TIMEOUT;
+
+        let fetch = RuntimeConfig::default().fetch_timeout;
+        assert!(
+            fetch > CDP_TIMEOUT,
+            "fetch_timeout ({fetch:?}) must exceed one CDP stage ({CDP_TIMEOUT:?})"
         );
     }
 

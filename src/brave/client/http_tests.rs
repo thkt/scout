@@ -379,7 +379,8 @@ fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
     assert_eq!(client.base_url, API_BASE);
 }
 
-/// [T-BC027] brave は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
+/// [T-BC027] brave retries an API that answers HTTP 408 once and returns the second,
+/// successful response
 ///
 /// The retryable status set must not be re-tabled in `is_retriable`: 408 is
 /// retried only because `Classification::from_http_status` calls it
@@ -407,7 +408,8 @@ async fn search_408_retries_once_then_succeeds() {
     );
 }
 
-/// [T-BC028] brave の ResponseTooLarge は classify 導出でも再試行されない
+/// [T-BC028] brave's ResponseTooLarge stays non-retryable even when retriability is
+/// derived from classify
 ///
 /// Retry cannot shrink an oversized response, so this variant must stay
 /// non-retriable even though the classify path now decides every arm but

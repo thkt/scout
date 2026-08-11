@@ -43,7 +43,9 @@ Option B は `gh` 慣習 (`GITHUB_TOKEN` 最優先) に反し CI の明示 env �
 
 ### Confirmation
 
-`src/token_source.rs` のテストが解決順を pin する。`[T-TOK001]` は env reader が `GITHUB_TOKEN` を返すと subprocess へ落ちずその値で短絡することを assert する。`[T-TOK002]` は `GITHUB_TOKEN` が whitespace のみのとき未設定扱いで次候補 `GH_TOKEN` へ落ちることを assert する。`TokenSource` trait は `StaticTokenSource` で subprocess 無しにテストでき、production の `GhCliSource` だけが実 `gh` を起動する。`gh` の出力契約が変わった際はこれらが回帰を検出する。
+`src/token_source.rs` のテストが解決順を pin する。`[T-TOK001]` は env reader が `GITHUB_TOKEN` を返すと subprocess へ落ちずその値で短絡することを assert する。`[T-TOK002]` は `GITHUB_TOKEN` が whitespace のみのとき未設定扱いで次候補 `GH_TOKEN` へ落ちることを assert する。`gh` 経路も注入で覆う。`resolve_from_env_or_gh` は env reader と並べて subprocess 起動関数を受け取り、production の `GhCliSource` だけが実 `gh` を起動する `spawn_gh` を渡す。`[T-TOK003]` が stdout の末尾改行を trim してトークンにすること、`[T-TOK004]` が非ゼロ終了で stderr をログへ出さないこと (SEC 判断の pin)、`[T-TOK005]` が whitespace のみの stdout を未取得扱いにすること、`[T-TOK006]` が timeout 超過で未認証へ落ちることを assert する。`TokenSource` trait 自体は `StaticTokenSource` で上位からも subprocess 無しにテストできる。
+
+この注入を入れるまで `[T-TOK001]`/`[T-TOK002]` は env 経路しか通らず、`gh` の出力契約が変わっても検出できなかった。そもそもどの分岐を走るかが、テストを回すマシンに `gh` が入っているかに依存していた。
 
 ## Pros and Cons of the Options
 

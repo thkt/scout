@@ -70,20 +70,20 @@ pub(crate) struct Degradation {
 }
 
 impl Degradation {
-    pub fn push(&mut self, message: String, reason: DegradedReason) {
+    pub(crate) fn push(&mut self, message: String, reason: DegradedReason) {
         self.notes.push(message);
         self.reasons.push(reason);
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.notes.is_empty() && self.reasons.is_empty()
     }
 
-    pub fn notes(&self) -> &[String] {
+    pub(crate) fn notes(&self) -> &[String] {
         &self.notes
     }
 
-    pub fn into_parts(self) -> (Vec<String>, Vec<DegradedReason>) {
+    pub(crate) fn into_parts(self) -> (Vec<String>, Vec<DegradedReason>) {
         (self.notes, self.reasons)
     }
 }
@@ -105,7 +105,7 @@ pub(crate) struct CommandOutput {
 }
 
 impl CommandOutput {
-    pub fn ok(markdown: String, data: serde_json::Value) -> Self {
+    pub(crate) fn ok(markdown: String, data: serde_json::Value) -> Self {
         Self {
             markdown,
             data,
@@ -115,7 +115,7 @@ impl CommandOutput {
         }
     }
 
-    pub fn with_degradation(
+    pub(crate) fn with_degradation(
         markdown: String,
         data: serde_json::Value,
         degradation: Degradation,
@@ -214,18 +214,18 @@ impl ErrorCode {
 /// `degraded_reasons` as an additive field (omitted from JSON when empty).
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
-    pub data: serde_json::Value,
-    pub degraded: bool,
-    pub notes: Vec<String>,
+    data: serde_json::Value,
+    degraded: bool,
+    notes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub degraded_reasons: Vec<DegradedReason>,
+    degraded_reasons: Vec<DegradedReason>,
 }
 
 /// Error envelope per ADR-0010. Wraps the payload under an `error` key so
 /// JSON output matches `{"error": { "code": ..., "message": ..., ... }}`.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorEnvelope {
-    pub error: ErrorPayload,
+    pub(crate) error: ErrorPayload,
 }
 
 /// Serialize an output envelope as its one-line JSON form per ADR-0010. The
@@ -239,13 +239,13 @@ pub(crate) fn to_json_line<T: Serialize>(envelope: &T) -> String {
 /// Error payload nested under `ErrorEnvelope::error` per ADR-0010.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorPayload {
-    pub code: ErrorCode,
-    pub message: String,
+    pub(crate) code: ErrorCode,
+    pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_step: Option<String>,
+    pub(crate) next_step: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub candidates: Vec<String>,
-    pub retryable: bool,
+    pub(crate) candidates: Vec<String>,
+    pub(crate) retryable: bool,
 }
 
 #[cfg(test)]

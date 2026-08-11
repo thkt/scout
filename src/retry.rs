@@ -23,7 +23,7 @@ const MAX_RETRY_AFTER_SECS: u64 = 300;
 /// so `2` yields the 3-attempt budget that backends are tuned against.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
 
-pub(crate) fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
+fn jittered_backoff(attempt: u32, rng: &dyn Rng) -> u64 {
     let base = INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt));
     let half = base / 2;
     half + rng.u64_below(half.max(1))
@@ -124,11 +124,7 @@ pub(crate) fn retry_after_within_cap(retry_after: Option<u64>) -> bool {
     retry_after.is_none_or(|s| s <= MAX_RETRY_AFTER_SECS)
 }
 
-pub(crate) fn retry_after_or_backoff(
-    retry_after: Option<u64>,
-    attempt: u32,
-    rng: &dyn Rng,
-) -> Duration {
+fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32, rng: &dyn Rng) -> Duration {
     match retry_after {
         Some(secs) => Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)),
         // Cap the exponential backoff at the same ceiling as the server-supplied

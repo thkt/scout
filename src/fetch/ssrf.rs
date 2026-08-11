@@ -57,7 +57,7 @@ pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
 }
 
 /// Object-safe boxed future returned by [`DnsResolver::lookup`].
-pub(crate) type DnsLookupFuture<'a> =
+type DnsLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, FetchError>> + Send + 'a>>;
 
 /// Resolves a host to one or more IP addresses. `Send + Sync` so implementations
@@ -125,10 +125,10 @@ impl fmt::Display for RedactedLogUrl<'_> {
 /// `reqwest::Client::get`) accept `&ValidatedUrl` so the type system forces
 /// every fetch path through the SSRF check.
 #[derive(Debug, Clone)]
-pub(crate) struct ValidatedUrl(url::Url);
+pub(super) struct ValidatedUrl(url::Url);
 
 impl ValidatedUrl {
-    pub(crate) fn as_str(&self) -> &str {
+    pub(super) fn as_str(&self) -> &str {
         self.0.as_str()
     }
 
@@ -137,14 +137,14 @@ impl ValidatedUrl {
     /// would re-parse a string that came out of a `url::Url` in the first place,
     /// adding an error branch nothing can reach. The result is a plain `Url`, so
     /// the caller still has to run it back through `ssrf_check`.
-    pub(crate) fn join(&self, relative: &str) -> Result<url::Url, url::ParseError> {
+    pub(super) fn join(&self, relative: &str) -> Result<url::Url, url::ParseError> {
         self.0.join(relative)
     }
 
     /// Bypasses SSRF validation. Test-only — production code must go through
     /// [`ssrf_check`] so the type system enforces the SSRF contract.
     #[cfg(test)]
-    pub(crate) fn for_test(raw: &str) -> Self {
+    pub(super) fn for_test(raw: &str) -> Self {
         Self(url::Url::parse(raw).expect("test URL must parse"))
     }
 }
@@ -155,7 +155,7 @@ impl fmt::Display for ValidatedUrl {
     }
 }
 
-pub(crate) async fn ssrf_check(
+pub(super) async fn ssrf_check(
     raw: &str,
     resolver: &dyn DnsResolver,
     mode: &EgressMode,
@@ -207,13 +207,13 @@ pub(crate) async fn ssrf_check(
 /// logs the block here so all three stages report it identically. `stage`
 /// distinguishes them: `preflight` (before the request), `connect` (reqwest's
 /// resolver), `proxy` (the CDP SOCKS5 hop).
-pub(crate) fn first_blocked_ip(stage: &'static str, host: &str, ips: &[IpAddr]) -> Option<IpAddr> {
+pub(super) fn first_blocked_ip(stage: &'static str, host: &str, ips: &[IpAddr]) -> Option<IpAddr> {
     let blocked = ips.iter().copied().find(|ip| is_private_ip(*ip))?;
     warn!(stage, host = %host, ip = %blocked, "blocked connect to private IP");
     Some(blocked)
 }
 
-pub(crate) fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
+fn validate_url_sync(raw: &str) -> Result<url::Url, FetchError> {
     let parsed = url::Url::parse(raw)?;
     match parsed.scheme() {
         "http" | "https" => {}
@@ -250,7 +250,7 @@ fn is_cgn(v4: Ipv4Addr) -> bool {
     octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
-pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
+fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()

@@ -8,6 +8,10 @@ mod download;
 mod extractor;
 mod ssrf;
 
+/// Re-exported for the `tools::config` invariant test alone; `cdp` itself stays
+/// private to `fetch`, and no production path outside this module reads it.
+#[cfg(all(test, feature = "js-rendering"))]
+pub(crate) use cdp::CDP_TIMEOUT;
 use ssrf::ssrf_check;
 pub(crate) use ssrf::{
     DnsResolver, EgressMode, RedactedLogUrl, SsrfResolver, TokioDnsResolver, detect_egress_mode,
@@ -27,7 +31,7 @@ use crate::envelope::ErrorCode;
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
 use converter::{FetchResult, to_fetch_result};
-use download::download;
+use download::{DownloadedPage, download};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
@@ -37,17 +41,23 @@ use extractor::{extract_article, extract_raw};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
-    pub js: bool,
+    pub(crate) js: bool,
     /// Skip Readability extraction; return full HTML converted to Markdown.
-    pub raw: bool,
+    pub(crate) raw: bool,
     /// Egress routing for this fetch. `Direct` (the default) runs scout's DNS
     /// pre-check and dials the host directly; `Proxied` skips the pre-check and
     /// routes via the configured HTTP proxy (which resolves and dials instead).
-    pub egress: EgressMode,
+    pub(crate) egress: EgressMode,
 }
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
-const MAX_REDIRECTS: usize = 5;
+
+/// Hop limit for `download`'s hand-rolled redirect loop, which re-runs the SSRF
+/// check on every hop. `tools::builder` carries a same-valued `MAX_REDIRECTS`
+/// for reqwest's own `Policy::limited` on the Brave / GitHub / Slack client —
+/// a different mechanism on a different client, so the two move independently
+/// despite matching today.
+const FETCH_MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FetchError {
@@ -135,7 +145,7 @@ impl FetchError {
             // Priority 4: TEMP_FAILURE (non-Status variants)
             Self::DnsResolution(_) => Classification::new(ErrorCode::TempFailure)
                 .with_hint("Check the URL's domain name and your DNS resolver"),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Http(re) => Classification::from_reqwest(re),
             // Priority 5 sibling: IO_ERROR — external tool failure (browser)
             Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),
@@ -188,11 +198,31 @@ pub(crate) async fn fetch_page(
     // cleared whenever CDP output replaces the body below, because the headless
     // browser re-decodes the page from its own response handling.
     #[cfg(feature = "js-rendering")]
-    let (final_url, mut html, mut decode_uncertain) =
-        download(client, &validated, MAX_REDIRECTS, resolver.as_ref(), egress).await?;
+    let DownloadedPage {
+        url: final_url,
+        text: mut html,
+        mut decode_uncertain,
+    } = download(
+        client,
+        &validated,
+        FETCH_MAX_REDIRECTS,
+        resolver.as_ref(),
+        egress,
+    )
+    .await?;
     #[cfg(not(feature = "js-rendering"))]
-    let (final_url, html, decode_uncertain) =
-        download(client, &validated, MAX_REDIRECTS, resolver.as_ref(), egress).await?;
+    let DownloadedPage {
+        url: final_url,
+        text: html,
+        decode_uncertain,
+    } = download(
+        client,
+        &validated,
+        FETCH_MAX_REDIRECTS,
+        resolver.as_ref(),
+        egress,
+    )
+    .await?;
 
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
@@ -299,8 +329,26 @@ fn visible_text_len(html: &str, limit: usize) -> usize {
     count
 }
 
+/// Visible characters below which a `<body>` counts as empty enough that the
+/// page is probably rendered by JS. Counted in characters, not bytes, so the
+/// same prose crosses it at the same length in every script — 100 bytes is 100
+/// Latin characters but only 33 CJK ones, which let a Japanese SPA past the
+/// check on a third of the text an English one needed.
 const BODY_TEXT_THRESHOLD: usize = 100;
 
+/// Markers of a client-rendered shell, listed in the double-quoted form only.
+///
+/// The list decides nothing for a page carrying `<script`, since that arm of
+/// [`is_js_dependent`] short-circuits first. It is consulted only for a thin
+/// body with no script tag anywhere, where the shell marker is the sole evidence
+/// the page is an app (T-F023).
+///
+/// The single-quoted (`id='root'`) and unquoted (`id=root`) forms are left out
+/// rather than overlooked: the templates and server renderers that emit these
+/// ids write double quotes, and the form that strips them is an HTML minifier,
+/// whose output ships the bundle's `<script` tag for the other arm to catch.
+/// Attribute values are also case-sensitive, unlike the tag names
+/// [`contains_ignore_ascii_case`] folds.
 const SPA_ROOT_IDS: &[&str] = &[
     r#"id="root""#,
     r#"id="app""#,
@@ -344,7 +392,7 @@ fn has_thin_body(html: &str) -> bool {
         html
     };
 
-    let mut visible_bytes = 0usize;
+    let mut visible_chars = 0usize;
     let mut in_tag = false;
     let mut skip_text = false;
     let mut tag_buf = [0u8; 16];
@@ -385,15 +433,15 @@ fn has_thin_body(html: &str) -> bool {
             }
             _ if skip_text => {}
             _ if ch.is_whitespace() => {
-                if !in_whitespace && visible_bytes > 0 {
-                    visible_bytes += 1;
+                if !in_whitespace && visible_chars > 0 {
+                    visible_chars += 1;
                     in_whitespace = true;
                 }
             }
             _ => {
-                visible_bytes += ch.len_utf8();
+                visible_chars += 1;
                 in_whitespace = false;
-                if visible_bytes >= BODY_TEXT_THRESHOLD {
+                if visible_chars >= BODY_TEXT_THRESHOLD {
                     return false;
                 }
             }

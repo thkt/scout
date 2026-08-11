@@ -5,6 +5,13 @@ use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note
 
 const MAX_README_BYTES: usize = 24_000;
 
+/// `f64` carries 53 bits of mantissa, so the cast below is exact up to 8 PB.
+/// GitHub caps a blob at 100 MB, and the tree sizes this formats come from the
+/// same API, so no input reaches the range where the rounding would show.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "sizes come from the GitHub API and stay far below 2^53 bytes"
+)]
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -78,6 +85,18 @@ pub(crate) fn format_file_content(
     format!("{header}\n\n{fence}{lang}\n{content}\n{fence}")
 }
 
+/// List the tree entries, fencing the paths.
+///
+/// `owner` and `repo` reach here through `parse_repo`, which admits only
+/// `[A-Za-z0-9._-]`, and `ref_` through `validate_ref`, which rejects `[` among
+/// others — so neither can carry link syntax and neither is escaped.
+///
+/// The paths are different: they come from the GitHub API unvalidated, and a
+/// name like `docs/[draft](old).md` reads as a link once it lands in markdown.
+/// They go inside a fence rather than through `escape_md_inline`, because the
+/// agent reading this list passes a path straight back to `repo-read` — escaping
+/// would hand it `docs/\[draft\]\(old\).md` and turn a rendering concern into a
+/// 404. A fence neutralizes the block without altering a byte of the path.
 pub(crate) fn format_tree(
     owner: &str,
     repo: &str,
@@ -92,13 +111,16 @@ pub(crate) fn format_tree(
     }
     out.push_str("\n\n");
 
+    let mut paths = String::new();
     for entry in entries {
-        out.push_str(&entry.path);
+        paths.push_str(&entry.path);
         if let Some(size) = entry.size {
-            let _ = write!(out, " ({})", format_size(size));
+            let _ = write!(paths, " ({})", format_size(size));
         }
-        out.push('\n');
+        paths.push('\n');
     }
+    let fence = fence_delimiter(&paths);
+    let _ = write!(out, "{fence}\n{paths}{fence}\n");
 
     out
 }

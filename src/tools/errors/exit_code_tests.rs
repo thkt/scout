@@ -96,8 +96,8 @@ fn io_errors_have_exit_code_74() {
 /// [T-ER003] TempFailure errors are retryable, display retry hint, exit 75 (EX_TEMPFAIL).
 /// Timeout cases moved to T-ER027 with exit 124 per ADR-0002.
 ///
-/// [T-ER035] Slack の接続拒否 error は ScoutError 経由で exit code 75 と retry hint
-/// になる — pinned by the `SlackError::Network` row, which carries a real
+/// [T-ER035] A Slack connection-refused error becomes exit code 75 with a retry
+/// hint through ScoutError — pinned by the `SlackError::Network` row, which carries a real
 /// connection-refused `reqwest::Error`.
 #[tokio::test]
 async fn temp_failure_errors_have_exit_code_75() {
@@ -216,6 +216,10 @@ async fn fetch_error_http_connection_refused_is_transient() {
 /// retryable buries it instead. github and brave used to blanket-map this to
 /// TempFailure, each in its own arm — the shared `Classification::from_reqwest`
 /// is what keeps the three answers the same from here on.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the decode failure is the fixture, not a body this test wants; the mock serves 8 bytes"
+)]
 #[tokio::test]
 async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
     use reqwest::Client;
@@ -292,7 +296,8 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
     }
 }
 
-/// [T-ER036] internal_error が再試行後も継続すると ScoutError 経由で exit code 75 と retry hint になる
+/// [T-ER036] An internal_error that persists after retries becomes exit code 75 with a
+/// retry hint through ScoutError
 ///
 /// The seam from a persistently-failing real HTTP call through to the
 /// process exit code: a `fetch_message` whose responder always answers

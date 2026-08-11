@@ -82,6 +82,14 @@ N 行で切る。
 
 メタデータ表: Language, Stars, Forks, Open Issues, License, Default Branch, Topics, URL。
 
+### `repo-tree` の出力 (`format_tree`)
+
+`format_overview` とは中和の方法が異なる。ヘッダ (`owner/repo (ref: X)` と `files: N`) は escape せず素で出す。`owner`/`repo` は `parse_repo` が `[A-Za-z0-9._-]` のみを通し、`ref_` は `validate_ref` が `[` を含む文字群を弾くため、いずれも link 記法を組み立てられない。
+
+パス一覧は fence で囲む。パスは GitHub API 由来で検証を通っておらず、`docs/[draft](old).md` のような名前が markdown 上で link として解釈される。ここで `escape_md_inline` を使わないのは、この一覧を読んだエージェントがパスをそのまま `repo-read` の引数に渡すため。escape すると `docs/\[draft\]\(old\).md` が渡り、表示の問題が 404 に変わる。fence はバイトを変えずに block 全体を中和する。fence の長さは `fence_delimiter` がパス中の最長バックティック連から決める。
+
+`src/github/format/tree_tests.rs` の `[T-GF042]` がパスのバイト一致と fence の存在を、`[T-GF043]` がバックティックを含むパスで fence が伸びることを assert する。
+
 ### 切り詰めロジック (src/github/format.rs:153-174)
 
 ```
@@ -93,6 +101,14 @@ out.push_str(&shift_headings(&content[..end], 2)); // 見出し level を 2 下�
 ```
 
 `truncate_with_note` を再利用しないのは、切り詰めとマーカー付与の間に `shift_headings` を挟む必要があるため。
+
+### README の setext 見出し
+
+`shift_headings` は ATX (`# Title`) に加えて setext (`Title` の次行に `=====` / `-----`) も対象にし、後者は ATX へ書き換えてから level を下げる。h3 以降に setext の表現が無いため、記法の変換を伴う。underline 行は消える。
+
+対象を広げた根拠は実測である。star 上位 100 リポジトリの README のうち 5 件が setext を使い、うち `torvalds/linux` と `996icu/996.ICU` は README ほぼ全体が setext で構成される。ATX 限定のままだと、これらの README は見出しが `## README` より浅い level のまま残り、section 順序の契約が README 内部から壊れる。
+
+`-` は thematic break およびリスト記号と字面が重なるため、CommonMark §4.3 の規則 (underline の直上が段落行なら setext、空行なら thematic break) で判別する。`src/markdown.rs` の `[T-MD021..T-MD025]` が変換・thematic break の非変換・段落でない行の非変換・fence 内の非変換・h6 clamp を assert する。
 
 ### 参照
 

@@ -24,10 +24,10 @@ pub(crate) enum DetectionSource {
 /// Result of decoding raw bytes into Unicode text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DecodeResult {
-    pub text: String,
+    pub(crate) text: String,
     /// The encoding label in lowercase (e.g. "shift_jis", "utf-8").
-    pub encoding: String,
-    pub source: DetectionSource,
+    pub(crate) encoding: String,
+    pub(crate) source: DetectionSource,
 }
 
 /// Decode a base64-encoded string into raw bytes.
@@ -59,7 +59,7 @@ pub(super) fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeRes
         return decode_explicit(bytes, label);
     }
     if let Some(result) = decode_bom(bytes) {
-        return Ok(result);
+        return result;
     }
     decode_detect(bytes)
 }
@@ -85,7 +85,18 @@ fn decode_explicit(bytes: &[u8], label: &str) -> Result<DecodeResult, GitHubErro
     })
 }
 
-fn decode_bom(bytes: &[u8]) -> Option<DecodeResult> {
+/// `None` means no BOM was present, so the caller moves on to detection. A BOM
+/// that is present but whose bytes do not decode is a failure, not a miss: it
+/// returns `Some(Err)` so detection cannot paper over a file that declared its
+/// own encoding and then contradicted it.
+///
+/// Failing here matches `decode_explicit` and ADR-0013's split, where the GitHub
+/// path ends in a `NonUtf8` error with a retry hint while only the fetch path
+/// returns a lossy body. Until then this arm dropped `had_errors` on the floor
+/// and handed back replacement characters under `DetectionSource::Bom`, which
+/// reads to the caller as a settled encoding — and the GitHub path carries no
+/// equivalent of fetch's `decode_uncertain` to say otherwise.
+fn decode_bom(bytes: &[u8]) -> Option<Result<DecodeResult, GitHubError>> {
     let (encoding, bom_len) = Encoding::for_bom(bytes)?;
     let (decoded, had_errors) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
     if had_errors {
@@ -93,12 +104,16 @@ fn decode_bom(bytes: &[u8]) -> Option<DecodeResult> {
             encoding = encoding.name(),
             had_errors, "BOM-identified encoding produced replacement characters during decode"
         );
+        return Some(Err(GitHubError::NonUtf8(format!(
+            "Content declares a {} BOM but does not decode as it. Retry with --encoding <label>.",
+            encoding.name()
+        ))));
     }
-    Some(DecodeResult {
+    Some(Ok(DecodeResult {
         text: decoded.into_owned(),
         encoding: encoding.name().to_ascii_lowercase(),
         source: DetectionSource::Bom,
-    })
+    }))
 }
 
 fn is_likely_binary(bytes: &[u8]) -> bool {

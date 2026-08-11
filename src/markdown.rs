@@ -3,7 +3,12 @@ use std::borrow::Cow;
 /// Escape characters that break Markdown link syntax: `[`, `]`, `(`, `)`.
 /// Newlines are folded to spaces so an untrusted value cannot break onto a new
 /// line and inject block Markdown (a heading or list item).
-pub(crate) fn escape_md_link(s: &str) -> String {
+///
+/// For a link target only — `|` is deliberately absent, since a URL inside
+/// `[](…)` has no table column to break out of. Text that is not a link target
+/// wants [`escape_md_inline`], which does escape it; that is why this is private
+/// to the module and reachable only through [`md_link`].
+fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -93,6 +98,51 @@ pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Number of leading lines occupied by a `---`-delimited frontmatter block, or
+/// 0 when the input does not open with one.
+///
+/// scout's own fetch output carries this block (ADR-0014), and its lines are not
+/// content: `author: "Jane"` above the closing `---` reads as a setext h2 by the
+/// CommonMark rule, which would rewrite the key as a heading and consume the
+/// delimiter that closes the block. An unterminated opening `---` yields 0, so a
+/// body that merely starts with a thematic break is still shifted.
+fn frontmatter_len(lines: &[&str]) -> usize {
+    if lines.first() != Some(&"---") {
+        return 0;
+    }
+    lines[1..]
+        .iter()
+        .position(|l| *l == "---")
+        .map_or(0, |p| p + 2)
+}
+
+/// Return the setext heading level if `text` followed by `underline` forms one
+/// (CommonMark §4.3): `=` underlines an h1, `-` an h2.
+///
+/// `-` is also a thematic break and a list bullet, and the rule that separates
+/// them is what the underline sits under: a setext underline follows a paragraph
+/// line, a thematic break follows a blank one. So `text` has to be ordinary
+/// prose — a blank line, an ATX heading, a list item, a quote, a table row or a
+/// fence above the dashes leaves them alone.
+fn setext_heading_level(text: &str, underline: &str) -> Option<usize> {
+    let text = text.trim();
+    if text.is_empty() || text.starts_with(['#', '-', '*', '+', '>', '|', '=']) {
+        return None;
+    }
+    if text.starts_with("```") || text.starts_with("~~~") {
+        return None;
+    }
+    let underline = underline.trim_end();
+    // Column 0 only, matching `atx_heading_level`'s treatment of the marker: an
+    // indented underline is a code block or list continuation, not a heading.
+    let mut chars = underline.chars();
+    let first = chars.next()?;
+    if !matches!(first, '=' | '-') || !chars.all(|c| c == first) {
+        return None;
+    }
+    Some(if first == '=' { 1 } else { 2 })
+}
+
 /// Return the heading level (1–6) if `trimmed` is a valid ATX heading
 /// (CommonMark §4.2), or `None` otherwise.
 fn atx_heading_level(trimmed: &str) -> Option<usize> {
@@ -110,6 +160,12 @@ fn atx_heading_level(trimmed: &str) -> Option<usize> {
 /// Only valid ATX headings (CommonMark §4.2: 1–6 `#` + space/tab/EOL) are
 /// shifted; lines like `#include` or `#123` are left unchanged.
 ///
+/// A setext heading (`Title` over `=====`) is rewritten to its ATX equivalent
+/// before being shifted, because past h2 there is no setext form to shift into.
+/// The underline line is consumed. Some READMEs are written almost entirely in
+/// setext, so skipping the form would drop a whole document's structure a level
+/// below the `## README` it sits under.
+///
 /// Skips lines inside fenced code blocks so that comment lines like `# TODO`
 /// are not affected.  Note: the fence toggle is simplified — it does not track
 /// opening fence character or length, so a 4-backtick fence closed by 3 backticks
@@ -118,21 +174,47 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
     if levels == 0 {
         return markdown.to_owned();
     }
+    let lines: Vec<&str> = markdown.lines().collect();
+    let body_start = frontmatter_len(&lines);
     let mut in_code_block = false;
     let mut out = String::with_capacity(markdown.len() + levels * 40);
+    let mut first = true;
+    let mut skip_underline = false;
 
-    for (i, line) in markdown.lines().enumerate() {
-        if i > 0 {
+    for (i, line) in lines.iter().enumerate() {
+        if skip_underline {
+            skip_underline = false;
+            continue;
+        }
+        if !first {
             out.push('\n');
         }
+        first = false;
+
+        if i < body_start {
+            out.push_str(line);
+            continue;
+        }
+
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_code_block = !in_code_block;
         }
-        if let Some(orig_hashes) = (!in_code_block)
-            .then(|| atx_heading_level(trimmed))
-            .flatten()
-        {
+        if in_code_block {
+            out.push_str(line);
+            continue;
+        }
+
+        let setext = lines
+            .get(i + 1)
+            .and_then(|next| setext_heading_level(line, next));
+        if let Some(orig_level) = setext {
+            let new_level = (orig_level + levels).min(6);
+            out.push_str(&"######"[..new_level]);
+            out.push(' ');
+            out.push_str(line.trim());
+            skip_underline = true;
+        } else if let Some(orig_hashes) = atx_heading_level(trimmed) {
             let indent = &line[..line.len() - trimmed.len()];
             let new_level = (orig_hashes + levels).min(6);
             let heading_text = &trimmed[orig_hashes..];
@@ -156,7 +238,7 @@ mod tests {
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
-        // Newlines fold to spaces so the value cannot inject a new Markdown line.
+        // Left as-is, the newline would open a new Markdown line inside the link.
         assert_eq!(escape_md_link("a\n## h"), "a ## h");
     }
 
@@ -243,6 +325,93 @@ mod tests {
         );
     }
 
+    /// [T-MD021] setext headings are rewritten to ATX and shifted
+    ///
+    /// `=` underlines an h1 and `-` an h2 (CommonMark §4.3). Past h2 there is no
+    /// setext form to shift into, so both become ATX and the underline is
+    /// consumed.
+    #[test]
+    fn shift_headings_converts_setext_to_atx() {
+        let input = "Title\n=====\n\nBody\n\nSection\n-------\n\nmore";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result, "### Title\n\nBody\n\n#### Section\n\nmore",
+            "setext h1/h2 must shift to ATX h3/h4 with the underline consumed"
+        );
+    }
+
+    /// [T-MD022] a `---` that follows a blank line stays a thematic break
+    ///
+    /// The rule separating a setext underline from a thematic break is what sits
+    /// above it. Without this case, widening the underline test would silently
+    /// turn every horizontal rule in a README into a heading.
+    #[test]
+    fn shift_headings_leaves_thematic_break_alone() {
+        let input = "Para\n\n---\n\nNext";
+        assert_eq!(shift_headings(input, 2), input);
+    }
+
+    /// [T-MD023] list items, quotes and table rows above dashes are not headings
+    #[test]
+    fn shift_headings_leaves_non_paragraph_lines_above_dashes() {
+        for input in [
+            "- item\n---",
+            "> quote\n---",
+            "| a | b |\n|---|---|",
+            "# Already ATX\n---",
+        ] {
+            let out = shift_headings(input, 2);
+            assert!(
+                !out.contains("#### "),
+                "no setext h2 should be produced for {input:?}, got: {out}"
+            );
+        }
+    }
+
+    /// [T-MD024] setext underlines inside a fenced block are left as content
+    #[test]
+    fn shift_headings_ignores_setext_inside_code_fence() {
+        let input = "```\nTitle\n=====\n```\n# Real";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result, "```\nTitle\n=====\n```\n### Real",
+            "fenced content must survive untouched"
+        );
+    }
+
+    /// [T-MD025] a setext heading shifted past h6 clamps like an ATX one
+    #[test]
+    fn shift_headings_setext_clamps_at_h6() {
+        let input = "Deep\n----";
+        assert_eq!(shift_headings(input, 5), "###### Deep");
+    }
+
+    /// [T-MD026] a leading frontmatter block survives the shift intact
+    ///
+    /// Regression: when setext support landed, the closing `---` read as an
+    /// underline for the `author:` line above it, so the key became a heading and
+    /// the delimiter that closes the block disappeared. `tests/output_injection.rs`
+    /// caught it end-to-end; this pins the same thing at the function boundary.
+    #[test]
+    fn shift_headings_leaves_frontmatter_intact() {
+        let input = "---\ntitle: \"T\"\nauthor: \"Jane\"\n---\n\nBody\n\n# Heading";
+        let result = shift_headings(input, 2);
+        assert_eq!(
+            result, "---\ntitle: \"T\"\nauthor: \"Jane\"\n---\n\nBody\n\n### Heading",
+            "frontmatter keys are not headings and its closing --- is not an underline"
+        );
+    }
+
+    /// [T-MD027] an unterminated leading `---` is body content, not frontmatter
+    ///
+    /// Without the closing delimiter there is no block to protect, so the usual
+    /// rules apply and the rest of the document still shifts.
+    #[test]
+    fn shift_headings_unterminated_frontmatter_still_shifts() {
+        let input = "---\n\n# Heading";
+        assert_eq!(shift_headings(input, 2), "---\n\n### Heading");
+    }
+
     /// [T-MD010]
     #[test]
     fn shift_headings_clamps_at_h6() {
@@ -314,5 +483,22 @@ mod tests {
         let result = truncate_with_note(&input, 100);
         assert!(result.len() < 200);
         assert!(result.contains("(truncated: showing 100 / 200 bytes)"));
+    }
+
+    /// [T-MD020] A cap that lands mid-character cuts at the boundary below it
+    ///
+    /// Every other truncation test feeds ASCII, where every byte index is a char
+    /// boundary — so none of them fails if `floor_char_boundary` is dropped for a
+    /// plain `&s[..max_bytes]`, which panics on the first multi-byte page scout
+    /// fetches. 100 falls inside the 34th 3-byte character, so the cut must land
+    /// on 99.
+    #[test]
+    fn truncate_with_note_cuts_on_a_char_boundary() {
+        let input = "あ".repeat(50);
+        let result = truncate_with_note(&input, 100);
+        assert!(
+            result.contains("showing 99 / 150 bytes"),
+            "cut must snap to the boundary below 100, got: {result}"
+        );
     }
 }

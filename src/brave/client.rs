@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 use tracing::{info, warn};
 
-use crate::body_limit::{MAX_API_RESPONSE_BYTES, read_body_capped};
+use crate::body_limit::{
+    MAX_API_RESPONSE_BYTES, MAX_ERROR_BODY_BYTES, read_body_capped, read_body_snippet,
+};
 use crate::classify::Classification;
 use crate::clock::{Clock, SystemClock};
 use crate::envelope::ErrorCode;
@@ -19,7 +21,10 @@ use crate::rng::{FastrandRng, Rng};
 use super::types::{SearchResult, WebSearchResponse};
 
 const API_BASE: &str = "https://api.search.brave.com/res/v1/web/search";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Per-request cap on one Brave call. `pub(crate)` so the config invariant test
+/// can assert `research_timeout` covers a search plus a page fetch, the way
+/// `HTTP_TIMEOUT` and `CDP_TIMEOUT` are read for their own commands.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const BODY_SNIPPET_BYTES: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
@@ -93,7 +98,7 @@ impl BraveError {
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } => Classification::transient_retry(),
             Self::Server(code) => Classification::from_http_status(*code),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — schema drift is a scout-side invariant;
             // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
@@ -156,11 +161,7 @@ impl BraveClient {
     /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
     /// tests can exercise the env-not-set / whitespace branches without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    pub(crate) fn from_env_with<F>(
-        http: Client,
-        max_retries: u32,
-        get_var: F,
-    ) -> Result<Self, BraveError>
+    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, BraveError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
@@ -305,17 +306,26 @@ async fn classify_response(
     Ok(response)
 }
 
+/// Read enough of a failed response to say what went wrong, then cut it to the
+/// snippet length.
+///
+/// The read is bounded by [`MAX_ERROR_BODY_BYTES`] rather than taking the whole
+/// body: `Response::text()` has no cap, so an error response could cost memory
+/// the success path is guarded against. The second cut is the display length —
+/// `from_utf8_lossy` can grow the byte count with replacement characters, so it
+/// happens after the conversion, on a char boundary.
 async fn read_error_body_snippet(
     response: reqwest::Response,
     status: reqwest::StatusCode,
 ) -> String {
-    let mut text = match response.text().await {
-        Ok(t) => t,
+    let bytes = match read_body_snippet(response, MAX_ERROR_BODY_BYTES).await {
+        Ok(b) => b,
         Err(e) => {
             warn!(status = %status, error = %e, "Brave API error; body unreadable");
             return "(body unreadable)".to_owned();
         }
     };
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
     if text.len() > BODY_SNIPPET_BYTES {
         text.truncate(text.floor_char_boundary(BODY_SNIPPET_BYTES));
     }

@@ -24,7 +24,7 @@ use super::{RuntimeConfig, Scout, ScoutError};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Per-request timeout for a single HTTP call. `pub(crate)` so the config
 /// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
-pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
 /// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
@@ -33,7 +33,7 @@ const MAX_REDIRECTS: usize = 5;
 /// `GitHub` at wiremock endpoints without reaching into private fields.
 /// `build` is sync + infallible so fallibility stays in `from_env`
 /// (issue #103).
-pub(crate) struct ScoutBuilder {
+pub(super) struct ScoutBuilder {
     http: Client,
     fetch_http: Client,
     brave: Option<BraveClient>,
@@ -83,6 +83,12 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
 
+    // `Policy::none()` is load-bearing, not a default: `fetch::download` walks
+    // the redirect chain itself so it can run `ssrf_check` on every hop
+    // (ADR-0001). Letting reqwest follow them would land on the final URL with
+    // only the first one validated, and nothing in the type system says so —
+    // `download` states the requirement in prose and this is the call site that
+    // has to keep it.
     let fetch_builder = Client::builder()
         .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -108,7 +114,7 @@ impl ScoutBuilder {
     /// Read `SCOUT_*` env vars, construct the two `reqwest::Client`s, and
     /// probe Brave (best-effort). Defaults for `clock` / `rng` / `token_source`
     /// match production behavior; tests override via `with_*`.
-    pub(crate) fn from_env() -> Result<Self, ScoutError> {
+    pub(super) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
         let egress = detect_egress_mode(&env::vars().collect());
         let (http, fetch_http) = build_default_clients(&egress)?;
@@ -139,7 +145,7 @@ impl ScoutBuilder {
     /// only fails on TLS init, which would be a real bug — `.expect` is
     /// appropriate.
     #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
+    pub(super) fn for_test() -> Self {
         let (http, fetch_http) =
             build_default_clients(&EgressMode::Direct).expect("test client init");
         Self {
@@ -159,25 +165,25 @@ impl ScoutBuilder {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+    pub(super) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
+    pub(super) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
         self.rng = rng;
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_token_source(mut self, source: Arc<dyn TokenSource>) -> Self {
+    pub(super) fn with_token_source(mut self, source: Arc<dyn TokenSource>) -> Self {
         self.token_source = source;
         self
     }
 
     #[cfg(test)]
-    pub(crate) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
+    pub(super) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
         self.dns = dns;
         self
     }
@@ -189,7 +195,7 @@ impl ScoutBuilder {
     /// `fetch_http` is the `Direct` guard-carrying client. Mirrors the other
     /// `with_*` setters.
     #[cfg(test)]
-    pub(crate) fn with_egress(mut self, egress: EgressMode) -> Self {
+    pub(super) fn with_egress(mut self, egress: EgressMode) -> Self {
         self.egress = egress;
         self
     }
@@ -203,7 +209,7 @@ impl ScoutBuilder {
     /// keeps `build_default_clients`. The SSRF contract stays pinned by the
     /// dedicated T-F017 / T-F072 fetch_page tests, not by this client.
     #[cfg(test)]
-    pub(crate) fn with_fetch_http(mut self, client: Client) -> Self {
+    pub(super) fn with_fetch_http(mut self, client: Client) -> Self {
         self.fetch_http = client;
         self
     }
@@ -213,7 +219,7 @@ impl ScoutBuilder {
     /// waiting the production 120s (issue #185). `RuntimeConfig` is `Copy`, so
     /// the field assignment leaves the rest of the config untouched.
     #[cfg(test)]
-    pub(crate) fn with_github_timeout(mut self, timeout: Duration) -> Self {
+    pub(super) fn with_github_timeout(mut self, timeout: Duration) -> Self {
         self.config.github_timeout = timeout;
         self
     }
@@ -222,7 +228,7 @@ impl ScoutBuilder {
     /// `tokio::time::timeout` around `fetch_message` to trip against a delayed
     /// wiremock response instead of waiting the production 30s.
     #[cfg(test)]
-    pub(crate) fn with_slack_timeout(mut self, timeout: Duration) -> Self {
+    pub(super) fn with_slack_timeout(mut self, timeout: Duration) -> Self {
         self.config.slack_timeout = timeout;
         self
     }
@@ -230,7 +236,7 @@ impl ScoutBuilder {
     /// Re-uses the builder's `http` so wiremock servers share the test client
     /// (avoids spawning a second `reqwest` connection pool per test).
     #[cfg(test)]
-    pub(crate) fn with_brave_endpoint(mut self, endpoint: &str) -> Self {
+    pub(super) fn with_brave_endpoint(mut self, endpoint: &str) -> Self {
         self.brave = Some(BraveClient::with_base_url(self.http.clone(), endpoint));
         self
     }
@@ -238,19 +244,19 @@ impl ScoutBuilder {
     /// `build()` pre-inits the `OnceCell` with whatever `clock` / `rng` are set
     /// at that moment, so `with_clock` / `with_rng` have to come first.
     #[cfg(test)]
-    pub(crate) fn with_github_endpoint(mut self, endpoint: &str) -> Self {
+    pub(super) fn with_github_endpoint(mut self, endpoint: &str) -> Self {
         self.github_endpoint = Some(endpoint.to_owned());
         self
     }
 
     /// Same ordering constraint as `with_github_endpoint`.
     #[cfg(test)]
-    pub(crate) fn with_slack_endpoint(mut self, endpoint: &str) -> Self {
+    pub(super) fn with_slack_endpoint(mut self, endpoint: &str) -> Self {
         self.slack_endpoint = Some(endpoint.to_owned());
         self
     }
 
-    pub(crate) fn build(self) -> Scout {
+    pub(super) fn build(self) -> Scout {
         let github = OnceCell::new();
         #[cfg(test)]
         if let Some(endpoint) = self.github_endpoint.as_deref() {

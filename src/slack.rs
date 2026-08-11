@@ -134,10 +134,12 @@ impl SlackError {
                 // Priority 3: NOT_FOUND. Underscore forms are Slack-native error
                 // codes; the space forms are scout's own strings from
                 // `fetch_message`: bare "message not found" (resolved list empty)
-                // and "message {ts} not found in thread" (target absent or in a
-                // truncated page). The latter interpolates `{ts}`, so it can't be
-                // exact-matched — the `starts_with`/`contains` guard catches the
-                // whole "message … not found …" family (issue #224). Slack-native
+                // and "message {ts} not found in thread", which gains a trailing
+                // clause when paging stopped at the page cap. Neither of the
+                // latter two can be exact-matched — one interpolates `{ts}`, the
+                // other varies by cause — so the `starts_with`/`contains` guard
+                // catches the whole "message … not found …" family (issue #224).
+                // Slack-native
                 // codes are snake_case and never start with "message " (space),
                 // so they fall through to their own arms below.
                 "channel_not_found" | "message_not_found" | "thread_not_found" => {
@@ -169,7 +171,7 @@ impl SlackError {
                 // params, so neither shape reaches scout. ADR-0011's note
                 // lists them.
                 //
-                // 退避: Unknown (ADR-0011 — not a numbered priority slot).
+                // Retreat: Unknown (ADR-0011 — not a numbered priority slot).
                 // A string this table does not classify, including one Slack
                 // adds later, surfaces as a classification gap rather than as
                 // a caller mistake.
@@ -177,7 +179,7 @@ impl SlackError {
             },
             // Priority 4: TEMP_FAILURE
             Self::RateLimited { .. } | Self::Server(_) => Classification::transient_retry(),
-            // Priority 4 (TIMEOUT) and 退避: see `Classification::from_reqwest`
+            // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 4: TIMEOUT
             Self::Timeout(_) => Classification::timeout_retry(),

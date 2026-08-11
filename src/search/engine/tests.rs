@@ -400,3 +400,32 @@ async fn source_fetch_timeout_states_the_timeout_once() {
         "failed_urls[].reason should state the timeout once, got: {reason}"
     );
 }
+
+/// [T-SE018] both halves of a failed-URL line take the same escape
+///
+/// The URL went through `escape_md_link` and the reason through
+/// `escape_md_inline`, which differ on `|`: the first leaves it, since a link
+/// target has no table column to break out of. Nothing on this line is a link
+/// target, so one line could carry `a|b` beside `err \| msg`.
+#[test]
+fn failed_url_line_escapes_url_and_reason_alike() {
+    let report = ResearchReport {
+        failed_urls: vec![FailedUrl {
+            url: "https://example.com/a|b".into(),
+            reason: "gateway said a|b".into(),
+        }],
+        ..Default::default()
+    };
+
+    let text = format_report(&report, "q");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("- https"))
+        .expect("failed-url line");
+
+    assert_eq!(
+        line.matches(r"\|").count(),
+        2,
+        "url and reason must escape `|` the same way, got: {line}"
+    );
+}

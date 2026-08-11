@@ -107,3 +107,46 @@ async fn repo_tree_path_filter_excludes_non_matching_files() {
         "path filter should exclude Cargo.toml, got:\n{result:?}"
     );
 }
+
+/// [T-TS033] a malformed --lines is rejected before any GitHub request
+///
+/// `parse_line_range` only ever inspects the string's shape — empty, a bad
+/// number, a zero start, an end below the start — so none of it needs the file.
+/// It used to run after `get_contents`, and after the blob fetch and the decode
+/// that can follow, which spent one or two rate-limited calls to report a typo
+/// the caller made. Every other caller-supplied value (`repository`, `path`,
+/// `ref`) is already checked on this side of the network.
+#[tokio::test]
+async fn repo_read_invalid_line_range_fails_before_any_request() {
+    let Some(server) = try_spawn_mock_server("tools::t_033").await else {
+        return;
+    };
+
+    // Deliberately no mock: reaching the network at all would 404 here, which
+    // would surface as NotFound rather than the range error asserted below.
+    let s = scout_with_github("http://localhost:0", &server.uri());
+    let params = RepoReadParams {
+        repository: Some("owner/repo".into()),
+        path: Some("test.txt".into()),
+        ref_: None,
+        lines: Some("not-a-range".into()),
+        encoding: None,
+    };
+
+    let err = s
+        .repo_read(params)
+        .await
+        .expect_err("a malformed --lines must fail");
+
+    assert!(
+        err.message().contains("not-a-range"),
+        "error should name the offending range, got: {}",
+        err.message()
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests.is_empty(),
+        "no GitHub request should be made for a range that cannot parse, got {} request(s)",
+        requests.len()
+    );
+}

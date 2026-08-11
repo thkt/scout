@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::no_redirect_client;
 use crate::test_support::{
     join_server_thread, spawn_close_delimited_body_server, spawn_declared_length_no_body_server,
     try_spawn_mock_server,
@@ -46,7 +47,8 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
     join_server_thread(handle);
 }
 
-/// [T-BL001] Content-Length が cap を超えるヘッダのみのレスポンスは body を読まずに too_large になる
+/// [T-BL001] A header-only response whose Content-Length exceeds the cap becomes
+/// too_large without the body being read
 ///
 /// (TC-006 gap) The server writes only a `Content-Length: cap+1` header,
 /// then closes without a single body byte. If `read_body_capped` reached the
@@ -82,7 +84,7 @@ async fn content_length_over_cap_with_no_body_rejects_too_large_without_reading_
     join_server_thread(handle);
 }
 
-/// [T-BL002] ちょうど cap バイトの body は全量が返る
+/// [T-BL002] A body of exactly cap bytes returns in full
 #[tokio::test]
 async fn body_of_exactly_cap_bytes_returns_in_full() {
     const CAP: usize = 16;
@@ -108,4 +110,53 @@ async fn body_of_exactly_cap_bytes_returns_in_full() {
         Ok(vec![b'x'; CAP]),
         "a body exactly at cap must be returned in full, not rejected"
     );
+}
+
+/// [T-R016] read_body_snippet stops at the limit instead of draining the body
+///
+/// `Response::text()` reads everything, so the error paths in `brave::client`
+/// and `github` could spend on a failed response what `read_body_capped` refuses
+/// to spend on a successful one. The server here sends far more than the limit
+/// with no Content-Length, so only the chunk loop can stop it.
+#[tokio::test]
+async fn read_body_snippet_stops_at_the_limit() {
+    const LIMIT: usize = 32;
+    let Some((url, handle)) = spawn_close_delimited_body_server(LIMIT * 100) else {
+        return; // loopback bind unavailable — skip
+    };
+
+    let response = no_redirect_client()
+        .get(&url)
+        .send()
+        .await
+        .expect("request to the local server");
+    let body = read_body_snippet(response, LIMIT)
+        .await
+        .expect("snippet read");
+
+    assert_eq!(
+        body.len(),
+        LIMIT,
+        "must return exactly the limit, not the whole body"
+    );
+    join_server_thread(handle);
+}
+
+/// [T-R017] a body shorter than the limit comes back whole
+#[tokio::test]
+async fn read_body_snippet_returns_a_short_body_intact() {
+    let Some(server) = try_spawn_mock_server("body_limit::snippet_short").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("nope"))
+        .mount(&server)
+        .await;
+
+    let response = reqwest::get(server.uri()).await.expect("request");
+    let body = read_body_snippet(response, 1024)
+        .await
+        .expect("snippet read");
+
+    assert_eq!(body, b"nope");
 }

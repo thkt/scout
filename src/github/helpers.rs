@@ -29,6 +29,18 @@ pub(super) fn encode_path(s: &str) -> String {
     utf8_percent_encode(s, PATH_ENCODE_SET).to_string()
 }
 
+/// Whether `s` may stand as an owner or repo name in a request path.
+///
+/// This is the only guard on those two: `get_*` interpolates them into
+/// `/repos/{owner}/{repo}` without [`encode_path`], which is safe precisely
+/// because the alphabet here needs no escaping in a path segment — every
+/// delimiter that would need it (`/ ? # % &`) is rejected.
+///
+/// `..` and `.` are refused as whole segments because those two are the ones a
+/// URL normalizer acts on: `/repos/../x` can resolve to `/x`. Names that merely
+/// contain dots (`...`, `..a`) carry no such meaning and are left to GitHub to
+/// 404, which keeps this from guessing at an account-name policy it does not
+/// own.
 fn is_valid_github_name(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -131,20 +143,30 @@ pub(crate) fn parse_line_range(range: &str) -> Result<(usize, Option<usize>), Gi
 }
 
 /// Extract a line range from content, returning numbered lines.
+///
+/// `start` is 1-based and `end` inclusive. A backwards range yields nothing
+/// rather than panicking: `parse_line_range` rejects `end < start`, so the pair
+/// only arrives reversed from a caller that assembled it some other way, and
+/// `lines[start..end]` would panic on it.
 pub(crate) fn apply_line_range(content: &str, start: usize, end: Option<usize>) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
     let start_idx = start.saturating_sub(1);
-    let end_idx = end.map(|e| e.min(total)).unwrap_or(total);
+    let end_idx = end.map_or(total, |e| e.min(total)).max(start_idx);
 
     if start_idx >= total {
         return format!("(file has {total} lines, requested start at {start})");
     }
 
+    // Width from the file rather than a fixed 5: the byte cap admits far more
+    // than 99,999 lines (a 100k-line file of short records is about 1 MB against
+    // a 10 MB cap), and past that the gutter stopped lining up mid-file. `max(5)`
+    // holds the previous width for everything smaller.
+    let width = total.to_string().len().max(5);
     lines[start_idx..end_idx]
         .iter()
         .enumerate()
-        .map(|(i, line)| format!("{:>5}\t{}", start_idx + i + 1, line))
+        .map(|(i, line)| format!("{:>width$}\t{}", start_idx + i + 1, line))
         .collect::<Vec<_>>()
         .join("\n")
 }

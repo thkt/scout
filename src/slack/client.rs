@@ -38,12 +38,12 @@ struct FetchedThread {
 /// channel. A bare `String` return hid these, so caps were invisible to callers
 /// (issue #222).
 pub(crate) struct SlackFetchOutcome {
-    pub markdown: String,
+    pub(crate) markdown: String,
     /// `conversations.replies` hit the page cap; replies past it are omitted.
-    pub thread_truncated: bool,
+    pub(crate) thread_truncated: bool,
     /// Distinct user IDs exceeded `SLACK_MAX_USER_LOOKUPS`; the excess render
     /// as raw `<@UID>` instead of resolved names.
-    pub users_capped: bool,
+    pub(crate) users_capped: bool,
     /// The `conversations.info` call or at least one in-cap `users.info` call
     /// returned an error; that ID renders raw even though the cap did not drop
     /// it. Kept distinct from `users_capped` so a caller can tell "resolution
@@ -51,7 +51,7 @@ pub(crate) struct SlackFetchOutcome {
     ///
     /// A 200 carrying no name does not count: the lookup reached Slack, which
     /// had no name to give, so there is nothing for the caller to retry.
-    pub lookups_failed: bool,
+    pub(crate) lookups_failed: bool,
 }
 
 pub(crate) struct SlackClient {
@@ -111,7 +111,7 @@ const SLACK_MAX_REPLY_PAGES: usize = 50;
 const SLACK_MAX_USER_LOOKUPS: usize = 50;
 
 impl SlackClient {
-    pub fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
+    fn new(http: Client, token: Redacted, max_retries: u32) -> Self {
         Self {
             http,
             token,
@@ -132,11 +132,7 @@ impl SlackClient {
     /// tests can exercise the token-not-set / whitespace branches without
     /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
     /// Mirrors [`crate::brave::client::BraveClient::from_env_with`] (ADR-0007).
-    pub(crate) fn from_env_with<F>(
-        http: Client,
-        max_retries: u32,
-        get_var: F,
-    ) -> Result<Self, SlackError>
+    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, SlackError>
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
@@ -510,7 +506,7 @@ impl SlackClient {
         }
     }
 
-    pub async fn fetch_message(
+    pub(crate) async fn fetch_message(
         &self,
         slack_url: &SlackUrl,
     ) -> Result<SlackFetchOutcome, SlackError> {
@@ -567,9 +563,21 @@ impl SlackClient {
 
         let resolved = resolve_messages(&fetched.messages, &users);
 
+        // A missing target has two causes that read alike: the message is gone,
+        // or it sits past the page cap and was never fetched. Only the second is
+        // worth acting on, so say which one happened. `classify` matches the
+        // "message … not found" family rather than an exact string, so the
+        // longer form still routes to NotFound.
         let (first, resolved) =
             extract_target(resolved, &slack_url.ts).ok_or_else(|| SlackError::Api {
-                error: format!("message {} not found in thread", slack_url.ts),
+                error: if fetched.truncated {
+                    format!(
+                        "message {} not found in thread (paging stopped at the {SLACK_MAX_REPLY_PAGES}-page cap, so later replies were never fetched)",
+                        slack_url.ts
+                    )
+                } else {
+                    format!("message {} not found in thread", slack_url.ts)
+                },
             })?;
         let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
         let output = format_slack_output(slack_url, &channel_name, &first, replies);
@@ -598,8 +606,12 @@ fn is_retriable(e: &SlackError) -> bool {
     }
 }
 
+/// Deserialize target for `api_get_once` tests that assert on the error arm.
+/// `ok` exists to give serde a field to bind, and no test reads it back, so
+/// `expect` rather than `allow`: the day a test does read it, the suppression
+/// itself is reported as no longer needed.
 #[cfg(test)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "field exists for serde, never read back")]
 #[derive(Debug, serde::Deserialize)]
 struct DummyBody {
     ok: bool,

@@ -10,6 +10,21 @@ use super::{FetchError, MAX_RESPONSE_BYTES};
 use crate::body_limit::read_body_capped;
 use crate::charset::is_reliable_detection;
 
+/// A page as it came off the wire: which URL actually served it, the decoded
+/// body, and whether that decode was a best-effort fallback.
+///
+/// `url` is the last hop, not the one the caller asked for, and every hop in
+/// between passed `ssrf_check` — so it is the URL that later stages resolve
+/// relative links against. `decode_uncertain` travels with the text rather than
+/// beside it because a caller that reads one without the other reports a body it
+/// cannot vouch for as clean (issue #241).
+#[derive(Debug)]
+pub(super) struct DownloadedPage {
+    pub(super) url: ValidatedUrl,
+    pub(super) text: String,
+    pub(super) decode_uncertain: bool,
+}
+
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
 ///
 /// `reqwest::redirect::Policy::limited(n)` is not acceptable: it follows
@@ -29,7 +44,7 @@ pub(super) async fn download(
     max_redirects: usize,
     resolver: &dyn DnsResolver,
     mode: &EgressMode,
-) -> Result<(ValidatedUrl, String, bool), FetchError> {
+) -> Result<DownloadedPage, FetchError> {
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
@@ -84,7 +99,11 @@ pub(super) async fn download(
         )
         .await?;
         let decoded = decode_body(&body, charset.as_deref());
-        return Ok((current_url, decoded.text, decoded.uncertain));
+        return Ok(DownloadedPage {
+            url: current_url,
+            text: decoded.text,
+            decode_uncertain: decoded.uncertain,
+        });
     }
 
     // CALIBRATION (issue #145 / #148 follow-up): structured fields below let
@@ -185,16 +204,30 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
     Some(decoded.into_owned())
 }
 
+/// Gate the download on whether the response is text scout can convert.
+///
+/// Outside `text/*`, the rule is the RFC 6839 `+xml` structured syntax suffix
+/// rather than a list of names. A feed is the same document whether the server
+/// labels it `text/xml`, `application/xml`, or `application/rss+xml`, and
+/// listing names accepted the first two while rejecting the third — the label,
+/// not the content, decided. `application/xhtml+xml` needs no arm of its own
+/// under that rule.
+///
+/// The suffix is honoured under `application/` alone, so `image/svg+xml` stays
+/// out: it is an image whose serialization happens to be XML.
+///
+/// An empty mime (a bare `; charset=utf-8`) passes. The server declared nothing
+/// about the type, so there is nothing to reject on.
 fn check_content_type(content_type: &str) -> Result<(), FetchError> {
     let mime = content_type
         .split_once(';')
         .map_or(content_type, |(mime, _params)| mime)
         .trim();
-    if !mime.is_empty()
-        && !mime.starts_with("text/")
-        && mime != "application/xhtml+xml"
-        && mime != "application/xml"
-    {
+    let accepted = mime.is_empty()
+        || mime.starts_with("text/")
+        || mime == "application/xml"
+        || (mime.starts_with("application/") && mime.ends_with("+xml"));
+    if !accepted {
         return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
     Ok(())

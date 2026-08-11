@@ -42,12 +42,17 @@ flate2 = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
+# `lib::run` is the crate's only external entry point, so a `pub` anywhere
+# else claims a reach it does not have. Fields are outside this lint's scope.
+unreachable_pub = "deny"
 
 [lints.clippy]
 # absolute paths
 absolute_paths = "deny"
-# idiomatic iterators
+# casts
 cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
+# idiomatic iterators
 redundant_closure_for_method_calls = "deny"
 filter_map_next = "deny"
 flat_map_option = "deny"
@@ -60,6 +65,8 @@ enum_glob_use = "deny"
 str_to_string = "deny"
 # arguments
 needless_pass_by_value = "deny"
+# uncapped reads (list and rationale in clippy.toml)
+disallowed_methods = "deny"
 
 [profile.release]
 opt-level = 3

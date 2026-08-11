@@ -374,7 +374,8 @@ async fn get_json_2xx_oversized_body_returns_too_large() {
     );
 }
 
-/// [T-GH023] github は HTTP 408 を 1 度返す API に対し再試行し 2 度目の成功レスポンスを返す
+/// [T-GH023] github retries an API that answers HTTP 408 once and returns the second,
+/// successful response
 ///
 /// The retryable status set must not be re-tabled in `is_retriable`: 408 is
 /// retried only because `Classification::from_http_status` calls it

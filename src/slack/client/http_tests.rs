@@ -567,6 +567,61 @@ async fn fetch_replies_stops_at_page_cap_and_warns() {
     assert!(logs_contain("WARN"));
 }
 
+/// [T-SK087] When the target message is missing *and* paging stopped at
+/// `SLACK_MAX_REPLY_PAGES`, the error says the thread was cut short.
+///
+/// The two causes of a missing target are indistinguishable in the message
+/// otherwise: a permalink to a deleted message and a permalink to reply 10,001
+/// both read "message … not found in thread". Only the second is worth acting
+/// on, and the page cap is the reason. `SlackError::classify` still routes the
+/// longer string to NotFound, since its guard matches the "message … not found"
+/// family rather than an exact string.
+#[tokio::test]
+async fn missing_target_in_a_capped_thread_names_the_page_cap() {
+    let Some(server) = try_spawn_mock_server("slack::http").await else {
+        return;
+    };
+    let parent_ts = "1000.000001";
+    // Every page advertises another, so paging ends at the cap; the target ts
+    // appears on none of them.
+    mount_get(
+        &server,
+        "/conversations.replies",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "messages": [{"user": "U1", "text": "parent", "ts": parent_ts}],
+            "has_more": true,
+            "response_metadata": {"next_cursor": "MORE"}
+        })),
+    )
+    .await;
+    mount_users_info_resolving(&server).await;
+
+    let client = SlackClient::with_base_url(Client::new(), &server.uri());
+    let url = slack_url("9999.999999", Some(parent_ts));
+    let Err(err) = client.fetch_message(&url).await else {
+        panic!("a target absent from every fetched page cannot resolve");
+    };
+
+    let SlackError::Api { ref error } = err else {
+        panic!("expected an Api error naming the missing message, got: {err}");
+    };
+    assert!(
+        error.contains("9999.999999") && error.contains("not found"),
+        "the error must still name the missing message, got: {error}"
+    );
+    assert!(
+        error.contains("page cap"),
+        "a capped thread must say so, or the caller cannot tell a deleted \
+         message from an unfetched one, got: {error}"
+    );
+    assert_eq!(
+        err.classify().kind,
+        ErrorCode::NotFound,
+        "the longer string must still classify as NotFound"
+    );
+}
+
 /// [T-SK047] A message-permalink URL (no thread_ts) whose target has replies
 /// triggers the conversations.history reply_count probe; when reply_count > 0
 /// fetch_thread re-fetches the full thread via conversations.replies and marks
@@ -744,7 +799,8 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
     );
 }
 
-/// [T-SK077] api error internal_error は一度再試行され 2 回目の成功レスポンスが返る
+/// [T-SK077] The api error internal_error is retried once and the second, successful
+/// response returns
 ///
 /// `internal_error` classifies as TempFailure (per `SlackError::classify`'s
 /// `Api` string table), so `is_retriable` must derive from `classify().kind`
@@ -779,7 +835,8 @@ async fn api_error_internal_error_retries_once_then_succeeds() {
     );
 }
 
-/// [T-SK078] conversations.replies の 2 ページ目が invalid_cursor を返すと同じ cursor で再試行され部分的な thread は返らない
+/// [T-SK078] When the second page of conversations.replies answers invalid_cursor, the
+/// same cursor is retried and no partial thread returns
 ///
 /// `api_get`'s retry closure recaptures the same `params`, so a retry resends
 /// page 2's own cursor and never restarts from page 1, which is the recovery
@@ -830,7 +887,8 @@ async fn replies_second_page_invalid_cursor_retries_same_cursor_and_discards_par
     );
 }
 
-/// [T-SK079] timeout でも transient でもない transport error は再試行されず 1 回で返る
+/// [T-SK079] A transport error that is neither timeout nor transient is not retried and
+/// returns after one attempt
 ///
 /// A redirect loop is neither `is_timeout()` nor `is_transient_network()`,
 /// so it classifies as Unknown — `Classification::from_reqwest`'s escape
@@ -875,7 +933,7 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
     );
 }
 
-/// [T-SK080] 2xx の mid-stream body 切断は Network に落ち TempFailure に分類される
+/// [T-SK080] A mid-stream body drop on a 2xx lands on Network and classifies as TempFailure
 ///
 /// Mirrors `api_get_once_2xx_mid_stream_drop_returns_network` (T-SK030), and
 /// additionally pins the classification: a transport-IO drop must land in
@@ -900,7 +958,7 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
     join_server_thread(handle);
 }
 
-/// [T-SK081] SlackClient の read timeout は ScoutError 経由で exit code 124 になる
+/// [T-SK081] A SlackClient read timeout becomes exit code 124 through ScoutError
 ///
 /// The seam from a real HTTP timeout through to the process exit code:
 /// a `SlackClient::api_get_once` call whose request timeout fires must reach
@@ -942,7 +1000,7 @@ async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     );
 }
 
-/// [T-SK073] users.info が 500 を返しても各 ID への request は 1 回で終わる
+/// [T-SK073] Even when users.info answers 500, the request for each ID is sent once
 ///
 /// `SlackError::Server(_)` classifies as `transient_retry`, so routing
 /// `fetch_user_name` through `api_get` would retry a 500 up to
@@ -970,7 +1028,7 @@ async fn users_info_500_returns_after_1_request_per_id() {
     assert!(failed, "a 500 response from users.info is a lookup failure");
 }
 
-/// [T-SK074] conversations.info が 500 を返しても request は 1 回で終わる
+/// [T-SK074] Even when conversations.info answers 500, the request is sent once
 ///
 /// Mirrors T-SK073 for `resolve_channel`, which shares the retry-amplification
 /// path and additionally blocks the `tokio::join!` in `fetch_message` for the

@@ -17,6 +17,18 @@
 //! Cite another test **without** brackets: `Companion to T-TS020`. Brackets mark a
 //! definition, so a bracketed citation is indistinguishable from a second
 //! definition — by grep, and by a reader scanning for where an id lives.
+//!
+//! # What the prose under an id carries
+//!
+//! It says what breaks if the test is deleted: the edit that would otherwise
+//! pass. Where naming that needs a premise the code's own doc already states,
+//! restate the premise and go on — someone reading a failure should not have to
+//! open the implementation to see what the test defends, and the two audiences
+//! are different enough that the overlap earns its keep.
+//!
+//! What does not belong is the implementation's rationale retold whole. If the
+//! prose says nothing the code's doc does not, name the item and cut it: two
+//! copies of one rationale is one that a later change can leave behind.
 
 use std::collections::HashMap;
 use std::env;
@@ -120,13 +132,13 @@ fn bind_loopback(test_name: &str) -> Option<TcpListener> {
     guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
 }
 
-pub async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
+pub(crate) async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
 }
 
 /// Testable core: inject bind result and force flag to control skip-vs-panic.
-pub async fn try_spawn_with_bind(
+async fn try_spawn_with_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
     force: bool,
@@ -143,7 +155,7 @@ pub async fn try_spawn_with_bind(
 /// `accept_count` connections accepted and counted even when a mid-loop
 /// write fails, so the loop runs to completion and the *first* error
 /// surfaces afterwards.
-pub(crate) fn spawn_accept_loop<F>(
+fn spawn_accept_loop<F>(
     test_name: &str,
     accept_count: usize,
     respond: F,
@@ -152,7 +164,13 @@ where
     F: Fn(&mut TcpStream) -> io::Result<()> + Send + 'static,
 {
     let listener = bind_loopback(test_name)?;
-    let addr = listener.local_addr().ok()?;
+    // `bind_loopback` already decided skip-vs-panic for this test run. A bound
+    // listener that cannot report its own address is not that decision, and
+    // returning `None` here would skip the scenario even under
+    // SCOUT_NETWORK_TESTS, which exists to stop exactly that.
+    let addr = listener
+        .local_addr()
+        .expect("a bound listener reports its address");
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = Arc::clone(&counter);
     let handle = thread::spawn(move || -> io::Result<()> {
@@ -191,10 +209,7 @@ pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
 ///
 /// The elapsed handle is dropped, not joined: joining a still-running thread
 /// blocks again, which is the hang this guards against.
-pub(crate) fn join_server_thread_with_deadline(
-    handle: JoinHandle<io::Result<()>>,
-    deadline: Duration,
-) {
+fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline: Duration) {
     let started = Instant::now();
     while !handle.is_finished() {
         if started.elapsed() >= deadline {
@@ -228,7 +243,7 @@ pub(crate) fn join_server_thread_with_deadline(
 /// passing a larger value blocks the spawned thread on `listener.accept()`.
 /// `join_server_thread` no longer hangs on that: it panics naming
 /// `accept_count` once its deadline elapses (`join_server_thread_with_deadline`).
-pub fn spawn_mid_stream_drop_server(
+pub(crate) fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
     spawn_accept_loop("spawn_mid_stream_drop_server", accept_count, |stream| {
@@ -247,7 +262,7 @@ pub fn spawn_mid_stream_drop_server(
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
 /// `spawn_mid_stream_drop_server`.
-pub fn spawn_close_delimited_body_server(
+pub(crate) fn spawn_close_delimited_body_server(
     body_size: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let (addr, _counter, handle) =
@@ -275,7 +290,7 @@ pub fn spawn_close_delimited_body_server(
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
 /// `spawn_close_delimited_body_server`.
-pub fn spawn_declared_length_no_body_server(
+pub(crate) fn spawn_declared_length_no_body_server(
     declared_len: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let (addr, _counter, handle) =
@@ -297,7 +312,7 @@ pub fn spawn_declared_length_no_body_server(
 ///
 /// Returns `None` when loopback bind is unavailable so callers can early-return
 /// in restricted environments, matching `spawn_close_delimited_body_server`.
-pub fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
+pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let body = body.to_owned();
     let (addr, _counter, handle) = spawn_accept_loop("spawn_forward_proxy", 1, move |stream| {
         let response = format!(
@@ -558,7 +573,7 @@ mod tests {
         let _result = try_spawn_with_bind("forced_panic", bind_err, true).await;
     }
 
-    /// [T-SUP001] respond 閉包が Err を返すとサーバ thread の join 結果が Err になる
+    /// [T-SUP001] When the respond closure returns Err, the server thread's join result is Err
     #[test]
     fn respond_err_makes_thread_join_result_err() {
         let Some((addr, _counter, handle)) = spawn_accept_loop(
@@ -581,7 +596,8 @@ mod tests {
         );
     }
 
-    /// [T-SUP002] respond 閉包が Err を返した接続の後も accept ループは続き接続カウンタは accept_count に達する
+    /// [T-SUP002] The accept loop continues past a connection whose respond closure
+    /// returned Err, and the counter reaches accept_count
     #[test]
     fn accept_loop_continues_past_respond_err_until_accept_count() {
         let accept_count = 3;
@@ -608,11 +624,13 @@ mod tests {
         );
     }
 
-    /// [T-SUP003] accept_count がクライアントの接続数を超えたサーバ thread は deadline 経過で accept_count を名指す panic になる
+    /// [T-SUP003] A server thread whose accept_count exceeds the client's connection
+    /// count panics naming accept_count once the deadline elapses
     ///
-    /// deadline 経過で thread は切り離されるため、listener はテスト終了の直後まで
-    /// 開いたまま残る。nextest がこれを leak-timeout (既定 100ms) 内に閉じきれず
-    /// leaky と報告することがあるが、pass 判定は変わらない。
+    /// The deadline detaches the thread, so the listener stays open until just
+    /// after the test ends. nextest sometimes cannot close it within the
+    /// leak-timeout (100ms by default) and reports the test as leaky, which does
+    /// not change the pass verdict.
     #[test]
     #[should_panic(expected = "accept_count")]
     fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
@@ -634,11 +652,12 @@ mod tests {
         join_server_thread_with_deadline(handle, Duration::from_millis(200));
     }
 
-    /// [T-SUP004] 完了済みのサーバ thread は deadline を待たずに join が返る
+    /// [T-SUP004] A finished server thread returns from join without waiting out the deadline
     ///
-    /// `spawn_accept_loop` を通さず thread を直接起こす。待ち方を決めるのは
-    /// handle の状態だけなので loopback は要らず、通せば bind 不可の環境用の
-    /// 早期 return が、一度も実行されない分岐として diff に残る。
+    /// The thread is spawned directly rather than through `spawn_accept_loop`.
+    /// Only the handle's state decides how long the join waits, so no loopback
+    /// is needed; routing through the helper would leave its early return for
+    /// bind-less environments in the diff as a branch that never executes.
     #[test]
     fn finished_server_thread_returns_before_deadline_elapses() {
         let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
@@ -654,11 +673,12 @@ mod tests {
         );
     }
 
-    /// [T-SUP005] Err を返したサーバ thread は deadline 前に既存のメッセージで panic する
+    /// [T-SUP005] A server thread that returned Err panics with the existing message
+    /// before the deadline
     ///
-    /// respond が返した `Err` は thread の戻り値としてしか届かないので、その
-    /// 戻り値を直接置いても伝播経路は変わらない。thread を直接起こす理由は
-    /// T-SUP004 に書いた。
+    /// An `Err` from respond reaches the caller only as the thread's return
+    /// value, so placing that return value directly leaves the propagation path
+    /// unchanged. T-SUP004 states why the thread is spawned directly.
     #[test]
     fn server_thread_err_panics_with_existing_message_before_deadline() {
         let handle =
@@ -687,7 +707,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP006] 数字で始まる ID を含む入力は違反として報告される
+    /// [T-SUP006] Input carrying an ID that starts with a digit is reported as a violation
     #[test]
     fn digit_leading_id_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -705,7 +725,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP007] T-201 系の ID は違反として報告されない
+    /// [T-SUP007] An ID in the T-201 family is not reported as a violation
     #[test]
     fn t201_family_id_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -721,7 +741,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP008] 同じ ID が 2 度現れる入力は重複として報告される
+    /// [T-SUP008] Input where the same ID appears twice is reported as a duplicate
     #[test]
     fn duplicate_id_across_files_is_reported_as_violation() {
         let occurrences = vec![
@@ -745,10 +765,11 @@ mod tests {
         );
     }
 
-    /// [T-SUP010] 同じファイル内で同じ ID が 2 度現れると重複として報告される
+    /// [T-SUP010] The same ID appearing twice inside one file is reported as a duplicate
     ///
-    /// 改番前の `src/slack/classify_tests.rs` が T-002 を 3 回持っていた形。
-    /// T-SUP008 のファイル跨ぎだけでは、この経路が報告されるかを決められない。
+    /// The shape `src/slack/classify_tests.rs` had before renumbering, where
+    /// T-002 appeared three times. T-SUP008's across-files case alone cannot
+    /// settle whether this path is reported.
     #[test]
     fn duplicate_id_within_one_file_is_reported_as_violation() {
         let occurrences = vec![
@@ -772,7 +793,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP011] allowlist へ足した 201-1 は違反として報告されない
+    /// [T-SUP011] 201-1, added to the allowlist, is not reported as a violation
     #[test]
     fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -788,7 +809,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP012] allowlist に無い 201-17 は違反として報告される
+    /// [T-SUP012] 201-17, absent from the allowlist, is reported as a violation
     #[test]
     fn t201_17_absent_from_allowlist_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -806,7 +827,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP009] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    /// [T-SUP009] Scanning the real `src/` and `tests/` finds no test-id violations
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
         let violations = scan_test_id_violations();
@@ -817,7 +838,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP013] FR-018 を含む入力は違反として報告される
+    /// [T-SUP013] Input carrying FR-018 is reported as a violation
     #[test]
     fn fr_requirement_code_in_input_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -835,7 +856,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP014] BR-001 を含む入力は違反として報告される
+    /// [T-SUP014] Input carrying BR-001 is reported as a violation
     #[test]
     fn br_requirement_code_in_input_is_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -853,7 +874,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP015] 要件コードを含まない入力は違反として報告されない
+    /// [T-SUP015] Input carrying no requirement code is not reported as a violation
     #[test]
     fn input_without_requirement_code_is_not_reported_as_violation() {
         let occurrences: Vec<ScannedToken> = Vec::new();
@@ -866,7 +887,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP016] 実際の `src/` と `tests/` を走査した結果に違反が無い
+    /// [T-SUP016] Scanning the real `src/` and `tests/` finds no requirement-code violations
     #[test]
     fn scanning_src_and_tests_finds_no_requirement_code_violations() {
         let violations = scan_requirement_code_violations();
