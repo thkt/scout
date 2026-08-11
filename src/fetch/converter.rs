@@ -1,6 +1,9 @@
-use htmd::HtmlToMarkdown;
+use std::rc::Rc;
+
 use htmd::element_handler::{HandlerResult, Handlers};
 use htmd::options::Options;
+use htmd::{HtmlToMarkdown, Node};
+use markup5ever_rcdom::NodeData;
 use serde::Serialize;
 
 use super::FetchError;
@@ -95,18 +98,15 @@ fn markdown_converter() -> HtmlToMarkdown {
 /// A `<pre><code>` pair is already fenced by htmd's built-in `code_handler`
 /// before this handler ever sees it (htmd-0.5.5/src/element_handler/code.rs:44-73,
 /// registered ahead of this handler in `ElementHandlers::new` so `add_handler`
-/// only shadows the outer `pre` dispatch, not the inner `code` one); its walked
-/// content starts with a raw, unescaped fence-character run, which this handler
-/// passes through unchanged instead of fencing a second time.
+/// only shadows the outer `pre` dispatch, not the inner `code` one), so its
+/// walked content passes through unchanged instead of gaining a second fence.
 ///
-/// A bare `<pre>` whose direct text starts with a fence character never has
-/// that shape: `dom_walker::escape_pre_text_if_needed`
-/// (htmd-0.5.5/src/dom_walker.rs:423-436) unconditionally backslash-escapes
-/// it first, so the walked content starts with `\` followed by the fence
-/// character. Checking the raw first byte tells the two cases apart. That
-/// backslash only protects htmd's own unfenced output; once this handler
-/// wraps the content in its own fence, the escape is redundant and is
-/// stripped so the fenced body matches the source text.
+/// Both branches read the DOM rather than the walked text. `code_handler`
+/// fences exactly when the `<code>` element's parent is `<pre>`
+/// (htmd-0.5.5/src/element_handler/code.rs:33-41), which a direct `<code>`
+/// child answers; the walked text does not, because a bare `<pre>` holding
+/// syntax-highlighter `<span>`s emits its own leading backtick raw and reads
+/// as already fenced.
 // `Element` must stay by-value: htmd's blanket `ElementHandler` impl only
 // covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
 // (htmd-0.5.5/src/element_handler/mod.rs:95-100), so a `&Element` signature
@@ -116,22 +116,50 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     let result = handlers.walk_children(element.node);
     let content = result.content.trim_matches('\n');
 
-    if content.starts_with(['`', '~']) {
+    if has_code_child(element.node) {
         return Some(HandlerResult {
             content: format!("\n\n{content}\n\n"),
             markdown_translated: result.markdown_translated,
         });
     }
 
-    let content = content
-        .strip_prefix('\\')
-        .filter(|rest| rest.starts_with(['`', '~']))
-        .unwrap_or(content);
+    let content = if opens_with_escaped_fence_char(element.node) {
+        content.strip_prefix('\\').unwrap_or(content)
+    } else {
+        content
+    };
     let fence = fence_delimiter(content);
     Some(HandlerResult {
         content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
         markdown_translated: result.markdown_translated,
     })
+}
+
+/// Whether the element has a direct `<code>` child, the shape htmd's
+/// `code_handler` fences on its own.
+fn has_code_child(node: &Rc<Node>) -> bool {
+    node.children.borrow().iter().any(|child| {
+        matches!(&child.data, NodeData::Element { name, .. } if name.local.as_ref() == "code")
+    })
+}
+
+/// Whether the leading `\` in the walked content is htmd's escape rather than
+/// source text.
+///
+/// `dom_walker::escape_pre_text_if_needed` prepends the backslash only to a
+/// text node whose direct parent is `<pre>` and whose first character is
+/// `` ` `` or `~` (htmd-0.5.5/src/dom_walker.rs:34-41 and 423-436). Reading
+/// that first character back off the DOM inverts the escape exactly: source
+/// text that already opens with `` \` `` produces the same walked bytes and
+/// must keep its backslash.
+fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
+    node.children
+        .borrow()
+        .first()
+        .is_some_and(|first| match &first.data {
+            NodeData::Text { contents } => contents.borrow().starts_with(['`', '~']),
+            _ => false,
+        })
 }
 
 pub(super) fn to_fetch_result(
@@ -523,9 +551,8 @@ mod tests {
     /// A `<pre><code>` pair is already turned into a single fenced block by
     /// htmd's built-in `code_handler`
     /// (htmd-0.5.5/src/element_handler/code.rs:44-73). The added `pre` handler
-    /// must recognize this case by checking whether the walked content already
-    /// starts with a fence character, and pass it through instead of wrapping
-    /// it in a second fence.
+    /// must recognize this case by the direct `<code>` child in the DOM, and
+    /// pass it through instead of wrapping it in a second fence.
     #[test]
     fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
         let article = article("<pre><code>fn main() {}</code></pre>");
@@ -588,6 +615,46 @@ mod tests {
         assert!(
             result.markdown().contains("```\nabc\n\\` def\n```"),
             "a literal backslash-backtick pair not at the content's head must survive as written:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC027] 原文の先頭にあるバックスラッシュとバッククォートの並びがそのまま残る
+    ///
+    /// `escape_pre_text_if_needed` prepends its backslash only when the text
+    /// node's first character is `` ` `` or `~`
+    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so source text that already
+    /// opens with `` \` `` reaches the handler untouched. Telling the two apart
+    /// needs the DOM: the walked content is the same `` \` `` either way.
+    #[test]
+    fn source_leading_backslash_backtick_pair_survives_unstripped() {
+        let article = article("<pre>\\`hello</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\n\\`hello\n```"),
+            "a source backslash before the leading backtick must survive as written:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC028] インライン要素を子に持つ code 無しの pre がフェンスで囲まれて出る
+    ///
+    /// Syntax highlighters wrap code lines in `<span>` without a `<code>`
+    /// child. htmd escapes only text nodes whose direct parent is `<pre>`
+    /// (htmd-0.5.5/src/dom_walker.rs:34-41), so text nested in a `<span>`
+    /// reaches the handler with its leading fence character raw, looking
+    /// exactly like the already-fenced output of htmd's `code_handler`.
+    #[test]
+    fn pre_with_nested_inline_element_is_wrapped_in_a_fence() {
+        let article = article("<pre><span>`x`</span></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\n`x`\n```"),
+            "a <pre> whose fence-leading text comes from a nested element must still be fenced:\n{}",
             result.markdown()
         );
     }
