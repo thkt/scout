@@ -1,7 +1,9 @@
 use std::fmt::Write;
 
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserInfo, real_issues};
-use crate::markdown::{escape_md_inline, md_link, shift_headings, truncation_note};
+use crate::markdown::{
+    escape_md_inline, fence_delimiter, md_link, shift_headings, truncation_note,
+};
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -20,23 +22,6 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
-}
-
-/// Build a safe fenced code block delimiter that is longer than any backtick
-/// run found in `content`.
-fn fence_delimiter(content: &str) -> String {
-    let max_run = content
-        .bytes()
-        .fold((0usize, 0usize), |(longest, run), b| {
-            if b == b'`' {
-                let next = run + 1;
-                (longest.max(next), next)
-            } else {
-                (longest, 0)
-            }
-        })
-        .0;
-    "`".repeat(max_run.max(2) + 1)
 }
 
 /// Infer a Markdown language identifier from a file path's extension.
