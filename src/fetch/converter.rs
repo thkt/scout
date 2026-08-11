@@ -1,5 +1,8 @@
+use htmd::HtmlToMarkdown;
+use htmd::options::Options;
 use serde::Serialize;
 
+use super::FetchError;
 use super::extractor::ExtractedArticle;
 use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
@@ -63,25 +66,41 @@ pub(crate) const RAW_FALLBACK_NOTE: &str =
 
 pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could not be determined; the body is a best-effort decode and may be garbled.\n\n";
 
+/// Builds the converter fresh per call: htmd's `Options` and handler table are
+/// plain owned data, not amortized global state, so there is nothing to gain
+/// from caching an instance across calls.
+///
+/// `Options::default()` already sets `translation_mode: TranslationMode::Pure`
+/// (htmd-0.5.5/src/options.rs:19-35); `preformatted_code: true` is the one
+/// field the contract adds on top, so it keeps whitespace inside inline
+/// `<code>` instead of collapsing it
+/// (htmd-0.5.5/src/element_handler/code.rs:118-131).
+fn markdown_converter() -> HtmlToMarkdown {
+    let options = Options {
+        preformatted_code: true,
+        ..Options::default()
+    };
+    HtmlToMarkdown::builder().options(options).build()
+}
+
 pub(super) fn to_fetch_result(
     article: &ExtractedArticle,
     url: String,
     decode_uncertain: bool,
-) -> FetchResult {
-    // The bare `false` is fast_html2md 0.0.62's `commonmark` parameter, which its
-    // rustdoc describes as "adjusting markdown output to commonmark". Naming it
-    // here because the literal alone says nothing at the call site; what scout
-    // gains by leaving it off is not recorded anywhere.
-    // https://docs.rs/fast_html2md/0.0.62/fast_html2md/fn.rewrite_html.html
-    let markdown = html2md::rewrite_html(&article.content_html, false);
+) -> Result<FetchResult, FetchError> {
+    // Fail-close: a conversion error must surface as a `FetchError`, not as an
+    // empty or partial markdown body silently returned to the caller.
+    let markdown = markdown_converter()
+        .convert(&article.content_html)
+        .map_err(|e| FetchError::MarkdownConversion(e.to_string()))?;
     let output = format_with_frontmatter(article, &markdown);
 
-    FetchResult {
+    Ok(FetchResult {
         url,
         markdown: output,
         used_raw_fallback: article.used_raw_fallback,
         decode_uncertain,
-    }
+    })
 }
 
 fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
@@ -120,7 +139,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
         assert!(result.markdown().starts_with("---\n"));
         assert!(result.markdown().contains("\n---\n\n"));
@@ -141,7 +160,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
         assert!(result.markdown().contains("title: \"Only Title\""));
         assert!(!result.markdown().contains("author:"));
@@ -185,7 +204,8 @@ mod tests {
             content_html: "<p>x</p>".into(),
             used_raw_fallback: true,
         };
-        let result = to_fetch_result(&raw_fallback_only, "https://example.com".into(), false);
+        let result =
+            to_fetch_result(&raw_fallback_only, "https://example.com".into(), false).unwrap();
         assert!(
             result.used_raw_fallback(),
             "the article's raw-fallback flag must reach the result"
@@ -202,7 +222,8 @@ mod tests {
             content_html: "<p>x</p>".into(),
             used_raw_fallback: false,
         };
-        let result = to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true);
+        let result =
+            to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true).unwrap();
         assert!(
             !result.used_raw_fallback(),
             "the article carried no raw-fallback flag"
@@ -210,6 +231,84 @@ mod tests {
         assert!(
             result.decode_uncertain(),
             "the caller's decode_uncertain must reach the result"
+        );
+    }
+
+    /// [T-FC015] pre の中の code が含むエスケープ対象 6 文字にバックスラッシュが付かない
+    ///
+    /// htmd 0.5.5's `escape_if_needed` backslash-escapes six ASCII bytes in
+    /// ordinary text — `\ * _ \` [ ]` (htmd-0.5.5/src/dom_walker.rs:374-406) —
+    /// but a `<pre><code>` text node takes the `is_pre && parent_tag != "pre"`
+    /// branch, which copies the text through with no escaping at all
+    /// (htmd-0.5.5/src/dom_walker.rs:34-41). This pins that pass-through: none
+    /// of the six bytes gains a backslash inside a code block.
+    #[test]
+    fn pre_code_escape_target_chars_are_not_backslash_escaped() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: r#"<pre><code>\ * _ ` [ ] end</code></pre>"#.into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains(r"\ * _ ` [ ] end"),
+            "the six escape-target characters must survive unescaped inside a code block:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC016] 3 個のバッククォートを含むコードに対してフェンスが 4 個に広がる
+    ///
+    /// htmd's `get_code_fence_marker` sets the fence width to
+    /// `3.max(longest_backtick_run_in_content + 1)`
+    /// (htmd-0.5.5/src/element_handler/code.rs:85-103), so a code block
+    /// containing a run of 3 backticks must be wrapped in a 4-backtick fence
+    /// rather than the usual 3, or the fence would terminate the block early.
+    #[test]
+    fn code_block_with_three_backticks_widens_fence_to_four() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<pre><code>a ``` b</code></pre>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("````\na ``` b\n````"),
+            "a 3-backtick run in the content must widen the fence to 4 backticks:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC017] class="language-rust" を持つ code のフェンスに情報文字列 rust が付く
+    ///
+    /// htmd's `find_language_from_attrs` reads the `code` element's `class`
+    /// attribute for a `language-*` token and appends the suffix as the
+    /// fence's info string with no separating space
+    /// (htmd-0.5.5/src/element_handler/code.rs:58-69, 105-116).
+    #[test]
+    fn code_block_with_language_class_gets_language_info_string() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: r#"<pre><code class="language-rust">fn main() {}</code></pre>"#.into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```rust\nfn main() {}\n```"),
+            "a `language-rust` class must attach `rust` as the fence info string:\n{}",
+            result.markdown()
         );
     }
 }
