@@ -128,6 +128,168 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 mod tests {
     use super::*;
 
+    /// [T-FC023] table の出力がヘッダ行に続く区切り行を含む
+    ///
+    /// htmd's `table_handler` pushes the header row (`format_row_padded`)
+    /// immediately followed by the separator row (`format_separator_padded`)
+    /// with no blank line between them
+    /// (htmd-0.5.5/src/element_handler/table.rs:178-183).
+    #[test]
+    fn table_output_includes_a_separator_row_following_the_header_row() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<table><thead><tr><th>Name</th><th>Age</th></tr></thead>\
+                <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>"
+                .into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let header_idx = lines
+            .iter()
+            .position(|line| line.contains("Name") && line.contains("Age"))
+            .expect("header row must be present");
+        let separator_line = lines
+            .get(header_idx + 1)
+            .expect("a line must immediately follow the header row");
+
+        assert!(
+            !separator_line.is_empty()
+                && separator_line.contains('-')
+                && separator_line
+                    .chars()
+                    .all(|c| c == '|' || c == '-' || c == ' '),
+            "the line right after the header row must be a dash separator row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC024] li の中の pre がリストのマーカーと同じ項目に留まる
+    ///
+    /// `list_item_handler` walks the `<li>`'s children into one string and
+    /// indents every line but the first by the marker's width before
+    /// prefixing the marker
+    /// (htmd-0.5.5/src/element_handler/li.rs:9-21,
+    /// `indent_text_except_first_line`), so a fenced code block nested
+    /// inside the `<li>` stays indented under the same marker instead of
+    /// breaking out as an unindented top-level block.
+    #[test]
+    fn li_pre_stays_in_the_same_item_as_the_list_marker() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let marker_line = markdown
+            .lines()
+            .find(|line| line.contains("intro"))
+            .expect("the list marker line must carry the li's leading text");
+        assert!(
+            marker_line.trim_start().starts_with(['-', '*']),
+            "the li's leading text must carry a list marker:\n{markdown}"
+        );
+
+        let fence_body_lines: Vec<&str> = markdown
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                trimmed == "```" || trimmed == "line1" || trimmed == "line2"
+            })
+            .collect();
+        assert_eq!(
+            fence_body_lines.len(),
+            4,
+            "expected two fence delimiters and two content lines:\n{markdown}"
+        );
+        for line in fence_body_lines {
+            assert!(
+                line.starts_with(' '),
+                "a <pre> block inside <li> must stay indented under the list marker, \
+                 not break out as a column-0 block: {line:?}\n{markdown}"
+            );
+        }
+    }
+
+    /// [T-FC025] td の中の pre が表の行を分断しない
+    ///
+    /// A table cell's content passes through `normalize_cell_content`, which
+    /// replaces every `\n` with a single space before the cell is written
+    /// into the pipe-delimited row
+    /// (htmd-0.5.5/src/element_handler/table.rs:227-233), so a `<pre>`
+    /// block's internal newlines cannot turn one table row into several
+    /// lines.
+    #[test]
+    fn td_pre_does_not_split_the_table_row() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>line1\nline2</code></pre></td></tr></tbody></table>"
+                .into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let data_row = markdown
+            .lines()
+            .find(|line| line.contains("line1"))
+            .expect("the data row must be present");
+        assert!(
+            data_row.contains("line1") && data_row.contains("line2"),
+            "both lines of the <pre> block must land on the same table row:\n{markdown}"
+        );
+        assert!(
+            data_row.starts_with('|') && data_row.ends_with('|'),
+            "the row must stay a single well-formed pipe-delimited row:\n{markdown}"
+        );
+        assert_eq!(
+            markdown.lines().filter(|l| l.contains('|')).count(),
+            3,
+            "the table must still have exactly 3 pipe-bearing lines \
+             (header, separator, one data row):\n{markdown}"
+        );
+    }
+
+    /// [T-FC026] 括弧を含む URL のリンク先が括弧の手前で切れない
+    ///
+    /// `AnchorElementHandler::escape_link_destination` backslash-escapes
+    /// every `(` and `)` in the href before writing it as the link
+    /// destination (htmd-0.5.5/src/element_handler/anchor.rs), so the part
+    /// of the URL after an opening paren cannot be misread as closing the
+    /// Markdown link early -- the full URL survives in the output.
+    #[test]
+    fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#.into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains(r"[Foo](https://example.com/wiki/Foo_\(bar\))"),
+            "the link destination must carry the full URL past the parenthesis, \
+             not truncate at it:\n{markdown}"
+        );
+    }
+
     /// [T-FC001]
     #[test]
     fn always_includes_frontmatter() {

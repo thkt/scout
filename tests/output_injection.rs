@@ -9,9 +9,9 @@
 //! contract, not a gap to close: `neutralize_yaml_markers` rewrites every
 //! column-0 marker line by its literal text alone, with no state tracking
 //! whether the line sits inside a fenced code block. `T-C032` proves this by
-//! injecting a marker inside a `<pre>` element (which `html2md::rewrite_html`
-//! renders as a fenced code block) and asserting it is rewritten exactly like
-//! the bare-paragraph cases `T-C029`/`T-C030` are.
+//! injecting a marker inside a `<pre><code>` element (which htmd renders as a
+//! fenced code block) and asserting it is rewritten exactly like the
+//! bare-paragraph cases `T-C029`/`T-C030` are.
 //!
 //! Every scenario's fixture is a Readability-friendly article (title, byline,
 //! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
@@ -241,9 +241,10 @@ fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
 #[test]
 fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
     let context = "pre element marker";
-    let Some(markdown) =
-        fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
-    else {
+    let Some(markdown) = fetch_markdown(
+        &article_html("<pre><code>---\nevil: true\n...\n</code></pre>"),
+        context,
+    ) else {
         return;
     };
     let (_, body) = split_frontmatter(&markdown, context);
