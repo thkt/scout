@@ -12,6 +12,12 @@ clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json", "gzip", "brotli", "deflate", "zstd"] }
 dom_smoothie = "0.18"
 htmd = "0.5.5"
+# The DOM types behind htmd's re-exported `Node`. The `pre` handler in
+# src/fetch/converter.rs needs `NodeData` to tell a `<pre><code>` pair from a
+# bare `<pre>`, and htmd re-exports only `Node` (htmd-0.5.5/src/lib.rs:16).
+# Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
+# the two resolve to one crate and the node types stay identical.
+markup5ever_rcdom = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
