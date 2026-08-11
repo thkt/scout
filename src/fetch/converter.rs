@@ -311,4 +311,123 @@ mod tests {
             result.markdown()
         );
     }
+
+    /// [T-FC019] code 子を持たない pre がフェンスで囲まれて出る
+    ///
+    /// htmd's built-in `pre_handler` wraps a `<pre>` with no `<code>` child in
+    /// blank lines only, with no fence markers at all
+    /// (htmd-0.5.5/src/element_handler/pre.rs:29-40,
+    /// `concat_strings!("\n\n", content, "\n\n")`). U-003 registers a `pre`
+    /// handler via `HtmlToMarkdownBuilder::add_handler` that fences this case
+    /// using `crate::markdown::fence_delimiter`.
+    #[test]
+    fn pre_without_code_child_is_wrapped_in_a_fence() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<pre>plain text</pre>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\nplain text\n```"),
+            "a <pre> with no <code> child must be wrapped in a fenced code block:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC020] htmd が既にフェンスした pre の中の code を二重のフェンスで囲まない
+    ///
+    /// A `<pre><code>` pair is already turned into a single fenced block by
+    /// htmd's built-in `code_handler`
+    /// (htmd-0.5.5/src/element_handler/code.rs:44-73). The added `pre` handler
+    /// must recognize this case by checking whether the walked content already
+    /// starts with a fence character, and pass it through instead of wrapping
+    /// it in a second fence.
+    #[test]
+    fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<pre><code>fn main() {}</code></pre>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\nfn main() {}\n```"),
+            "the pre>code block must still be fenced once:\n{}",
+            result.markdown()
+        );
+        assert_eq!(
+            result.markdown().matches("```").count(),
+            2,
+            "an already-fenced pre>code block must not gain a second fence:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC021] htmd が pre 直下のテキスト先頭に付けるバックスラッシュはフェンス内に残らない
+    ///
+    /// `dom_walker::escape_pre_text_if_needed` prepends a backslash to a
+    /// `<pre>` direct text node whose first character is a fence character
+    /// (`` ` `` or `~`), so htmd's own unfenced output cannot be misread as
+    /// opening a fence (htmd-0.5.5/src/dom_walker.rs:423-436). Once the added
+    /// `pre` handler wraps that content in its own fence, the character is
+    /// already protected and the extra backslash must not survive.
+    #[test]
+    fn htmd_leading_backslash_before_pre_text_does_not_survive_inside_the_fence() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<pre>`hello</pre>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\n`hello\n```"),
+            "the leading backtick must survive unescaped inside the fence:\n{}",
+            result.markdown()
+        );
+        assert!(
+            !result.markdown().contains("\\`hello"),
+            "htmd's pre-text leading backslash must be stripped once the content is fenced:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC022] 原文の行頭にあるバックスラッシュとバッククォートの並びがそのまま残る
+    ///
+    /// `escape_pre_text_if_needed` only inspects the first character of the
+    /// whole text node (htmd-0.5.5/src/dom_walker.rs:423-426), so a literal
+    /// `` \` `` sequence occurring after the text node's first character is
+    /// never touched by htmd. This pins that the stripping added for T-FC021
+    /// targets only the walked content's overall leading position, not every
+    /// line head inside it.
+    #[test]
+    fn literal_backslash_backtick_pair_mid_content_survives_unstripped() {
+        let article = ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: "<pre>abc\n\\` def</pre>".into(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("```\nabc\n\\` def\n```"),
+            "a literal backslash-backtick pair not at the content's head must survive as written:\n{}",
+            result.markdown()
+        );
+    }
 }
