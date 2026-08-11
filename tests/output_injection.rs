@@ -262,6 +262,39 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
     );
 }
 
+// T-C039: bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten
+//
+// T-C032 pins the <pre><code> case, which htmd's built-in `code_handler`
+// already wraps in a fence before `neutralize_yaml_markers` ever sees the
+// converted Markdown. This scenario swaps in a bare <pre> with no <code>
+// child instead, which only gets fenced because the `pre` handler
+// `to_fetch_result` registers on top of htmd's defaults (T-FC019, U-003)
+// wraps it. The two behaviors sit in different code paths inside the same
+// `markdown_converter` pipeline; this proves neither one dropped the other's
+// output when both apply to the same element.
+#[test]
+fn bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten() {
+    let context = "bare pre element marker";
+    let Some(markdown) =
+        fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
+    else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    assert!(
+        body.contains("```\n***\nevil: true\n***\n```"),
+        "a bare <pre> (no <code> child) must be wrapped in a fence by the added \
+         pre handler AND have its column-0 YAML markers rewritten to ***, the \
+         same combination T-C032 pins for <pre><code>, got body:\n{body}"
+    );
+    assert!(
+        !body.lines().any(|l| l == "---" || l == "..."),
+        "no bare --- or ... line should survive anywhere in the body, \
+         inside or outside the code fence, got body:\n{body}"
+    );
+}
+
 // T-C033: title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line
 #[test]
 fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() {

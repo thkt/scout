@@ -1,9 +1,11 @@
 use htmd::HtmlToMarkdown;
+use htmd::element_handler::{HandlerResult, Handlers};
 use htmd::options::Options;
 use serde::Serialize;
 
 use super::FetchError;
 use super::extractor::ExtractedArticle;
+use crate::markdown::fence_delimiter;
 use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 /// Fetched page content converted to Markdown. Fields are private so the only
@@ -80,7 +82,56 @@ fn markdown_converter() -> HtmlToMarkdown {
         preformatted_code: true,
         ..Options::default()
     };
-    HtmlToMarkdown::builder().options(options).build()
+    HtmlToMarkdown::builder()
+        .options(options)
+        .add_handler(vec!["pre"], pre_handler)
+        .build()
+}
+
+/// Fences a `<pre>` with no `<code>` child, which htmd's built-in `pre_handler`
+/// otherwise emits unfenced (htmd-0.5.5/src/element_handler/pre.rs:29-40,
+/// `concat_strings!("\n\n", content, "\n\n")` with no fence markers).
+///
+/// A `<pre><code>` pair is already fenced by htmd's built-in `code_handler`
+/// before this handler ever sees it (htmd-0.5.5/src/element_handler/code.rs:44-73,
+/// registered ahead of this handler in `ElementHandlers::new` so `add_handler`
+/// only shadows the outer `pre` dispatch, not the inner `code` one); its walked
+/// content starts with a raw, unescaped fence-character run, which this handler
+/// passes through unchanged instead of fencing a second time.
+///
+/// A bare `<pre>` whose direct text starts with a fence character never has
+/// that shape: `dom_walker::escape_pre_text_if_needed`
+/// (htmd-0.5.5/src/dom_walker.rs:423-436) unconditionally backslash-escapes
+/// it first, so the walked content starts with `\` followed by the fence
+/// character. Checking the raw first byte tells the two cases apart. That
+/// backslash only protects htmd's own unfenced output; once this handler
+/// wraps the content in its own fence, the escape is redundant and is
+/// stripped so the fenced body matches the source text.
+// `Element` must stay by-value: htmd's blanket `ElementHandler` impl only
+// covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
+// (htmd-0.5.5/src/element_handler/mod.rs:95-100), so a `&Element` signature
+// would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
+#[allow(clippy::needless_pass_by_value)]
+fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    let result = handlers.walk_children(element.node);
+    let content = result.content.trim_matches('\n');
+
+    if content.starts_with(['`', '~']) {
+        return Some(HandlerResult {
+            content: format!("\n\n{content}\n\n"),
+            markdown_translated: result.markdown_translated,
+        });
+    }
+
+    let content = content
+        .strip_prefix('\\')
+        .filter(|rest| rest.starts_with(['`', '~']))
+        .unwrap_or(content);
+    let fence = fence_delimiter(content);
+    Some(HandlerResult {
+        content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
+        markdown_translated: result.markdown_translated,
+    })
 }
 
 pub(super) fn to_fetch_result(
