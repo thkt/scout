@@ -179,6 +179,18 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 mod tests {
     use super::*;
 
+    /// Minimal `ExtractedArticle` fixture for tests that only vary the body
+    /// HTML: no title/byline/published_time and no raw-fallback flag.
+    fn article(html: &str) -> ExtractedArticle {
+        ExtractedArticle {
+            title: None,
+            byline: None,
+            published_time: None,
+            content_html: html.into(),
+            used_raw_fallback: false,
+        }
+    }
+
     /// [T-FC023] table の出力がヘッダ行に続く区切り行を含む
     ///
     /// htmd's `table_handler` pushes the header row (`format_row_padded`)
@@ -187,15 +199,10 @@ mod tests {
     /// (htmd-0.5.5/src/element_handler/table.rs:178-183).
     #[test]
     fn table_output_includes_a_separator_row_following_the_header_row() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<table><thead><tr><th>Name</th><th>Age</th></tr></thead>\
-                <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>"
-                .into(),
-            used_raw_fallback: false,
-        };
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Age</th></tr></thead>\
+                <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
@@ -230,13 +237,7 @@ mod tests {
     /// breaking out as an unindented top-level block.
     #[test]
     fn li_pre_stays_in_the_same_item_as_the_list_marker() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
@@ -281,15 +282,10 @@ mod tests {
     /// lines.
     #[test]
     fn td_pre_does_not_split_the_table_row() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
-                <pre><code>line1\nline2</code></pre></td></tr></tbody></table>"
-                .into(),
-            used_raw_fallback: false,
-        };
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>line1\nline2</code></pre></td></tr></tbody></table>",
+        );
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
@@ -323,13 +319,7 @@ mod tests {
     /// Markdown link early -- the full URL survives in the output.
     #[test]
     fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#.into(),
-            used_raw_fallback: false,
-        };
+        let article = article(r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#);
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
@@ -457,13 +447,7 @@ mod tests {
     /// of the six bytes gains a backslash inside a code block.
     #[test]
     fn pre_code_escape_target_chars_are_not_backslash_escaped() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: r#"<pre><code>\ * _ ` [ ] end</code></pre>"#.into(),
-            used_raw_fallback: false,
-        };
+        let article = article(r#"<pre><code>\ * _ ` [ ] end</code></pre>"#);
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -483,13 +467,7 @@ mod tests {
     /// rather than the usual 3, or the fence would terminate the block early.
     #[test]
     fn code_block_with_three_backticks_widens_fence_to_four() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<pre><code>a ``` b</code></pre>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<pre><code>a ``` b</code></pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -508,13 +486,7 @@ mod tests {
     /// (htmd-0.5.5/src/element_handler/code.rs:58-69, 105-116).
     #[test]
     fn code_block_with_language_class_gets_language_info_string() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: r#"<pre><code class="language-rust">fn main() {}</code></pre>"#.into(),
-            used_raw_fallback: false,
-        };
+        let article = article(r#"<pre><code class="language-rust">fn main() {}</code></pre>"#);
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -535,13 +507,7 @@ mod tests {
     /// using `crate::markdown::fence_delimiter`.
     #[test]
     fn pre_without_code_child_is_wrapped_in_a_fence() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<pre>plain text</pre>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<pre>plain text</pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -562,13 +528,7 @@ mod tests {
     /// it in a second fence.
     #[test]
     fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<pre><code>fn main() {}</code></pre>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<pre><code>fn main() {}</code></pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -595,13 +555,7 @@ mod tests {
     /// already protected and the extra backslash must not survive.
     #[test]
     fn htmd_leading_backslash_before_pre_text_does_not_survive_inside_the_fence() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<pre>`hello</pre>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<pre>`hello</pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
@@ -627,13 +581,7 @@ mod tests {
     /// line head inside it.
     #[test]
     fn literal_backslash_backtick_pair_mid_content_survives_unstripped() {
-        let article = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<pre>abc\n\\` def</pre>".into(),
-            used_raw_fallback: false,
-        };
+        let article = article("<pre>abc\n\\` def</pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
