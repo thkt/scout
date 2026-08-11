@@ -448,6 +448,39 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
     }
 }
 
+/// [T-SE020] 4 個のフェンスの内側にある 3 個のバッククォート行が research 出力でも閉じ扱いされない
+///
+/// `format_fetched_pages` runs `shift_headings` per page, so the fence-length
+/// tracking has to hold on the path the report takes, not only on a direct
+/// `shift_headings` call: a heading-syntax line inside the 4-backtick fence
+/// stays literal, and only the line after the matching 4-backtick close takes
+/// the page-level shift.
+#[test]
+fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
+    let page = FetchResult::for_test(
+        "https://page1.example".into(),
+        "````\n```\n## Not a heading\n````\n\n## After\n".into(),
+        false,
+    );
+    let report = ResearchReport {
+        fetched_pages: vec![page],
+        ..Default::default()
+    };
+
+    let text = format_report(&report, "q");
+
+    assert!(
+        text.contains("````\n```\n## Not a heading\n````"),
+        "the heading-syntax line inside the 4-backtick fence must stay \
+         literal, got:\n{text}"
+    );
+    assert!(
+        text.contains("##### After"),
+        "the heading after the matching 4-backtick close sits outside the \
+         fence and must take the page-level shift, got:\n{text}"
+    );
+}
+
 /// [T-SE018] both halves of a failed-URL line take the same escape
 ///
 /// The URL went through `escape_md_link` and the reason through
