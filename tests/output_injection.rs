@@ -268,10 +268,9 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
 // already wraps in a fence before `neutralize_yaml_markers` ever sees the
 // converted Markdown. This scenario swaps in a bare <pre> with no <code>
 // child instead, which only gets fenced because the `pre` handler
-// `to_fetch_result` registers on top of htmd's defaults (T-FC019, U-003)
-// wraps it. The two behaviors sit in different code paths inside the same
-// `markdown_converter` pipeline; this proves neither one dropped the other's
-// output when both apply to the same element.
+// `to_fetch_result` registers on top of htmd's defaults (T-FC019) wraps it.
+// The two run on different code paths inside the same `markdown_converter`
+// pipeline.
 #[test]
 fn bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten() {
     let context = "bare pre element marker";

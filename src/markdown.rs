@@ -551,10 +551,6 @@ mod tests {
     }
 
     /// [T-MD030] 4 個のフェンスで囲まれた中の 3 個のバッククォート行が閉じ扱いされない
-    ///
-    /// A fence opened with 4 backticks stays open through a 3-backtick line
-    /// nested inside it; only the matching 4-backtick line closes it, so the
-    /// heading that follows the real close is outside the fence and shifts.
     #[test]
     fn shift_headings_does_not_close_four_backtick_fence_on_shorter_backtick_run() {
         let input = "````\n```\ncontent\n````\n## After";
@@ -567,10 +563,6 @@ mod tests {
     }
 
     /// [T-MD031] 4 個のフェンスの中にある見出し記法の行が見出しとして繰り下げられない
-    ///
-    /// The shorter 3-backtick line inside the 4-backtick fence must not be
-    /// mistaken for the close, so a heading-syntax line that follows it is
-    /// still inside the fence and must not shift.
     #[test]
     fn shift_headings_leaves_heading_syntax_line_inside_four_backtick_fence_unshifted() {
         let input = "````\n```\n## Not a heading\n````";

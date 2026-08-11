@@ -95,18 +95,13 @@ fn markdown_converter() -> HtmlToMarkdown {
 /// otherwise emits unfenced (htmd-0.5.5/src/element_handler/pre.rs:29-40,
 /// `concat_strings!("\n\n", content, "\n\n")` with no fence markers).
 ///
-/// A `<pre><code>` pair is already fenced by htmd's built-in `code_handler`
-/// before this handler ever sees it (htmd-0.5.5/src/element_handler/code.rs:44-73,
-/// registered ahead of this handler in `ElementHandlers::new` so `add_handler`
-/// only shadows the outer `pre` dispatch, not the inner `code` one), so its
-/// walked content passes through unchanged instead of gaining a second fence.
-///
-/// Both branches read the DOM rather than the walked text. `code_handler`
-/// fences exactly when the `<code>` element's parent is `<pre>`
-/// (htmd-0.5.5/src/element_handler/code.rs:33-41), which a direct `<code>`
-/// child answers; the walked text does not, because a bare `<pre>` holding
-/// syntax-highlighter `<span>`s emits its own leading backtick raw and reads
-/// as already fenced.
+/// A `<pre><code>` pair arrives already fenced by htmd's built-in
+/// `code_handler` (htmd-0.5.5/src/element_handler/code.rs:44-73, registered
+/// ahead of this handler in `ElementHandlers::new` so `add_handler` shadows
+/// only the outer `pre` dispatch, not the inner `code` one), so it passes
+/// through unchanged. Telling the two shapes apart reads the DOM, not the
+/// walked text: a bare `<pre>` holding syntax-highlighter `<span>`s emits its
+/// own leading backtick raw and reads as already fenced.
 // `Element` must stay by-value: htmd's blanket `ElementHandler` impl only
 // covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
 // (htmd-0.5.5/src/element_handler/mod.rs:95-100), so a `&Element` signature
@@ -136,7 +131,8 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 }
 
 /// Whether the element has a direct `<code>` child, the shape htmd's
-/// `code_handler` fences on its own.
+/// `code_handler` fences on its own: it fences exactly when the `<code>`
+/// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
 fn has_code_child(node: &Rc<Node>) -> bool {
     node.children.borrow().iter().any(|child| {
         matches!(&child.data, NodeData::Element { name, .. } if name.local.as_ref() == "code")
@@ -153,10 +149,9 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// text that already opens with `` \` `` produces the same walked bytes and
 /// must keep its backslash.
 ///
-/// The first *text* child is the one to read, since a comment or any other
-/// non-text node can precede it. When an element precedes it instead, that
-/// element's own output opens the content, so the strip finds no leading
-/// backslash to take and the answer here does not matter.
+/// The first *text* child is the one to read, since a comment can precede it.
+/// An element before it opens the content with its own output instead, leaving
+/// no leading backslash to strip either way.
 fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
     node.children
         .borrow()
@@ -266,9 +261,7 @@ mod tests {
     /// indents every line but the first by the marker's width before
     /// prefixing the marker
     /// (htmd-0.5.5/src/element_handler/li.rs:9-21,
-    /// `indent_text_except_first_line`), so a fenced code block nested
-    /// inside the `<li>` stays indented under the same marker instead of
-    /// breaking out as an unindented top-level block.
+    /// `indent_text_except_first_line`).
     #[test]
     fn li_pre_stays_in_the_same_item_as_the_list_marker() {
         let article = article("<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>");
@@ -311,9 +304,7 @@ mod tests {
     /// A table cell's content passes through `normalize_cell_content`, which
     /// replaces every `\n` with a single space before the cell is written
     /// into the pipe-delimited row
-    /// (htmd-0.5.5/src/element_handler/table.rs:227-233), so a `<pre>`
-    /// block's internal newlines cannot turn one table row into several
-    /// lines.
+    /// (htmd-0.5.5/src/element_handler/table.rs:227-233).
     #[test]
     fn td_pre_does_not_split_the_table_row() {
         let article = article(
@@ -348,9 +339,9 @@ mod tests {
     ///
     /// `AnchorElementHandler::escape_link_destination` backslash-escapes
     /// every `(` and `)` in the href before writing it as the link
-    /// destination (htmd-0.5.5/src/element_handler/anchor.rs), so the part
-    /// of the URL after an opening paren cannot be misread as closing the
-    /// Markdown link early -- the full URL survives in the output.
+    /// destination (htmd-0.5.5/src/element_handler/anchor.rs:170-177), so the
+    /// part of the URL after an opening paren cannot be misread as closing the
+    /// Markdown link early.
     #[test]
     fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
         let article = article(r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#);
@@ -391,10 +382,7 @@ mod tests {
     fn frontmatter_omits_missing_fields() {
         let article = ExtractedArticle {
             title: Some("Only Title".into()),
-            byline: None,
-            published_time: None,
-            content_html: "<p>Text</p>".into(),
-            used_raw_fallback: false,
+            ..article("<p>Text</p>")
         };
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
@@ -409,10 +397,7 @@ mod tests {
     fn frontmatter_body_cannot_inject_document_marker() {
         let article = ExtractedArticle {
             title: Some("T".into()),
-            byline: None,
-            published_time: None,
-            content_html: String::new(),
-            used_raw_fallback: false,
+            ..article("")
         };
         let body = "intro\n---\ninjected: pwned\nreal";
         let out = format_with_frontmatter(&article, body);
@@ -435,11 +420,8 @@ mod tests {
     #[test]
     fn to_fetch_result_carries_both_flags() {
         let raw_fallback_only = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<p>x</p>".into(),
             used_raw_fallback: true,
+            ..article("<p>x</p>")
         };
         let result =
             to_fetch_result(&raw_fallback_only, "https://example.com".into(), false).unwrap();
@@ -452,13 +434,7 @@ mod tests {
             "the caller passed decode_uncertain=false"
         );
 
-        let decode_uncertain_only = ExtractedArticle {
-            title: None,
-            byline: None,
-            published_time: None,
-            content_html: "<p>x</p>".into(),
-            used_raw_fallback: false,
-        };
+        let decode_uncertain_only = article("<p>x</p>");
         let result =
             to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true).unwrap();
         assert!(
