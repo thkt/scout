@@ -17,7 +17,7 @@ htmd = "0.5.5"
 # bare `<pre>`, and htmd re-exports only `Node` (htmd-0.5.5/src/lib.rs:16).
 # Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
 # the two resolve to one crate and the node types stay identical.
-markup5ever_rcdom = "0.38"
+markup5ever_rcdom = "0.39"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
