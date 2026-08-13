@@ -20,26 +20,19 @@ htmd = "0.5.5"
 #
 # That pin still leaves the parser stack duplicated one level down: this chain
 # resolves to html5ever 0.38.0 and markup5ever 0.38.0, while dom_smoothie ->
-# dom_query pulls 0.39.0 of both. `cargo deny check` reports one
-# `warning[duplicate]` per crate every run, and deny.toml keeps
-# bans.multiple-versions = "warn" (not "deny") so both stay visible instead of
-# being skipped.
+# dom_query pulls 0.39.0 of both. `cargo deny check` warns once per crate every
+# run, and we leave both warnings visible rather than skipping them.
 #
-# We tolerate the duplication because aligning the versions buys almost
-# nothing. Measured on M3/8 core with lto=true, three clean release builds per
-# variant: the binary shrinks 16.5 KB (-0.19%) and the build times overlap
-# within a 3-second spread, whichever version the two chains are pushed onto.
-# The reason is structural. `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>`
+# We tolerate the duplication because aligning the versions buys almost nothing
+# (measured in issue #379). `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>`
 # monomorphize on the sink type, so htmd (RcDom) and dom_smoothie (dom_query
-# sink) each keep their own copy of the parser code no matter which version
-# they share. Unifying removes the two warnings, not the two code sets.
-#
-# Bump this pin to "0.39" once htmd depends on markup5ever_rcdom 0.39
-# (0.39.0+unofficial is already published) to clear both warnings.
+# sink) each keep their own copy of the parser code whichever version they
+# share. Unifying removes the two warnings, not the two code sets.
 #
 # renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
-# raised past htmd on its own. Drop that bound in the same change that bumps
-# this pin, or renovate stops offering updates for the crate entirely.
+# raised past htmd on its own. Once htmd depends on markup5ever_rcdom 0.39
+# (0.39.0+unofficial is already published), bump this pin and drop that bound
+# together, or renovate stops offering updates for the crate entirely.
 markup5ever_rcdom = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
