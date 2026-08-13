@@ -728,11 +728,11 @@ mod tests {
         let article = article("<pre><span>line1\n</span>line2</pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
 
         assert!(
-            result.markdown().contains("line1\nline2"),
-            "the span's trailing newline must reach the sibling text as a real line break:\n{}",
-            result.markdown()
+            markdown.contains("line1\nline2"),
+            "the span's trailing newline must reach the sibling text as a real line break:\n{markdown}"
         );
     }
 
@@ -757,11 +757,11 @@ mod tests {
         );
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
 
         assert!(
-            result.markdown().contains("line1\nline2\nline3"),
-            "each line-span's content must land on its own output line, in order:\n{}",
-            result.markdown()
+            markdown.contains("line1\nline2\nline3"),
+            "each line-span's content must land on its own output line, in order:\n{markdown}"
         );
     }
 
@@ -788,18 +788,17 @@ mod tests {
         let article = article("<p><code><span>line1\n</span>line2</code></p>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
 
         assert!(
-            result.markdown().contains("line1line2"),
+            markdown.contains("line1line2"),
             "a span inside inline code with no <pre> ancestor must fall through to htmd's \
              built-in span handler, whose trim_matches('\\n') strips the newline before the \
-             code handler can fold it to a space:\n{}",
-            result.markdown()
+             code handler can fold it to a space:\n{markdown}"
         );
         assert!(
-            !result.markdown().contains("line1\nline2"),
-            "the newline must not survive raw:\n{}",
-            result.markdown()
+            !markdown.contains("line1\nline2"),
+            "the newline must not survive raw:\n{markdown}"
         );
     }
 
@@ -816,12 +815,12 @@ mod tests {
         let article = article("<pre><span>line1\n</span><span><b>line2</b></span></pre>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
 
         assert!(
-            result.markdown().contains("line1\n**line2**"),
+            markdown.contains("line1\n**line2**"),
             "the newline before a line-span with an element child must survive, and that \
-             child element must still be converted to Markdown:\n{}",
-            result.markdown()
+             child element must still be converted to Markdown:\n{markdown}"
         );
     }
 }
