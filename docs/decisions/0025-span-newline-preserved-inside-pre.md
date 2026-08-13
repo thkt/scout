@@ -15,7 +15,7 @@ decision-makers: thkt (project owner)
 ## Decision Drivers
 
 - 上流 htmd のリリースを待たずに #384 の退行を止める
-- 挙動差分を `<pre>` 配下の span に限定し、`<pre>` の外の span (inline code 内など) は htmd 標準の折り畳みを保つ
+- 挙動差分を `<pre>` 配下の span に限定し、`<pre>` の外の span (inline code 内など) は htmd 標準の処理へそのまま委譲する
 - htmd の fork や恒久的なパッチを避け、上流が直った時点で単純に消せる形にする
 
 ## Considered Options
@@ -31,18 +31,18 @@ Chosen option: 方式 A。`src/fetch/converter.rs` の `pre_handler` と同じ `
 
 決め手は、`add_handler(vec!["span"], span_handler)` を足すだけで htmd 側の登録ハンドラ数が 1 を超え、`dom_walker.rs:87-110` の高速経路自体が全 span で無効になり、`element_handler/mod.rs` の通常ディスパッチ (`find_handler`) に切り替わる点である。この副作用により、最後に登録した `span_handler` (scout 側) が最初に呼ばれる形になり、fork も上流リリース待ちも要らずに退行を止められた。
 
-祖先判定は `<pre>` のみとし、htmd 自身の `is_inside_pre` (`<code>` 祖先も含む、element_handler/mod.rs:358-367) より意図的に狭くした。`<pre>` の外にある inline `<code>` 内の span は `Handlers::fallback` を経て htmd 標準の `handle_preformatted_code` の改行→空白折り畳みを保つ (T-FC054 で pin)。math span (`class="math math-inline"`) の除外は写していない。組み込みの math 分岐は属性と単一 Text 子の両方を要求するため、要素の子を持つ span 構造では元々マッチしない。
+祖先判定は `<pre>` のみとし、htmd 自身の `is_inside_pre` (`<code>` 祖先も含む、element_handler/mod.rs:358-367) より意図的に狭くした。`<pre>` の外にある inline `<code>` 内の span は `Handlers::fallback` を経て htmd 組み込みの span ハンドラへ渡る。そこで `content.trim_matches('\n')` (element_handler/span.rs:33) が span 内容の両端の改行を落とすため、`handle_preformatted_code` の改行→空白折り畳み (element_handler/code.rs:189-208) には届かず、前後の行が区切りなしで連結する (T-FC054 で pin)。改行が span の中ではなく `<code>` 自身のテキストノードにある場合は span ハンドラを通らず、従来どおり空白へ畳まれる。math span (`class="math math-inline"`) の除外は写していない。組み込みの math 分岐は属性と単一 Text 子の両方を要求するため、要素の子を持つ span 構造では元々マッチしない。
 
 ### Consequences
 
 - Good, because #384 の退行が上流のリリースを待たずに止まり、6 ページ 123 ブロックの行数落ちが解消する (行ごとの検証は issue #384 本文の実測。本 DR の実装確認範囲はユニットテストと目視観察に限る)
 - Good, because `pre_handler` と同じ登録パターンを踏襲し、`converter.rs` 内の実装が一貫する
 - Bad, because htmd の内部実装 (`dom_walker.rs` の登録ハンドラ数ゲート、`element_handler/mod.rs` のディスパッチ順) に依存した回避策であり、htmd 側の実装変更で無言のまま壊れうる
-- Bad, because 判定が `<pre>` 祖先のみで `is_inside_pre` より狭いため、`<pre>` の外にある inline `<code>` 内の span は改行が空白へ畳まれたままで、pre 内 span と挙動が分かれる
+- Bad, because 判定が `<pre>` 祖先のみで `is_inside_pre` より狭いため、`<pre>` の外にある inline `<code>` 内の span は改行が両端とも剥がれて空白も残らず、pre 内 span と挙動が分かれる。これは #384 以前から続く htmd 標準の挙動で、span の登録を外した状態でも同一の出力を実測した
 
 ### Confirmation
 
-T-FC052〜T-FC055 (`src/fetch/converter.rs` の `mod tests`) が、pre 内 span の末尾改行の保持、行ごとの span が別行を保つこと、pre 外の inline code 内 span で折り畳みが保たれること、隣接 span が要素の子を持つ形でも改行が残ることを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
+T-FC052〜T-FC055 (`src/fetch/converter.rs` の `mod tests`) が、pre 内 span の末尾改行の保持、行ごとの span が別行を保つこと、pre 外の inline code 内 span で改行が剥がれること、隣接 span が要素の子を持つ形でも改行が残ることを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
 
 ## Pros and Cons of the Options
 
@@ -85,6 +85,6 @@ htmd の内部実装 (登録ハンドラ数ゲート、ディスパッチ順) �
 
 - `dom_walker.rs` の strip と `element_handler/span.rs` の両方が上流で直る。両方の修正が入った htmd バージョンへ上げた時点で `span_handler` と `has_pre_ancestor` を削除し、`add_handler(vec!["span"], ...)` の登録も外す
 - htmd がハンドラ登録数のゲートや `find_handler` のディスパッチ順を変更し、本ハンドラの前提 (最後に登録したハンドラが最初に呼ばれる) が崩れる。回避策の実装を作り直すか、方式 B・C へ切り替える
-- `<pre>` の外にある inline `<code>` 内 span の折り畳み挙動について要望が来る。祖先判定を `is_inside_pre` 相当に広げるか判断する
+- `<pre>` の外にある inline `<code>` 内 span で改行が消える挙動について要望が来る。祖先判定を `is_inside_pre` 相当に広げるか判断する。なお `element_handler/span.rs:33` の strip だけが上流で直ると、この経路の改行は `handle_preformatted_code` へ届くようになり、消える挙動から空白へ畳む挙動へ変わる
 
 Related to issue #384.

@@ -765,32 +765,40 @@ mod tests {
         );
     }
 
-    /// [T-FC054] pre の外の inline code の中の span では改行が空白へ畳まれたまま残る
+    /// [T-FC054] pre の外の inline code の中の span では改行が剥がれ空白も残らない
     ///
-    /// htmd's `handle_inline_code` folds every `\n` in the inline `<code>`'s
-    /// walked content into a space (htmd-0.5.5/src/element_handler/code.rs:
-    /// 189-208, `handle_preformatted_code`). U-001's ancestor check for the
-    /// passthrough branch looks for a `<pre>` ancestor only — narrower than
-    /// htmd's `is_inside_pre`, which also treats a `<code>` ancestor as
-    /// "inside pre" (htmd-0.5.5/src/element_handler/mod.rs:358-367). A span
-    /// nested in inline `<code>` with no `<pre>` ancestor must therefore fall
-    /// through to the built-in handler via `Handlers::fallback` and keep the
-    /// code handler's own newline-to-space folding, not bypass it.
+    /// U-001's ancestor check for the passthrough branch looks for a `<pre>`
+    /// ancestor only — narrower than htmd's `is_inside_pre`, which also treats
+    /// a `<code>` ancestor as "inside pre" (htmd-0.5.5/src/element_handler/
+    /// mod.rs:358-367). A span nested in inline `<code>` with no `<pre>`
+    /// ancestor therefore falls through to htmd's built-in span handler via
+    /// `Handlers::fallback`, and that handler's `content.trim_matches('\n')`
+    /// (htmd-0.5.5/src/element_handler/span.rs:33) removes the newline from
+    /// both edges of the span's content. The removal happens before
+    /// `handle_preformatted_code`'s own newline-to-space folding
+    /// (htmd-0.5.5/src/element_handler/code.rs:189-208) can reach it, so the
+    /// two lines join with no separator at all.
+    ///
+    /// Measured identical with the `span` registration removed, so this is
+    /// htmd's standing behavior rather than a difference U-001 introduces. A
+    /// newline sitting in the `<code>`'s own text node instead of inside a
+    /// span never reaches the span handler and still folds to a space.
     #[test]
-    fn span_inside_inline_code_outside_pre_keeps_newline_folded_to_a_space() {
-        let article = article("<p><code>line1\n<span>line2</span></code></p>");
+    fn span_inside_inline_code_outside_pre_loses_the_newline_entirely() {
+        let article = article("<p><code><span>line1\n</span>line2</code></p>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
 
         assert!(
-            result.markdown().contains("line1 line2"),
-            "a span inside inline code with no <pre> ancestor must keep the code \
-             handler's newline-to-space folding, not pass the newline through raw:\n{}",
+            result.markdown().contains("line1line2"),
+            "a span inside inline code with no <pre> ancestor must fall through to htmd's \
+             built-in span handler, whose trim_matches('\\n') strips the newline before the \
+             code handler can fold it to a space:\n{}",
             result.markdown()
         );
         assert!(
             !result.markdown().contains("line1\nline2"),
-            "the newline must not survive raw once folded to a space:\n{}",
+            "the newline must not survive raw:\n{}",
             result.markdown()
         );
     }
