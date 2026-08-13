@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use htmd::element_handler::{HandlerResult, Handlers};
 use htmd::options::Options;
@@ -88,6 +88,7 @@ fn markdown_converter() -> HtmlToMarkdown {
     HtmlToMarkdown::builder()
         .options(options)
         .add_handler(vec!["pre"], pre_handler)
+        .add_handler(vec!["span"], span_handler)
         .build()
 }
 
@@ -161,6 +162,61 @@ fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
             _ => None,
         })
         .unwrap_or(false)
+}
+
+/// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
+/// ancestor; every other span delegates to `Handlers::fallback`.
+///
+/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110, active
+/// while exactly one handler is registered for `span`) trims every leading
+/// and trailing `\n` off the span's own walked content unconditionally,
+/// including when the span sits inside a `<pre>` and those newlines are real
+/// line breaks the surrounding preformatted text depends on. Registering a
+/// second `span` handler here (this one) raises the registered-handler count
+/// past that fast path's `== 1` gate, so htmd falls back to its normal
+/// per-element dispatch for every `<span>` instead
+/// (htmd-0.5.5/src/element_handler/mod.rs, `ElementHandlers::handle` /
+/// `find_handler`), and this handler runs first as the most-recently
+/// registered one.
+///
+/// The `<pre>`-ancestor check below (`has_pre_ancestor`) looks for a `<pre>`
+/// ancestor only. That is narrower than htmd's own `is_inside_pre`
+/// (htmd-0.5.5/src/element_handler/mod.rs:358-367), which also treats a
+/// `<code>` ancestor as "inside pre": a `<span>` nested in inline `<code>`
+/// with no `<pre>` ancestor is not "suppressed" by this handler and falls
+/// through to `Handlers::fallback`, reaching htmd's built-in `span_handler`
+/// unchanged and keeping the inline-code handler's own newline-to-space
+/// folding.
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    if has_pre_ancestor(element.node) {
+        return Some(handlers.walk_children(element.node));
+    }
+    handlers.fallback(element)
+}
+
+/// Whether any ancestor of `node` is a `<pre>` element. Mirrors the
+/// take-upgrade-put-back pattern htmd's own `node_util::get_parent_node` uses
+/// to read the `Cell<Option<WeakHandle>>` parent link without leaving it
+/// empty for later traversals (htmd-0.5.5/src/node_util.rs:13-23).
+fn has_pre_ancestor(node: &Rc<Node>) -> bool {
+    let mut current = get_parent(node);
+    while let Some(parent) = current {
+        if matches!(&parent.data, NodeData::Element { name, .. } if name.local.as_ref() == "pre") {
+            return true;
+        }
+        current = get_parent(&parent);
+    }
+    false
+}
+
+fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
+    let value = node.parent.take();
+    let parent = value.as_ref().and_then(Weak::upgrade);
+    node.parent.set(value);
+    parent
 }
 
 pub(super) fn to_fetch_result(
@@ -655,6 +711,108 @@ mod tests {
         assert!(
             result.markdown().contains("```\n`x`\n```"),
             "a <pre> whose fence-leading text comes from a nested element must still be fenced:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC052] pre の中の span の末尾にある改行が出力に残る
+    ///
+    /// htmd's built-in `span` fast path (dom_walker.rs:87-110, active while
+    /// exactly one handler is registered for `span`) trims every leading and
+    /// trailing `\n` off a span's own walked content regardless of a `<pre>`
+    /// ancestor. U-001 registers a `span` handler that passes a `<pre>`-nested
+    /// span's content through unmodified, so a trailing `\n` inside the span
+    /// must survive up to the sibling text that follows it.
+    #[test]
+    fn trailing_newline_at_the_end_of_a_span_inside_pre_survives_in_the_output() {
+        let article = article("<pre><span>line1\n</span>line2</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("line1\nline2"),
+            "the span's trailing newline must reach the sibling text as a real line break:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC053] 行ごとに span を並べた pre で各行が別の行として出る
+    ///
+    /// A syntax highlighter emits one `<span>` per source line, each carrying
+    /// its own trailing `\n`. The built-in fast path trims that `\n` off each
+    /// span independently, so adjacent lines collapse into one. U-001's `span`
+    /// handler must pass every such span's content through untouched so the
+    /// per-span newlines keep the lines apart.
+    ///
+    /// Each span carries a distinct `data-line` attribute so htmd's adjacent-
+    /// element merge (`dom_walker::can_combine`, htmd-0.5.5/src/dom_walker.rs:
+    /// 250-307, gated on `attrs1 == attrs2`) does not fold the three sibling
+    /// spans into one node ahead of the per-span trim this test targets.
+    #[test]
+    fn pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line() {
+        let article = article(
+            "<pre><span data-line=\"1\">line1\n</span>\
+             <span data-line=\"2\">line2\n</span>\
+             <span data-line=\"3\">line3</span></pre>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("line1\nline2\nline3"),
+            "each line-span's content must land on its own output line, in order:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC054] pre の外の inline code の中の span では改行が空白へ畳まれたまま残る
+    ///
+    /// htmd's `handle_inline_code` folds every `\n` in the inline `<code>`'s
+    /// walked content into a space (htmd-0.5.5/src/element_handler/code.rs:
+    /// 189-208, `handle_preformatted_code`). U-001's ancestor check for the
+    /// passthrough branch looks for a `<pre>` ancestor only — narrower than
+    /// htmd's `is_inside_pre`, which also treats a `<code>` ancestor as
+    /// "inside pre" (htmd-0.5.5/src/element_handler/mod.rs:358-367). A span
+    /// nested in inline `<code>` with no `<pre>` ancestor must therefore fall
+    /// through to the built-in handler via `Handlers::fallback` and keep the
+    /// code handler's own newline-to-space folding, not bypass it.
+    #[test]
+    fn span_inside_inline_code_outside_pre_keeps_newline_folded_to_a_space() {
+        let article = article("<p><code>line1\n<span>line2</span></code></p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("line1 line2"),
+            "a span inside inline code with no <pre> ancestor must keep the code \
+             handler's newline-to-space folding, not pass the newline through raw:\n{}",
+            result.markdown()
+        );
+        assert!(
+            !result.markdown().contains("line1\nline2"),
+            "the newline must not survive raw once folded to a space:\n{}",
+            result.markdown()
+        );
+    }
+
+    /// [T-FC055] 隣の span が要素の子を持つ形でも pre の中の改行が残る
+    ///
+    /// The passthrough branch must walk the span's children through the full
+    /// handler chain (`Handlers::walk_children`, which recurses into nested
+    /// elements) rather than reading raw text only. A neighboring line-span
+    /// whose own child is an element (not a bare text node) must still convert
+    /// that nested element to Markdown while the preceding line-span's
+    /// trailing newline survives.
+    #[test]
+    fn pre_newline_survives_when_the_neighboring_span_has_an_element_child() {
+        let article = article("<pre><span>line1\n</span><span><b>line2</b></span></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+
+        assert!(
+            result.markdown().contains("line1\n**line2**"),
+            "the newline before a line-span with an element child must survive, and that \
+             child element must still be converted to Markdown:\n{}",
             result.markdown()
         );
     }
