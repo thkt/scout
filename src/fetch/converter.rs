@@ -1,7 +1,7 @@
 use std::rc::{Rc, Weak};
 
 use htmd::element_handler::{HandlerResult, Handlers};
-use htmd::options::Options;
+use htmd::options::{Options, TranslationMode};
 use htmd::{HtmlToMarkdown, Node};
 use markup5ever_rcdom::NodeData;
 use serde::Serialize;
@@ -247,15 +247,26 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
 /// table.rs:250-256), caption handling (table.rs:167-169), and column-count
 /// estimation (table.rs:151-153) mirror the built-in shape.
 ///
-/// The Faithful translation-mode branch and the `has_explicit_headers` /
-/// `is_inside_table_cell` fallback gate (table.rs:19-24, 185-220) are not
-/// reproduced: `markdown_converter` always builds with `Options::default()`,
-/// which is `TranslationMode::Pure`, so that branch and gate never run in
-/// this app.
+/// Mirrors the built-in's `serialize_if_faithful!(handlers, element, 0)` /
+/// `TranslationMode::Pure` gate (table.rs:19-24) with a single check at this
+/// handler's own entry: any non-`Pure` mode falls straight to
+/// `Handlers::fallback`, reaching htmd's built-in `table_handler` (and, via
+/// its own two-part gate, `serialize_if_faithful!`'s raw-HTML branch on an
+/// attribute-bearing element) instead of running the positional extraction
+/// below. `markdown_converter` always builds with `Options::default()`,
+/// which is `TranslationMode::Pure`, so this app's own runtime never takes
+/// that branch; the mode check exists to match the built-in handler's shape
+/// and is exercised directly in tests via a `Faithful`-mode converter. The
+/// `has_explicit_headers` / `is_inside_table_cell` fallback gate
+/// (table.rs:185-220) is Pure-only and is not reproduced.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
 fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    if handlers.options().translation_mode != TranslationMode::Pure {
+        return handlers.fallback(element);
+    }
+
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -1312,6 +1323,55 @@ mod tests {
                 "the thead's second row must survive as a data row, not be dropped from the \
                  output",
             );
+    }
+
+    /// [T-FC068] Faithful モードで属性を持つ表が組み込みへ委譲され HTML のまま出る
+    ///
+    /// `markdown_converter` always builds with `Options::default()`
+    /// (`TranslationMode::Pure`), so this test builds its own converter with
+    /// `TranslationMode::Faithful`, registering the same `pre`/`span`/`table`
+    /// handlers, to reach the added `table` handler under a non-Pure mode.
+    ///
+    /// htmd's own built-in `table_handler` opens with
+    /// `serialize_if_faithful!(handlers, element, 0)`
+    /// (htmd-0.5.5/src/element_handler/table.rs:19), which returns the
+    /// element's raw HTML serialization, unconverted, whenever the mode is
+    /// `Faithful` and the element carries more than 0 attributes
+    /// (htmd-0.5.5/src/element_handler/element_util.rs:178-199). The
+    /// contract requires the added `table` handler to fall to
+    /// `Handlers::fallback` at its own entry whenever `translation_mode` is
+    /// not `Pure`, reaching that same built-in behavior — not run its own
+    /// positional cell extraction, which carries no such mode check and
+    /// would emit a pipe-delimited Markdown table regardless of mode.
+    #[test]
+    fn faithful_mode_table_with_attributes_delegates_to_the_built_in_handler_and_stays_html() {
+        use htmd::options::{Options, TranslationMode};
+
+        let options = Options {
+            translation_mode: TranslationMode::Faithful,
+            ..Options::default()
+        };
+        let converter = HtmlToMarkdown::builder()
+            .options(options)
+            .add_handler(vec!["pre"], pre_handler)
+            .add_handler(vec!["span"], span_handler)
+            .add_handler(vec!["table"], table_handler)
+            .build();
+
+        let html = r#"<table class="data"><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>"#;
+        let markdown = converter.convert(html).expect("conversion must succeed");
+
+        assert!(
+            markdown.contains("<table"),
+            "a table with attributes under Faithful mode must delegate to htmd's built-in \
+             table handler and come out as raw HTML, not the app's positional Markdown \
+             table:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("| Name |"),
+            "the app's own pipe-delimited table formatting must not run under Faithful \
+             mode:\n{markdown}"
+        );
     }
 
     /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
