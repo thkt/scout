@@ -89,6 +89,7 @@ fn markdown_converter() -> HtmlToMarkdown {
         .options(options)
         .add_handler(vec!["pre"], pre_handler)
         .add_handler(vec!["span"], span_handler)
+        .add_handler(vec!["table"], table_handler)
         .build()
 }
 
@@ -219,6 +220,227 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     parent
 }
 
+/// Fixes htmd's built-in `table_handler`'s per-tag row extraction
+/// (`extract_row_cells(handlers, row_node, "th")` /
+/// `extract_row_cells(handlers, row_node, "td")`,
+/// htmd-0.5.5/src/element_handler/table.rs:223-247): a row is scanned once
+/// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
+/// no `<thead>` — loses whichever tag that row's extraction call did not ask
+/// for (table.rs:83-100: the `tbody`/`tfoot` branch takes only the row's
+/// `<th>` cells for a candidate header row and `continue`s past its `<td>`
+/// cells once that extraction is non-empty; a later mixed row falls to the
+/// `<td>`-only extraction and loses its `<th>` label the same way). This
+/// handler instead reads each row's cells positionally in one pass
+/// (`extract_row_cells` below), so a label and its value from the same
+/// source row land in the same output row, in separate cells.
+///
+/// Row and separator formatting drop the built-in's column-width alignment
+/// padding (`compute_column_widths` / `format_row_padded` /
+/// `format_separator_padded`, table.rs:258-299, which widens every cell and
+/// dash run out to the column's longest cell): `format_table_row` below
+/// writes a fixed one space of padding on each side of every cell regardless
+/// of a neighboring cell's width, so an empty (or missing) cell renders as a
+/// pipe and two spaces, and `format_separator_row` writes a fixed 3-dash run
+/// per cell.
+///
+/// Cell-content newline normalization (`normalize_cell_content` below mirrors
+/// table.rs:250-256), caption handling (table.rs:167-169), and column-count
+/// estimation (table.rs:151-153) mirror the built-in shape.
+///
+/// The Faithful translation-mode branch and the `has_explicit_headers` /
+/// `is_inside_table_cell` fallback gate (table.rs:19-24, 185-220) are not
+/// reproduced: `markdown_converter` always builds with `Options::default()`,
+/// which is `TranslationMode::Pure`, so that branch and gate never run in
+/// this app.
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    let mut captions: Vec<String> = Vec::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut has_header = false;
+    let mut markdown_translated = true;
+
+    for child in element.node.children.borrow().iter() {
+        let NodeData::Element { name, .. } = &child.data else {
+            continue;
+        };
+        match name.local.as_ref() {
+            "caption" => {
+                if let Some(res) = handlers.handle(child) {
+                    markdown_translated &= res.markdown_translated;
+                    captions.push(trim_document_whitespace(&res.content).to_owned());
+                }
+            }
+            "thead" => {
+                has_header = true;
+                if let Some(row_node) = row_children(child).into_iter().next() {
+                    let (cells, translated) = extract_row_cells(handlers, &row_node);
+                    headers = cells;
+                    markdown_translated &= translated;
+                }
+            }
+            "tbody" | "tfoot" => {
+                for row_node in row_children(child) {
+                    let (cells, translated) = extract_row_cells(handlers, &row_node);
+                    markdown_translated &= translated;
+                    if !has_header && row_has_header_cell(&row_node) {
+                        headers = cells;
+                        has_header = true;
+                    } else if !cells.is_empty() {
+                        rows.push(cells);
+                    }
+                }
+            }
+            "tr" => {
+                let (cells, translated) = extract_row_cells(handlers, child);
+                markdown_translated &= translated;
+                if !has_header && row_has_header_cell(child) {
+                    headers = cells;
+                    has_header = true;
+                } else if !cells.is_empty() {
+                    rows.push(cells);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let num_columns = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if num_columns == 0 {
+        let content = handlers.walk_children(element.node).content;
+        let content = content.trim_matches('\n');
+        if content.is_empty() {
+            return None;
+        }
+        return Some(HandlerResult {
+            content: format!("\n\n{content}\n\n"),
+            markdown_translated,
+        });
+    }
+
+    let mut table_md = String::from("\n\n");
+    for caption in captions {
+        table_md.push_str(&caption);
+        table_md.push('\n');
+    }
+    if !headers.is_empty() {
+        table_md.push_str(&format_table_row(&headers, num_columns));
+        table_md.push_str(&format_separator_row(num_columns));
+    }
+    for row in &rows {
+        table_md.push_str(&format_table_row(row, num_columns));
+    }
+    table_md.push('\n');
+
+    Some(HandlerResult {
+        content: table_md,
+        markdown_translated,
+    })
+}
+
+/// The `<tr>` children of a `<thead>`/`<tbody>`/`<tfoot>` node, collected
+/// eagerly since the borrow behind `children.borrow()` cannot outlive this
+/// call.
+fn row_children(node: &Rc<Node>) -> Vec<Rc<Node>> {
+    node.children
+        .borrow()
+        .iter()
+        .filter(|child| is_row(child))
+        .cloned()
+        .collect()
+}
+
+fn is_row(node: &Rc<Node>) -> bool {
+    matches!(&node.data, NodeData::Element { name, .. } if name.local.as_ref() == "tr")
+}
+
+/// Whether `row_node` carries at least one `<th>` cell, the positional
+/// analogue of the built-in's "first th-row becomes the header" rule
+/// (htmd-0.5.5/src/element_handler/table.rs:83-93, 106-117).
+fn row_has_header_cell(row_node: &Rc<Node>) -> bool {
+    row_node.children.borrow().iter().any(
+        |cell| matches!(&cell.data, NodeData::Element { name, .. } if name.local.as_ref() == "th"),
+    )
+}
+
+/// Extracts a row's `<th>`/`<td>` cells positionally, in source order,
+/// passing each cell's conversion to `Handlers::handle` (dispatches to
+/// htmd's built-in `td_th_handler`) rather than filtering by a single tag
+/// the way the built-in `extract_row_cells` does.
+fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<String>, bool) {
+    let mut cells = Vec::new();
+    let mut markdown_translated = true;
+
+    for cell in row_node.children.borrow().iter() {
+        let is_cell = matches!(&cell.data, NodeData::Element { name, .. } if matches!(name.local.as_ref(), "th" | "td"));
+        if !is_cell {
+            continue;
+        }
+        let Some(res) = handlers.handle(cell) else {
+            continue;
+        };
+        markdown_translated &= res.markdown_translated;
+        cells.push(normalize_cell_content(&res.content));
+    }
+
+    (cells, markdown_translated)
+}
+
+/// Mirrors htmd's built-in `normalize_cell_content`
+/// (htmd-0.5.5/src/element_handler/table.rs:250-256): folds `\n` to a space
+/// and drops `\r` so multi-line cell content cannot split the pipe-delimited
+/// row, escapes `|` so cell content cannot introduce a spurious column, then
+/// trims tab/newline/CR/space from both ends. Unlike a general whitespace
+/// collapse, this does not touch other whitespace-like characters (e.g. NBSP
+/// U+00A0), which must survive unchanged inside the cell.
+fn normalize_cell_content(content: &str) -> String {
+    let content = content
+        .replace('\n', " ")
+        .replace('\r', "")
+        .replace('|', "&#124;");
+    trim_document_whitespace(&content).to_owned()
+}
+
+/// Trims the same whitespace set as htmd's private
+/// `TrimDocumentWhitespace::trim_document_whitespace`
+/// (htmd-0.5.5/src/text_util.rs:14-16, 215-217): tab, newline, CR, and space
+/// only, so NBSP and other non-ASCII whitespace-like characters are left in
+/// place.
+fn trim_document_whitespace(s: &str) -> &str {
+    s.trim_matches(|c: char| matches!(c, '\t' | '\n' | '\r' | ' '))
+}
+
+/// Writes one pipe-delimited row with a fixed one space of padding on each
+/// side of every cell — no column-width alignment padding. A cell shorter
+/// than `num_columns` (row too short) or empty renders as `|  |` (pipe,
+/// space, space, pipe), per the contract's spec for an empty cell.
+fn format_table_row(row: &[String], num_columns: usize) -> String {
+    let mut line = String::from("|");
+    for i in 0..num_columns {
+        let cell = row.get(i).map(String::as_str).unwrap_or("");
+        line.push(' ');
+        line.push_str(cell);
+        line.push_str(" |");
+    }
+    line.push('\n');
+    line
+}
+
+/// Writes the dash separator row: exactly 3 dashes per cell, unpadded to
+/// column width.
+fn format_separator_row(num_columns: usize) -> String {
+    let mut line = String::from("|");
+    for _ in 0..num_columns {
+        line.push_str(" --- |");
+    }
+    line.push('\n');
+    line
+}
+
 pub(super) fn to_fetch_result(
     article: &ExtractedArticle,
     url: String,
@@ -239,24 +461,39 @@ pub(super) fn to_fetch_result(
     })
 }
 
+/// Wraps `markdown` in a `---`-delimited YAML frontmatter block carrying
+/// whichever of title/author/date the article provides. When the article
+/// carries none of the three, the wrapper is skipped entirely rather than
+/// emitting an empty `---\n---\n\n` shell: that shell holds no information
+/// and would otherwise put a bare `---` line ahead of the article's own
+/// content, which a caller scanning the body line-by-line (e.g. by leading
+/// `-`) cannot distinguish from content that starts with a dash.
 fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
-    let mut fm = String::from("---\n");
+    let mut fields = String::new();
 
     if let Some(title) = &article.title {
-        write_yaml_str(&mut fm, "title", title);
+        write_yaml_str(&mut fields, "title", title);
     }
     // "byline" is the Readability/journalism term; mapped to "author" for YAML frontmatter
     if let Some(author) = &article.byline {
-        write_yaml_str(&mut fm, "author", author);
+        write_yaml_str(&mut fields, "author", author);
     }
     if let Some(date) = &article.published_time {
-        write_yaml_str(&mut fm, "date", date);
+        write_yaml_str(&mut fields, "date", date);
     }
 
-    fm.push_str("---\n\n");
     // The body is untrusted page content appended after the frontmatter, so a
     // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
-    fm.push_str(&neutralize_yaml_markers(markdown));
+    let body = neutralize_yaml_markers(markdown);
+
+    if fields.is_empty() {
+        return body;
+    }
+
+    let mut fm = String::from("---\n");
+    fm.push_str(&fields);
+    fm.push_str("---\n\n");
+    fm.push_str(&body);
     fm
 }
 
@@ -799,6 +1036,134 @@ mod tests {
         assert!(
             !markdown.contains("line1\nline2"),
             "the newline must not survive raw:\n{markdown}"
+        );
+    }
+
+    /// [T-FC060] th と td が混ざる行でラベルと値が同じ行の別セルに出る
+    ///
+    /// htmd's built-in `table_handler` extracts a row's cells by a single tag
+    /// at a time (`extract_row_cells(handlers, row_node, "th")` or `"td"`,
+    /// htmd-0.5.5/src/element_handler/table.rs:223-247). A `<tr>` mixing both
+    /// tags — a label/value row such as `<tr><th>Name</th><td>Alice</td></tr>`
+    /// — has no thead, so `tbody` handling treats the first such row as the
+    /// header: it extracts only the `<th>` cells (`["Name"]`) and, since that
+    /// is non-empty, discards the row's `<td>` entirely via `continue`
+    /// (table.rs:83-93), dropping "Alice" from the output. A later mixed row
+    /// falls to the `td`-only extraction and loses its `<th>` label the same
+    /// way (table.rs:95-100). The added `table` handler must walk each row's
+    /// cells positionally instead, so a label and its value from the same
+    /// source row land in the same output row, in separate cells.
+    #[test]
+    fn label_and_value_from_a_mixed_th_td_row_land_in_the_same_row_in_separate_cells() {
+        let article = article(
+            "<table><tbody><tr><th>Name</th><td>Alice</td></tr>\
+             <tr><th>Age</th><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let name_row = markdown
+            .lines()
+            .find(|line| line.contains("Name"))
+            .expect("a row carrying the Name label must be present");
+        assert!(
+            name_row.contains("Alice"),
+            "the th label and its td value from the same source row must land in the same \
+             output row:\n{markdown}"
+        );
+
+        let age_row = markdown
+            .lines()
+            .find(|line| line.contains("Age"))
+            .expect("a row carrying the Age label must be present");
+        assert!(
+            age_row.contains("30"),
+            "the th label and its td value from the same source row must land in the same \
+             output row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC061] パイプで囲まれた行の中に空白 2 個以上の連続が現れない
+    ///
+    /// htmd's built-in row formatter pads every cell out to the column's max
+    /// width across the whole table (`compute_column_widths` /
+    /// `format_row_padded`, htmd-0.5.5/src/element_handler/table.rs:258-270,
+    /// 281-299), so a cell shorter than its column produces a run of two or
+    /// more spaces before the next `|`. The contract's row format carries no
+    /// such alignment padding, so a cell shorter than its neighbor's width
+    /// must not leave a multi-space run in the row.
+    #[test]
+    fn table_row_between_pipes_has_no_run_of_two_or_more_spaces() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>City</th></tr></thead>\
+             <tbody><tr><td>Al</td><td>Springfield</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let data_row = markdown
+            .lines()
+            .find(|line| line.contains("Al") && line.contains("Springfield"))
+            .expect("the data row must be present");
+
+        assert!(
+            !data_row.contains("  "),
+            "a table row must carry no run of two or more consecutive spaces \
+             (no column-width alignment padding):\n{markdown}"
+        );
+    }
+
+    /// [T-FC062] 区切り行がセルごとにダッシュ 3 本で出る
+    ///
+    /// htmd's built-in `format_separator_padded` widens each column's dash run
+    /// to that column's computed width (htmd-0.5.5/src/element_handler/
+    /// table.rs:272-279), so "Name"/"Alice" produce a 5-dash column rather
+    /// than the fixed 3 the contract specifies.
+    #[test]
+    fn separator_row_has_exactly_three_dashes_per_cell() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Age</th></tr></thead>\
+             <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let separator_line = markdown
+            .lines()
+            .find(|line| line.contains('-'))
+            .expect("a dash separator row must be present");
+
+        assert_eq!(
+            separator_line, "| --- | --- |",
+            "the separator row must carry exactly three dashes per cell, unpadded to column \
+             width:\n{markdown}"
+        );
+    }
+
+    /// [T-FC063] セルの中の NBSP が空白へ落ちずに残る
+    ///
+    /// The contract requires cell-content newline normalization to follow the
+    /// built-in form (`normalize_cell_content` replaces `\n`/`\r` only,
+    /// htmd-0.5.5/src/element_handler/table.rs:250-256) rather than a general
+    /// whitespace collapse that would fold U+00A0 into an ASCII space. This
+    /// pins that a literal NBSP inside a cell reaches the output unchanged.
+    #[test]
+    fn nbsp_inside_a_cell_survives_without_collapsing_to_a_space() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Value</th></tr></thead>\
+             <tbody><tr><td>A\u{00A0}B</td><td>x</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("A\u{00A0}B"),
+            "a literal NBSP inside a cell must survive unchanged, not collapse to an ASCII \
+             space:\n{markdown}"
         );
     }
 
