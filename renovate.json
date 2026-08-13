@@ -16,6 +16,11 @@
       "matchDepNames": ["rust"],
       "addLabels": ["dependencies", "rust"],
       "commitMessageTopic": "rust-version (MSRV)"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchDepNames": ["htmd", "markup5ever_rcdom"],
+      "groupName": "htmd + markup5ever_rcdom"
     }
   ]
 }
