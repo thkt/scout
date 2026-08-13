@@ -16,6 +16,18 @@
       "matchDepNames": ["rust"],
       "addLabels": ["dependencies", "rust"],
       "commitMessageTopic": "rust-version (MSRV)"
+    },
+    {
+      "description": "Carry both crates in one PR so a version split arrives as a reviewable update instead of a compile error. See the markup5ever_rcdom pin comment in Cargo.toml for why the versions must match.",
+      "matchManagers": ["cargo"],
+      "matchDepNames": ["htmd", "markup5ever_rcdom"],
+      "groupName": "htmd + markup5ever_rcdom"
+    },
+    {
+      "description": "Hold markup5ever_rcdom at the 0.38 line htmd 0.5.5 requires. The group rule above does not cover this on its own: renovate places co-occurring updates in one PR, but still opens a PR for whichever crate has an update. PR #374 bumped this crate alone and failed to compile.",
+      "matchManagers": ["cargo"],
+      "matchDepNames": ["markup5ever_rcdom"],
+      "allowedVersions": "<0.39"
     }
   ]
 }

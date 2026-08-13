@@ -17,6 +17,22 @@ htmd = "0.5.5"
 # bare `<pre>`, and htmd re-exports only `Node` (htmd-0.5.5/src/lib.rs:16).
 # Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
 # the two resolve to one crate and the node types stay identical.
+#
+# That pin still leaves the parser stack duplicated one level down: this chain
+# resolves to html5ever 0.38.0 and markup5ever 0.38.0, while dom_smoothie ->
+# dom_query pulls 0.39.0 of both. `cargo deny check` warns once per crate every
+# run, and we leave both warnings visible rather than skipping them.
+#
+# We tolerate the duplication because aligning the versions buys almost nothing
+# (measured in issue #379). `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>`
+# monomorphize on the sink type, so htmd (RcDom) and dom_smoothie (dom_query
+# sink) each keep their own copy of the parser code whichever version they
+# share. Unifying removes the two warnings, not the two code sets.
+#
+# renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
+# raised past htmd on its own. Once htmd depends on markup5ever_rcdom 0.39
+# (0.39.0+unofficial is already published), bump this pin and drop that bound
+# together, or renovate stops offering updates for the crate entirely.
 markup5ever_rcdom = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
