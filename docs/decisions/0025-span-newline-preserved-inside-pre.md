@@ -81,6 +81,12 @@ htmd へ上流 PR を送り、リリースされるまで退行を許容する�
 
 htmd の内部実装 (登録ハンドラ数ゲート、ディスパッチ順) に依存する回避策を採る代わりに、fork の保守コストと上流リリース待ちの期間を避けた。この回避策は htmd のマイナーバージョンアップでも黙って壊れうるため、`cargo update` 後は T-FC052〜T-FC055 の green を確認する。
 
+### Upstream status
+
+上流 letmutex/htmd へは報告していない。2026-08-14 時点で同種の報告も無く、issue と PR を全件走査して該当が 0 件だった。open issue は `#27 escape_if_needed` と `#3 Compare with Pandoc` の 2 件で、どちらも改行の strip とは別の主題である。closed の `#14 Better handling code block` は `<pre class="language-rs">` からの言語解決の要望で、これも別の主題である。
+
+htmd の main (v0.5.5 と同じ commit、2026-07-27) に両方の欠落が残る。`element_handler/span.rs:33` の `content.trim_matches('\n')` には `is_pre` の分岐が無い。`dom_walker.rs` の高速経路は `is_pre` を再計算した直後に `trim_start_matches('\n')` と `trim_end_matches('\n')` を無条件で適用し、その 2 行下の `append_normalized_content(output, content, is_pre)` にだけ `is_pre` を渡す。上流側の修正は strip を `if !is_pre` で囲む形になる。
+
 ### Reassessment Triggers
 
 - `dom_walker.rs` の strip と `element_handler/span.rs` の両方が上流で直る。両方の修正が入った htmd バージョンへ上げた時点で `span_handler` と `has_pre_ancestor` を削除し、`add_handler(vec!["span"], ...)` の登録も外す
