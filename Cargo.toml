@@ -27,6 +27,10 @@ htmd = "0.5.5"
 # markup5ever_rcdom "0.38" yet. Bump this pin to "0.39" once htmd does
 # (markup5ever_rcdom 0.39.0+unofficial is already published) to unify both
 # chains and clear the warning.
+#
+# renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
+# raised past htmd on its own. Drop that bound in the same change that bumps
+# this pin, or renovate stops offering updates for the crate entirely.
 markup5ever_rcdom = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

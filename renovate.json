@@ -18,9 +18,16 @@
       "commitMessageTopic": "rust-version (MSRV)"
     },
     {
+      "description": "Carry both crates in one PR so a version split shows up as a reviewable update instead of a compile error. src/fetch/converter.rs matches htmd's re-exported Node against markup5ever_rcdom's NodeData, so the two must resolve to the same compiled type.",
       "matchManagers": ["cargo"],
       "matchDepNames": ["htmd", "markup5ever_rcdom"],
       "groupName": "htmd + markup5ever_rcdom"
+    },
+    {
+      "description": "Hold markup5ever_rcdom at the 0.38 line htmd 0.5.5 requires. Grouping alone does not stop a lone bump: renovate places co-occurring updates in one PR, but still opens a PR for whichever crate has an update. PR #374 bumped this crate alone and failed with error[E0308] on the two NodeData sites. Raise the bound once htmd depends on markup5ever_rcdom 0.39, and update the pin in Cargo.toml in the same change.",
+      "matchManagers": ["cargo"],
+      "matchDepNames": ["markup5ever_rcdom"],
+      "allowedVersions": "<0.39"
     }
   ]
 }
