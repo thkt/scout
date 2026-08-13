@@ -18,15 +18,24 @@ htmd = "0.5.5"
 # Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
 # the two resolve to one crate and the node types stay identical.
 #
-# That pin still leaves `markup5ever` duplicated one level down: this chain
-# resolves to 0.38.0, while dom_smoothie -> dom_query -> html5ever pulls
-# 0.39.0. `cargo deny check` reports it every run as `warning[duplicate]:
-# found 2 duplicate entries for crate 'markup5ever'`. We tolerate that
-# recurring warning (deny.toml keeps bans.multiple-versions = "warn", not
-# "deny") instead of silencing it, because htmd 0.5.5 has not moved past
-# markup5ever_rcdom "0.38" yet. Bump this pin to "0.39" once htmd does
-# (markup5ever_rcdom 0.39.0+unofficial is already published) to unify both
-# chains and clear the warning.
+# That pin still leaves the parser stack duplicated one level down: this chain
+# resolves to html5ever 0.38.0 and markup5ever 0.38.0, while dom_smoothie ->
+# dom_query pulls 0.39.0 of both. `cargo deny check` reports one
+# `warning[duplicate]` per crate every run, and deny.toml keeps
+# bans.multiple-versions = "warn" (not "deny") so both stay visible instead of
+# being skipped.
+#
+# We tolerate the duplication because aligning the versions buys almost
+# nothing. Measured on M3/8 core with lto=true, three clean release builds per
+# variant: the binary shrinks 16.5 KB (-0.19%) and the build times overlap
+# within a 3-second spread, whichever version the two chains are pushed onto.
+# The reason is structural. `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>`
+# monomorphize on the sink type, so htmd (RcDom) and dom_smoothie (dom_query
+# sink) each keep their own copy of the parser code no matter which version
+# they share. Unifying removes the two warnings, not the two code sets.
+#
+# Bump this pin to "0.39" once htmd depends on markup5ever_rcdom 0.39
+# (0.39.0+unofficial is already published) to clear both warnings.
 #
 # renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
 # raised past htmd on its own. Drop that bound in the same change that bumps
