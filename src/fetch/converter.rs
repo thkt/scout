@@ -259,7 +259,14 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut has_header = false;
+    // Whether the header search has already been resolved — by a `thead`'s
+    // first row (always) or by the table's first row outside a `thead` (only
+    // when it qualifies, see `row_has_header_cell`). Once true, every
+    // remaining row — including a later all-`<th>` row or a `thead`'s own
+    // second-and-later rows — is a data row unconditionally: the search never
+    // re-opens past the first candidate (U-002's contract: no "first row that
+    // satisfies a condition" scan over the body).
+    let mut header_decided = false;
     let mut markdown_translated = true;
 
     for child in element.node.children.borrow().iter() {
@@ -274,21 +281,38 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
                 }
             }
             "thead" => {
-                has_header = true;
-                if let Some(row_node) = row_children(child).into_iter().next() {
+                let mut thead_rows = row_children(child).into_iter();
+                // The thead's first row unconditionally becomes the header,
+                // regardless of whether its cells are `<th>` or `<td>` — the
+                // header search never falls through past a `thead`.
+                if let Some(row_node) = thead_rows.next() {
                     let (cells, translated) = extract_row_cells(handlers, &row_node);
                     headers = cells;
                     markdown_translated &= translated;
+                    header_decided = true;
+                }
+                // A multi-row thead's remaining rows carry no further header
+                // candidacy; they surface as ordinary data rows.
+                for row_node in thead_rows {
+                    let (cells, translated) = extract_row_cells(handlers, &row_node);
+                    markdown_translated &= translated;
+                    if !cells.is_empty() {
+                        rows.push(cells);
+                    }
                 }
             }
             "tbody" | "tfoot" => {
                 for row_node in row_children(child) {
                     let (cells, translated) = extract_row_cells(handlers, &row_node);
                     markdown_translated &= translated;
-                    if !has_header && row_has_header_cell(&row_node) {
-                        headers = cells;
-                        has_header = true;
-                    } else if !cells.is_empty() {
+                    if !header_decided {
+                        header_decided = true;
+                        if row_has_header_cell(&row_node) {
+                            headers = cells;
+                            continue;
+                        }
+                    }
+                    if !cells.is_empty() {
                         rows.push(cells);
                     }
                 }
@@ -296,10 +320,14 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
             "tr" => {
                 let (cells, translated) = extract_row_cells(handlers, child);
                 markdown_translated &= translated;
-                if !has_header && row_has_header_cell(child) {
-                    headers = cells;
-                    has_header = true;
-                } else if !cells.is_empty() {
+                if !header_decided {
+                    header_decided = true;
+                    if row_has_header_cell(child) {
+                        headers = cells;
+                        continue;
+                    }
+                }
+                if !cells.is_empty() {
                     rows.push(cells);
                 }
             }
@@ -327,10 +355,11 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
         table_md.push_str(&caption);
         table_md.push('\n');
     }
-    if !headers.is_empty() {
-        table_md.push_str(&format_table_row(&headers, num_columns));
-        table_md.push_str(&format_separator_row(num_columns));
-    }
+    // A header row (possibly empty, when no thead and no row qualified) and
+    // its separator always appear once the table has at least one column —
+    // per U-002's contract, "該当が無ければ空のヘッダ行が出る".
+    table_md.push_str(&format_table_row(&headers, num_columns));
+    table_md.push_str(&format_separator_row(num_columns));
     for row in &rows {
         table_md.push_str(&format_table_row(row, num_columns));
     }
@@ -1186,6 +1215,138 @@ mod tests {
             markdown.contains("line1\n**line2**"),
             "the newline before a line-span with an element child must survive, and that \
              child element must still be converted to Markdown:\n{markdown}"
+        );
+    }
+
+    /// [T-FC064] ヘッダへ昇格した行の td が失われない
+    ///
+    /// A `<thead>`'s first row unconditionally becomes the header regardless
+    /// of whether its cells are `<th>` or `<td>` (U-002's contract: the header
+    /// search scope is limited to `thead`'s first row or the table's first
+    /// row, with no scan for "the first row that satisfies a condition"). A
+    /// mixed `<th>`/`<td>` first row inside `<thead>` must still carry every
+    /// cell — not just the `<th>` ones — into the header row.
+    #[test]
+    fn header_promoted_row_keeps_its_td_cells() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><td>Alice</td></tr></thead>\
+             <tbody><tr><td>Bob</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let header_line = markdown
+            .lines()
+            .find(|line| line.contains("Name"))
+            .expect("the thead's first row must become the header row");
+        assert!(
+            header_line.contains("Alice"),
+            "the row promoted to header must keep its td cell alongside its th cell, \
+             not lose it:\n{markdown}"
+        );
+    }
+
+    /// [T-FC065] 本文の途中にある th だけの行がデータ行として出る
+    ///
+    /// The header search scope is limited to `thead`'s first row or the
+    /// table's first row (U-002's contract). With no `thead` and a first row
+    /// that does not qualify as a header, the old wide-search algorithm kept
+    /// scanning subsequent rows for "the first row that satisfies a
+    /// condition" and promoted a later all-`<th>` row it found mid-body. The
+    /// new scope must not do that: an all-`<th>` row that is not the table's
+    /// first row must stay a data row.
+    #[test]
+    fn th_only_row_in_the_middle_of_the_body_appears_as_a_data_row() {
+        let article = article(
+            "<table><tbody><tr><td>Alice</td><td>30</td></tr>\
+             <tr><th>Bob</th><th>40</th></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let separator_idx = lines
+            .iter()
+            .position(|line| {
+                !line.is_empty()
+                    && line.contains('-')
+                    && line.chars().all(|c| c == '|' || c == '-' || c == ' ')
+            })
+            .expect("a dash separator row must be present");
+        let bob_idx = lines
+            .iter()
+            .position(|line| line.contains("Bob") && line.contains("40"))
+            .expect("the th-only row's cells must land in the same row");
+
+        assert!(
+            bob_idx > separator_idx,
+            "a th-only row that is not the table's first row must be emitted as a data row \
+             after the separator, not promoted to header:\n{markdown}"
+        );
+    }
+
+    /// [T-FC066] 複数行 thead の 2 行目以降がデータ行として出る
+    ///
+    /// The header search scope is limited to `thead`'s first row (U-002's
+    /// contract). The current `thead` handling reads only
+    /// `row_children(child).into_iter().next()` and never visits the
+    /// remaining rows at all, so a multi-row `<thead>`'s second and later
+    /// rows are silently dropped rather than surfacing as data rows.
+    #[test]
+    fn second_and_later_rows_of_a_multi_row_thead_appear_as_data_rows() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Age</th></tr>\
+             <tr><th>Category A</th><th>Category B</th></tr></thead>\
+             <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        markdown
+            .lines()
+            .find(|line| line.contains("Category A") && line.contains("Category B"))
+            .expect(
+                "the thead's second row must survive as a data row, not be dropped from the \
+                 output",
+            );
+    }
+
+    /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
+    ///
+    /// U-002's contract requires an empty header row when no row qualifies as
+    /// a header ("該当が無ければ空のヘッダ行が出る"). The current
+    /// implementation instead skips the header/separator block entirely when
+    /// `headers` stays empty (`if !headers.is_empty() { ... }`), so a table
+    /// with no `<thead>` and no all-`<th>` row emits its data rows with no
+    /// header row at all.
+    #[test]
+    fn table_with_no_all_th_row_emits_an_empty_header_row_and_separator() {
+        let article = article(
+            "<table><tbody><tr><td>A</td><td>B</td></tr>\
+             <tr><td>C</td><td>D</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "|  |  |")
+            .expect("an empty header row must be present when no row qualifies as a header");
+        let separator_line = lines
+            .get(header_idx + 1)
+            .expect("a line must immediately follow the empty header row");
+        assert_eq!(
+            *separator_line, "| --- | --- |",
+            "the line right after the empty header row must be the dash separator row:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("| A | B |") && markdown.contains("| C | D |"),
+            "the table's data rows must still be present after the empty header:\n{markdown}"
         );
     }
 }
