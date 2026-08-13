@@ -17,6 +17,16 @@ htmd = "0.5.5"
 # bare `<pre>`, and htmd re-exports only `Node` (htmd-0.5.5/src/lib.rs:16).
 # Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
 # the two resolve to one crate and the node types stay identical.
+#
+# That pin still leaves `markup5ever` duplicated one level down: this chain
+# resolves to 0.38.0, while dom_smoothie -> dom_query -> html5ever pulls
+# 0.39.0. `cargo deny check` reports it every run as `warning[duplicate]:
+# found 2 duplicate entries for crate 'markup5ever'`. We tolerate that
+# recurring warning (deny.toml keeps bans.multiple-versions = "warn", not
+# "deny") instead of silencing it, because htmd 0.5.5 has not moved past
+# markup5ever_rcdom "0.38" yet. Bump this pin to "0.39" once htmd does
+# (markup5ever_rcdom 0.39.0+unofficial is already published) to unify both
+# chains and clear the warning.
 markup5ever_rcdom = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
