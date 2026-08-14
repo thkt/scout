@@ -5,19 +5,15 @@
 //! page content forge a document boundary or inject a second frontmatter
 //! block into output a caller parses as YAML-fenced Markdown.
 //!
-//! Fence tracking is pinned here as the current, intentional contract: a
-//! column-0 marker line inside a *closed* fenced code block (one that opens
-//! and later closes within the same body) is left as ordinary content, since
-//! it reads as the page quoting sample output rather than an attempt to forge
-//! a document boundary; a marker line outside any fence, or inside a fence
-//! that never closes before the body ends, is still rewritten to `***` the
-//! same as the bare-paragraph cases `T-C029`/`T-C030`. `T-C041` pins the
-//! unclosed-fence fallback. `T-C032` and `T-C039` pin that closed-fence
-//! preservation directly, through the two different code paths
-//! `markdown_converter` can take to a fence — htmd's own `<pre><code>`
-//! handling and this crate's own `pre`-without-`<code>` handler (T-FC019) —
-//! and `T-C034` combines an outside-fence marker with a closed-fence one in
-//! one fixture to prove the two rules compose.
+//! A column-0 marker inside a closed fence is left as ordinary content: it
+//! reads as the page quoting sample output, not as an attempt to forge a
+//! document boundary. Outside any fence, or inside one that never closes
+//! before the body ends, it is still rewritten to `***`.
+//!
+//! Closed-fence preservation is pinned through both code paths
+//! `markdown_converter` can take to a fence, since only one of them is htmd's
+//! own: a `<pre><code>` pair, and a bare `<pre>` that this crate's `pre`
+//! handler fences (T-FC019).
 //!
 //! Every scenario's fixture is a Readability-friendly article (title, byline,
 //! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
@@ -485,28 +481,15 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 
 // T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
 //
-// T-C032/T-C039 pin closed-fence preservation in isolation, T-C031
-// pins outside-fence rewriting in isolation, and T-C041 pins the
-// EOF-unclosed-fence fallback in isolation. Each of those fixtures carries
-// only one of the three shapes, so none of them proves what happens when a
-// real page carries all three at once: `neutralize_yaml_markers_outside_fences`
-// (src/yaml.rs) tracks fence state as one running value across the whole
-// body and, per its own doc comment, once *any* fence is still open at the
-// body's end "there is no closed region left to protect", so the entire
-// body — not just the tail after the unresolved fence — is re-run through
-// the fence-unaware `neutralize_yaml_markers`. This scenario is the seam
-// that proves that global scope is real end to end: a fixture whose *only*
-// fence closes properly, placed ahead of a later fence that never does,
-// still loses its own marker protection, because the unclosed fence at the
-// bottom of the page invalidates the whole document's fence context, not
-// just its own tail.
+// Fence state is one running value over the whole body, so an unclosed fence
+// anywhere invalidates the document's fence context rather than only its own
+// tail. A fixture carrying one shape cannot show that. Here a fence that
+// closes properly sits ahead of one that never does, and loses its own marker
+// protection because of it.
 //
-// The three source shapes appear in this order so each is unambiguous on
-// its own before the interaction is asserted: a closed `<pre>` fence
-// carrying markers (would read as protected in isolation), a bare
-// paragraph marker outside any fence (always rewritten), and T-C041's
-// inline-code trick that opens a fence-looking line with no line-start
-// close anywhere after it (leaves fence state open through EOF).
+// The unclosed fence goes last so each earlier shape is unambiguous on its
+// own: a closed `<pre>` fence carrying markers, then a bare paragraph marker
+// outside any fence, then T-C041's inline-code trick.
 #[test]
 fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output() {
     let context = "closed fence, paragraph, and unclosed fence combined";

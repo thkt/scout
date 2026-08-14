@@ -45,20 +45,19 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
 /// as sample output in a code block) is left as ordinary content instead of
 /// being mistaken for an actual YAML document boundary.
 ///
-/// Fence tracking reuses [`fence_marker`] (U-001): a fence closes only at a
-/// line whose run of the same character is at least as long as the one that
-/// opened it (CommonMark §4.5), so a 4-backtick fence stays open through a
-/// nested 3-backtick line.
+/// A fence closes only at a line whose run of the same character is at least
+/// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
+/// stays open through a nested 3-backtick line.
 ///
-/// When the body ends with a fence still open, there is no closed region left
-/// to protect — the fence marker itself was most likely a false positive (a
-/// stray backtick run, not a real code block) — so the whole body is run
-/// through [`neutralize_yaml_markers`] instead of the partial per-line result.
-// Wired into production by `format_with_frontmatter` (src/fetch/converter.rs),
-// which calls this instead of `neutralize_yaml_markers` for the fetch sanitize
-// path. `src/slack/format.rs` still calls the non-fence-aware
-// `neutralize_yaml_markers` directly; switching that path is not part of this
-// unit's contract.
+/// A body ending with a fence still open falls back to the whole-body rewrite
+/// rather than keeping the partial per-line result: an unclosed fence is more
+/// likely a stray backtick run than a real code block, and a partial result
+/// would leave every line after it unprotected.
+///
+/// `src/slack/format.rs` keeps calling the fence-unaware
+/// [`neutralize_yaml_markers`]. Slack message text passes to the leaf nearly
+/// raw, so an attacker-authored unclosed fence there would turn off
+/// neutralization for everything after it.
 pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fence: Option<(char, usize)> = None;
