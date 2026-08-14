@@ -235,30 +235,22 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
 /// source row land in the same output row, in separate cells.
 ///
 /// Row and separator formatting drop the built-in's column-width alignment
-/// padding (`compute_column_widths` / `format_row_padded` /
-/// `format_separator_padded`, table.rs:258-299, which widens every cell and
-/// dash run out to the column's longest cell): `format_table_row` below
-/// writes a fixed one space of padding on each side of every cell regardless
-/// of a neighboring cell's width, so an empty (or missing) cell renders as a
-/// pipe and two spaces, and `format_separator_row` writes a fixed 3-dash run
-/// per cell.
+/// padding, which widens every cell and dash run out to the column's longest
+/// cell. `format_table_row` below writes one space on each side of every cell
+/// regardless of a neighboring cell's width, so an empty or missing cell
+/// renders as a pipe and two spaces, and `format_separator_row` writes a
+/// fixed 3-dash run per cell.
 ///
-/// Cell-content newline normalization (`normalize_cell_content` below mirrors
-/// table.rs:250-256), caption handling (table.rs:167-169), and column-count
-/// estimation (table.rs:151-153) mirror the built-in shape.
+/// Cell-content newline normalization, caption handling, and column-count
+/// estimation follow the built-in's shape.
 ///
-/// Mirrors the built-in's `serialize_if_faithful!(handlers, element, 0)` /
-/// `TranslationMode::Pure` gate (table.rs:19-24) with a single check at this
-/// handler's own entry: any non-`Pure` mode falls straight to
-/// `Handlers::fallback`, reaching htmd's built-in `table_handler` (and, via
-/// its own two-part gate, `serialize_if_faithful!`'s raw-HTML branch on an
-/// attribute-bearing element) instead of running the positional extraction
-/// below. `markdown_converter` always builds with `Options::default()`,
-/// which is `TranslationMode::Pure`, so this app's own runtime never takes
-/// that branch; the mode check exists to match the built-in handler's shape
-/// and is exercised directly in tests via a `Faithful`-mode converter. The
-/// `has_explicit_headers` / `is_inside_table_cell` fallback gate
-/// (table.rs:185-220) is Pure-only and is not reproduced.
+/// Any non-`Pure` translation mode falls straight to `Handlers::fallback`,
+/// which reaches the built-in `table_handler` and its own
+/// `serialize_if_faithful!` gate (table.rs:19-24) rather than the positional
+/// extraction below. `markdown_converter` always builds with
+/// `Options::default()`, which is `TranslationMode::Pure`, so scout's own
+/// runtime never takes that branch; T-FC068 exercises it through a
+/// `Faithful`-mode converter built in the test.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -270,13 +262,13 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
-    // Whether the header search has already been resolved — by a `thead`'s
-    // first row (always) or by the table's first row outside a `thead` (only
-    // when it qualifies, see `row_has_header_cell`). Once true, every
-    // remaining row — including a later all-`<th>` row or a `thead`'s own
-    // second-and-later rows — is a data row unconditionally: the search never
-    // re-opens past the first candidate (U-002's contract: no "first row that
-    // satisfies a condition" scan over the body).
+    // Whether the header search has already been resolved: by a `thead`'s
+    // first row, which always resolves it, or by the table's first row outside
+    // a `thead`, which resolves it whether or not `row_is_all_header_cells`
+    // promotes that row. Once true, every remaining row is a data row, a later
+    // all-`<th>` row and a `thead`'s second-and-later rows included. The search
+    // never re-opens past the first candidate, so no row order can rearrange
+    // the body.
     let mut header_decided = false;
     let mut markdown_translated = true;
 
@@ -1117,18 +1109,10 @@ mod tests {
 
     /// [T-FC060] th と td が混ざる行でラベルと値が同じ行の別セルに出る
     ///
-    /// htmd's built-in `table_handler` extracts a row's cells by a single tag
-    /// at a time (`extract_row_cells(handlers, row_node, "th")` or `"td"`,
-    /// htmd-0.5.5/src/element_handler/table.rs:223-247). A `<tr>` mixing both
-    /// tags — a label/value row such as `<tr><th>Name</th><td>Alice</td></tr>`
-    /// — has no thead, so `tbody` handling treats the first such row as the
-    /// header: it extracts only the `<th>` cells (`["Name"]`) and, since that
-    /// is non-empty, discards the row's `<td>` entirely via `continue`
-    /// (table.rs:83-93), dropping "Alice" from the output. A later mixed row
-    /// falls to the `td`-only extraction and loses its `<th>` label the same
-    /// way (table.rs:95-100). The added `table` handler must walk each row's
-    /// cells positionally instead, so a label and its value from the same
-    /// source row land in the same output row, in separate cells.
+    /// The row shape the whole handler exists for. Under the built-in's
+    /// per-tag extraction, described on `table_handler` above, this row keeps
+    /// "Name" and drops "Alice"; the positional walk must carry both into the
+    /// same output row, in separate cells.
     #[test]
     fn label_and_value_from_a_mixed_th_td_row_land_in_the_same_row_in_separate_cells() {
         let article = article(
@@ -1298,13 +1282,10 @@ mod tests {
 
     /// [T-FC065] 本文の途中にある th だけの行がデータ行として出る
     ///
-    /// The header search scope is limited to `thead`'s first row or the
-    /// table's first row (U-002's contract). With no `thead` and a first row
-    /// that does not qualify as a header, the old wide-search algorithm kept
-    /// scanning subsequent rows for "the first row that satisfies a
-    /// condition" and promoted a later all-`<th>` row it found mid-body. The
-    /// new scope must not do that: an all-`<th>` row that is not the table's
-    /// first row must stay a data row.
+    /// The header search reaches only `thead`'s first row or the table's first
+    /// row (U-002's contract). An all-`<th>` row anywhere else stays a data row
+    /// even when the table's first row did not qualify as a header, because the
+    /// search never scans on for a later row that would.
     #[test]
     fn th_only_row_in_the_middle_of_the_body_appears_as_a_data_row() {
         let article = article(
@@ -1338,11 +1319,9 @@ mod tests {
 
     /// [T-FC066] 複数行 thead の 2 行目以降がデータ行として出る
     ///
-    /// The header search scope is limited to `thead`'s first row (U-002's
-    /// contract). The current `thead` handling reads only
-    /// `row_children(child).into_iter().next()` and never visits the
-    /// remaining rows at all, so a multi-row `<thead>`'s second and later
-    /// rows are silently dropped rather than surfacing as data rows.
+    /// Only a `thead`'s first row carries header candidacy (U-002's contract).
+    /// Its second and later rows must still reach the output, as data rows, so
+    /// a multi-row `<thead>` loses nothing.
     #[test]
     fn second_and_later_rows_of_a_multi_row_thead_appear_as_data_rows() {
         let article = article(

@@ -339,10 +339,10 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
 // does.
 //
 // The fixture is a row-heading table (`<th>` first cell, `<td>` second cell
-// on every row, no `<thead>`) with one short row and one long row, so that
-// htmd's built-in column-width padding — were the seam broken and this
-// fixture falling back to the built-in `table_handler` — would visibly widen
-// the short cells with run-of-spaces padding and a wider dash separator.
+// on every row, no `<thead>`) with one short row and one long row. The width
+// gap is what makes the padding assertion discriminating: the built-in pads
+// every cell out to the longest one, so a fixture of evenly sized cells would
+// pass whichever handler ran.
 #[test]
 fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     let context = "row heading table with column alignment";
