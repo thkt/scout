@@ -90,6 +90,7 @@ fn markdown_converter() -> HtmlToMarkdown {
         .add_handler(vec!["pre"], pre_handler)
         .add_handler(vec!["span"], span_handler)
         .add_handler(vec!["table"], table_handler)
+        .add_handler(vec!["a"], a_handler)
         .build()
 }
 
@@ -264,6 +265,52 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let parent = value.as_ref().and_then(Weak::upgrade);
     node.parent.set(value);
     parent
+}
+
+/// Suppresses an `<a>` whose `href` is a same-page fragment (`#…`) and whose
+/// content is empty: a syntax highlighter's per-line `#__codelineno-…`
+/// anchor, or a Sphinx-style `<a class="headerlink" href="#…"></a>`. Neither
+/// carries a destination a reader could follow, so htmd's own
+/// `AnchorElementHandler` would still emit a bare `[](#…)`
+/// (htmd-0.5.5/src/element_handler/anchor.rs:44-77, which only special-cases
+/// a missing `href`, not an empty one).
+///
+/// Shadows `a` in the same shape as `pre_handler` above: `walk_children` runs
+/// exactly once, up front, and its content decides the branch. The suppress
+/// branch is this file's own logic and builds its `HandlerResult` straight
+/// from that decision, setting `markdown_translated: true` explicitly because
+/// discarding the anchor leaves no content behind that could still be raw
+/// HTML. Every other case — no `href` at all, a fragment `href` wrapping real
+/// content, or a non-fragment `href` regardless of content — falls to
+/// `Handlers::fallback`, which reaches the built-in anchor handler and
+/// rebuilds the correct `[text](url "title")` output (destination escaping,
+/// link styles, referenced-link bookkeeping) on its own; this handler does
+/// not re-derive that logic.
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    let result = handlers.walk_children(element.node);
+    let is_empty_fragment_anchor = anchor_href(&element).is_some_and(|href| href.starts_with('#'))
+        && result.content.trim().is_empty();
+
+    if is_empty_fragment_anchor {
+        return Some(HandlerResult {
+            content: String::new(),
+            markdown_translated: true,
+        });
+    }
+
+    handlers.fallback(element)
+}
+
+/// The `<a>` element's `href` attribute value, or `None` when absent.
+fn anchor_href(element: &htmd::Element) -> Option<String> {
+    element
+        .attrs
+        .iter()
+        .find(|attr| attr.name.local.as_ref() == "href")
+        .map(|attr| attr.value.to_string())
 }
 
 /// Fixes htmd's built-in `table_handler`'s per-tag row extraction
@@ -1921,6 +1968,113 @@ mod tests {
                 .any(|line| line.starts_with('#') && line.contains("line2")),
             "the text after a <br> inside a heading must not end up inside the heading's own \
              '#'-prefixed line:\n{markdown}"
+        );
+    }
+
+    /// [T-FC048] pre の中の空アンカーが消えて原文の行とインデントが残る
+    ///
+    /// Fixture mirrors a syntax-highlighted code block's per-line
+    /// `#__codelineno-…` anchor: a bare `<pre>` (no `<code>` child) with an
+    /// empty `<a>` at the start of each indented line.
+    #[test]
+    fn empty_anchor_inside_pre_disappears_leaving_the_original_line_and_indentation() {
+        let article = article(
+            "<pre><a href=\"#__codelineno-0-1\"></a>    def foo():\n\
+             <a href=\"#__codelineno-0-2\"></a>        return 1\n</pre>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("__codelineno"),
+            "an empty anchor pointing only at a fragment must leave no trace of its href:\n{markdown}"
+        );
+        assert!(
+            markdown.lines().any(|line| line == "    def foo():"),
+            "the first original line and its indentation must survive with the anchor removed:\n{markdown}"
+        );
+        assert!(
+            markdown.lines().any(|line| line == "        return 1"),
+            "the second original line and its indentation must survive with the anchor removed:\n{markdown}"
+        );
+    }
+
+    /// [T-FC049] 絶対 URL を指す中身が空のアンカーは行き先と title を保つ
+    ///
+    /// Paired with a fragment-only empty anchor (`#top`) in the same
+    /// paragraph so the assertion cannot pass by coincidence: it fails today
+    /// because the fragment-only sibling is not yet suppressed, and only
+    /// holds once suppression targets the fragment-only case specifically,
+    /// leaving the absolute-URL anchor untouched.
+    #[test]
+    fn empty_anchor_to_absolute_url_keeps_destination_and_title() {
+        let article = article(
+            "<p>See <a href=\"https://example.com/target\" title=\"Target page\"></a> \
+             and <a href=\"#top\"></a> for details.</p>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("[](https://example.com/target \"Target page\")"),
+            "an empty anchor pointing at an absolute URL must keep its destination and title:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("#top"),
+            "the fragment-only sibling anchor must be suppressed, not just the absolute one kept:\n{markdown}"
+        );
+    }
+
+    /// [T-FC050] title 付きで中身が空の headerlink が消える
+    #[test]
+    fn titled_headerlink_with_empty_content_is_removed() {
+        let article = article(
+            "<h2>Section<a class=\"headerlink\" href=\"#section\" \
+             title=\"Link to this heading\"></a></h2>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("## Section"),
+            "the heading text must survive with the headerlink removed:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("Link to this heading"),
+            "the headerlink's title must not survive:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("#section"),
+            "the headerlink's href must not survive:\n{markdown}"
+        );
+    }
+
+    /// [T-FC051] href 属性を持たない a は組み込みへ委譲される
+    ///
+    /// Paired with a fragment-only empty anchor (`#nav`) in the same
+    /// paragraph so the assertion cannot pass by coincidence: it fails today
+    /// because the fragment-only sibling is not yet suppressed, and only
+    /// holds once suppression is scoped to anchors carrying `href`, leaving
+    /// an `<a>` with no `href` at all to fall through to htmd's own handler
+    /// unchanged.
+    #[test]
+    fn anchor_without_href_delegates_to_the_builtin_handler() {
+        let article = article("<p><a>plain text</a> and <a href=\"#nav\"></a></p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("plain text") && !markdown.contains("[plain text]"),
+            "an <a> with no href must fall through to the builtin handler's walk-children \
+             behavior, not gain link brackets:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("#nav"),
+            "the fragment-only sibling anchor must be suppressed, not just the hrefless one delegated:\n{markdown}"
         );
     }
 }
