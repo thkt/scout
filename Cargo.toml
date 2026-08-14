@@ -12,21 +12,18 @@ clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json", "gzip", "brotli", "deflate", "zstd"] }
 dom_smoothie = "0.18"
 htmd = "0.5.5"
-# The DOM types behind htmd's re-exported `Node`. The `pre` handler in
-# src/fetch/converter.rs needs `NodeData` to tell a `<pre><code>` pair from a
-# bare `<pre>`, and htmd re-exports only `Node` (htmd-0.5.5/src/lib.rs:16).
-# Pinned to the version htmd itself depends on (htmd-0.5.5/Cargo.toml:95), so
-# the two resolve to one crate and the node types stay identical.
+# htmd re-exports only `Node`, so the handlers in src/fetch/converter.rs read
+# the DOM through this crate's `NodeData`. Pinned to the version htmd itself
+# depends on, so the two resolve to one crate and the node types stay
+# identical.
 #
-# The pin leaves html5ever and markup5ever duplicated one level down, since
-# dom_smoothie pulls 0.39 of both. `cargo deny check` warns per crate and we
-# leave those warnings visible rather than skipping them.
-#
-# Aligning the versions is not worth doing: `TreeBuilder<Handle, Sink>` and
-# `Tokenizer<Sink>` monomorphize on the sink type, so htmd (RcDom) and
-# dom_smoothie (dom_query sink) keep their own copy of the parser code whichever
-# version they share. Unifying removes the two warnings, not the two code sets
-# (measured in issue #379).
+# That leaves html5ever and markup5ever duplicated one level down, where
+# dom_smoothie pulls 0.39 of both, and `cargo deny check` warns per crate. We
+# leave those warnings rather than skipping them, and do not chase the
+# duplication: `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>` monomorphize
+# on the sink type, so htmd (RcDom) and dom_smoothie (dom_query sink) keep
+# their own copy of the parser code whichever version they share. Aligning
+# removes the two warnings, not the two code sets (measured in issue #379).
 #
 # renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
 # raised past htmd on its own. Bump this pin and drop that bound together once
