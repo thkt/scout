@@ -351,13 +351,10 @@ fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
 /// writes onto a delegated link's tail
 /// (htmd-0.5.5/src/element_handler/anchor.rs:124-129, the `Inlined` /
 /// `InlinedPreferAutolinks` styles `markdown_converter` always builds with).
-/// The suffix is matched by exact tail position — `str::strip_suffix` twice,
-/// once past any reattached trailing whitespace and once past the closing
-/// `)` — never by searching for the title text anywhere in `content`; a
-/// title that also happens to appear as ordinary link text must not be cut
-/// out of the middle. `content` returns unchanged, verbatim, whenever either
-/// `strip_suffix` misses: an unrecognized tail shape (e.g. the `Referenced`
-/// link style, unused at runtime) must not be rewritten blind.
+/// The match is by tail position, never by searching for the title text
+/// anywhere in `content`: a title that also reads as ordinary link text must
+/// not be cut out of the middle. A tail that does not match returns verbatim,
+/// so an unrecognized shape is never rewritten blind.
 ///
 /// `title_attr` is the raw `title` attribute text. htmd escapes and
 /// reflows it first (`process_title`, anchor.rs:186-207) before writing it
@@ -379,13 +376,9 @@ fn strip_link_title(content: &str, title_attr: &str) -> String {
 }
 
 /// Reimplements htmd's private `process_title`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:186-207): splits `text` into
-/// lines, trims each with the same document-whitespace set as
-/// `trim_document_whitespace` below, drops lines left empty by that trim,
-/// rejoins the survivors with a bare `\n`, and backslash-escapes every `"`.
-/// `strip_link_title` above needs this exact output to locate the title htmd
-/// already wrote into the delegated result — not to make its own escaping
-/// decision.
+/// (htmd-0.5.5/src/element_handler/anchor.rs:186-207). `strip_link_title`
+/// above has to reproduce htmd's transform byte for byte to locate the title
+/// htmd already wrote, so this makes no escaping decision of its own.
 fn process_title_like_htmd(text: &str) -> String {
     let mut result = String::new();
     let mut wrote_any = false;
@@ -414,9 +407,8 @@ fn process_title_like_htmd(text: &str) -> String {
 /// strips the anchor's own trailing whitespace off the link text before
 /// building `[text](url "title")` and re-appends it after the closing `)`
 /// (htmd-0.5.5/src/element_handler/anchor.rs:106-133), so a tail match against
-/// the raw `content` misses whenever that whitespace is present. Only the tail
-/// is split: `content` always opens with `[`, so a leading trim would answer a
-/// boundary no caller asks about.
+/// the raw `content` misses whenever that whitespace is present. The leading
+/// side is left alone: `content` always opens with `[`.
 fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
     let body = content.trim_end_matches(['\t', '\n', '\r', ' ']);
     content.split_at(body.len())
