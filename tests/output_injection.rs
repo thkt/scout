@@ -507,7 +507,7 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 // regression that let either path add its escape would fail this test's
 // no-backslash assertion instead of passing it vacuously.
 #[test]
-fn 行ごとに_span_を並べた_pre_を含むページで_fetch_出力の各行がバックスラッシュを含まない() {
+fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     let context = "syntax-highlighted pre with one span per line";
     let injected = "<pre><span data-line=\"1\">~/project$ ls -la\n</span>\
                      <span data-line=\"2\">`echo hello`\n</span>\
