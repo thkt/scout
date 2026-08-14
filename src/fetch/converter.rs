@@ -555,10 +555,10 @@ mod tests {
 
     /// [T-FC023] table の出力がヘッダ行に続く区切り行を含む
     ///
-    /// htmd's `table_handler` pushes the header row (`format_row_padded`)
-    /// immediately followed by the separator row (`format_separator_padded`)
-    /// with no blank line between them
-    /// (htmd-0.5.5/src/element_handler/table.rs:178-183).
+    /// This file's own `table_handler` pushes the header row
+    /// (`format_table_row`) immediately followed by the separator row
+    /// (`format_separator_row`) with no blank line between them
+    /// (converter.rs:372-373).
     #[test]
     fn table_output_includes_a_separator_row_following_the_header_row() {
         let article = article(
@@ -634,10 +634,10 @@ mod tests {
 
     /// [T-FC025] td の中の pre が表の行を分断しない
     ///
-    /// A table cell's content passes through `normalize_cell_content`, which
-    /// replaces every `\n` with a single space before the cell is written
-    /// into the pipe-delimited row
-    /// (htmd-0.5.5/src/element_handler/table.rs:227-233).
+    /// `extract_row_cells` above passes each cell's content through this
+    /// file's own `normalize_cell_content`, which replaces every `\n` with a
+    /// single space before the cell is written into the pipe-delimited row
+    /// (converter.rs:427, 440-446).
     #[test]
     fn td_pre_does_not_split_the_table_row() {
         let article = article(
