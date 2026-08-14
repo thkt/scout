@@ -171,6 +171,26 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
     "`".repeat(max_run.max(2) + 1)
 }
 
+/// Advance `fence` across one line and report whether that line is
+/// fence-protected: inside a fenced code block, or the delimiter line itself.
+///
+/// A fence closes only at a line whose run of the same character is at least
+/// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
+/// stays open through a nested 3-backtick line. The trim happens here, so
+/// callers must not pre-trim: an indented delimiter would otherwise reach the
+/// caller's own indent handling already stripped.
+pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool {
+    let marker = fence_marker(line.trim_start());
+    match (*fence, marker) {
+        (None, Some((c, len))) => *fence = Some((c, len)),
+        (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
+            *fence = None;
+        }
+        _ => {}
+    }
+    fence.is_some() || marker.is_some()
+}
+
 /// Return the fence character and run length if `trimmed` opens or closes a
 /// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
 fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
@@ -225,19 +245,12 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
             continue;
         }
 
-        let trimmed = line.trim_start();
-        let marker = fence_marker(trimmed);
-        match (fence, marker) {
-            (None, Some((c, len))) => fence = Some((c, len)),
-            (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
-                fence = None;
-            }
-            _ => {}
-        }
-        if fence.is_some() || marker.is_some() {
+        if track_fence(&mut fence, line) {
             out.push_str(line);
             continue;
         }
+
+        let trimmed = line.trim_start();
 
         let setext = lines
             .get(i + 1)
@@ -571,6 +584,44 @@ mod tests {
             result, input,
             "the heading-syntax line remains inside the still-open fence and \
              must not shift, got: {result}"
+        );
+    }
+
+    /// [T-MD032] バッククォート 3 個の行がフェンス開始として認識される
+    #[test]
+    fn fence_marker_recognizes_three_backticks_as_fence_start() {
+        assert_eq!(fence_marker("```"), Some(('`', 3)));
+    }
+
+    /// [T-MD033] バッククォート 2 個の行はフェンス開始として認識されない
+    #[test]
+    fn fence_marker_does_not_recognize_two_backticks_as_fence_start() {
+        assert_eq!(fence_marker("``"), None);
+    }
+
+    /// [T-MD034] チルダ 3 個の行がフェンス開始として認識される
+    #[test]
+    fn fence_marker_recognizes_three_tildes_as_fence_start() {
+        assert_eq!(fence_marker("~~~"), Some(('~', 3)));
+    }
+
+    /// [T-MD035] 4 スペースでインデントされたフェンス行もフェンス開始として認識される
+    ///
+    /// `fence_marker` takes an already-trimmed line, so asserting on it
+    /// directly would only restate T-MD032. `track_fence` owns the trim, so
+    /// the indent has to be observed through a caller: a `#` line between two
+    /// indented fences must keep its level, since it sits inside a code block.
+    #[test]
+    fn fence_marker_recognizes_four_space_indented_fence_line() {
+        let shifted = shift_headings("    ```\n# not a heading\n    ```\n# heading\n", 1);
+
+        assert!(
+            shifted.contains("\n# not a heading\n"),
+            "a line inside an indented fence must keep its level:\n{shifted}"
+        );
+        assert!(
+            shifted.contains("\n## heading"),
+            "a heading past the closed indented fence must still shift:\n{shifted}"
         );
     }
 }

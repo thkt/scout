@@ -97,6 +97,32 @@ fn reply_author_cannot_inject_yaml_document_marker() {
     );
 }
 
+/// [T-SK088] フェンスの内側に YAML マーカーを含む message でも Slack 出力は
+/// `***` へ書き換える
+///
+/// `format_slack_output` neutralizes the body through
+/// [`crate::yaml::neutralize_yaml_markers`], not the fence-aware
+/// `neutralize_yaml_markers_outside_fences` (see that function's doc comment):
+/// a `---` line stays a rewrite target even when it sits inside a closed
+/// ```` ``` ```` fence in the message text.
+#[test]
+fn fenced_body_marker_is_rewritten_even_inside_closed_fence() {
+    let slack_url = parse_slack_url("https://team.slack.com/archives/C123/p1111111111222222")
+        .expect("URL fixture should parse");
+    let first = ResolvedMessage {
+        author: "author".into(),
+        text: "before\n```\n---\n```\nafter".into(),
+        ts: "1111111111.222222".into(),
+    };
+    let output = format_slack_output(&slack_url, "#general", &first, &[]);
+
+    let body = output
+        .split("---\n\n")
+        .nth(1)
+        .expect("body follows the frontmatter close delimiter");
+    assert_eq!(body, "before\n```\n***\n```\nafter\n");
+}
+
 fn msg(ts: &str, author: &str) -> ResolvedMessage {
     ResolvedMessage {
         author: author.into(),

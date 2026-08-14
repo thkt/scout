@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::FetchError;
 use super::extractor::ExtractedArticle;
 use crate::markdown::fence_delimiter;
-use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
+use crate::yaml::{neutralize_yaml_markers_outside_fences, write_yaml_str};
 
 /// Fetched page content converted to Markdown. Fields are private so the only
 /// construction paths are [`to_fetch_result`] (production) and
@@ -556,7 +556,10 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 
     // The body is untrusted page content appended after the frontmatter, so a
     // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
-    let body = neutralize_yaml_markers(markdown);
+    // A marker inside a closed fence is quoted sample output, not an attempt to
+    // forge a document boundary, so it stays verbatim. Outside any fence, or
+    // inside one that never closes, it is still rewritten to `***`.
+    let body = neutralize_yaml_markers_outside_fences(markdown);
 
     let mut fm = String::from("---\n");
     fm.push_str(&fields);

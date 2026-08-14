@@ -1,25 +1,28 @@
-//! Pins `neutralize_yaml_markers` (src/yaml.rs) end to end through
-//! `scout fetch`: a page body containing a column-0 `---`/`...` line must not
-//! reach stdout as a bare YAML document marker after the frontmatter block
-//! `format_with_frontmatter` opens, because that would let page content forge
-//! a document boundary or inject a second frontmatter block into output a
-//! caller parses as YAML-fenced Markdown.
+//! Pins `neutralize_yaml_markers_outside_fences` (src/yaml.rs) end to end
+//! through `scout fetch`: a page body containing a column-0 `---`/`...` line
+//! must not reach stdout as a bare YAML document marker after the
+//! frontmatter block `format_with_frontmatter` opens, because that would let
+//! page content forge a document boundary or inject a second frontmatter
+//! block into output a caller parses as YAML-fenced Markdown.
 //!
-//! Fence non-consideration is pinned here as the current, intentional
-//! contract, not a gap to close: `neutralize_yaml_markers` rewrites every
-//! column-0 marker line by its literal text alone, with no state tracking
-//! whether the line sits inside a fenced code block. `T-C032` proves this by
-//! injecting a marker inside a `<pre><code>` element (which htmd renders as a
-//! fenced code block) and asserting it is rewritten exactly like the
-//! bare-paragraph cases `T-C029`/`T-C030` are.
+//! A column-0 marker inside a closed fence is left as ordinary content: it
+//! reads as the page quoting sample output, not as an attempt to forge a
+//! document boundary. Outside any fence, or inside one that never closes
+//! before the body ends, it is still rewritten to `***`.
+//!
+//! Closed-fence preservation is pinned through both code paths
+//! `markdown_converter` can take to a fence, since only one of them is htmd's
+//! own: a `<pre><code>` pair, and a bare `<pre>` that this crate's `pre`
+//! handler fences (T-FC019).
 //!
 //! Every scenario's fixture is a Readability-friendly article (title, byline,
 //! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
 //! succeeds; `fetch_markdown` asserts `RAW_FALLBACK_NOTE`'s text is absent
 //! from stdout before returning, so a scenario whose fixture accidentally
 //! trips the raw-fallback path (and thus never reaches
-//! `neutralize_yaml_markers` through the extracted-content path this file
-//! targets) fails loudly instead of silently proving a different contract.
+//! `neutralize_yaml_markers_outside_fences` through the extracted-content
+//! path this file targets) fails loudly instead of silently proving a
+//! different contract.
 //!
 //! `T-C033`/`T-C034` pin the sibling contract `write_yaml_str`
 //! (src/yaml.rs) owns: a frontmatter *field value* (the article
@@ -103,8 +106,8 @@ fn fetch_markdown(html: &str, context: &str) -> Option<String> {
     assert!(
         !stdout.contains("Readability extraction failed"),
         "{context}: fixture must extract cleanly (no RAW_FALLBACK_NOTE) so the \
-         assertion below exercises neutralize_yaml_markers, not the raw-HTML \
-         fallback path; got:\n{stdout}"
+         assertion below exercises neutralize_yaml_markers_outside_fences, not \
+         the raw-HTML fallback path; got:\n{stdout}"
     );
     Some(stdout)
 }
@@ -112,7 +115,8 @@ fn fetch_markdown(html: &str, context: &str) -> Option<String> {
 /// Splits the output at its first frontmatter block into that block's
 /// interior lines (neither delimiter included) and every byte after its
 /// closing `"---\n\n"` — the latter being what `format_with_frontmatter`
-/// (src/fetch/converter.rs) appended from `neutralize_yaml_markers`'s output.
+/// (src/fetch/converter.rs) appended from
+/// `neutralize_yaml_markers_outside_fences`'s output.
 ///
 /// Both slices are located rather than assumed:
 ///
@@ -237,9 +241,9 @@ fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
     );
 }
 
-// T-C032: pre_element_column_zero_marker_is_rewritten_to_asterisks
+// T-C032: pre_code_column_zero_marker_survives_verbatim_inside_closed_fence
 #[test]
-fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
+fn pre_code_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "pre element marker";
     let Some(markdown) = fetch_markdown(
         &article_html("<pre><code>---\nevil: true\n...\n</code></pre>"),
@@ -249,30 +253,30 @@ fn pre_element_column_zero_marker_is_rewritten_to_asterisks() {
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
-    // Not fence-aware on purpose (see module doc).
+    // Fence-aware (see module doc): a <pre><code> block is a closed fence, so
+    // its column-0 markers are left as ordinary quoted content, not rewritten.
     assert!(
-        body.contains("```\n***\nevil: true\n***\n```"),
-        "column-0 markers inside a <pre>-derived fenced code block must be \
-         rewritten to *** the same as markers outside a code fence, got body:\n{body}"
+        body.contains("```\n---\nevil: true\n...\n```"),
+        "column-0 markers inside a closed <pre>-derived fenced code block must \
+         survive verbatim, not be rewritten to ***, got body:\n{body}"
     );
     assert!(
-        !body.lines().any(|l| l == "---" || l == "..."),
-        "no bare --- or ... line should survive anywhere in the body, \
-         inside or outside the code fence, got body:\n{body}"
+        !body.lines().any(|l| l == "***"),
+        "no line inside the closed code fence should be rewritten to ***, got body:\n{body}"
     );
 }
 
-// T-C039: bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten
+// T-C039: bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence
 //
 // T-C032 pins the <pre><code> case, which htmd's built-in `code_handler`
-// already wraps in a fence before `neutralize_yaml_markers` ever sees the
-// converted Markdown. This scenario swaps in a bare <pre> with no <code>
-// child instead, which only gets fenced because the `pre` handler
+// already wraps in a fence before `neutralize_yaml_markers_outside_fences`
+// ever sees the converted Markdown. This scenario swaps in a bare <pre> with
+// no <code> child instead, which only gets fenced because the `pre` handler
 // `to_fetch_result` registers on top of htmd's defaults (T-FC019) wraps it.
 // The two run on different code paths inside the same `markdown_converter`
-// pipeline.
+// pipeline, and both land on the same closed-fence preservation contract.
 #[test]
-fn bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten() {
+fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "bare pre element marker";
     let Some(markdown) =
         fetch_markdown(&article_html("<pre>---\nevil: true\n...\n</pre>"), context)
@@ -282,15 +286,15 @@ fn bare_pre_without_code_child_gets_fenced_and_has_its_markers_rewritten() {
     let (_, body) = split_frontmatter(&markdown, context);
 
     assert!(
-        body.contains("```\n***\nevil: true\n***\n```"),
+        body.contains("```\n---\nevil: true\n...\n```"),
         "a bare <pre> (no <code> child) must be wrapped in a fence by the added \
-         pre handler AND have its column-0 YAML markers rewritten to ***, the \
-         same combination T-C032 pins for <pre><code>, got body:\n{body}"
+         pre handler, and that closed fence's column-0 YAML markers must \
+         survive verbatim, not be rewritten to ***, the same combination \
+         T-C032 pins for <pre><code>, got body:\n{body}"
     );
     assert!(
-        !body.lines().any(|l| l == "---" || l == "..."),
-        "no bare --- or ... line should survive anywhere in the body, \
-         inside or outside the code fence, got body:\n{body}"
+        !body.lines().any(|l| l == "***"),
+        "no line inside the closed code fence should be rewritten to ***, got body:\n{body}"
     );
 }
 
@@ -393,12 +397,48 @@ fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     );
 }
 
-// T-C034: no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker
+// T-C041: unclosed_fence_body_falls_back_to_asterisks
+//
+// `<code>` content of three backticks forces htmd's inline-code delimiter to
+// four (`get_inline_code_delimiter`), so the paragraph's rendered line opens
+// with four backticks at column 0 while its own matching close sits mid-line,
+// not at the start of any later line. `fence_marker` only reads a line's
+// leading run, so it reads this line as opening a fenced block that never
+// closes through the rest of the body — the "closes never" shape
+// `neutralize_yaml_markers_outside_fences`'s (src/yaml.rs) EOF fallback
+// exists for.
+//
+// Four backticks rather than three: a fence closes on a run at least as long
+// as the opener, so a 3-backtick opener would be closed by any later
+// 3-backtick line the page happens to carry. A 4-backtick opener needs four,
+// which no line here produces.
 #[test]
-fn no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker() {
-    // One fixture carrying both hostile shapes, so that `write_yaml_str`'s
-    // per-field escaping and `neutralize_yaml_markers`'s per-line body rewrite
-    // are proven to compose rather than each being re-proven in isolation.
+fn unclosed_fence_body_falls_back_to_asterisks() {
+    let context = "inline code opens an unmatched fence-looking line before a marker";
+    let injected = "<p><code>```</code> before marker</p><p>--- evil: true</p>";
+    let Some(markdown) = fetch_markdown(&article_html(injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    assert!(
+        body.lines().any(|l| l == "*** evil: true"),
+        "the marker following the unclosed fence-looking line must still be rewritten to \
+         *** evil: true, got body:\n{body}"
+    );
+    assert!(
+        !body.lines().any(|l| l == "--- evil: true"),
+        "the original --- evil: true line must not survive rewriting, got body:\n{body}"
+    );
+}
+
+// T-C034: markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_survive_verbatim
+#[test]
+fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_survive_verbatim() {
+    // One fixture carrying every hostile shape, so that `write_yaml_str`'s
+    // per-field escaping and `neutralize_yaml_markers_outside_fences`'s
+    // per-line, fence-aware body rewrite are proven to compose rather than
+    // each being re-proven in isolation.
     let title = r#"Report --- "Special" Edition"#;
     let injected = "<p>---</p><p>...</p><p>--- evil: true</p>\
                      <pre>---\nevil: true\n...\n</pre>";
@@ -408,11 +448,100 @@ fn no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker() {
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
+    // The bare <pre> (no <code> child) is a closed fence: its own --- and ...
+    // lines survive verbatim, the same contract T-C032/T-C039 pin directly.
+    assert!(
+        body.contains("```\n---\nevil: true\n...\n```"),
+        "the closed fence's own column-0 YAML markers must survive verbatim, \
+         not be rewritten to ***, got body:\n{body}"
+    );
+    // Outside that fence, the bare --- paragraph, the bare ... paragraph, and
+    // the --- evil: true paragraph are each rewritten to a *** line.
+    assert_eq!(
+        body.lines().filter(|l| *l == "***").count(),
+        2,
+        "the bare --- paragraph and the bare ... paragraph, both outside any \
+         fence, must each be rewritten to their own *** line, got body:\n{body}"
+    );
+    assert!(
+        body.lines().any(|l| l == "*** evil: true"),
+        "the --- evil: true paragraph, outside any fence, must be rewritten to \
+         *** evil: true, got body:\n{body}"
+    );
+    // No unrewritten marker escapes outside the one known closed-fence block.
+    let outside_fence = body.replacen("```\n---\nevil: true\n...\n```", "", 1);
+    assert!(
+        !outside_fence
+            .lines()
+            .any(|l| l.starts_with("---") || l.starts_with("...")),
+        "no line outside the closed fence should start with --- or ..., \
+         got body:\n{body}"
+    );
+}
+
+// T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
+//
+// Fence state is one running value over the whole body, so an unclosed fence
+// anywhere invalidates the document's fence context rather than only its own
+// tail. A fixture carrying one shape cannot show that. Here a fence that
+// closes properly sits ahead of one that never does, and loses its own marker
+// protection because of it.
+//
+// The unclosed fence goes last so each earlier shape is unambiguous on its
+// own: a closed `<pre>` fence carrying markers, then a bare paragraph marker
+// outside any fence, then T-C041's inline-code trick.
+#[test]
+fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output() {
+    let context = "closed fence, paragraph, and unclosed fence combined";
+    let closed_fence = "<pre>---\nevil: true\n...\n</pre>";
+    let outside_marker = "<p>--- evil: true</p>";
+    let unclosed_trick = "<p><code>```</code> before marker</p><p>... evil: unclosed</p>";
+    let injected = format!("{closed_fence}{outside_marker}{unclosed_trick}");
+    let Some(markdown) = fetch_markdown(&article_html(&injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    // The fence's own delimiter syntax (the ``` wrapping the <pre> content)
+    // still comes through as a literal code fence in the rendered Markdown:
+    // the fallback only rewrites bare --- / ... marker lines, it never
+    // touches a ``` line, so the block still reads as fenced code.
+    assert!(
+        body.contains("```\n***\nevil: true\n***\n```"),
+        "the <pre> block must still render as a fenced code block, got body:\n{body}"
+    );
+    // But unlike T-C032/T-C039 (no unclosed fence anywhere in those
+    // pages), this fence's own --- and ... lines are NOT left verbatim here:
+    // the later unclosed fence invalidates fence-aware protection for the
+    // whole body, so these are rewritten to *** the same as every other
+    // marker in this page.
+    assert!(
+        !body.contains("```\n---\nevil: true\n...\n```"),
+        "the closed fence's own markers must not survive verbatim once a \
+         later fence in the same page never closes, got body:\n{body}"
+    );
+    // The bare paragraph marker outside any fence is rewritten, the same
+    // contract T-C031 pins alone.
+    assert!(
+        body.lines().any(|l| l == "*** evil: true"),
+        "the outside-fence paragraph marker must be rewritten to \
+         *** evil: true, got body:\n{body}"
+    );
+    // The marker following the unclosed fence-looking line is rewritten,
+    // the same contract T-C041 pins alone.
+    assert!(
+        body.lines().any(|l| l == "*** evil: unclosed"),
+        "the marker following the unclosed fence-looking line must be \
+         rewritten to *** evil: unclosed, got body:\n{body}"
+    );
+    // No bare --- or ... line survives anywhere in the page: the three
+    // sources converge into one uniformly neutralized output with no gap
+    // left by the closed fence's now-invalidated protection.
     assert!(
         !body
             .lines()
             .any(|l| l.starts_with("---") || l.starts_with("...")),
-        "no line anywhere in the output after the first frontmatter block's \
-         close should start with --- or ..., got body:\n{body}"
+        "no line anywhere in the page should start with --- or ... once the \
+         page carries an unclosed fence, got body:\n{body}"
     );
 }

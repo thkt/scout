@@ -5,6 +5,8 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
+use crate::markdown::track_fence;
+
 /// Neutralize YAML document markers in untrusted body text appended after a
 /// `---`-delimited frontmatter block.  A line that is exactly `---` or `...` (a
 /// YAML document start/end marker, and also a Markdown thematic break) is rewritten
@@ -18,14 +20,55 @@ pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
         if i > 0 {
             out.push('\n');
         }
-        match yaml_marker_rest(line) {
-            Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
-            Some(rest) => {
-                out.push_str("***");
-                out.push_str(rest);
-            }
-            None => out.push_str(line),
+        append_marker_rewritten(&mut out, line);
+    }
+    out
+}
+
+/// The rewrite rule shared by [`neutralize_yaml_markers`] and
+/// [`neutralize_yaml_markers_outside_fences`]: append `line` to `out`, rewriting
+/// a bare YAML document marker (see [`yaml_marker_rest`]) to `***` and leaving
+/// every other line untouched.
+fn append_marker_rewritten(out: &mut String, line: &str) {
+    match yaml_marker_rest(line) {
+        Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
+        Some(rest) => {
+            out.push_str("***");
+            out.push_str(rest);
         }
+        None => out.push_str(line),
+    }
+}
+
+/// Apply [`neutralize_yaml_markers`]'s rewrite rule only to lines outside a
+/// fenced code block, so a marker line quoted inside a closed fence (e.g. shown
+/// as sample output in a code block) is left as ordinary content instead of
+/// being mistaken for an actual YAML document boundary.
+///
+/// A body ending with a fence still open falls back to the whole-body rewrite
+/// rather than keeping the partial per-line result: an unclosed fence is more
+/// likely a stray backtick run than a real code block, and a partial result
+/// would leave every line after it unprotected.
+///
+/// `src/slack/format.rs` keeps calling the fence-unaware
+/// [`neutralize_yaml_markers`]. Slack message text passes to the leaf nearly
+/// raw, so an attacker-authored unclosed fence there would turn off
+/// neutralization for everything after it.
+pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut fence: Option<(char, usize)> = None;
+    for (i, line) in body.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if track_fence(&mut fence, line) {
+            out.push_str(line);
+        } else {
+            append_marker_rewritten(&mut out, line);
+        }
+    }
+    if fence.is_some() {
+        return neutralize_yaml_markers(body);
     }
     out
 }
@@ -161,5 +204,41 @@ mod tests {
         assert_eq!(neutralize_yaml_markers("--- #x"), "*** #x");
         assert_eq!(neutralize_yaml_markers("---\tfoo"), "***\tfoo");
         assert_eq!(neutralize_yaml_markers("... bar"), "*** bar");
+    }
+
+    /// [T-FC030] 閉じないフェンスの後ろにある YAML マーカー行も *** に書き換わる
+    #[test]
+    fn yaml_marker_after_unclosed_fence_is_still_rewritten() {
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences("```yaml\n---\nfoo"),
+            "```yaml\n***\nfoo"
+        );
+    }
+
+    /// [T-FC031] 閉じたフェンスの内側にある YAML マーカー行は原文のまま残る
+    #[test]
+    fn yaml_marker_inside_closed_fence_is_preserved() {
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences("```\n---\n```\n...\nafter"),
+            "```\n---\n```\n***\nafter"
+        );
+    }
+
+    /// [T-FC032] フェンスの外側にある YAML マーカー行は *** に書き換わる
+    #[test]
+    fn yaml_marker_outside_fence_is_rewritten() {
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences("---\n```\ncode\n```\n..."),
+            "***\n```\ncode\n```\n***"
+        );
+    }
+
+    /// [T-FC033] 4 個のフェンスの内側にある 3 個のバッククォート行は閉じと見なされない
+    #[test]
+    fn three_backtick_line_inside_four_backtick_fence_does_not_close_it() {
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences("````\n```\n---\n````\n..."),
+            "````\n```\n---\n````\n***"
+        );
     }
 }
