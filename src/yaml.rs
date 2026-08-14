@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
-use crate::markdown::fence_marker;
+use crate::markdown::track_fence;
 
 /// Neutralize YAML document markers in untrusted body text appended after a
 /// `---`-delimited frontmatter block.  A line that is exactly `---` or `...` (a
@@ -45,10 +45,6 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
 /// as sample output in a code block) is left as ordinary content instead of
 /// being mistaken for an actual YAML document boundary.
 ///
-/// A fence closes only at a line whose run of the same character is at least
-/// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
-/// stays open through a nested 3-backtick line.
-///
 /// A body ending with a fence still open falls back to the whole-body rewrite
 /// rather than keeping the partial per-line result: an unclosed fence is more
 /// likely a stray backtick run than a real code block, and a partial result
@@ -65,15 +61,7 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
         if i > 0 {
             out.push('\n');
         }
-        let marker = fence_marker(line.trim_start());
-        match (fence, marker) {
-            (None, Some((c, len))) => fence = Some((c, len)),
-            (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
-                fence = None;
-            }
-            _ => {}
-        }
-        if fence.is_some() || marker.is_some() {
+        if track_fence(&mut fence, line) {
             out.push_str(line);
         } else {
             append_marker_rewritten(&mut out, line);

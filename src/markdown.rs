@@ -171,9 +171,30 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
     "`".repeat(max_run.max(2) + 1)
 }
 
+/// Advance `fence` across one line of a Markdown body and report whether that
+/// line is fence-protected: either inside a fenced code block or the delimiter
+/// line itself. Callers walking a body line by line hold the state and pass it
+/// back in.
+///
+/// A fence closes only at a line whose run of the same character is at least
+/// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
+/// stays open through a nested 3-backtick line. The line is trimmed here, so
+/// an indented fence delimiter counts.
+pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool {
+    let marker = fence_marker(line.trim_start());
+    match (*fence, marker) {
+        (None, Some((c, len))) => *fence = Some((c, len)),
+        (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
+            *fence = None;
+        }
+        _ => {}
+    }
+    fence.is_some() || marker.is_some()
+}
+
 /// Return the fence character and run length if `trimmed` opens or closes a
 /// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
-pub(crate) fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
+fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
     let c = trimmed.chars().next()?;
     if c != '`' && c != '~' {
         return None;
@@ -225,19 +246,12 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
             continue;
         }
 
-        let trimmed = line.trim_start();
-        let marker = fence_marker(trimmed);
-        match (fence, marker) {
-            (None, Some((c, len))) => fence = Some((c, len)),
-            (Some((open_c, open_len)), Some((c, len))) if c == open_c && len >= open_len => {
-                fence = None;
-            }
-            _ => {}
-        }
-        if fence.is_some() || marker.is_some() {
+        if track_fence(&mut fence, line) {
             out.push_str(line);
             continue;
         }
+
+        let trimmed = line.trim_start();
 
         let setext = lines
             .get(i + 1)
