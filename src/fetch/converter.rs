@@ -314,33 +314,23 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
             }
             "tbody" | "tfoot" => {
                 for row_node in row_children(child) {
-                    let (cells, translated) = extract_row_cells(handlers, &row_node);
-                    markdown_translated &= translated;
-                    if !header_decided {
-                        header_decided = true;
-                        if row_has_header_cell(&row_node) {
-                            headers = cells;
-                            continue;
-                        }
-                    }
-                    if !cells.is_empty() {
-                        rows.push(cells);
-                    }
+                    markdown_translated &= extract_data_row(
+                        handlers,
+                        &row_node,
+                        &mut header_decided,
+                        &mut headers,
+                        &mut rows,
+                    );
                 }
             }
             "tr" => {
-                let (cells, translated) = extract_row_cells(handlers, child);
-                markdown_translated &= translated;
-                if !header_decided {
-                    header_decided = true;
-                    if row_has_header_cell(child) {
-                        headers = cells;
-                        continue;
-                    }
-                }
-                if !cells.is_empty() {
-                    rows.push(cells);
-                }
+                markdown_translated &= extract_data_row(
+                    handlers,
+                    child,
+                    &mut header_decided,
+                    &mut headers,
+                    &mut rows,
+                );
             }
             _ => {}
         }
@@ -405,6 +395,35 @@ fn row_has_header_cell(row_node: &Rc<Node>) -> bool {
     row_node.children.borrow().iter().any(
         |cell| matches!(&cell.data, NodeData::Element { name, .. } if name.local.as_ref() == "th"),
     )
+}
+
+/// Extracts one body-level row (a `tbody`/`tfoot` row, or a bare `<tr>`
+/// directly under `<table>`) and resolves the header search against it: the
+/// first such row to reach this function decides `*header_decided`, and if
+/// it carries a `<th>` cell its extracted cells become `*headers` instead of
+/// a data row. Shared by the `"tbody" | "tfoot"` and `"tr"` match arms in
+/// `table_handler`, which differ only in how many row nodes they hand this
+/// function — a loop over `tbody`/`tfoot`'s rows versus a single top-level
+/// `<tr>`.
+fn extract_data_row(
+    handlers: &dyn Handlers,
+    row_node: &Rc<Node>,
+    header_decided: &mut bool,
+    headers: &mut Vec<String>,
+    rows: &mut Vec<Vec<String>>,
+) -> bool {
+    let (cells, translated) = extract_row_cells(handlers, row_node);
+    if !*header_decided {
+        *header_decided = true;
+        if row_has_header_cell(row_node) {
+            *headers = cells;
+            return translated;
+        }
+    }
+    if !cells.is_empty() {
+        rows.push(cells);
+    }
+    translated
 }
 
 /// Extracts a row's `<th>`/`<td>` cells positionally, in source order,
