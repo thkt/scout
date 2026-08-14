@@ -133,44 +133,41 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     })
 }
 
+/// The element's tag name, or `None` when the node is not an element.
+fn element_tag(node: &Rc<Node>) -> Option<&str> {
+    match &node.data {
+        NodeData::Element { name, .. } => Some(name.local.as_ref()),
+        _ => None,
+    }
+}
+
 /// Whether the element has a direct `<code>` child, the shape htmd's
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
 /// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
 fn has_code_child(node: &Rc<Node>) -> bool {
-    node.children.borrow().iter().any(|child| {
-        matches!(&child.data, NodeData::Element { name, .. } if name.local.as_ref() == "code")
-    })
+    node.children
+        .borrow()
+        .iter()
+        .any(|child| element_tag(child) == Some("code"))
 }
 
-/// Rebuilds a `<pre>` element's non-code content from its DOM children
-/// instead of htmd's own walked text, so a text child opens with its source
-/// character unescaped no matter where it sits among its siblings.
+/// Rebuilds a `<pre>` element's non-code content from its DOM children rather
+/// than htmd's walked text.
 ///
-/// `Handlers::walk_children`, called once in `pre_handler` before this runs
-/// and its own returned string discarded, already ran htmd's adjacent-sibling
-/// merge on `node.children` (`dom_walker::can_combine`, gated on
-/// `attrs1 == attrs2`, htmd-0.5.5/src/dom_walker.rs:243-297), so a run of
-/// same-tag same-attrs `<span>`s reaches this loop already merged into one
-/// node.
+/// `escape_pre_text_if_needed` backslash-escapes a leading `` ` `` or `~` only
+/// while htmd walks the text (htmd-0.5.5/src/dom_walker.rs:34-41, 423-436).
+/// Reading a Text child's `contents` off the DOM never introduces that
+/// backslash, at any child position, so nothing has to be reverse-escaped
+/// afterwards.
 ///
-/// A direct Text child is appended as written: `escape_pre_text_if_needed`
-/// backslash-escapes a leading `` ` `` or `~` only while htmd walks the text
-/// itself (htmd-0.5.5/src/dom_walker.rs:34-41, 423-436), so reading the
-/// child's `contents` straight off the DOM here never introduces that
-/// backslash in the first place, at any child position.
+/// Requires `pre_handler`'s discarded `walk_children` call to have run first:
+/// that is what merges adjacent same-tag same-attrs `<span>`s
+/// (`dom_walker::can_combine`, htmd-0.5.5/src/dom_walker.rs:243-297) into the
+/// single node this loop then sees.
 ///
-/// An Element child (a nested `<pre>`, a `<span>`, inline markup, ...) still
-/// goes through `Handlers::handle`, converting the ordinary way.
-/// `markdown_translated` aggregates only from those conversions: a Text child
-/// never turns it false (`dom_walker::walk_node`'s `NodeData::Text` arm never
-/// touches the flag, which starts `true`).
-///
-/// A block-level Element child's own converted content already opens and
-/// closes with a blank line, so appending two such children back to back
-/// stacks both sides' blank lines. `push_element_content` below caps the
-/// newline run straddling that junction at 2. It runs only for Element
-/// children, so a Text child's own embedded newlines stay untouched: those are
-/// real line breaks the surrounding preformatted text depends on.
+/// `markdown_translated` aggregates from Element children alone. A Text child
+/// cannot turn it false: htmd's own `NodeData::Text` arm never touches the
+/// flag.
 fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
     let mut content = String::new();
     let mut markdown_translated = true;
@@ -189,14 +186,16 @@ fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
     (content, markdown_translated)
 }
 
-/// Appends `addition` to `content`, capping the run of newlines straddling
-/// the junction (trailing newlines already in `content` plus `addition`'s own
-/// leading newlines) at 2. Newlines beyond that are trimmed off `content`'s
-/// tail first and, if the tail alone cannot absorb the excess, off
-/// `addition`'s head — so the combined boundary reads as at most one blank
-/// line regardless of how many newlines either side's own wrapping
-/// contributed. Both counts are `\n`, a 1-byte ASCII character, so trimming
-/// by character count is always a valid byte-boundary cut.
+/// Appends `addition` to `content`, capping the newline run straddling the
+/// junction at 2 so the boundary reads as at most one blank line.
+///
+/// Two block-level children each wrap themselves in blank lines, so back to
+/// back they stack both sides'. Only Element children come through here: a
+/// Text child's embedded newlines are real line breaks the preformatted text
+/// depends on, and capping them would corrupt the block.
+///
+/// Trimming by character count is a valid byte cut because both counts are of
+/// `\n`, a 1-byte character.
 fn push_element_content(content: &mut String, addition: &str) {
     let trailing = content.chars().rev().take_while(|&c| c == '\n').count();
     let leading = addition.chars().take_while(|&c| c == '\n').count();
@@ -252,7 +251,7 @@ fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handl
 fn has_pre_ancestor(node: &Rc<Node>) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
-        if matches!(&parent.data, NodeData::Element { name, .. } if name.local.as_ref() == "pre") {
+        if element_tag(&parent) == Some("pre") {
             return true;
         }
         current = get_parent(&parent);
@@ -320,10 +319,10 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
     let mut markdown_translated = true;
 
     for child in element.node.children.borrow().iter() {
-        let NodeData::Element { name, .. } = &child.data else {
+        let Some(tag) = element_tag(child) else {
             continue;
         };
-        match name.local.as_ref() {
+        match tag {
             "caption" => {
                 if let Some(res) = handlers.handle(child) {
                     markdown_translated &= res.markdown_translated;
@@ -425,7 +424,7 @@ fn row_children(node: &Rc<Node>) -> Vec<Rc<Node>> {
 }
 
 fn is_row(node: &Rc<Node>) -> bool {
-    matches!(&node.data, NodeData::Element { name, .. } if name.local.as_ref() == "tr")
+    element_tag(node) == Some("tr")
 }
 
 /// Whether every cell in `row_node` is a `<th>`, and there is at least one.
@@ -443,13 +442,9 @@ fn is_row(node: &Rc<Node>) -> bool {
 /// qualifies, so `all` cannot promote it on a vacant iterator.
 fn row_is_all_header_cells(row_node: &Rc<Node>) -> bool {
     let children = row_node.children.borrow();
-    let mut cells = children.iter().filter_map(|cell| match &cell.data {
-        NodeData::Element { name, .. } => match name.local.as_ref() {
-            tag @ ("th" | "td") => Some(tag),
-            _ => None,
-        },
-        _ => None,
-    });
+    let mut cells = children
+        .iter()
+        .filter_map(|cell| element_tag(cell).filter(|tag| matches!(*tag, "th" | "td")));
     let mut saw_cell = false;
     let all_th = cells.all(|tag| {
         saw_cell = true;
@@ -496,8 +491,7 @@ fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<Strin
     let mut markdown_translated = true;
 
     for cell in row_node.children.borrow().iter() {
-        let is_cell = matches!(&cell.data, NodeData::Element { name, .. } if matches!(name.local.as_ref(), "th" | "td"));
-        if !is_cell {
+        if !matches!(element_tag(cell), Some("th" | "td")) {
             continue;
         }
         let Some(res) = handlers.handle(cell) else {
