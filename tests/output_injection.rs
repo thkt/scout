@@ -597,3 +597,86 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
          page carries an unclosed fence, got body:\n{body}"
     );
 }
+
+// T-C044: 段落と表とリストを同時に含むページで畳みと hard break と反例が 1 つの出力に揃う
+//
+// DR-0027 splits fetch's line-break handling into a 3-form contract (a
+// paragraph's own wrapped newline folds to one space; a paragraph's `<br>`
+// survives as a hard break) and a named counter-example (the same `<br>`
+// loses that hard-break form inside a table cell or a list item).
+// `src/fetch/converter.rs`'s `mod tests` pins each form in isolation by
+// calling `to_fetch_result` directly (T-FC041/T-FC042 for the contract,
+// T-FC045/T-FC046 for the counter-example); this scenario is the seam
+// proving all four survive together through the real pipeline this file's
+// other scenarios exercise (mock proxy -> Readability extraction ->
+// `markdown_converter` -> frontmatter wrapping), on one page that carries a
+// paragraph, a table, and a list at once, the shape none of the unit tests
+// combine.
+#[test]
+fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one_output() {
+    let context = "paragraph fold, hard break, and table/list counter-examples combined";
+    let fold_paragraph = "<p>river bank line one\nriver bank line two</p>";
+    let hard_break_paragraph = "<p>bridge deck line one<br>bridge deck line two</p>";
+    // Row-heading shape (<tbody>, <th> label cell, two rows) mirrors the
+    // fixture T-C045 already proves Readability keeps as a genuine data
+    // table rather than unwrapping as a layout table; a single-row, no-<th>
+    // table does not survive extraction intact.
+    let table = "<table><tbody>\
+        <tr><th>Harbor</th><td>harbor cell line one<br>harbor cell line two</td></tr>\
+        <tr><th>Note</th><td>second row keeps this a genuine data table</td></tr>\
+        </tbody></table>";
+    let list = "<ul><li>lighthouse item line one<br>lighthouse item line two</li></ul>";
+    let injected = format!("{fold_paragraph}{hard_break_paragraph}{table}{list}");
+    let Some(markdown) = fetch_markdown(&article_html(&injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    // Contract form 1 (T-FC041): the paragraph's own wrapped newline folds
+    // to a single space.
+    assert!(
+        body.contains("river bank line one river bank line two"),
+        "{context}: a newline inside a paragraph's text must fold to a single space, got \
+         body:\n{body}"
+    );
+    assert!(
+        !body.contains("river bank line one\nriver bank line two"),
+        "{context}: the source newline must not survive as a literal line break, got \
+         body:\n{body}"
+    );
+
+    // Contract form 2 (T-FC042): the paragraph's own <br> survives as a hard
+    // break (two trailing spaces then a newline).
+    assert!(
+        body.contains("bridge deck line one  \nbridge deck line two"),
+        "{context}: a <br> inside a paragraph must leave two trailing spaces before the \
+         newline it introduces, got body:\n{body}"
+    );
+
+    // Counter-example (T-FC045): the table cell's <br> loses the hard break
+    // and collapses to a run of spaces instead.
+    assert!(
+        body.contains("| Harbor | harbor cell line one   harbor cell line two |"),
+        "{context}: a <br> inside a table cell must collapse to a run of spaces, not survive \
+         as a line break, got body:\n{body}"
+    );
+    assert!(
+        !body.contains("harbor cell line one  \nharbor cell line two"),
+        "{context}: the paragraph's hard-break form must not survive inside a table cell, got \
+         body:\n{body}"
+    );
+
+    // Counter-example (T-FC046): the list item's <br> loses its trailing
+    // spaces and becomes an indented newline instead.
+    assert!(
+        body.contains("lighthouse item line one\n    lighthouse item line two"),
+        "{context}: a <br> inside a list item must leave no trailing spaces on the line \
+         before it, and the text after it must reappear indented on its own line, got \
+         body:\n{body}"
+    );
+    assert!(
+        !body.contains("lighthouse item line one  \n"),
+        "{context}: the paragraph's hard-break form must not survive inside a list item, got \
+         body:\n{body}"
+    );
+}
