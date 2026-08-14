@@ -304,8 +304,11 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
 fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     let result = handlers.walk_children(element.node);
     let has_link_text = !result.content.trim().is_empty();
-    let is_empty_fragment_anchor =
-        anchor_href(&element).is_some_and(|href| href.starts_with('#')) && !has_link_text;
+    // `href=""` resolves to the current page, the same nothing a bare `#`
+    // points at, so both suppress on empty content.
+    let is_empty_fragment_anchor = anchor_href(&element)
+        .is_some_and(|href| href.is_empty() || href.starts_with('#'))
+        && !has_link_text;
 
     if is_empty_fragment_anchor {
         return Some(HandlerResult {
@@ -359,9 +362,9 @@ fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
 /// `title_attr` is the raw `title` attribute text. htmd escapes and
 /// reflows it first (`process_title`, anchor.rs:186-207) before writing it
 /// into the delegated result, so `process_title_like_htmd` below must
-/// reproduce that same transform for the tail match to line up — including a
-/// whitespace-only attribute, which htmd still renders as an empty-but-present
-/// `("")` title rather than omitting the title syntax outright (T-FC076).
+/// reproduce that same transform for the tail match to line up, including a
+/// whitespace-only attribute: htmd renders that as an empty-but-present `("")`
+/// title rather than omitting the title syntax.
 fn strip_link_title(content: &str, title_attr: &str) -> String {
     let processed_title = process_title_like_htmd(title_attr);
     let (body, trailing_ws) = split_trailing_document_whitespace(content);
@@ -410,11 +413,10 @@ fn process_title_like_htmd(text: &str) -> String {
 /// trims from both ends). `AnchorElementHandler::build_inlined_anchor`
 /// strips the anchor's own trailing whitespace off the link text before
 /// building `[text](url "title")` and re-appends it after the closing `)`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:106-133), so a tail match run
-/// against the raw `content` would miss whenever that whitespace is present;
-/// this must trim from the tail only; a leading trim would answer a boundary
-/// `strip_link_title` never asks about, since `content` here always opens
-/// with `[`.
+/// (htmd-0.5.5/src/element_handler/anchor.rs:106-133), so a tail match against
+/// the raw `content` misses whenever that whitespace is present. Only the tail
+/// is split: `content` always opens with `[`, so a leading trim would answer a
+/// boundary no caller asks about.
 fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
     let body = content.trim_end_matches(['\t', '\n', '\r', ' ']);
     content.split_at(body.len())
@@ -2182,6 +2184,30 @@ mod tests {
         assert!(
             !markdown.contains("#nav"),
             "the fragment-only sibling anchor must be suppressed, not just the hrefless one delegated:\n{markdown}"
+        );
+    }
+
+    /// [T-FC077] href が空文字列で中身も空のアンカーが消える
+    ///
+    /// `href=""` resolves to the current page, so it points at the same
+    /// nothing a bare `#` does. Left to the builtin handler it emits
+    /// `[]( "title")`, which is the empty link plus restated title this
+    /// handler exists to remove.
+    #[test]
+    fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
+        let article = article("<p><a href=\"\" title=\"here\"></a>tail</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("[]("),
+            "an empty-href anchor with no content must be suppressed, not emitted as an \
+             empty link carrying its title:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("tail"),
+            "the text after the suppressed anchor must survive:\n{markdown}"
         );
     }
 
