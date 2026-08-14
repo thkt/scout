@@ -479,6 +479,58 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
     );
 }
 
+// T-C043: 行ごとに_span_を並べた_pre_を含むページで_fetch_出力の各行がバックスラッシュを含まない
+//
+// Exercises the same syntax-highlighter shape `pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line`
+// (T-FC053, src/fetch/converter.rs) pins by calling `to_fetch_result`
+// directly, but through the real `scout fetch` pipeline: HTML over the mock
+// proxy -> `dom_smoothie::Readability` extraction -> `markdown_converter` ->
+// frontmatter wrapping -> stdout. Readability's own DOM cleanup runs ahead of
+// `raw_pre_content`/`span_handler` here, where the unit test's direct call
+// never exercises it, so this is the seam that proves Readability does not
+// unwrap or flatten the per-line `<span>`s into direct `<pre>` text children
+// before the converter ever sees them.
+//
+// That distinction matters because `raw_pre_content` only reads a `<pre>`
+// direct Text child's `contents` straight off the DOM (bypassing htmd's own
+// `escape_pre_text_if_needed`, module doc above), while a `<span>` child goes
+// through `Handlers::handle` -> `span_handler` -> `Handlers::walk_children`,
+// whose own Text nodes carry `parent_tag == "span"`, a shape
+// `escape_pre_text_if_needed` never escapes either (it only escapes a Text
+// node whose immediate parent is literally `<pre>`, htmd-0.5.5/src/dom_walker.rs:34-41,
+// 423-436). If Readability's cleanup unwrapped the line spans, the same
+// leading `~`/`` ` `` bytes below would land as direct `<pre>` text instead
+// and take the escape-prone path this file's `T-C032` fixtures also cover.
+//
+// Two of the three lines below open with `~` and `` ` `` respectively — the
+// two characters `escape_pre_text_if_needed` targets — specifically so a
+// regression that let either path add its escape would fail this test's
+// no-backslash assertion instead of passing it vacuously.
+#[test]
+fn 行ごとに_span_を並べた_pre_を含むページで_fetch_出力の各行がバックスラッシュを含まない() {
+    let context = "syntax-highlighted pre with one span per line";
+    let injected = "<pre><span data-line=\"1\">~/project$ ls -la\n</span>\
+                     <span data-line=\"2\">`echo hello`\n</span>\
+                     <span data-line=\"3\">plain trailing line</span></pre>";
+    let Some(markdown) = fetch_markdown(&article_html(injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    assert!(
+        body.contains("```\n~/project$ ls -la\n`echo hello`\nplain trailing line\n```"),
+        "{context}: each line-span's content must land on its own output line, in order, and \
+         match the source text verbatim, got body:\n{body}"
+    );
+    assert!(
+        !body.lines().any(|l| l.contains('\\')),
+        "{context}: no line of fetch output should contain a backslash, since neither \
+         raw_pre_content's direct-Text-child path nor span_handler's walk_children path may \
+         introduce htmd's leading `~`/`` ` `` escape once the per-line <span> structure survives \
+         Readability extraction intact, got body:\n{body}"
+    );
+}
+
 // T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
 //
 // Fence state is one running value over the whole body, so an unclosed fence
