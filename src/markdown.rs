@@ -171,15 +171,14 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
     "`".repeat(max_run.max(2) + 1)
 }
 
-/// Advance `fence` across one line of a Markdown body and report whether that
-/// line is fence-protected: either inside a fenced code block or the delimiter
-/// line itself. Callers walking a body line by line hold the state and pass it
-/// back in.
+/// Advance `fence` across one line and report whether that line is
+/// fence-protected: inside a fenced code block, or the delimiter line itself.
 ///
 /// A fence closes only at a line whose run of the same character is at least
 /// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
-/// stays open through a nested 3-backtick line. The line is trimmed here, so
-/// an indented fence delimiter counts.
+/// stays open through a nested 3-backtick line. The trim happens here, so
+/// callers must not pre-trim: an indented delimiter would otherwise reach the
+/// caller's own indent handling already stripped.
 pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool {
     let marker = fence_marker(line.trim_start());
     match (*fence, marker) {
@@ -609,11 +608,9 @@ mod tests {
     /// [T-MD035] 4 スペースでインデントされたフェンス行もフェンス開始として認識される
     ///
     /// `fence_marker` takes an already-trimmed line, so asserting on it
-    /// directly would only restate T-MD032. Both callers
-    /// (`shift_headings` here and `neutralize_yaml_markers_outside_fences` in
-    /// `yaml.rs`) trim first, which is what makes the indent irrelevant. This
-    /// goes through `shift_headings` to prove that: a `#` line between two
-    /// indented fences must not be shifted, since it sits inside a code block.
+    /// directly would only restate T-MD032. `track_fence` owns the trim, so
+    /// the indent has to be observed through a caller: a `#` line between two
+    /// indented fences must keep its level, since it sits inside a code block.
     #[test]
     fn fence_marker_recognizes_four_space_indented_fence_line() {
         let shifted = shift_headings("    ```\n# not a heading\n    ```\n# heading\n", 1);
