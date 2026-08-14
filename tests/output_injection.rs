@@ -501,3 +501,83 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
          got body:\n{body}"
     );
 }
+
+// T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
+//
+// T-C032/T-C039/T-C040 pin closed-fence preservation in isolation, T-C031
+// pins outside-fence rewriting in isolation, and T-C041 pins the
+// EOF-unclosed-fence fallback in isolation. Each of those fixtures carries
+// only one of the three shapes, so none of them proves what happens when a
+// real page carries all three at once: `neutralize_yaml_markers_outside_fences`
+// (src/yaml.rs) tracks fence state as one running value across the whole
+// body and, per its own doc comment, once *any* fence is still open at the
+// body's end "there is no closed region left to protect", so the entire
+// body — not just the tail after the unresolved fence — is re-run through
+// the fence-unaware `neutralize_yaml_markers`. This scenario is the seam
+// that proves that global scope is real end to end: a fixture whose *only*
+// fence closes properly, placed ahead of a later fence that never does,
+// still loses its own marker protection, because the unclosed fence at the
+// bottom of the page invalidates the whole document's fence context, not
+// just its own tail.
+//
+// The three source shapes appear in this order so each is unambiguous on
+// its own before the interaction is asserted: a closed `<pre>` fence
+// carrying markers (would read as protected in isolation), a bare
+// paragraph marker outside any fence (always rewritten), and T-C041's
+// inline-code trick that opens a fence-looking line with no line-start
+// close anywhere after it (leaves fence state open through EOF).
+#[test]
+fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output() {
+    let context = "closed fence, paragraph, and unclosed fence combined";
+    let closed_fence = "<pre>---\nevil: true\n...\n</pre>";
+    let outside_marker = "<p>--- evil: true</p>";
+    let unclosed_trick = "<p><code>``</code> before marker</p><p>... evil: unclosed</p>";
+    let injected = format!("{closed_fence}{outside_marker}{unclosed_trick}");
+    let Some(markdown) = fetch_markdown(&article_html(&injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    // The fence's own delimiter syntax (the ``` wrapping the <pre> content)
+    // still comes through as a literal code fence in the rendered Markdown:
+    // the fallback only rewrites bare --- / ... marker lines, it never
+    // touches a ``` line, so the block still reads as fenced code.
+    assert!(
+        body.contains("```\n***\nevil: true\n***\n```"),
+        "the <pre> block must still render as a fenced code block, got body:\n{body}"
+    );
+    // But unlike T-C032/T-C039/T-C040 (no unclosed fence anywhere in those
+    // pages), this fence's own --- and ... lines are NOT left verbatim here:
+    // the later unclosed fence invalidates fence-aware protection for the
+    // whole body, so these are rewritten to *** the same as every other
+    // marker in this page.
+    assert!(
+        !body.contains("```\n---\nevil: true\n...\n```"),
+        "the closed fence's own markers must not survive verbatim once a \
+         later fence in the same page never closes, got body:\n{body}"
+    );
+    // The bare paragraph marker outside any fence is rewritten, the same
+    // contract T-C031 pins alone.
+    assert!(
+        body.lines().any(|l| l == "*** evil: true"),
+        "the outside-fence paragraph marker must be rewritten to \
+         *** evil: true, got body:\n{body}"
+    );
+    // The marker following the unclosed fence-looking line is rewritten,
+    // the same contract T-C041 pins alone.
+    assert!(
+        body.lines().any(|l| l == "*** evil: unclosed"),
+        "the marker following the unclosed fence-looking line must be \
+         rewritten to *** evil: unclosed, got body:\n{body}"
+    );
+    // No bare --- or ... line survives anywhere in the page: the three
+    // sources converge into one uniformly neutralized output with no gap
+    // left by the closed fence's now-invalidated protection.
+    assert!(
+        !body
+            .lines()
+            .any(|l| l.starts_with("---") || l.starts_with("...")),
+        "no line anywhere in the page should start with --- or ... once the \
+         page carries an unclosed fence, got body:\n{body}"
+    );
+}
