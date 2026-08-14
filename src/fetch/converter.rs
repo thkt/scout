@@ -1645,4 +1645,85 @@ mod tests {
              same-tag, same-attrs spans into one node before handling:\n{markdown}"
         );
     }
+
+    /// [T-FC038] 隣接するブロック子の境界に残る改行が2個までに収まる
+    ///
+    /// `raw_pre_content` appends each Element child's own converted content
+    /// directly (`content.push_str(&res.content)`) with no separator logic
+    /// of its own. A block-level child's own content already opens and
+    /// closes with a blank line, so two such children in a row stack both
+    /// sides' blank lines instead of collapsing to one. Scout's own rule for
+    /// the rebuilt `<pre>` content is that the run of newlines at such a
+    /// boundary caps at 2 (a single blank line), regardless of how many the
+    /// two sides' individual wrapping happens to add up to.
+    #[test]
+    fn adjacent_block_children_boundary_keeps_newlines_capped_at_two() {
+        let article = article("<pre><div>ALPHA</div><div>BETA</div></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let alpha_end = markdown
+            .find("ALPHA")
+            .expect("first block child's text must be present")
+            + "ALPHA".len();
+        let beta_start = markdown
+            .find("BETA")
+            .expect("second block child's text must be present");
+        let between = &markdown[alpha_end..beta_start];
+        let newline_run = between.chars().filter(|&c| c == '\n').count();
+
+        assert!(
+            newline_run <= 2,
+            "the boundary between adjacent block children must carry at most 2 newlines, \
+             got {newline_run}:\n{markdown}"
+        );
+    }
+
+    /// [T-FC039] pre 直下の br が行末空白2個と改行として残る
+    ///
+    /// A `<br>` that is a direct child of `<pre>` reaches `raw_pre_content`'s
+    /// `NodeData::Element` branch, which hands it to `Handlers::handle` and
+    /// appends the result into the rebuilt content exactly as returned, with
+    /// no trimming of a line break that lands mid-string. Under the
+    /// default `BrStyle::TwoSpaces` a `<br>` converts to two trailing
+    /// spaces and a newline — the Markdown hard-break form — and that form
+    /// must reach the fenced output between the text on either side of it.
+    #[test]
+    fn br_directly_under_pre_survives_as_two_trailing_spaces_and_a_newline() {
+        let article = article("<pre>line1<br>line2</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1  \nline2"),
+            "a <br> directly under <pre> must leave two trailing spaces before the newline \
+             it introduces:\n{markdown}"
+        );
+    }
+
+    /// [T-FC040] pre の中の未登録タグの子のテキストがエスケープされずに出る
+    ///
+    /// The fixture's inner tag has no handler registered for it by this
+    /// crate or by htmd itself, so the `NodeData::Element` branch in
+    /// `raw_pre_content` still hands it to `Handlers::handle`, but that call
+    /// resolves to htmd's own no-handler fallback path instead of any
+    /// handler this crate adds. That fallback still counts the surrounding
+    /// `<pre>` as an ancestor, so escape-target characters in the tag's text
+    /// must survive unescaped, the same as text sitting directly under
+    /// `<pre>` does.
+    #[test]
+    fn unregistered_tag_child_text_inside_pre_is_not_escaped() {
+        let article = article("<pre><mark>a_b*c</mark></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("a_b*c"),
+            "an unregistered tag's text content inside <pre> must survive without \
+             escape-target characters gaining a backslash:\n{markdown}"
+        );
+    }
 }
