@@ -1828,15 +1828,10 @@ mod tests {
 
     /// [T-FC044] inline code の中の連続する空白がそのまま残る
     ///
-    /// A `<code>` element's own children are walked with `is_pre = true`
-    /// regardless of the `preformatted_code` option: `Handlers::walk_children`
-    /// sets `is_pre` from the node's own tag name being `"code"`
-    /// (htmd-0.5.5/src/element_handler/mod.rs:343-344), so the raw text pushed
-    /// at dom_walker.rs:34-40 never passes through `compress_whitespace`.
-    /// `markdown_converter`'s `preformatted_code: true` then routes that
-    /// walked content through `handle_preformatted_code`
-    /// (htmd-0.5.5/src/element_handler/code.rs:169-190), which folds only a
-    /// `\n` to a space and leaves an existing run of ASCII spaces untouched.
+    /// A `<code>`'s children walk with `is_pre = true` from the tag name
+    /// alone, so the whitespace compression that folds a paragraph never runs
+    /// on them (htmd-0.5.5/src/element_handler/mod.rs:343-344). The fold that
+    /// does run downstream touches `\n` only, leaving a run of spaces alone.
     #[test]
     fn consecutive_spaces_inside_inline_code_survive_unchanged() {
         let article = article("<p>a <code>x   y</code> b</p>");
@@ -1853,16 +1848,10 @@ mod tests {
 
     /// [T-FC045] 表セルの中の br は改行を失い空白へ畳まれる
     ///
-    /// A `<br>` inside a `<td>` still reaches htmd's built-in `br_handler`
-    /// via `td_th_handler` -> `handle_or_serialize_by_parent`
-    /// (htmd-0.5.5/src/element_handler/element_util.rs:29-40), which walks
-    /// the cell's children unchanged, so the cell's own converted content
-    /// carries the same `"  \n"` hard-break form T-FC039/042 pin for `<pre>`
-    /// and `<p>`. That content then passes through this crate's own
-    /// `normalize_cell_content` (converter.rs:514-520), whose
-    /// `content.replace('\n', " ")` turns the embedded `\n` into a third
-    /// space next to the hard break's own two trailing spaces, so the pair
-    /// the paragraph/pre contract renders as a real line break instead
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
+    /// this crate's own `normalize_cell_content` then replaces every `\n` with
+    /// a space so a cell cannot split its pipe-delimited row. The break
+    /// becomes a third space beside the two the hard break already carries
     /// collapses to a run of spaces inside the cell — the `<br>` leaves no
     /// line break in the rendered table at all.
     #[test]
@@ -1886,18 +1875,11 @@ mod tests {
 
     /// [T-FC046] リスト項目の中の br は行末空白 2 個を失いインデントされた改行になる
     ///
-    /// A `<br>` inside a `<li>` still reaches htmd's built-in `br_handler`
-    /// via `list_item_handler` (htmd-0.5.5/src/element_handler/li.rs:10-42),
-    /// which walks the item's children unchanged, so the item's own
-    /// converted content carries the same `"  \n"` hard-break form T-FC042
-    /// pins for a `<br>` inside `<p>`. `list_item_handler` then runs that
-    /// content through `indent_text_except_first_line` with
-    /// `trim_line_end: true` (li.rs:29, text_util.rs:219-247), which trims
-    /// each line's trailing document whitespace before indenting every line
-    /// after the first — the trim strips the hard break's own two trailing
-    /// spaces off `"line1  "`, and the indent it adds to `"line2"` takes
-    /// their place instead of a Markdown hard break surviving into the
-    /// rendered list.
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
+    /// `list_item_handler` indents every line after the first with
+    /// `trim_line_end: true` (htmd-0.5.5/src/element_handler/li.rs:29). The
+    /// trim takes the hard break's two trailing spaces, and the indent stands
+    /// in their place.
     #[test]
     fn br_inside_a_list_item_loses_its_trailing_spaces_and_becomes_an_indented_newline() {
         let article = article("<ul><li>line1<br>line2</li></ul>");
@@ -1920,18 +1902,10 @@ mod tests {
 
     /// [T-FC047] 見出しの中の br 以降は見出しの外へ出る
     ///
-    /// A `<br>` inside an `<h2>` still reaches htmd's built-in `br_handler`
-    /// via `headings_handler` (htmd-0.5.5/src/element_handler/headings.rs:9-27),
-    /// which walks the heading's children unchanged, so the heading's own
-    /// converted content carries the same `"  \n"` hard-break form T-FC042
-    /// pins for a `<br>` inside `<p>`. `headings_handler` trims only the
-    /// content's own leading/trailing whitespace
-    /// (`trim_document_whitespace`, text_util.rs:14-16, a `trim_matches`
-    /// that never touches an embedded `\n`) and then writes the `#` marker
-    /// once, ahead of that whole content. An ATX heading is a single source
-    /// line, so the text after the embedded `\n` renders on its own
-    /// unmarked line below the `#` line instead of staying part of the
-    /// heading.
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, and
+    /// the heading handler writes its `#` marker once, ahead of the whole
+    /// content. An ATX heading is a single source line, so everything past the
+    /// embedded `\n` lands unmarked on the line below.
     #[test]
     fn text_after_a_br_inside_a_heading_lands_outside_the_heading_line() {
         let article = article("<h2>line1<br>line2</h2>");
