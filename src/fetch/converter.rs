@@ -1757,4 +1757,170 @@ mod tests {
              escape-target characters gaining a backslash:\n{markdown}"
         );
     }
+
+    /// [T-FC041] 段落の中の改行が空白 1 個へ畳まれる
+    ///
+    /// A raw `\n` makes a Text node fail htmd's `is_plain_text` check
+    /// (htmd-0.5.5/src/dom_walker.rs:157-165), which routes it through
+    /// `compress_whitespace`. That folds any run of ASCII whitespace, a lone
+    /// newline included, to a single space.
+    #[test]
+    fn a_newline_inside_a_paragraph_collapses_to_a_single_space() {
+        let article = article("<p>line1\nline2</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1 line2"),
+            "a newline inside a paragraph's text must collapse to a single space:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("line1\nline2"),
+            "the source newline must not survive as a literal line break:\n{markdown}"
+        );
+    }
+
+    /// [T-FC042] 段落の中の br が行末空白2個と改行として残る
+    ///
+    /// htmd's built-in `br_handler` converts a `<br>` to `"  \n"` under the
+    /// default `BrStyle::TwoSpaces` (htmd-0.5.5/src/element_handler/br.rs:8-14),
+    /// the Markdown hard-break form. Scout registers no `br` handler, so the
+    /// built-in is what every `<br>` reaches.
+    #[test]
+    fn br_inside_a_paragraph_survives_as_two_trailing_spaces_and_a_newline() {
+        let article = article("<p>line1<br>line2</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1  \nline2"),
+            "a <br> inside a paragraph must leave two trailing spaces before the newline it \
+             introduces:\n{markdown}"
+        );
+    }
+
+    /// [T-FC043] pre の中身は畳まれずに改行が残る
+    ///
+    /// A `<pre>` with no `<code>` child is rebuilt by this crate's own
+    /// `pre_handler` via `raw_pre_content`, which reads a Text child's
+    /// `contents` straight off the DOM rather than htmd's walked text, so the
+    /// source newline never reaches
+    /// `compress_whitespace` at all and survives as a real line break inside
+    /// the fence.
+    #[test]
+    fn pre_content_is_not_collapsed_and_keeps_its_newline() {
+        let article = article("<pre>line1\nline2</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nline1\nline2\n```"),
+            "a <pre> block's internal newline must survive as a real line break, not collapse \
+             to a space:\n{markdown}"
+        );
+    }
+
+    /// [T-FC044] inline code の中の連続する空白がそのまま残る
+    ///
+    /// A `<code>`'s children walk with `is_pre = true` from the tag name
+    /// alone, so the whitespace compression that folds a paragraph never runs
+    /// on them (htmd-0.5.5/src/element_handler/mod.rs:343-344). The fold that
+    /// does run downstream touches `\n` only, leaving a run of spaces alone.
+    #[test]
+    fn consecutive_spaces_inside_inline_code_survive_unchanged() {
+        let article = article("<p>a <code>x   y</code> b</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`x   y`"),
+            "three consecutive spaces inside inline code must survive without collapsing to a \
+             single space:\n{markdown}"
+        );
+    }
+
+    /// [T-FC045] 表セルの中の br は改行を失い空白へ畳まれる
+    ///
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
+    /// this crate's own `normalize_cell_content` then replaces every `\n` with
+    /// a space so a cell cannot split its pipe-delimited row. The break becomes
+    /// a third space beside the two it already carries, leaving no line break
+    /// in the rendered table.
+    #[test]
+    fn br_inside_a_table_cell_loses_the_line_break_and_collapses_to_whitespace() {
+        let article = article("<table><tr><td>line1<br>line2</td></tr></table>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| line1   line2 |"),
+            "a <br> inside a table cell must collapse to a run of spaces between the text on \
+             either side of it, not survive as a line break:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("line1  \nline2"),
+            "the hard-break form a <br> takes in a paragraph or <pre> must not survive inside \
+             a table cell, which cannot hold a literal newline:\n{markdown}"
+        );
+    }
+
+    /// [T-FC046] リスト項目の中の br は行末空白 2 個を失いインデントされた改行になる
+    ///
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
+    /// `list_item_handler` indents every line after the first with
+    /// `trim_line_end: true` (htmd-0.5.5/src/element_handler/li.rs:29). The
+    /// trim takes the hard break's two trailing spaces, and the indent stands
+    /// in their place.
+    #[test]
+    fn br_inside_a_list_item_loses_its_trailing_spaces_and_becomes_an_indented_newline() {
+        let article = article("<ul><li>line1<br>line2</li></ul>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1\n    line2"),
+            "a <br> inside a list item must leave no trailing spaces on the line before it, \
+             and the text after it must reappear indented under the bullet on its own \
+             line:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("line1  \n"),
+            "the hard-break form a <br> takes in a paragraph must not survive inside a list \
+             item, where the indent step trims it away:\n{markdown}"
+        );
+    }
+
+    /// [T-FC047] 見出しの中の br 以降は見出しの外へ出る
+    ///
+    /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, and
+    /// the heading handler writes its `#` marker once, ahead of the whole
+    /// content. An ATX heading is a single source line, so everything past the
+    /// embedded `\n` lands unmarked on the line below.
+    #[test]
+    fn text_after_a_br_inside_a_heading_lands_outside_the_heading_line() {
+        let article = article("<h2>line1<br>line2</h2>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("## line1  \nline2"),
+            "text after a <br> inside a heading must land on its own line below the '#' \
+             marker, carrying the same hard-break form a <br> produces inside a paragraph:\n\
+             {markdown}"
+        );
+        assert!(
+            !markdown
+                .lines()
+                .any(|line| line.starts_with('#') && line.contains("line2")),
+            "the text after a <br> inside a heading must not end up inside the heading's own \
+             '#'-prefixed line:\n{markdown}"
+        );
+    }
 }
