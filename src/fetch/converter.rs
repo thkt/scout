@@ -110,11 +110,10 @@ fn markdown_converter() -> HtmlToMarkdown {
 // would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
 #[allow(clippy::needless_pass_by_value)]
 fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    // Called for its side effect as much as its value: htmd's own walk runs
-    // the adjacent-sibling merge on `element.node.children` before either
-    // branch below reads them (see `raw_pre_content`'s doc comment). The
-    // walked string itself (`result.content`) is used only by the
-    // `<pre><code>` branch, which htmd already fences correctly on its own.
+    // Called for its side effect as much as its value: the walk runs htmd's
+    // adjacent-sibling merge on `element.node.children` before either branch
+    // below reads them. The walked string is used only by the `<pre><code>`
+    // branch, which htmd already fences correctly on its own.
     let result = handlers.walk_children(element.node);
 
     if has_code_child(element.node) {
@@ -151,15 +150,14 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// and its own returned string discarded, already ran htmd's adjacent-sibling
 /// merge on `node.children` (`dom_walker::can_combine`, gated on
 /// `attrs1 == attrs2`, htmd-0.5.5/src/dom_walker.rs:243-297), so a run of
-/// same-tag same-attrs `<span>`s reaches this loop as the single merged node
-/// T-FC037 pins.
+/// same-tag same-attrs `<span>`s reaches this loop already merged into one
+/// node.
 ///
 /// A direct Text child is appended as written: `escape_pre_text_if_needed`
 /// backslash-escapes a leading `` ` `` or `~` only while htmd walks the text
 /// itself (htmd-0.5.5/src/dom_walker.rs:34-41, 423-436), so reading the
 /// child's `contents` straight off the DOM here never introduces that
-/// backslash in the first place, at any child position — the case T-FC021,
-/// T-FC027, and T-FC034-036 cover.
+/// backslash in the first place, at any child position.
 ///
 /// An Element child (a nested `<pre>`, a `<span>`, inline markup, ...) still
 /// goes through `Handlers::handle`, converting the ordinary way.
@@ -170,9 +168,9 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// A block-level Element child's own converted content already opens and
 /// closes with a blank line, so appending two such children back to back
 /// stacks both sides' blank lines. `push_element_content` below caps the
-/// newline run straddling that junction at 2 (T-FC038); it runs only for
-/// Element children, so a Text child's own embedded newlines — real line
-/// breaks the surrounding preformatted text depends on — are never touched.
+/// newline run straddling that junction at 2. It runs only for Element
+/// children, so a Text child's own embedded newlines stay untouched: those are
+/// real line breaks the surrounding preformatted text depends on.
 fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
     let mut content = String::new();
     let mut markdown_translated = true;
