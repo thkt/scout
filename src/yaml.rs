@@ -54,13 +54,11 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
 /// to protect — the fence marker itself was most likely a false positive (a
 /// stray backtick run, not a real code block) — so the whole body is run
 /// through [`neutralize_yaml_markers`] instead of the partial per-line result.
-// No production call site wires this in yet; that lands in a later unit that
-// switches the fetch/Slack sanitize path over from `neutralize_yaml_markers`.
-// `cfg_attr(not(test), ...)` rather than a bare `allow`: the `#[cfg(test)] mod
-// tests` below already calls this function, so the lint should still fire in
-// production builds (where it has no caller) once the later unit's call site
-// lands and this attribute needs deleting.
-#[cfg_attr(not(test), allow(dead_code))]
+// Wired into production by `format_with_frontmatter` (src/fetch/converter.rs),
+// which calls this instead of `neutralize_yaml_markers` for the fetch sanitize
+// path. `src/slack/format.rs` still calls the non-fence-aware
+// `neutralize_yaml_markers` directly; switching that path is not part of this
+// unit's contract.
 pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fence: Option<(char, usize)> = None;
