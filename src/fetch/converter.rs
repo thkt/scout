@@ -416,13 +416,8 @@ fn process_title_like_htmd(text: &str) -> String {
 /// `strip_link_title` never asks about, since `content` here always opens
 /// with `[`.
 fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
-    let trailing_len: usize = content
-        .chars()
-        .rev()
-        .take_while(|c| matches!(c, '\t' | '\n' | '\r' | ' '))
-        .map(char::len_utf8)
-        .sum();
-    content.split_at(content.len() - trailing_len)
+    let body = content.trim_end_matches(['\t', '\n', '\r', ' ']);
+    content.split_at(body.len())
 }
 
 /// Fixes htmd's built-in `table_handler`'s per-tag row extraction
