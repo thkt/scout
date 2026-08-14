@@ -110,59 +110,105 @@ fn markdown_converter() -> HtmlToMarkdown {
 // would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
 #[allow(clippy::needless_pass_by_value)]
 fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    // Called for its side effect as much as its value: the walk runs htmd's
+    // adjacent-sibling merge on `element.node.children` before either branch
+    // below reads them. The walked string is used only by the `<pre><code>`
+    // branch, which htmd already fences correctly on its own.
     let result = handlers.walk_children(element.node);
-    let content = result.content.trim_matches('\n');
 
     if has_code_child(element.node) {
+        let content = result.content.trim_matches('\n');
         return Some(HandlerResult {
             content: format!("\n\n{content}\n\n"),
             markdown_translated: result.markdown_translated,
         });
     }
 
-    let content = if opens_with_escaped_fence_char(element.node) {
-        content.strip_prefix('\\').unwrap_or(content)
-    } else {
-        content
-    };
+    let (content, markdown_translated) = raw_pre_content(handlers, element.node);
+    let content = content.trim_matches('\n');
     let fence = fence_delimiter(content);
     Some(HandlerResult {
         content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
-        markdown_translated: result.markdown_translated,
+        markdown_translated,
     })
+}
+
+/// The element's tag name, or `None` when the node is not an element.
+fn element_tag(node: &Rc<Node>) -> Option<&str> {
+    match &node.data {
+        NodeData::Element { name, .. } => Some(name.local.as_ref()),
+        _ => None,
+    }
 }
 
 /// Whether the element has a direct `<code>` child, the shape htmd's
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
 /// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
 fn has_code_child(node: &Rc<Node>) -> bool {
-    node.children.borrow().iter().any(|child| {
-        matches!(&child.data, NodeData::Element { name, .. } if name.local.as_ref() == "code")
-    })
-}
-
-/// Whether the leading `\` in the walked content is htmd's escape rather than
-/// source text.
-///
-/// `dom_walker::escape_pre_text_if_needed` prepends the backslash only to a
-/// text node whose direct parent is `<pre>` and whose first character is
-/// `` ` `` or `~` (htmd-0.5.5/src/dom_walker.rs:34-41 and 423-436). Reading
-/// that first character back off the DOM inverts the escape exactly: source
-/// text that already opens with `` \` `` produces the same walked bytes and
-/// must keep its backslash.
-///
-/// The first *text* child is the one to read, since a comment can precede it.
-/// An element before it opens the content with its own output instead, leaving
-/// no leading backslash to strip either way.
-fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
     node.children
         .borrow()
         .iter()
-        .find_map(|child| match &child.data {
-            NodeData::Text { contents } => Some(contents.borrow().starts_with(['`', '~'])),
-            _ => None,
-        })
-        .unwrap_or(false)
+        .any(|child| element_tag(child) == Some("code"))
+}
+
+/// Rebuilds a `<pre>` element's non-code content from its DOM children rather
+/// than htmd's walked text.
+///
+/// `escape_pre_text_if_needed` backslash-escapes a leading `` ` `` or `~` only
+/// while htmd walks the text (htmd-0.5.5/src/dom_walker.rs:34-41, 423-436).
+/// Reading a Text child's `contents` off the DOM never introduces that
+/// backslash, at any child position, so nothing has to be reverse-escaped
+/// afterwards.
+///
+/// Requires `pre_handler`'s discarded `walk_children` call to have run first:
+/// that is what merges adjacent same-tag same-attrs `<span>`s
+/// (`dom_walker::can_combine`, htmd-0.5.5/src/dom_walker.rs:243-297) into the
+/// single node this loop then sees.
+///
+/// `markdown_translated` aggregates from Element children alone. A Text child
+/// cannot turn it false: htmd's own `NodeData::Text` arm never touches the
+/// flag.
+fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
+    let mut content = String::new();
+    let mut markdown_translated = true;
+    for child in node.children.borrow().iter() {
+        match &child.data {
+            NodeData::Text { contents } => content.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                if let Some(res) = handlers.handle(child) {
+                    markdown_translated &= res.markdown_translated;
+                    push_element_content(&mut content, &res.content);
+                }
+            }
+            _ => {}
+        }
+    }
+    (content, markdown_translated)
+}
+
+/// Appends `addition` to `content`, capping the newline run straddling the
+/// junction at 2 so the boundary reads as at most one blank line.
+///
+/// Two block-level children each wrap themselves in blank lines, so back to
+/// back they stack both sides'. Only Element children come through here: a
+/// Text child's embedded newlines are real line breaks the preformatted text
+/// depends on, and capping them would corrupt the block.
+///
+/// Trimming by character count is a valid byte cut because both counts are of
+/// `\n`, a 1-byte character.
+fn push_element_content(content: &mut String, addition: &str) {
+    let trailing = content.chars().rev().take_while(|&c| c == '\n').count();
+    let leading = addition.chars().take_while(|&c| c == '\n').count();
+    let total = trailing + leading;
+    if total > 2 {
+        let excess = total - 2;
+        let cut_from_content = excess.min(trailing);
+        content.truncate(content.len() - cut_from_content);
+        let cut_from_addition = excess - cut_from_content;
+        content.push_str(&addition[cut_from_addition..]);
+    } else {
+        content.push_str(addition);
+    }
 }
 
 /// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
@@ -205,7 +251,7 @@ fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handl
 fn has_pre_ancestor(node: &Rc<Node>) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
-        if matches!(&parent.data, NodeData::Element { name, .. } if name.local.as_ref() == "pre") {
+        if element_tag(&parent) == Some("pre") {
             return true;
         }
         current = get_parent(&parent);
@@ -273,10 +319,10 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
     let mut markdown_translated = true;
 
     for child in element.node.children.borrow().iter() {
-        let NodeData::Element { name, .. } = &child.data else {
+        let Some(tag) = element_tag(child) else {
             continue;
         };
-        match name.local.as_ref() {
+        match tag {
             "caption" => {
                 if let Some(res) = handlers.handle(child) {
                     markdown_translated &= res.markdown_translated;
@@ -378,7 +424,7 @@ fn row_children(node: &Rc<Node>) -> Vec<Rc<Node>> {
 }
 
 fn is_row(node: &Rc<Node>) -> bool {
-    matches!(&node.data, NodeData::Element { name, .. } if name.local.as_ref() == "tr")
+    element_tag(node) == Some("tr")
 }
 
 /// Whether every cell in `row_node` is a `<th>`, and there is at least one.
@@ -396,13 +442,9 @@ fn is_row(node: &Rc<Node>) -> bool {
 /// qualifies, so `all` cannot promote it on a vacant iterator.
 fn row_is_all_header_cells(row_node: &Rc<Node>) -> bool {
     let children = row_node.children.borrow();
-    let mut cells = children.iter().filter_map(|cell| match &cell.data {
-        NodeData::Element { name, .. } => match name.local.as_ref() {
-            tag @ ("th" | "td") => Some(tag),
-            _ => None,
-        },
-        _ => None,
-    });
+    let mut cells = children
+        .iter()
+        .filter_map(|cell| element_tag(cell).filter(|tag| matches!(*tag, "th" | "td")));
     let mut saw_cell = false;
     let all_th = cells.all(|tag| {
         saw_cell = true;
@@ -449,8 +491,7 @@ fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<Strin
     let mut markdown_translated = true;
 
     for cell in row_node.children.borrow().iter() {
-        let is_cell = matches!(&cell.data, NodeData::Element { name, .. } if matches!(name.local.as_ref(), "th" | "td"));
-        if !is_cell {
+        if !matches!(element_tag(cell), Some("th" | "td")) {
             continue;
         }
         let Some(res) = handlers.handle(cell) else {
@@ -945,12 +986,14 @@ mod tests {
 
     /// [T-FC022] 原文の行頭にあるバックスラッシュとバッククォートの並びがそのまま残る
     ///
-    /// `escape_pre_text_if_needed` only inspects the first character of the
-    /// whole text node (htmd-0.5.5/src/dom_walker.rs:423-426), so a literal
-    /// `` \` `` sequence occurring after the text node's first character is
-    /// never touched by htmd. This pins that the stripping added for T-FC021
-    /// targets only the walked content's overall leading position, not every
-    /// line head inside it.
+    /// `escape_pre_text_if_needed` only ever escapes a text node's very first
+    /// character (htmd-0.5.5/src/dom_walker.rs:423-426), so a `` \` `` sequence
+    /// occurring later in the same text is source content htmd never touches
+    /// either. `raw_pre_content` copies a Text child's `contents` straight off
+    /// the DOM with no position-based logic of its own, so a mid-content
+    /// `` \` `` survives the same way T-FC021's leading one does: both reach
+    /// the output because nothing on this crate's side inspects position at
+    /// all.
     #[test]
     fn literal_backslash_backtick_pair_mid_content_survives_unstripped() {
         let article = article("<pre>abc\n\\` def</pre>");
@@ -966,11 +1009,14 @@ mod tests {
 
     /// [T-FC027] 原文の先頭にあるバックスラッシュとバッククォートの並びがそのまま残る
     ///
-    /// `escape_pre_text_if_needed` prepends its backslash only when the text
-    /// node's first character is `` ` `` or `~`
-    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so source text that already
-    /// opens with `` \` `` reaches the handler untouched. Telling the two apart
-    /// needs the DOM: the walked content is the same `` \` `` either way.
+    /// `escape_pre_text_if_needed` prepends its own backslash only when the
+    /// text node's first character is `` ` `` or `~`
+    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so a text node whose source
+    /// already opens with `` \` `` reaches htmd's walk untouched: the walked
+    /// content is the same `` \` `` either way. `raw_pre_content` never reads
+    /// that walked content for a Text child, so it does not need to tell the
+    /// two cases apart; copying `contents` straight off the DOM reproduces the
+    /// source `` \` `` regardless of which case produced it.
     #[test]
     fn source_leading_backslash_backtick_pair_survives_unstripped() {
         let article = article("<pre>\\`hello</pre>");
@@ -986,9 +1032,13 @@ mod tests {
 
     /// [T-FC029] コメントノードが先行しても htmd のエスケープはフェンス内に残らない
     ///
-    /// The escape lands on the first *text* child, which a comment or any other
-    /// non-text node can precede. Looking only at the element's first child
-    /// would read that node instead and leave the backslash in place.
+    /// A `<!-- comment -->` direct child matches neither `NodeData::Text` nor
+    /// `NodeData::Element` in `raw_pre_content`'s loop, so it falls through the
+    /// catch-all arm and adds nothing to the rebuilt content. The loop keeps
+    /// walking past it and reaches the following Text child on that child's
+    /// own turn, copying its `contents` straight off the DOM the same as when
+    /// no comment precedes it: reading every child in order, rather than only
+    /// the first, is what makes a preceding comment harmless here.
     #[test]
     fn htmd_leading_backslash_is_stripped_when_a_comment_precedes_the_text() {
         let article = article("<pre><!-- c -->`hello</pre>");
@@ -1521,6 +1571,190 @@ mod tests {
             markdown.contains("| Alice | 30 |"),
             "both cells of the data row must be extracted past the whitespace text \
              nodes:\n{markdown}"
+        );
+    }
+
+    /// [T-FC034] pre 直下の 2 番目のテキストが先頭にバッククォートを持つとき原文のまま出る
+    ///
+    /// `opens_with_escaped_fence_char` only inspects the *first* Text child of
+    /// `<pre>` (converter.rs, `find_map` over `NodeData::Text`), and
+    /// `pre_handler` only strips a backslash sitting at the very front of the
+    /// joined `content` string. A second direct-child text node starting with
+    /// `` ` `` gets htmd's escape too (its parent is still `<pre>`), but that
+    /// escape lands mid-string, past the first (non-backtick-leading) text
+    /// node's own output, so today's front-anchored strip never reaches it.
+    #[test]
+    fn second_pre_child_text_starting_with_backtick_survives_unstripped() {
+        let article = article("<pre>abc<span>X</span>`def</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nabcX`def\n```"),
+            "the second text node's leading backtick must survive unescaped inside the \
+             fence:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains(r"abcX\`def"),
+            "htmd's escape on the second text node must not survive as a literal \
+             backslash:\n{markdown}"
+        );
+    }
+
+    /// [T-FC035] 先頭のテキストより前に要素がある pre でもバッククォートが原文のまま出る
+    ///
+    /// `opens_with_escaped_fence_char` finds the first *Text* child regardless
+    /// of a preceding element sibling, so it still reports a leading escape
+    /// here. But the escaped backslash sits past that element's own converted
+    /// output in the joined `content` string, not at its front, so
+    /// `content.strip_prefix('\\')` fails silently and the backslash stays put.
+    #[test]
+    fn backtick_after_a_preceding_element_child_survives_unstripped() {
+        let article = article("<pre><span>abc</span>`def</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nabc`def\n```"),
+            "the backtick following a preceding element child must survive unescaped inside \
+             the fence:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains(r"abc\`def"),
+            "htmd's escape must not survive as a literal backslash when an element precedes \
+             the text node:\n{markdown}"
+        );
+    }
+
+    /// [T-FC036] 入れ子の pre でも内側のバッククォートが原文のまま出る
+    ///
+    /// Same root cause as T-FC034 (a `<pre>` direct-child text node's leading
+    /// backtick is not the pre's first Text child, so the front-anchored strip
+    /// misses it), reached one level deeper: the outer `<pre>` delegates its
+    /// `<pre>` child to `Handlers::handle`, which re-enters this crate's own
+    /// `pre_handler` for the inner element. The bug must not disappear once
+    /// recursion is involved.
+    #[test]
+    fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
+        let article = article("<pre><pre>abc<span>X</span>`def</pre></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("abcX`def"),
+            "the inner pre's second text node's leading backtick must survive unescaped:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains(r"abcX\`def"),
+            "htmd's escape on the inner pre's second text node must not survive as a literal \
+             backslash:\n{markdown}"
+        );
+    }
+
+    /// [T-FC037] 同じタグと属性の span が連なる pre で各行の改行が保たれる
+    ///
+    /// Unlike T-FC052/053 (spans with distinct attrs, or attrs that block
+    /// htmd's adjacent-element merge), three `<span>` siblings sharing the same
+    /// tag and no attrs are eligible for htmd's own sibling merge
+    /// (`dom_walker::can_combine`, gated on `attrs1 == attrs2`), which runs
+    /// inside `Handlers::walk_children` and folds them into a single merged
+    /// span node ahead of this crate's own per-element handling.
+    #[test]
+    fn newlines_survive_across_merged_same_tag_same_attrs_spans_in_pre() {
+        let article =
+            article("<pre><span>line1\n</span><span>line2\n</span><span>line3</span></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1\nline2\nline3"),
+            "each line's newline must survive as a real line break even when htmd merges the \
+             same-tag, same-attrs spans into one node before handling:\n{markdown}"
+        );
+    }
+
+    /// [T-FC038] 隣接するブロック子の境界に残る改行が2個までに収まる
+    ///
+    /// `raw_pre_content` appends each Element child's own converted content
+    /// directly (`content.push_str(&res.content)`) with no separator logic
+    /// of its own. A block-level child's own content already opens and
+    /// closes with a blank line, so two such children in a row stack both
+    /// sides' blank lines instead of collapsing to one. Scout's own rule for
+    /// the rebuilt `<pre>` content is that the run of newlines at such a
+    /// boundary caps at 2 (a single blank line), regardless of how many the
+    /// two sides' individual wrapping happens to add up to.
+    #[test]
+    fn adjacent_block_children_boundary_keeps_newlines_capped_at_two() {
+        let article = article("<pre><div>ALPHA</div><div>BETA</div></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let alpha_end = markdown
+            .find("ALPHA")
+            .expect("first block child's text must be present")
+            + "ALPHA".len();
+        let beta_start = markdown
+            .find("BETA")
+            .expect("second block child's text must be present");
+        let between = &markdown[alpha_end..beta_start];
+        let newline_run = between.chars().filter(|&c| c == '\n').count();
+
+        assert!(
+            newline_run <= 2,
+            "the boundary between adjacent block children must carry at most 2 newlines, \
+             got {newline_run}:\n{markdown}"
+        );
+    }
+
+    /// [T-FC039] pre 直下の br が行末空白2個と改行として残る
+    ///
+    /// A `<br>` that is a direct child of `<pre>` reaches `raw_pre_content`'s
+    /// `NodeData::Element` branch, which hands it to `Handlers::handle` and
+    /// appends the result into the rebuilt content exactly as returned, with
+    /// no trimming of a line break that lands mid-string. Under the
+    /// default `BrStyle::TwoSpaces` a `<br>` converts to two trailing
+    /// spaces and a newline — the Markdown hard-break form — and that form
+    /// must reach the fenced output between the text on either side of it.
+    #[test]
+    fn br_directly_under_pre_survives_as_two_trailing_spaces_and_a_newline() {
+        let article = article("<pre>line1<br>line2</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1  \nline2"),
+            "a <br> directly under <pre> must leave two trailing spaces before the newline \
+             it introduces:\n{markdown}"
+        );
+    }
+
+    /// [T-FC040] pre の中の未登録タグの子のテキストがエスケープされずに出る
+    ///
+    /// The fixture's inner tag has no handler registered for it by this
+    /// crate or by htmd itself, so the `NodeData::Element` branch in
+    /// `raw_pre_content` still hands it to `Handlers::handle`, but that call
+    /// resolves to htmd's own no-handler fallback path instead of any
+    /// handler this crate adds. That fallback still counts the surrounding
+    /// `<pre>` as an ancestor, so escape-target characters in the tag's text
+    /// must survive unescaped, the same as text sitting directly under
+    /// `<pre>` does.
+    #[test]
+    fn unregistered_tag_child_text_inside_pre_is_not_escaped() {
+        let article = article("<pre><mark>a_b*c</mark></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("a_b*c"),
+            "an unregistered tag's text content inside <pre> must survive without \
+             escape-target characters gaining a backslash:\n{markdown}"
         );
     }
 }

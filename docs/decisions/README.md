@@ -31,6 +31,7 @@ This directory contains important decisions about the project.
 | [0023](0023-proxy-egress-delegation-for-fetch.md) | Proxy Egress Delegation for Fetch | accepted | 2026-07-21 |
 | [0024](0024-signal-test-skips-per-external-prerequisite.md) | Signal Test Skips per External Prerequisite | accepted | 2026-08-06 |
 | [0025](0025-span-newline-preserved-inside-pre.md) | Span Newline Preserved Inside `<pre>` | accepted | 2026-08-14 |
+| [0026](0026-pre-body-rebuilt-from-dom.md) | Pre Body Rebuilt from DOM, Not Reverse-Escaped from htmd's Walked Text | accepted | 2026-08-14 |
 
 ## By Status
 
@@ -61,6 +62,7 @@ This directory contains important decisions about the project.
 - **0023**: Proxy Egress Delegation for Fetch
 - **0024**: Signal Test Skips per External Prerequisite
 - **0025**: Span Newline Preserved Inside `<pre>`
+- **0026**: Pre Body Rebuilt from DOM, Not Reverse-Escaped from htmd's Walked Text
 
 ## About MADR Format
 
