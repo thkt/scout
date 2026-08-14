@@ -1757,4 +1757,97 @@ mod tests {
              escape-target characters gaining a backslash:\n{markdown}"
         );
     }
+
+    /// [T-FC041] 段落の中の改行が空白 1 個へ畳まれる
+    ///
+    /// A `<p>` child Text node carrying a raw `\n` fails htmd's own
+    /// `is_plain_text` check (htmd-0.5.5/src/dom_walker.rs:157-165: a `\n`
+    /// byte returns `false`), so it takes the `compress_whitespace` branch
+    /// instead (dom_walker.rs:56-58) — `compress_whitespace` folds any run
+    /// of ASCII whitespace, a lone newline included, down to a single space
+    /// (htmd-0.5.5/src/text_util.rs:156-190).
+    #[test]
+    fn a_newline_inside_a_paragraph_collapses_to_a_single_space() {
+        let article = article("<p>line1\nline2</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1 line2"),
+            "a newline inside a paragraph's text must collapse to a single space:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("line1\nline2"),
+            "the source newline must not survive as a literal line break:\n{markdown}"
+        );
+    }
+
+    /// [T-FC042] 段落の中の br が行末空白2個と改行として残る
+    ///
+    /// htmd's built-in `br_handler` converts a `<br>` to `"  \n"` under the
+    /// default `BrStyle::TwoSpaces` (htmd-0.5.5/src/element_handler/br.rs:8-14),
+    /// the Markdown hard-break form. Scout registers no `br` handler of its
+    /// own, so a `<br>` inside a `<p>` reaches this built-in unchanged, the
+    /// same conversion T-FC039 pins for a `<br>` directly under `<pre>`.
+    #[test]
+    fn br_inside_a_paragraph_survives_as_two_trailing_spaces_and_a_newline() {
+        let article = article("<p>line1<br>line2</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("line1  \nline2"),
+            "a <br> inside a paragraph must leave two trailing spaces before the newline it \
+             introduces:\n{markdown}"
+        );
+    }
+
+    /// [T-FC043] pre の中身は畳まれずに改行が残る
+    ///
+    /// A `<pre>` with no `<code>` child is rebuilt by this crate's own
+    /// `pre_handler` via `raw_pre_content`, which reads a Text child's
+    /// `contents` straight off the DOM (converter.rs:171-187) rather than
+    /// htmd's walked text, so the source newline never reaches
+    /// `compress_whitespace` at all and survives as a real line break inside
+    /// the fence.
+    #[test]
+    fn pre_content_is_not_collapsed_and_keeps_its_newline() {
+        let article = article("<pre>line1\nline2</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nline1\nline2\n```"),
+            "a <pre> block's internal newline must survive as a real line break, not collapse \
+             to a space:\n{markdown}"
+        );
+    }
+
+    /// [T-FC044] inline code の中の連続する空白がそのまま残る
+    ///
+    /// A `<code>` element's own children are walked with `is_pre = true`
+    /// regardless of the `preformatted_code` option: `Handlers::walk_children`
+    /// sets `is_pre` from the node's own tag name being `"code"`
+    /// (htmd-0.5.5/src/element_handler/mod.rs:343-344), so the raw text pushed
+    /// at dom_walker.rs:34-40 never passes through `compress_whitespace`.
+    /// `markdown_converter`'s `preformatted_code: true` then routes that
+    /// walked content through `handle_preformatted_code`
+    /// (htmd-0.5.5/src/element_handler/code.rs:169-190), which folds only a
+    /// `\n` to a space and leaves an existing run of ASCII spaces untouched.
+    #[test]
+    fn consecutive_spaces_inside_inline_code_survive_unchanged() {
+        let article = article("<p>a <code>x   y</code> b</p>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`x   y`"),
+            "three consecutive spaces inside inline code must survive without collapsing to a \
+             single space:\n{markdown}"
+        );
+    }
 }
