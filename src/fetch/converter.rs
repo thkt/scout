@@ -166,6 +166,13 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// `markdown_translated` aggregates only from those conversions: a Text child
 /// never turns it false (`dom_walker::walk_node`'s `NodeData::Text` arm never
 /// touches the flag, which starts `true`).
+///
+/// A block-level Element child's own converted content already opens and
+/// closes with a blank line, so appending two such children back to back
+/// stacks both sides' blank lines. `push_element_content` below caps the
+/// newline run straddling that junction at 2 (T-FC038); it runs only for
+/// Element children, so a Text child's own embedded newlines — real line
+/// breaks the surrounding preformatted text depends on — are never touched.
 fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
     let mut content = String::new();
     let mut markdown_translated = true;
@@ -175,13 +182,36 @@ fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
             NodeData::Element { .. } => {
                 if let Some(res) = handlers.handle(child) {
                     markdown_translated &= res.markdown_translated;
-                    content.push_str(&res.content);
+                    push_element_content(&mut content, &res.content);
                 }
             }
             _ => {}
         }
     }
     (content, markdown_translated)
+}
+
+/// Appends `addition` to `content`, capping the run of newlines straddling
+/// the junction (trailing newlines already in `content` plus `addition`'s own
+/// leading newlines) at 2. Newlines beyond that are trimmed off `content`'s
+/// tail first and, if the tail alone cannot absorb the excess, off
+/// `addition`'s head — so the combined boundary reads as at most one blank
+/// line regardless of how many newlines either side's own wrapping
+/// contributed. Both counts are `\n`, a 1-byte ASCII character, so trimming
+/// by character count is always a valid byte-boundary cut.
+fn push_element_content(content: &mut String, addition: &str) {
+    let trailing = content.chars().rev().take_while(|&c| c == '\n').count();
+    let leading = addition.chars().take_while(|&c| c == '\n').count();
+    let total = trailing + leading;
+    if total > 2 {
+        let excess = total - 2;
+        let cut_from_content = excess.min(trailing);
+        content.truncate(content.len() - cut_from_content);
+        let cut_from_addition = excess - cut_from_content;
+        content.push_str(&addition[cut_from_addition..]);
+    } else {
+        content.push_str(addition);
+    }
 }
 
 /// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
@@ -964,12 +994,14 @@ mod tests {
 
     /// [T-FC022] 原文の行頭にあるバックスラッシュとバッククォートの並びがそのまま残る
     ///
-    /// `escape_pre_text_if_needed` only inspects the first character of the
-    /// whole text node (htmd-0.5.5/src/dom_walker.rs:423-426), so a literal
-    /// `` \` `` sequence occurring after the text node's first character is
-    /// never touched by htmd. This pins that the stripping added for T-FC021
-    /// targets only the walked content's overall leading position, not every
-    /// line head inside it.
+    /// `escape_pre_text_if_needed` only ever escapes a text node's very first
+    /// character (htmd-0.5.5/src/dom_walker.rs:423-426), so a `` \` `` sequence
+    /// occurring later in the same text is source content htmd never touches
+    /// either. `raw_pre_content` copies a Text child's `contents` straight off
+    /// the DOM with no position-based logic of its own, so a mid-content
+    /// `` \` `` survives the same way T-FC021's leading one does: both reach
+    /// the output because nothing on this crate's side inspects position at
+    /// all.
     #[test]
     fn literal_backslash_backtick_pair_mid_content_survives_unstripped() {
         let article = article("<pre>abc\n\\` def</pre>");
@@ -985,11 +1017,14 @@ mod tests {
 
     /// [T-FC027] 原文の先頭にあるバックスラッシュとバッククォートの並びがそのまま残る
     ///
-    /// `escape_pre_text_if_needed` prepends its backslash only when the text
-    /// node's first character is `` ` `` or `~`
-    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so source text that already
-    /// opens with `` \` `` reaches the handler untouched. Telling the two apart
-    /// needs the DOM: the walked content is the same `` \` `` either way.
+    /// `escape_pre_text_if_needed` prepends its own backslash only when the
+    /// text node's first character is `` ` `` or `~`
+    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so a text node whose source
+    /// already opens with `` \` `` reaches htmd's walk untouched: the walked
+    /// content is the same `` \` `` either way. `raw_pre_content` never reads
+    /// that walked content for a Text child, so it does not need to tell the
+    /// two cases apart; copying `contents` straight off the DOM reproduces the
+    /// source `` \` `` regardless of which case produced it.
     #[test]
     fn source_leading_backslash_backtick_pair_survives_unstripped() {
         let article = article("<pre>\\`hello</pre>");
@@ -1005,9 +1040,13 @@ mod tests {
 
     /// [T-FC029] コメントノードが先行しても htmd のエスケープはフェンス内に残らない
     ///
-    /// The escape lands on the first *text* child, which a comment or any other
-    /// non-text node can precede. Looking only at the element's first child
-    /// would read that node instead and leave the backslash in place.
+    /// A `<!-- comment -->` direct child matches neither `NodeData::Text` nor
+    /// `NodeData::Element` in `raw_pre_content`'s loop, so it falls through the
+    /// catch-all arm and adds nothing to the rebuilt content. The loop keeps
+    /// walking past it and reaches the following Text child on that child's
+    /// own turn, copying its `contents` straight off the DOM the same as when
+    /// no comment precedes it: reading every child in order, rather than only
+    /// the first, is what makes a preceding comment harmless here.
     #[test]
     fn htmd_leading_backslash_is_stripped_when_a_comment_precedes_the_text() {
         let article = article("<pre><!-- c -->`hello</pre>");
