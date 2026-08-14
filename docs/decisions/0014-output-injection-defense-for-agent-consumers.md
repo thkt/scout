@@ -8,11 +8,11 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-scout の主 consumer は AI エージェントで、fetch / search / GitHub / Slack の結果を直接 context に取り込んで判断や次のアクションに使う。取得元は信頼できない Web ページや外部 message であり、本文に active markup や構造マーカーを仕込むことでエージェントの解釈を歪められる。代表的な注入面は次の 4 つである。
+scout の主 consumer は AI エージェントで、fetch/search/GitHub/Slack の結果を直接 context に取り込んで判断や次のアクションに使う。取得元は信頼できない Web ページや外部 message であり、本文に active markup や構造マーカーを仕込むことでエージェントの解釈を歪められる。代表的な注入面は次の 4 つである。
 
-1. URL scheme 注入: markdown link に `javascript:` / `data:` を埋め、クリックや naive parser で実行を誘う
-2. YAML 構造注入: frontmatter を付ける出力で、本文の行頭 `---` / `...` が新しい YAML document として解釈され、偽の frontmatter を差し込める
-3. markdown メタ文字注入: `|` `[]()`・改行で table / link / 見出し構造を壊し、本文を scout 自身の構造に偽装する
+1. URL scheme 注入: markdown link に `javascript:`/`data:` を埋め、クリックや naive parser で実行を誘う
+2. YAML 構造注入: frontmatter を付ける出力で、本文の行頭 `---`/`...` が新しい YAML document として解釈され、偽の frontmatter を差し込める
+3. markdown メタ文字注入: `|` `[]()`・改行で table/link/見出し構造を壊し、本文を scout 自身の構造に偽装する
 4. 制御文字注入: null byte や改行で parser を壊す
 
 scout はこれらの中和を出力境界に実装しているが、方針 (どこで何を中和するか、strip か escape か、HTML 層との分担) が ADR として記録されていない。
@@ -20,8 +20,8 @@ scout はこれらの中和を出力境界に実装しているが、方針 (ど
 ## Decision Drivers
 
 - エージェントは人間のレビューを介さず scout 出力を読むため、注入は silent に効く
-- fetch / search / Slack / GitHub の全 backend で一貫した保証が要る (per-site 例外は脆い)
-- HTML→markdown 変換の script 除去は変換ライブラリの責務で、scout は markdown / YAML 層の保証を上乗せする
+- fetch/search/Slack/GitHub の全 backend で一貫した保証が要る (per-site 例外は脆い)
+- HTML→markdown 変換の script 除去は変換ライブラリの責務で、scout は markdown/YAML 層の保証を上乗せする
 
 ## Considered Options
 
@@ -31,23 +31,30 @@ scout はこれらの中和を出力境界に実装しているが、方針 (ど
 
 ## Decision Outcome
 
-Chosen option: Option A。出力境界の中和を `src/markdown.rs` と `src/fetch/converter.rs` の少数の `pub(crate)` 関数に集約し、全 backend がそれを経由する。URL は http/https のみ clickable link にし、他 scheme は不活性な `text (url)` へ流す。markdown メタ文字は escape し改行は空白へ畳む。YAML 値は backslash escape し、本文行頭の `---`/`...` は `***` へ書き換える。`<script>`/`<style>` 等 active HTML の除去は Readability (dom_smoothie) と html2md (fast_html2md) に委譲し、scout は変換後の markdown/YAML 層を担う。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
+Chosen option: Option A。出力境界の中和を `src/markdown.rs` と `src/fetch/converter.rs` の少数の `pub(crate)` 関数に集約し、全 backend がそれを経由する。URL は http/https のみ clickable link にし、他 scheme は不活性な `text (url)` へ流す。markdown メタ文字は escape し改行は空白へ畳む。YAML 値は backslash escape する。
+
+本文行頭の `---`/`...` の書き換えは、fetch と Slack で経路を分ける。fetch は `neutralize_yaml_markers_outside_fences` (src/yaml.rs) を経由し、`fence_marker` (src/markdown.rs) でフェンスの開始・継続・終了を追跡する。閉じたフェンスの内側にあるマーカー行は取得元ページのコードブロックの一部として原文のまま返す。フェンスが本文の終わりまで閉じない場合は、開いたと判定したフェンス自体を信用せず、本文全体を fence 非対応の `neutralize_yaml_markers` に通した結果へ fail-closed で切り替え、フェンス以降を無中和のまま残さない。Slack は `neutralize_yaml_markers` を直接経由し、フェンスの内外を区別せず全行を書き換える。Slack の message 本文はほぼ生のまま leaf に渡るため、fetch と同じフェンス追跡を持ち込むと、攻撃者が閉じないフェンスを 1 行打つだけで以降の本文が無中和になる経路を開く。fetch 側の忠実性向上のためだけに Slack 側の注入防御を緩める変更はしない。
+
+`<script>`/`<style>` 等 active HTML の除去は Readability (dom_smoothie) と html2md (fast_html2md) に委譲し、scout は変換後の markdown/YAML 層を担う。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
 
 Option B は policy 管理コストが高く per-site ルールが脆いため却下。エージェント consumer は全取得元に対し予測可能な保証を要する。Option C は防御を下流 (時に人間の端末) に押し付け誤りやすいため却下。
 
 ### Consequences
 
 - Good, because 未知 scheme・難読化 URL・制御文字を素通しせず fail-closed で中和し、`javascript:` URL が clickable link になることを防ぐ
-- Good, because fetch / search / Slack / GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する
+- Good, because fetch/search/Slack/GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する。フェンス追跡のように経路が分かれる箇所は、分ける理由 (fetch は取得ページの忠実な再現、Slack は生に近い攻撃者制御入力) を関数選択の差として明示する
 - Good, because HTML 層の script 除去は変換ライブラリに委譲し、scout は markdown/YAML 層の保証に集中する
 - Good, because escape 系関数は clean input で借用を返し common path でゼロアロケーション
+- Good, because fetch はフェンスが本文末尾まで閉じない場合、開いたと判定したフェンス自体を信用せず本文全体を書き換える fail-closed に倒すため、フェンス構文の偽装による中和回避を許さない
+- Bad, because Slack はフェンス追跡を持たないため、Slack 上のコードブロックであっても `---`/`...` を含む行は `***` に書き換わり、fetch と異なり原文と一致しない。message 本文がほぼ生で共有 leaf に渡る Slack でフェンス追跡を緩めると、攻撃者が閉じないフェンスを打つだけで以降が無中和になるため、意図して見送る
+- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。その穴は scout 自身が出す Slack の reply 区切りと research 出力の `---` で既に開いており、フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
 - Bad, because HTML 層の script 除去は fast_html2md に依存し scout は再検証しないため、ライブラリが退行すると実行可能 markup が漏れうる
 
 ### Confirmation
 
-中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD018]` が escape / 改行畳み / scheme allowlist / 難読化 fail-closed / 見出し shift を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
+中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C040, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
 
 ## Pros and Cons of the Options
 
@@ -79,15 +86,17 @@ scout は素通しし parser 側の安全性に依存する。
 
 ### 中和点 (一次ソース)
 
-| 関数                      | 場所                    | 中和内容                                                                                 |
-| ------------------------- | ----------------------- | ---------------------------------------------------------------------------------------- |
-| `md_link`                 | src/markdown.rs:26-40   | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否             |
-| `escape_md_inline`        | src/markdown.rs:44-57   | `\|` `[]()` escape、改行を空白へ畳む                                                     |
-| `escape_md_link`          | src/markdown.rs:6-19    | link target の `[]()` escape、改行畳み                                                   |
-| `sanitize_heading`        | src/markdown.rs:64-71   | 見出し内改行を空白へ                                                                     |
-| `shift_headings`          | src/markdown.rs:109-140 | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip) |
-| `escape_yaml`             | src/yaml.rs:61-83       | `\` `"` `\n\r\t` を escape、`\0` を除去                                                  |
-| `neutralize_yaml_markers` | src/yaml.rs:15-32       | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変                               |
+| 関数                                     | 場所                    | 中和内容                                                                                                                                                                     |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `md_link`                                | src/markdown.rs:26-40   | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                 |
+| `escape_md_inline`                       | src/markdown.rs:44-57   | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                         |
+| `escape_md_link`                         | src/markdown.rs:6-19    | link target の `[]()` escape、改行畳み                                                                                                                                       |
+| `sanitize_heading`                       | src/markdown.rs:64-71   | 見出し内改行を空白へ                                                                                                                                                         |
+| `shift_headings`                         | src/markdown.rs:109-140 | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                     |
+| `fence_marker`                           | src/markdown.rs:176-183 | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                              |
+| `escape_yaml`                            | src/yaml.rs:61-83       | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                      |
+| `neutralize_yaml_markers`                | src/yaml.rs:17-26       | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
+| `neutralize_yaml_markers_outside_fences` | src/yaml.rs:62-87       | fetch 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
 
 ### HTML 層の分担
 
@@ -95,9 +104,10 @@ scout は素通しし parser 側の安全性に依存する。
 
 ### 参照
 
-- `src/markdown.rs` (markdown 層中和 + テスト T-MD001..018)
-- `src/yaml.rs` (frontmatter YAML 無害化 leaf + テスト T-FC003..007, T-FC012)
-- `src/fetch/converter.rs` (frontmatter 組み立て + テスト T-FC001, T-FC002, T-FC008)
+- `src/markdown.rs` (markdown 層中和 + テスト T-MD001..018、フェンス判定 `fence_marker` + テスト T-MD032..035)
+- `src/yaml.rs` (frontmatter YAML 無害化 leaf + テスト T-FC003..007, T-FC012、フェンス外限定の `neutralize_yaml_markers_outside_fences` + テスト T-FC030..033)
+- `src/fetch/converter.rs` (frontmatter 組み立て + テスト T-FC001, T-FC002, T-FC008。`format_with_frontmatter` は `neutralize_yaml_markers_outside_fences` を経由する)
+- `tests/output_injection.rs:T-C040, T-C041` (fetch 出力での閉じたフェンス保存/閉じないフェンスの fail-closed 切り替えを、実際の変換経路越しに固定する統合テスト)
 - `src/search/engine.rs` + `src/search/engine/tests.rs:T-SE010` (search 出力中和)
-- `src/slack/format.rs:90-130` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用)
+- `src/slack/format.rs:90-130` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用。フェンス非対応のまま直接経由することを `src/slack/format/format_tests.rs:T-SK088` が pin する)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #2)
