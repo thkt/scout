@@ -388,20 +388,41 @@ fn is_row(node: &Rc<Node>) -> bool {
     matches!(&node.data, NodeData::Element { name, .. } if name.local.as_ref() == "tr")
 }
 
-/// Whether `row_node` carries at least one `<th>` cell, the positional
-/// analogue of the built-in's "first th-row becomes the header" rule
-/// (htmd-0.5.5/src/element_handler/table.rs:83-93, 106-117).
-fn row_has_header_cell(row_node: &Rc<Node>) -> bool {
-    row_node.children.borrow().iter().any(
-        |cell| matches!(&cell.data, NodeData::Element { name, .. } if name.local.as_ref() == "th"),
-    )
+/// Whether every cell in `row_node` is a `<th>`, and there is at least one.
+///
+/// The built-in promotes any row holding a single `<th>`
+/// (htmd-0.5.5/src/element_handler/table.rs:83-93, 106-117). That rule turns a
+/// `<tr><th>label</th><td>value</td></tr>` row-heading row into a column
+/// header, inventing a column name out of the row's own label — nginx's
+/// directive tables read `Syntax:` as a column that way. Requiring every cell
+/// to be a `<th>` leaves such a row in the body, and the table surfaces with an
+/// empty header row instead of a false one.
+///
+/// Only element children count: a `<tr>` written across several source lines
+/// carries whitespace text nodes between its cells. An empty `<tr>` never
+/// qualifies, so `all` cannot promote it on a vacant iterator.
+fn row_is_all_header_cells(row_node: &Rc<Node>) -> bool {
+    let children = row_node.children.borrow();
+    let mut cells = children.iter().filter_map(|cell| match &cell.data {
+        NodeData::Element { name, .. } => match name.local.as_ref() {
+            tag @ ("th" | "td") => Some(tag),
+            _ => None,
+        },
+        _ => None,
+    });
+    let mut saw_cell = false;
+    let all_th = cells.all(|tag| {
+        saw_cell = true;
+        tag == "th"
+    });
+    saw_cell && all_th
 }
 
 /// Extracts one body-level row (a `tbody`/`tfoot` row, or a bare `<tr>`
 /// directly under `<table>`) and resolves the header search against it: the
 /// first such row to reach this function decides `*header_decided`, and if
-/// it carries a `<th>` cell its extracted cells become `*headers` instead of
-/// a data row. Shared by the `"tbody" | "tfoot"` and `"tr"` match arms in
+/// every one of its cells is a `<th>` its extracted cells become `*headers`
+/// instead of a data row. Shared by the `"tbody" | "tfoot"` and `"tr"` match arms in
 /// `table_handler`, which differ only in how many row nodes they hand this
 /// function — a loop over `tbody`/`tfoot`'s rows versus a single top-level
 /// `<tr>`.
@@ -415,7 +436,7 @@ fn extract_data_row(
     let (cells, translated) = extract_row_cells(handlers, row_node);
     if !*header_decided {
         *header_decided = true;
-        if row_has_header_cell(row_node) {
+        if row_is_all_header_cells(row_node) {
             *headers = cells;
             return translated;
         }
@@ -544,10 +565,6 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     // The body is untrusted page content appended after the frontmatter, so a
     // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
     let body = neutralize_yaml_markers(markdown);
-
-    if fields.is_empty() {
-        return body;
-    }
 
     let mut fm = String::from("---\n");
     fm.push_str(&fields);
@@ -1190,9 +1207,11 @@ mod tests {
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
 
+        // Anchored on the pipe so the frontmatter's own `---` delimiter cannot
+        // stand in for the separator row.
         let separator_line = markdown
             .lines()
-            .find(|line| line.contains('-'))
+            .find(|line| line.starts_with("| ---"))
             .expect("a dash separator row must be present");
 
         assert_eq!(
@@ -1396,16 +1415,17 @@ mod tests {
     /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
     ///
     /// U-002's contract requires an empty header row when no row qualifies as
-    /// a header ("該当が無ければ空のヘッダ行が出る"). The current
-    /// implementation instead skips the header/separator block entirely when
-    /// `headers` stays empty (`if !headers.is_empty() { ... }`), so a table
-    /// with no `<thead>` and no all-`<th>` row emits its data rows with no
-    /// header row at all.
+    /// a header ("該当が無ければ空のヘッダ行が出る"). The fixture is a
+    /// row-heading table whose first row mixes `<th>` and `<td>`: htmd's
+    /// built-in rule promotes any row holding a single `<th>`, which would read
+    /// `Name` as a column name and `Alice` as the value under it. Requiring
+    /// every cell to be a `<th>` keeps that row in the body, so the table opens
+    /// with an empty header row instead of a fabricated one.
     #[test]
     fn table_with_no_all_th_row_emits_an_empty_header_row_and_separator() {
         let article = article(
-            "<table><tbody><tr><td>A</td><td>B</td></tr>\
-             <tr><td>C</td><td>D</td></tr></tbody></table>",
+            "<table><tbody><tr><th>Name</th><td>Alice</td></tr>\
+             <tr><th>Age</th><td>30</td></tr></tbody></table>",
         );
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
@@ -1424,8 +1444,9 @@ mod tests {
             "the line right after the empty header row must be the dash separator row:\n{markdown}"
         );
         assert!(
-            markdown.contains("| A | B |") && markdown.contains("| C | D |"),
-            "the table's data rows must still be present after the empty header:\n{markdown}"
+            markdown.contains("| Name | Alice |") && markdown.contains("| Age | 30 |"),
+            "both row-heading rows must stay in the body after the empty header, label and \
+             value together:\n{markdown}"
         );
     }
 }
