@@ -1449,4 +1449,120 @@ mod tests {
              value together:\n{markdown}"
         );
     }
+
+    /// [T-FC069] thead を持たない表で全セルが th の最初の行がヘッダ行になる
+    ///
+    /// The affirmative half of the all-`<th>` rule. T-FC067 pins the rejection
+    /// side (a mixed row stays in the body) and T-FC064 promotes through
+    /// `<thead>`, which never consults the rule at all. A table whose first
+    /// `<tbody>` row is entirely `<th>` reaches the rule and must promote.
+    #[test]
+    fn all_th_first_body_row_becomes_the_header_without_a_thead() {
+        let article = article(
+            "<table><tbody><tr><th>Name</th><th>Age</th></tr>\
+             <tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "| Name | Age |")
+            .expect("the all-th first body row must become the header row");
+        assert_eq!(
+            lines.get(header_idx + 1).copied(),
+            Some("| --- | --- |"),
+            "the separator row must follow the promoted header row:\n{markdown}"
+        );
+        assert_eq!(
+            lines.get(header_idx + 2).copied(),
+            Some("| Alice | 30 |"),
+            "the remaining row must stay a data row under the header:\n{markdown}"
+        );
+    }
+
+    /// [T-FC070] caption を持つ表で caption がヘッダ行の前に出る
+    ///
+    /// U-001's contract keeps the built-in's caption placement, which emits the
+    /// caption's own converted content ahead of the header row rather than
+    /// dropping it (htmd-0.5.5/src/element_handler/table.rs:36-44).
+    #[test]
+    fn table_caption_precedes_the_header_row() {
+        let article = article(
+            "<table><caption>Population</caption>\
+             <thead><tr><th>City</th><th>Count</th></tr></thead>\
+             <tbody><tr><td>Osaka</td><td>2</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let caption_idx = lines
+            .iter()
+            .position(|line| line.contains("Population"))
+            .expect("the caption's text must reach the output");
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "| City | Count |")
+            .expect("the header row must be present");
+        assert!(
+            caption_idx < header_idx,
+            "the caption must precede the header row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC071] 行を持たない table が表として組み立てられずに退避する
+    ///
+    /// With no rows there is no column count to build a pipe table from, so the
+    /// handler walks the children and returns their content instead of emitting
+    /// a header row and separator for zero columns.
+    #[test]
+    fn table_with_no_rows_falls_back_to_its_walked_content() {
+        let article = article("<table><caption>Empty</caption></table>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Empty"),
+            "the table's own content must survive the fallback:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("---|") && !markdown.contains("| ---"),
+            "a table with no rows must not emit a separator row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC072] セルの間に改行がある tr でもセルが取り出される
+    ///
+    /// A `<tr>` written across source lines carries whitespace text nodes
+    /// between its cells. Both the cell walk and the all-`<th>` rule count
+    /// element children only, so the text nodes must not hide the cells or
+    /// block header promotion. The row also sits directly under `<table>` with
+    /// no `<tbody>`, which the browser parser preserves for a `<tr>` written
+    /// this way.
+    #[test]
+    fn cells_are_extracted_from_a_tr_split_across_source_lines() {
+        let article = article(
+            "<table>\n  <tr>\n    <th>Name</th>\n    <th>Age</th>\n  </tr>\n\
+             \n  <tr>\n    <td>Alice</td>\n    <td>30</td>\n  </tr>\n</table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| Name | Age |"),
+            "the whitespace between cells must not stop the all-th row from becoming the \
+             header:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("| Alice | 30 |"),
+            "both cells of the data row must be extracted past the whitespace text \
+             nodes:\n{markdown}"
+        );
+    }
 }
