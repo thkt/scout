@@ -11,14 +11,13 @@
 //! it reads as the page quoting sample output rather than an attempt to forge
 //! a document boundary; a marker line outside any fence, or inside a fence
 //! that never closes before the body ends, is still rewritten to `***` the
-//! same as the bare-paragraph cases `T-C029`/`T-C030`. `T-C040` pins the
-//! closed-fence preservation directly, and `T-C041` pins the unclosed-fence
-//! fallback. `T-C032` and `T-C039` exercise that same closed-fence
-//! preservation through the two different code paths `markdown_converter` can
-//! take to a fence — htmd's own `<pre><code>` handling and this crate's own
-//! `pre`-without-`<code>` handler (T-FC019) — and `T-C034` combines an
-//! outside-fence marker with a closed-fence one in one fixture to prove the
-//! two rules compose.
+//! same as the bare-paragraph cases `T-C029`/`T-C030`. `T-C041` pins the
+//! unclosed-fence fallback. `T-C032` and `T-C039` pin that closed-fence
+//! preservation directly, through the two different code paths
+//! `markdown_converter` can take to a fence — htmd's own `<pre><code>`
+//! handling and this crate's own `pre`-without-`<code>` handler (T-FC019) —
+//! and `T-C034` combines an outside-fence marker with a closed-fence one in
+//! one fixture to prove the two rules compose.
 //!
 //! Every scenario's fixture is a Readability-friendly article (title, byline,
 //! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
@@ -402,29 +401,6 @@ fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     );
 }
 
-// T-C040: fence_interior_yaml_marker_is_returned_verbatim
-#[test]
-fn fence_interior_yaml_marker_is_returned_verbatim() {
-    let context = "pre element marker inside a closed fence";
-    let Some(markdown) = fetch_markdown(
-        &article_html("<pre><code>---\nevil: true\n...\n</code></pre>"),
-        context,
-    ) else {
-        return;
-    };
-    let (_, body) = split_frontmatter(&markdown, context);
-
-    assert!(
-        body.contains("```\n---\nevil: true\n...\n```"),
-        "a YAML marker inside a closed fenced code block must survive verbatim, not be \
-         rewritten to ***, got body:\n{body}"
-    );
-    assert!(
-        !body.lines().any(|l| l == "***"),
-        "no bare --- or ... line inside the closed fence should be rewritten, got body:\n{body}"
-    );
-}
-
 // T-C041: unclosed_fence_body_falls_back_to_asterisks
 //
 // `<code>` content of two backticks forces htmd's inline-code delimiter to
@@ -504,7 +480,7 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 
 // T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
 //
-// T-C032/T-C039/T-C040 pin closed-fence preservation in isolation, T-C031
+// T-C032/T-C039 pin closed-fence preservation in isolation, T-C031
 // pins outside-fence rewriting in isolation, and T-C041 pins the
 // EOF-unclosed-fence fallback in isolation. Each of those fixtures carries
 // only one of the three shapes, so none of them proves what happens when a
@@ -546,7 +522,7 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
         body.contains("```\n***\nevil: true\n***\n```"),
         "the <pre> block must still render as a fenced code block, got body:\n{body}"
     );
-    // But unlike T-C032/T-C039/T-C040 (no unclosed fence anywhere in those
+    // But unlike T-C032/T-C039 (no unclosed fence anywhere in those
     // pages), this fence's own --- and ... lines are NOT left verbatim here:
     // the later unclosed fence invalidates fence-aware protection for the
     // whole body, so these are rewritten to *** the same as every other

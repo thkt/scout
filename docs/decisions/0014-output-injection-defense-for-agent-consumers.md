@@ -54,7 +54,7 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 
 ### Confirmation
 
-中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C040, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
+中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C032, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
 
 ## Pros and Cons of the Options
 
@@ -107,7 +107,7 @@ scout は素通しし parser 側の安全性に依存する。
 - `src/markdown.rs` (markdown 層中和 + テスト T-MD001..018、フェンス判定 `fence_marker` + テスト T-MD032..035)
 - `src/yaml.rs` (frontmatter YAML 無害化 leaf + テスト T-FC003..007, T-FC012、フェンス外限定の `neutralize_yaml_markers_outside_fences` + テスト T-FC030..033)
 - `src/fetch/converter.rs` (frontmatter 組み立て + テスト T-FC001, T-FC002, T-FC008。`format_with_frontmatter` は `neutralize_yaml_markers_outside_fences` を経由する)
-- `tests/output_injection.rs:T-C040, T-C041` (fetch 出力での閉じたフェンス保存/閉じないフェンスの fail-closed 切り替えを、実際の変換経路越しに固定する統合テスト)
+- `tests/output_injection.rs:T-C032, T-C041` (fetch 出力での閉じたフェンス保存/閉じないフェンスの fail-closed 切り替えを、実際の変換経路越しに固定する統合テスト)
 - `src/search/engine.rs` + `src/search/engine/tests.rs:T-SE010` (search 出力中和)
 - `src/slack/format.rs:90-130` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用。フェンス非対応のまま直接経由することを `src/slack/format/format_tests.rs:T-SK088` が pin する)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #2)
