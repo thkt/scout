@@ -1,7 +1,7 @@
 use std::rc::{Rc, Weak};
 
 use htmd::element_handler::{HandlerResult, Handlers};
-use htmd::options::Options;
+use htmd::options::{Options, TranslationMode};
 use htmd::{HtmlToMarkdown, Node};
 use markup5ever_rcdom::NodeData;
 use serde::Serialize;
@@ -89,6 +89,7 @@ fn markdown_converter() -> HtmlToMarkdown {
         .options(options)
         .add_handler(vec!["pre"], pre_handler)
         .add_handler(vec!["span"], span_handler)
+        .add_handler(vec!["table"], table_handler)
         .build()
 }
 
@@ -219,6 +220,299 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     parent
 }
 
+/// Fixes htmd's built-in `table_handler`'s per-tag row extraction
+/// (`extract_row_cells(handlers, row_node, "th")` /
+/// `extract_row_cells(handlers, row_node, "td")`,
+/// htmd-0.5.5/src/element_handler/table.rs:223-247): a row is scanned once
+/// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
+/// no `<thead>` — loses whichever tag that row's extraction call did not ask
+/// for (table.rs:83-100: the `tbody`/`tfoot` branch takes only the row's
+/// `<th>` cells for a candidate header row and `continue`s past its `<td>`
+/// cells once that extraction is non-empty; a later mixed row falls to the
+/// `<td>`-only extraction and loses its `<th>` label the same way). This
+/// handler instead reads each row's cells positionally in one pass
+/// (`extract_row_cells` below), so a label and its value from the same
+/// source row land in the same output row, in separate cells.
+///
+/// Row and separator formatting drop the built-in's column-width alignment
+/// padding, which widens every cell and dash run out to the column's longest
+/// cell. `format_table_row` below writes one space on each side of every cell
+/// regardless of a neighboring cell's width, so an empty or missing cell
+/// renders as a pipe and two spaces, and `format_separator_row` writes a
+/// fixed 3-dash run per cell.
+///
+/// Cell-content newline normalization, caption handling, and column-count
+/// estimation follow the built-in's shape.
+///
+/// Any non-`Pure` translation mode falls straight to `Handlers::fallback`,
+/// which reaches the built-in `table_handler` and its own
+/// `serialize_if_faithful!` gate (table.rs:19-24) rather than the positional
+/// extraction below. `markdown_converter` always builds with
+/// `Options::default()`, which is `TranslationMode::Pure`, so scout's own
+/// runtime never takes that branch; T-FC068 exercises it through a
+/// `Faithful`-mode converter built in the test.
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    if handlers.options().translation_mode != TranslationMode::Pure {
+        return handlers.fallback(element);
+    }
+
+    let mut captions: Vec<String> = Vec::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    // Whether the header search has already been resolved: by a `thead`'s
+    // first row, which always resolves it, or by the table's first row outside
+    // a `thead`, which resolves it whether or not `row_is_all_header_cells`
+    // promotes that row. Once true, every remaining row is a data row, a later
+    // all-`<th>` row and a `thead`'s second-and-later rows included. The search
+    // never re-opens past the first candidate, so no row order can rearrange
+    // the body.
+    let mut header_decided = false;
+    let mut markdown_translated = true;
+
+    for child in element.node.children.borrow().iter() {
+        let NodeData::Element { name, .. } = &child.data else {
+            continue;
+        };
+        match name.local.as_ref() {
+            "caption" => {
+                if let Some(res) = handlers.handle(child) {
+                    markdown_translated &= res.markdown_translated;
+                    captions.push(trim_document_whitespace(&res.content).to_owned());
+                }
+            }
+            "thead" => {
+                let mut thead_rows = row_children(child).into_iter();
+                // The thead's first row unconditionally becomes the header,
+                // regardless of whether its cells are `<th>` or `<td>` — the
+                // header search never falls through past a `thead`.
+                if let Some(row_node) = thead_rows.next() {
+                    let (cells, translated) = extract_row_cells(handlers, &row_node);
+                    headers = cells;
+                    markdown_translated &= translated;
+                    header_decided = true;
+                }
+                // A multi-row thead's remaining rows carry no further header
+                // candidacy; they surface as ordinary data rows.
+                for row_node in thead_rows {
+                    let (cells, translated) = extract_row_cells(handlers, &row_node);
+                    markdown_translated &= translated;
+                    if !cells.is_empty() {
+                        rows.push(cells);
+                    }
+                }
+            }
+            "tbody" | "tfoot" => {
+                for row_node in row_children(child) {
+                    markdown_translated &= extract_data_row(
+                        handlers,
+                        &row_node,
+                        &mut header_decided,
+                        &mut headers,
+                        &mut rows,
+                    );
+                }
+            }
+            "tr" => {
+                markdown_translated &= extract_data_row(
+                    handlers,
+                    child,
+                    &mut header_decided,
+                    &mut headers,
+                    &mut rows,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let num_columns = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if num_columns == 0 {
+        let content = handlers.walk_children(element.node).content;
+        let content = content.trim_matches('\n');
+        if content.is_empty() {
+            return None;
+        }
+        return Some(HandlerResult {
+            content: format!("\n\n{content}\n\n"),
+            markdown_translated,
+        });
+    }
+
+    let mut table_md = String::from("\n\n");
+    for caption in captions {
+        table_md.push_str(&caption);
+        table_md.push('\n');
+    }
+    // A header row (possibly empty, when no thead and no row qualified) and
+    // its separator always appear once the table has at least one column —
+    // per U-002's contract, "該当が無ければ空のヘッダ行が出る".
+    table_md.push_str(&format_table_row(&headers, num_columns));
+    table_md.push_str(&format_separator_row(num_columns));
+    for row in &rows {
+        table_md.push_str(&format_table_row(row, num_columns));
+    }
+    table_md.push('\n');
+
+    Some(HandlerResult {
+        content: table_md,
+        markdown_translated,
+    })
+}
+
+/// The `<tr>` children of a `<thead>`/`<tbody>`/`<tfoot>` node, collected
+/// eagerly since the borrow behind `children.borrow()` cannot outlive this
+/// call.
+fn row_children(node: &Rc<Node>) -> Vec<Rc<Node>> {
+    node.children
+        .borrow()
+        .iter()
+        .filter(|child| is_row(child))
+        .cloned()
+        .collect()
+}
+
+fn is_row(node: &Rc<Node>) -> bool {
+    matches!(&node.data, NodeData::Element { name, .. } if name.local.as_ref() == "tr")
+}
+
+/// Whether every cell in `row_node` is a `<th>`, and there is at least one.
+///
+/// The built-in promotes any row holding a single `<th>`
+/// (htmd-0.5.5/src/element_handler/table.rs:83-93, 106-117). That rule turns a
+/// `<tr><th>label</th><td>value</td></tr>` row-heading row into a column
+/// header, inventing a column name out of the row's own label — nginx's
+/// directive tables read `Syntax:` as a column that way. Requiring every cell
+/// to be a `<th>` leaves such a row in the body, and the table surfaces with an
+/// empty header row instead of a false one.
+///
+/// Only element children count: a `<tr>` written across several source lines
+/// carries whitespace text nodes between its cells. An empty `<tr>` never
+/// qualifies, so `all` cannot promote it on a vacant iterator.
+fn row_is_all_header_cells(row_node: &Rc<Node>) -> bool {
+    let children = row_node.children.borrow();
+    let mut cells = children.iter().filter_map(|cell| match &cell.data {
+        NodeData::Element { name, .. } => match name.local.as_ref() {
+            tag @ ("th" | "td") => Some(tag),
+            _ => None,
+        },
+        _ => None,
+    });
+    let mut saw_cell = false;
+    let all_th = cells.all(|tag| {
+        saw_cell = true;
+        tag == "th"
+    });
+    saw_cell && all_th
+}
+
+/// Extracts one body-level row (a `tbody`/`tfoot` row, or a bare `<tr>`
+/// directly under `<table>`) and resolves the header search against it: the
+/// first such row to reach this function decides `*header_decided`, and if
+/// every one of its cells is a `<th>` its extracted cells become `*headers`
+/// instead of a data row. Shared by the `"tbody" | "tfoot"` and `"tr"` match arms in
+/// `table_handler`, which differ only in how many row nodes they hand this
+/// function — a loop over `tbody`/`tfoot`'s rows versus a single top-level
+/// `<tr>`.
+fn extract_data_row(
+    handlers: &dyn Handlers,
+    row_node: &Rc<Node>,
+    header_decided: &mut bool,
+    headers: &mut Vec<String>,
+    rows: &mut Vec<Vec<String>>,
+) -> bool {
+    let (cells, translated) = extract_row_cells(handlers, row_node);
+    if !*header_decided {
+        *header_decided = true;
+        if row_is_all_header_cells(row_node) {
+            *headers = cells;
+            return translated;
+        }
+    }
+    if !cells.is_empty() {
+        rows.push(cells);
+    }
+    translated
+}
+
+/// Extracts a row's `<th>`/`<td>` cells positionally, in source order,
+/// passing each cell's conversion to `Handlers::handle` (dispatches to
+/// htmd's built-in `td_th_handler`) rather than filtering by a single tag
+/// the way the built-in `extract_row_cells` does.
+fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<String>, bool) {
+    let mut cells = Vec::new();
+    let mut markdown_translated = true;
+
+    for cell in row_node.children.borrow().iter() {
+        let is_cell = matches!(&cell.data, NodeData::Element { name, .. } if matches!(name.local.as_ref(), "th" | "td"));
+        if !is_cell {
+            continue;
+        }
+        let Some(res) = handlers.handle(cell) else {
+            continue;
+        };
+        markdown_translated &= res.markdown_translated;
+        cells.push(normalize_cell_content(&res.content));
+    }
+
+    (cells, markdown_translated)
+}
+
+/// Mirrors htmd's built-in `normalize_cell_content`
+/// (htmd-0.5.5/src/element_handler/table.rs:250-256): folds `\n` to a space
+/// and drops `\r` so multi-line cell content cannot split the pipe-delimited
+/// row, escapes `|` so cell content cannot introduce a spurious column, then
+/// trims tab/newline/CR/space from both ends. Unlike a general whitespace
+/// collapse, this does not touch other whitespace-like characters (e.g. NBSP
+/// U+00A0), which must survive unchanged inside the cell.
+fn normalize_cell_content(content: &str) -> String {
+    let content = content
+        .replace('\n', " ")
+        .replace('\r', "")
+        .replace('|', "&#124;");
+    trim_document_whitespace(&content).to_owned()
+}
+
+/// Trims the same whitespace set as htmd's private
+/// `TrimDocumentWhitespace::trim_document_whitespace`
+/// (htmd-0.5.5/src/text_util.rs:14-16, 215-217): tab, newline, CR, and space
+/// only, so NBSP and other non-ASCII whitespace-like characters are left in
+/// place.
+fn trim_document_whitespace(s: &str) -> &str {
+    s.trim_matches(|c: char| matches!(c, '\t' | '\n' | '\r' | ' '))
+}
+
+/// Writes one pipe-delimited row with a fixed one space of padding on each
+/// side of every cell — no column-width alignment padding. A cell shorter
+/// than `num_columns` (row too short) or empty renders as `|  |` (pipe,
+/// space, space, pipe), per the contract's spec for an empty cell.
+fn format_table_row(row: &[String], num_columns: usize) -> String {
+    let mut line = String::from("|");
+    for i in 0..num_columns {
+        let cell = row.get(i).map(String::as_str).unwrap_or("");
+        line.push(' ');
+        line.push_str(cell);
+        line.push_str(" |");
+    }
+    line.push('\n');
+    line
+}
+
+/// Writes the dash separator row: exactly 3 dashes per cell, unpadded to
+/// column width.
+fn format_separator_row(num_columns: usize) -> String {
+    let mut line = String::from("|");
+    for _ in 0..num_columns {
+        line.push_str(" --- |");
+    }
+    line.push('\n');
+    line
+}
+
 pub(super) fn to_fetch_result(
     article: &ExtractedArticle,
     url: String,
@@ -239,24 +533,35 @@ pub(super) fn to_fetch_result(
     })
 }
 
+/// Wraps `markdown` in a `---`-delimited YAML frontmatter block carrying
+/// whichever of title/author/date the article provides. When the article
+/// carries none of the three, the wrapper is skipped entirely rather than
+/// emitting an empty `---\n---\n\n` shell: that shell holds no information
+/// and would otherwise put a bare `---` line ahead of the article's own
+/// content, which a caller scanning the body line-by-line (e.g. by leading
+/// `-`) cannot distinguish from content that starts with a dash.
 fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
-    let mut fm = String::from("---\n");
+    let mut fields = String::new();
 
     if let Some(title) = &article.title {
-        write_yaml_str(&mut fm, "title", title);
+        write_yaml_str(&mut fields, "title", title);
     }
     // "byline" is the Readability/journalism term; mapped to "author" for YAML frontmatter
     if let Some(author) = &article.byline {
-        write_yaml_str(&mut fm, "author", author);
+        write_yaml_str(&mut fields, "author", author);
     }
     if let Some(date) = &article.published_time {
-        write_yaml_str(&mut fm, "date", date);
+        write_yaml_str(&mut fields, "date", date);
     }
 
-    fm.push_str("---\n\n");
     // The body is untrusted page content appended after the frontmatter, so a
     // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
-    fm.push_str(&neutralize_yaml_markers(markdown));
+    let body = neutralize_yaml_markers(markdown);
+
+    let mut fm = String::from("---\n");
+    fm.push_str(&fields);
+    fm.push_str("---\n\n");
+    fm.push_str(&body);
     fm
 }
 
@@ -278,10 +583,10 @@ mod tests {
 
     /// [T-FC023] table の出力がヘッダ行に続く区切り行を含む
     ///
-    /// htmd's `table_handler` pushes the header row (`format_row_padded`)
-    /// immediately followed by the separator row (`format_separator_padded`)
-    /// with no blank line between them
-    /// (htmd-0.5.5/src/element_handler/table.rs:178-183).
+    /// This file's own `table_handler` pushes the header row
+    /// (`format_table_row`) immediately followed by the separator row
+    /// (`format_separator_row`) with no blank line between them
+    /// (converter.rs:372-373).
     #[test]
     fn table_output_includes_a_separator_row_following_the_header_row() {
         let article = article(
@@ -357,10 +662,10 @@ mod tests {
 
     /// [T-FC025] td の中の pre が表の行を分断しない
     ///
-    /// A table cell's content passes through `normalize_cell_content`, which
-    /// replaces every `\n` with a single space before the cell is written
-    /// into the pipe-delimited row
-    /// (htmd-0.5.5/src/element_handler/table.rs:227-233).
+    /// `extract_row_cells` above passes each cell's content through this
+    /// file's own `normalize_cell_content`, which replaces every `\n` with a
+    /// single space before the cell is written into the pipe-delimited row
+    /// (converter.rs:427, 440-446).
     #[test]
     fn td_pre_does_not_split_the_table_row() {
         let article = article(
@@ -802,6 +1107,128 @@ mod tests {
         );
     }
 
+    /// [T-FC060] th と td が混ざる行でラベルと値が同じ行の別セルに出る
+    ///
+    /// The row shape the whole handler exists for. Under the built-in's
+    /// per-tag extraction, described on `table_handler` above, this row keeps
+    /// "Name" and drops "Alice"; the positional walk must carry both into the
+    /// same output row, in separate cells.
+    #[test]
+    fn label_and_value_from_a_mixed_th_td_row_land_in_the_same_row_in_separate_cells() {
+        let article = article(
+            "<table><tbody><tr><th>Name</th><td>Alice</td></tr>\
+             <tr><th>Age</th><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let name_row = markdown
+            .lines()
+            .find(|line| line.contains("Name"))
+            .expect("a row carrying the Name label must be present");
+        assert!(
+            name_row.contains("Alice"),
+            "the th label and its td value from the same source row must land in the same \
+             output row:\n{markdown}"
+        );
+
+        let age_row = markdown
+            .lines()
+            .find(|line| line.contains("Age"))
+            .expect("a row carrying the Age label must be present");
+        assert!(
+            age_row.contains("30"),
+            "the th label and its td value from the same source row must land in the same \
+             output row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC061] パイプで囲まれた行の中に空白 2 個以上の連続が現れない
+    ///
+    /// htmd's built-in row formatter pads every cell out to the column's max
+    /// width across the whole table (`compute_column_widths` /
+    /// `format_row_padded`, htmd-0.5.5/src/element_handler/table.rs:258-270,
+    /// 281-299), so a cell shorter than its column produces a run of two or
+    /// more spaces before the next `|`. The contract's row format carries no
+    /// such alignment padding, so a cell shorter than its neighbor's width
+    /// must not leave a multi-space run in the row.
+    #[test]
+    fn table_row_between_pipes_has_no_run_of_two_or_more_spaces() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>City</th></tr></thead>\
+             <tbody><tr><td>Al</td><td>Springfield</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let data_row = markdown
+            .lines()
+            .find(|line| line.contains("Al") && line.contains("Springfield"))
+            .expect("the data row must be present");
+
+        assert!(
+            !data_row.contains("  "),
+            "a table row must carry no run of two or more consecutive spaces \
+             (no column-width alignment padding):\n{markdown}"
+        );
+    }
+
+    /// [T-FC062] 区切り行がセルごとにダッシュ 3 本で出る
+    ///
+    /// htmd's built-in `format_separator_padded` widens each column's dash run
+    /// to that column's computed width (htmd-0.5.5/src/element_handler/
+    /// table.rs:272-279), so "Name"/"Alice" produce a 5-dash column rather
+    /// than the fixed 3 the contract specifies.
+    #[test]
+    fn separator_row_has_exactly_three_dashes_per_cell() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Age</th></tr></thead>\
+             <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        // Anchored on the pipe so the frontmatter's own `---` delimiter cannot
+        // stand in for the separator row.
+        let separator_line = markdown
+            .lines()
+            .find(|line| line.starts_with("| ---"))
+            .expect("a dash separator row must be present");
+
+        assert_eq!(
+            separator_line, "| --- | --- |",
+            "the separator row must carry exactly three dashes per cell, unpadded to column \
+             width:\n{markdown}"
+        );
+    }
+
+    /// [T-FC063] セルの中の NBSP が空白へ落ちずに残る
+    ///
+    /// The contract requires cell-content newline normalization to follow the
+    /// built-in form (`normalize_cell_content` replaces `\n`/`\r` only,
+    /// htmd-0.5.5/src/element_handler/table.rs:250-256) rather than a general
+    /// whitespace collapse that would fold U+00A0 into an ASCII space. This
+    /// pins that a literal NBSP inside a cell reaches the output unchanged.
+    #[test]
+    fn nbsp_inside_a_cell_survives_without_collapsing_to_a_space() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Value</th></tr></thead>\
+             <tbody><tr><td>A\u{00A0}B</td><td>x</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("A\u{00A0}B"),
+            "a literal NBSP inside a cell must survive unchanged, not collapse to an ASCII \
+             space:\n{markdown}"
+        );
+    }
+
     /// [T-FC055] 隣の span が要素の子を持つ形でも pre の中の改行が残る
     ///
     /// The passthrough branch must walk the span's children through the full
@@ -821,6 +1248,300 @@ mod tests {
             markdown.contains("line1\n**line2**"),
             "the newline before a line-span with an element child must survive, and that \
              child element must still be converted to Markdown:\n{markdown}"
+        );
+    }
+
+    /// [T-FC064] ヘッダへ昇格した行の td が失われない
+    ///
+    /// A `<thead>`'s first row unconditionally becomes the header regardless
+    /// of whether its cells are `<th>` or `<td>` (U-002's contract: the header
+    /// search scope is limited to `thead`'s first row or the table's first
+    /// row, with no scan for "the first row that satisfies a condition"). A
+    /// mixed `<th>`/`<td>` first row inside `<thead>` must still carry every
+    /// cell — not just the `<th>` ones — into the header row.
+    #[test]
+    fn header_promoted_row_keeps_its_td_cells() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><td>Alice</td></tr></thead>\
+             <tbody><tr><td>Bob</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        let header_line = markdown
+            .lines()
+            .find(|line| line.contains("Name"))
+            .expect("the thead's first row must become the header row");
+        assert!(
+            header_line.contains("Alice"),
+            "the row promoted to header must keep its td cell alongside its th cell, \
+             not lose it:\n{markdown}"
+        );
+    }
+
+    /// [T-FC065] 本文の途中にある th だけの行がデータ行として出る
+    ///
+    /// The header search reaches only `thead`'s first row or the table's first
+    /// row (U-002's contract). An all-`<th>` row anywhere else stays a data row
+    /// even when the table's first row did not qualify as a header, because the
+    /// search never scans on for a later row that would.
+    #[test]
+    fn th_only_row_in_the_middle_of_the_body_appears_as_a_data_row() {
+        let article = article(
+            "<table><tbody><tr><td>Alice</td><td>30</td></tr>\
+             <tr><th>Bob</th><th>40</th></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let separator_idx = lines
+            .iter()
+            .position(|line| {
+                !line.is_empty()
+                    && line.contains('-')
+                    && line.chars().all(|c| c == '|' || c == '-' || c == ' ')
+            })
+            .expect("a dash separator row must be present");
+        let bob_idx = lines
+            .iter()
+            .position(|line| line.contains("Bob") && line.contains("40"))
+            .expect("the th-only row's cells must land in the same row");
+
+        assert!(
+            bob_idx > separator_idx,
+            "a th-only row that is not the table's first row must be emitted as a data row \
+             after the separator, not promoted to header:\n{markdown}"
+        );
+    }
+
+    /// [T-FC066] 複数行 thead の 2 行目以降がデータ行として出る
+    ///
+    /// Only a `thead`'s first row carries header candidacy (U-002's contract).
+    /// Its second and later rows must still reach the output, as data rows, so
+    /// a multi-row `<thead>` loses nothing.
+    #[test]
+    fn second_and_later_rows_of_a_multi_row_thead_appear_as_data_rows() {
+        let article = article(
+            "<table><thead><tr><th>Name</th><th>Age</th></tr>\
+             <tr><th>Category A</th><th>Category B</th></tr></thead>\
+             <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        markdown
+            .lines()
+            .find(|line| line.contains("Category A") && line.contains("Category B"))
+            .expect(
+                "the thead's second row must survive as a data row, not be dropped from the \
+                 output",
+            );
+    }
+
+    /// [T-FC068] Faithful モードで属性を持つ表が組み込みへ委譲され HTML のまま出る
+    ///
+    /// `markdown_converter` always builds with `Options::default()`
+    /// (`TranslationMode::Pure`), so this test builds its own converter with
+    /// `TranslationMode::Faithful`, registering the same `pre`/`span`/`table`
+    /// handlers, to reach the added `table` handler under a non-Pure mode.
+    ///
+    /// htmd's own built-in `table_handler` opens with
+    /// `serialize_if_faithful!(handlers, element, 0)`
+    /// (htmd-0.5.5/src/element_handler/table.rs:19), which returns the
+    /// element's raw HTML serialization, unconverted, whenever the mode is
+    /// `Faithful` and the element carries more than 0 attributes
+    /// (htmd-0.5.5/src/element_handler/element_util.rs:178-199). The
+    /// contract requires the added `table` handler to fall to
+    /// `Handlers::fallback` at its own entry whenever `translation_mode` is
+    /// not `Pure`, reaching that same built-in behavior — not run its own
+    /// positional cell extraction, which carries no such mode check and
+    /// would emit a pipe-delimited Markdown table regardless of mode.
+    #[test]
+    fn faithful_mode_table_with_attributes_delegates_to_the_built_in_handler_and_stays_html() {
+        use htmd::options::{Options, TranslationMode};
+
+        let options = Options {
+            translation_mode: TranslationMode::Faithful,
+            ..Options::default()
+        };
+        let converter = HtmlToMarkdown::builder()
+            .options(options)
+            .add_handler(vec!["pre"], pre_handler)
+            .add_handler(vec!["span"], span_handler)
+            .add_handler(vec!["table"], table_handler)
+            .build();
+
+        let html = r#"<table class="data"><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>"#;
+        let markdown = converter.convert(html).expect("conversion must succeed");
+
+        assert!(
+            markdown.contains("<table"),
+            "a table with attributes under Faithful mode must delegate to htmd's built-in \
+             table handler and come out as raw HTML, not the app's positional Markdown \
+             table:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("| Name |"),
+            "the app's own pipe-delimited table formatting must not run under Faithful \
+             mode:\n{markdown}"
+        );
+    }
+
+    /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
+    ///
+    /// U-002's contract requires an empty header row when no row qualifies as
+    /// a header ("該当が無ければ空のヘッダ行が出る"). The fixture is a
+    /// row-heading table whose first row mixes `<th>` and `<td>`: htmd's
+    /// built-in rule promotes any row holding a single `<th>`, which would read
+    /// `Name` as a column name and `Alice` as the value under it. Requiring
+    /// every cell to be a `<th>` keeps that row in the body, so the table opens
+    /// with an empty header row instead of a fabricated one.
+    #[test]
+    fn table_with_no_all_th_row_emits_an_empty_header_row_and_separator() {
+        let article = article(
+            "<table><tbody><tr><th>Name</th><td>Alice</td></tr>\
+             <tr><th>Age</th><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "|  |  |")
+            .expect("an empty header row must be present when no row qualifies as a header");
+        let separator_line = lines
+            .get(header_idx + 1)
+            .expect("a line must immediately follow the empty header row");
+        assert_eq!(
+            *separator_line, "| --- | --- |",
+            "the line right after the empty header row must be the dash separator row:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("| Name | Alice |") && markdown.contains("| Age | 30 |"),
+            "both row-heading rows must stay in the body after the empty header, label and \
+             value together:\n{markdown}"
+        );
+    }
+
+    /// [T-FC069] thead を持たない表で全セルが th の最初の行がヘッダ行になる
+    ///
+    /// The affirmative half of the all-`<th>` rule. T-FC067 pins the rejection
+    /// side (a mixed row stays in the body) and T-FC064 promotes through
+    /// `<thead>`, which never consults the rule at all. A table whose first
+    /// `<tbody>` row is entirely `<th>` reaches the rule and must promote.
+    #[test]
+    fn all_th_first_body_row_becomes_the_header_without_a_thead() {
+        let article = article(
+            "<table><tbody><tr><th>Name</th><th>Age</th></tr>\
+             <tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "| Name | Age |")
+            .expect("the all-th first body row must become the header row");
+        assert_eq!(
+            lines.get(header_idx + 1).copied(),
+            Some("| --- | --- |"),
+            "the separator row must follow the promoted header row:\n{markdown}"
+        );
+        assert_eq!(
+            lines.get(header_idx + 2).copied(),
+            Some("| Alice | 30 |"),
+            "the remaining row must stay a data row under the header:\n{markdown}"
+        );
+    }
+
+    /// [T-FC070] caption を持つ表で caption がヘッダ行の前に出る
+    ///
+    /// U-001's contract keeps the built-in's caption placement, which emits the
+    /// caption's own converted content ahead of the header row rather than
+    /// dropping it (htmd-0.5.5/src/element_handler/table.rs:36-44).
+    #[test]
+    fn table_caption_precedes_the_header_row() {
+        let article = article(
+            "<table><caption>Population</caption>\
+             <thead><tr><th>City</th><th>Count</th></tr></thead>\
+             <tbody><tr><td>Osaka</td><td>2</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+        let lines: Vec<&str> = markdown.lines().collect();
+
+        let caption_idx = lines
+            .iter()
+            .position(|line| line.contains("Population"))
+            .expect("the caption's text must reach the output");
+        let header_idx = lines
+            .iter()
+            .position(|line| *line == "| City | Count |")
+            .expect("the header row must be present");
+        assert!(
+            caption_idx < header_idx,
+            "the caption must precede the header row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC071] 行を持たない table が表として組み立てられずに退避する
+    ///
+    /// With no rows there is no column count to build a pipe table from, so the
+    /// handler walks the children and returns their content instead of emitting
+    /// a header row and separator for zero columns.
+    #[test]
+    fn table_with_no_rows_falls_back_to_its_walked_content() {
+        let article = article("<table><caption>Empty</caption></table>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Empty"),
+            "the table's own content must survive the fallback:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("---|") && !markdown.contains("| ---"),
+            "a table with no rows must not emit a separator row:\n{markdown}"
+        );
+    }
+
+    /// [T-FC072] セルの間に改行がある tr でもセルが取り出される
+    ///
+    /// A `<tr>` written across source lines carries whitespace text nodes
+    /// between its cells. Both the cell walk and the all-`<th>` rule count
+    /// element children only, so the text nodes must not hide the cells or
+    /// block header promotion. The row also sits directly under `<table>` with
+    /// no `<tbody>`, which the browser parser preserves for a `<tr>` written
+    /// this way.
+    #[test]
+    fn cells_are_extracted_from_a_tr_split_across_source_lines() {
+        let article = article(
+            "<table>\n  <tr>\n    <th>Name</th>\n    <th>Age</th>\n  </tr>\n\
+             \n  <tr>\n    <td>Alice</td>\n    <td>30</td>\n  </tr>\n</table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| Name | Age |"),
+            "the whitespace between cells must not stop the all-th row from becoming the \
+             header:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("| Alice | 30 |"),
+            "both cells of the data row must be extracted past the whitespace text \
+             nodes:\n{markdown}"
         );
     }
 }
