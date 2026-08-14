@@ -180,14 +180,14 @@ fn opens_with_escaped_fence_char(node: &Rc<Node>) -> bool {
 /// `find_handler`), and this handler runs first as the most-recently
 /// registered one.
 ///
-/// The `<pre>`-ancestor check below (`has_pre_ancestor`) looks for a `<pre>`
-/// ancestor only. That is narrower than htmd's own `is_inside_pre`
-/// (htmd-0.5.5/src/element_handler/mod.rs:358-367), which also treats a
-/// `<code>` ancestor as "inside pre": a `<span>` nested in inline `<code>`
-/// with no `<pre>` ancestor is not "suppressed" by this handler and falls
-/// through to `Handlers::fallback`, reaching htmd's built-in `span_handler`
-/// unchanged and keeping the inline-code handler's own newline-to-space
-/// folding.
+/// `has_pre_ancestor` below looks for a `<pre>` ancestor only, narrower than
+/// htmd's own `is_inside_pre` (htmd-0.5.5/src/element_handler/mod.rs:358-367),
+/// which counts a `<code>` ancestor as "inside pre" too. A `<span>` in inline
+/// `<code>` with no `<pre>` ancestor therefore falls to `Handlers::fallback`
+/// and htmd's built-in `span_handler` strips the newline from both edges of
+/// its content, before the inline-code handler's newline-to-space folding can
+/// reach it. T-FC054 pins that, and DR-0025 records why the narrower check
+/// stays.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -814,8 +814,7 @@ mod tests {
     /// ordinary text — `\ * _ \` [ ]` (htmd-0.5.5/src/dom_walker.rs:374-406) —
     /// but a `<pre><code>` text node takes the `is_pre && parent_tag != "pre"`
     /// branch, which copies the text through with no escaping at all
-    /// (htmd-0.5.5/src/dom_walker.rs:34-41). This pins that pass-through: none
-    /// of the six bytes gains a backslash inside a code block.
+    /// (htmd-0.5.5/src/dom_walker.rs:34-41).
     #[test]
     fn pre_code_escape_target_chars_are_not_backslash_escaped() {
         let article = article(r#"<pre><code>\ * _ ` [ ] end</code></pre>"#);
@@ -1025,9 +1024,8 @@ mod tests {
     /// htmd's built-in `span` fast path (dom_walker.rs:87-110, active while
     /// exactly one handler is registered for `span`) trims every leading and
     /// trailing `\n` off a span's own walked content regardless of a `<pre>`
-    /// ancestor. U-001 registers a `span` handler that passes a `<pre>`-nested
-    /// span's content through unmodified, so a trailing `\n` inside the span
-    /// must survive up to the sibling text that follows it.
+    /// ancestor. The sibling text after the span is where the surviving
+    /// newline becomes observable.
     #[test]
     fn trailing_newline_at_the_end_of_a_span_inside_pre_survives_in_the_output() {
         let article = article("<pre><span>line1\n</span>line2</pre>");
@@ -1043,16 +1041,14 @@ mod tests {
 
     /// [T-FC053] 行ごとに span を並べた pre で各行が別の行として出る
     ///
-    /// A syntax highlighter emits one `<span>` per source line, each carrying
-    /// its own trailing `\n`. The built-in fast path trims that `\n` off each
-    /// span independently, so adjacent lines collapse into one. U-001's `span`
-    /// handler must pass every such span's content through untouched so the
-    /// per-span newlines keep the lines apart.
+    /// The shape a syntax highlighter emits: one `<span>` per source line, each
+    /// carrying its own trailing `\n`, which the built-in fast path trims off
+    /// every span independently until the lines collapse into one.
     ///
-    /// Each span carries a distinct `data-line` attribute so htmd's adjacent-
-    /// element merge (`dom_walker::can_combine`, htmd-0.5.5/src/dom_walker.rs:
-    /// 250-307, gated on `attrs1 == attrs2`) does not fold the three sibling
-    /// spans into one node ahead of the per-span trim this test targets.
+    /// Each span carries a distinct `data-line` attribute so htmd's
+    /// adjacent-element merge (`dom_walker::can_combine`, gated on
+    /// `attrs1 == attrs2`) does not fold the three siblings into one node ahead
+    /// of the per-span trim this test targets.
     #[test]
     fn pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line() {
         let article = article(
@@ -1072,22 +1068,16 @@ mod tests {
 
     /// [T-FC054] pre の外の inline code の中の span では改行が剥がれ空白も残らない
     ///
-    /// U-001's ancestor check for the passthrough branch looks for a `<pre>`
-    /// ancestor only — narrower than htmd's `is_inside_pre`, which also treats
-    /// a `<code>` ancestor as "inside pre" (htmd-0.5.5/src/element_handler/
-    /// mod.rs:358-367). A span nested in inline `<code>` with no `<pre>`
-    /// ancestor therefore falls through to htmd's built-in span handler via
-    /// `Handlers::fallback`, and that handler's `content.trim_matches('\n')`
-    /// (htmd-0.5.5/src/element_handler/span.rs:33) removes the newline from
-    /// both edges of the span's content. The removal happens before
-    /// `handle_preformatted_code`'s own newline-to-space folding
-    /// (htmd-0.5.5/src/element_handler/code.rs:189-208) can reach it, so the
-    /// two lines join with no separator at all.
+    /// The passthrough branch checks for a `<pre>` ancestor only, so this span
+    /// falls to htmd's built-in span handler, whose `content.trim_matches('\n')`
+    /// (htmd-0.5.5/src/element_handler/span.rs:33) strips both edges before
+    /// `handle_preformatted_code` can fold the newline to a space. The lines
+    /// join with no separator at all.
     ///
-    /// Measured identical with the `span` registration removed, so this is
-    /// htmd's standing behavior rather than a difference U-001 introduces. A
-    /// newline sitting in the `<code>`'s own text node instead of inside a
-    /// span never reaches the span handler and still folds to a space.
+    /// The newline has to sit inside the span: in the `<code>`'s own text node
+    /// it never reaches the span handler and still folds to a space. Removing
+    /// the `span` registration leaves the output identical, so this is htmd's
+    /// standing behavior, not one U-001 introduces.
     #[test]
     fn span_inside_inline_code_outside_pre_loses_the_newline_entirely() {
         let article = article("<p><code><span>line1\n</span>line2</code></p>");
@@ -1148,11 +1138,10 @@ mod tests {
     ///
     /// htmd's built-in row formatter pads every cell out to the column's max
     /// width across the whole table (`compute_column_widths` /
-    /// `format_row_padded`, htmd-0.5.5/src/element_handler/table.rs:258-270,
-    /// 281-299), so a cell shorter than its column produces a run of two or
-    /// more spaces before the next `|`. The contract's row format carries no
-    /// such alignment padding, so a cell shorter than its neighbor's width
-    /// must not leave a multi-space run in the row.
+    /// `format_row_padded`, htmd-0.5.5/src/element_handler/table.rs:258-299),
+    /// so a cell shorter than its column produces a run of two or more spaces
+    /// before the next `|`. The fixture's cells differ in width, which is what
+    /// makes the absence of such a run discriminating.
     #[test]
     fn table_row_between_pipes_has_no_run_of_two_or_more_spaces() {
         let article = article(
@@ -1231,12 +1220,9 @@ mod tests {
 
     /// [T-FC055] 隣の span が要素の子を持つ形でも pre の中の改行が残る
     ///
-    /// The passthrough branch must walk the span's children through the full
-    /// handler chain (`Handlers::walk_children`, which recurses into nested
-    /// elements) rather than reading raw text only. A neighboring line-span
-    /// whose own child is an element (not a bare text node) must still convert
-    /// that nested element to Markdown while the preceding line-span's
-    /// trailing newline survives.
+    /// The neighboring span's child is an element rather than a bare text
+    /// node, which a passthrough reading raw text would leave unconverted.
+    /// `Handlers::walk_children` recurses into it instead.
     #[test]
     fn pre_newline_survives_when_the_neighboring_span_has_an_element_child() {
         let article = article("<pre><span>line1\n</span><span><b>line2</b></span></pre>");
@@ -1253,12 +1239,9 @@ mod tests {
 
     /// [T-FC064] ヘッダへ昇格した行の td が失われない
     ///
-    /// A `<thead>`'s first row unconditionally becomes the header regardless
-    /// of whether its cells are `<th>` or `<td>` (U-002's contract: the header
-    /// search scope is limited to `thead`'s first row or the table's first
-    /// row, with no scan for "the first row that satisfies a condition"). A
-    /// mixed `<th>`/`<td>` first row inside `<thead>` must still carry every
-    /// cell — not just the `<th>` ones — into the header row.
+    /// A `<thead>`'s first row becomes the header whatever its cells are, so
+    /// the all-`<th>` rule never runs on it. A mixed row there must reach the
+    /// header row with both cells, not just the `<th>` one.
     #[test]
     fn header_promoted_row_keeps_its_td_cells() {
         let article = article(
@@ -1344,22 +1327,15 @@ mod tests {
 
     /// [T-FC068] Faithful モードで属性を持つ表が組み込みへ委譲され HTML のまま出る
     ///
-    /// `markdown_converter` always builds with `Options::default()`
-    /// (`TranslationMode::Pure`), so this test builds its own converter with
-    /// `TranslationMode::Faithful`, registering the same `pre`/`span`/`table`
-    /// handlers, to reach the added `table` handler under a non-Pure mode.
+    /// `markdown_converter` is Pure-only, so the test builds its own converter
+    /// in `Faithful` mode with the same handlers registered.
     ///
-    /// htmd's own built-in `table_handler` opens with
-    /// `serialize_if_faithful!(handlers, element, 0)`
-    /// (htmd-0.5.5/src/element_handler/table.rs:19), which returns the
-    /// element's raw HTML serialization, unconverted, whenever the mode is
-    /// `Faithful` and the element carries more than 0 attributes
-    /// (htmd-0.5.5/src/element_handler/element_util.rs:178-199). The
-    /// contract requires the added `table` handler to fall to
-    /// `Handlers::fallback` at its own entry whenever `translation_mode` is
-    /// not `Pure`, reaching that same built-in behavior — not run its own
-    /// positional cell extraction, which carries no such mode check and
-    /// would emit a pipe-delimited Markdown table regardless of mode.
+    /// Delegation shows up as raw HTML because the built-in opens with
+    /// `serialize_if_faithful!` (htmd-0.5.5/src/element_handler/table.rs:19),
+    /// which serializes the element unconverted. Running the positional
+    /// extraction instead would emit a pipe table, since that path carries no
+    /// mode check of its own. The table needs an attribute to get there:
+    /// `serialize_if_faithful!` requires more than 0 of them.
     #[test]
     fn faithful_mode_table_with_attributes_delegates_to_the_built_in_handler_and_stays_html() {
         use htmd::options::{Options, TranslationMode};
