@@ -173,7 +173,7 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
 
 /// Return the fence character and run length if `trimmed` opens or closes a
 /// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
-fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
+pub(crate) fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
     let c = trimmed.chars().next()?;
     if c != '`' && c != '~' {
         return None;
@@ -572,5 +572,30 @@ mod tests {
             "the heading-syntax line remains inside the still-open fence and \
              must not shift, got: {result}"
         );
+    }
+
+    /// [T-MD032] バッククォート 3 個の行がフェンス開始として認識される
+    #[test]
+    fn fence_marker_recognizes_three_backticks_as_fence_start() {
+        assert_eq!(fence_marker("```"), Some(('`', 3)));
+    }
+
+    /// [T-MD033] バッククォート 2 個の行はフェンス開始として認識されない
+    #[test]
+    fn fence_marker_does_not_recognize_two_backticks_as_fence_start() {
+        assert_eq!(fence_marker("``"), None);
+    }
+
+    /// [T-MD034] チルダ 3 個の行がフェンス開始として認識される
+    #[test]
+    fn fence_marker_recognizes_three_tildes_as_fence_start() {
+        assert_eq!(fence_marker("~~~"), Some(('~', 3)));
+    }
+
+    /// [T-MD035] 4 スペースでインデントされたフェンス行もフェンス開始として認識される
+    #[test]
+    fn fence_marker_recognizes_four_space_indented_fence_line() {
+        let line = "    ```";
+        assert_eq!(fence_marker(line.trim_start()), Some(('`', 3)));
     }
 }
