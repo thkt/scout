@@ -348,9 +348,10 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
         table_md.push_str(&caption);
         table_md.push('\n');
     }
-    // A header row (possibly empty, when no thead and no row qualified) and
-    // its separator always appear once the table has at least one column —
-    // per U-002's contract, "該当が無ければ空のヘッダ行が出る".
+    // A header row and its separator always appear once the table has at
+    // least one column. With no thead and no qualifying row the header row is
+    // empty rather than absent: a table opening straight into data rows reads
+    // as a table whose first row is the header.
     table_md.push_str(&format_table_row(&headers, num_columns));
     table_md.push_str(&format_separator_row(num_columns));
     for row in &rows {
@@ -875,9 +876,8 @@ mod tests {
     /// htmd's built-in `pre_handler` wraps a `<pre>` with no `<code>` child in
     /// blank lines only, with no fence markers at all
     /// (htmd-0.5.5/src/element_handler/pre.rs:29-40,
-    /// `concat_strings!("\n\n", content, "\n\n")`). U-003 registers a `pre`
-    /// handler via `HtmlToMarkdownBuilder::add_handler` that fences this case
-    /// using `crate::markdown::fence_delimiter`.
+    /// `concat_strings!("\n\n", content, "\n\n")`). This crate's own `pre`
+    /// handler fences the case instead, using `crate::markdown::fence_delimiter`.
     #[test]
     fn pre_without_code_child_is_wrapped_in_a_fence() {
         let article = article("<pre>plain text</pre>");
@@ -1080,7 +1080,7 @@ mod tests {
     /// The newline has to sit inside the span: in the `<code>`'s own text node
     /// it never reaches the span handler and still folds to a space. Removing
     /// the `span` registration leaves the output identical, so this is htmd's
-    /// standing behavior, not one U-001 introduces.
+    /// standing behavior, not one this crate's `span` handler introduces.
     #[test]
     fn span_inside_inline_code_outside_pre_loses_the_newline_entirely() {
         let article = article("<p><code><span>line1\n</span>line2</code></p>");
@@ -1269,7 +1269,7 @@ mod tests {
     /// [T-FC065] 本文の途中にある th だけの行がデータ行として出る
     ///
     /// The header search reaches only `thead`'s first row or the table's first
-    /// row (U-002's contract). An all-`<th>` row anywhere else stays a data row
+    /// row. An all-`<th>` row anywhere else stays a data row
     /// even when the table's first row did not qualify as a header, because the
     /// search never scans on for a later row that would.
     #[test]
@@ -1305,7 +1305,7 @@ mod tests {
 
     /// [T-FC066] 複数行 thead の 2 行目以降がデータ行として出る
     ///
-    /// Only a `thead`'s first row carries header candidacy (U-002's contract).
+    /// Only a `thead`'s first row carries header candidacy.
     /// Its second and later rows must still reach the output, as data rows, so
     /// a multi-row `<thead>` loses nothing.
     #[test]
@@ -1372,8 +1372,8 @@ mod tests {
 
     /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
     ///
-    /// U-002's contract requires an empty header row when no row qualifies as
-    /// a header ("該当が無ければ空のヘッダ行が出る"). The fixture is a
+    /// A table with no qualifying header row still opens with an empty header
+    /// row and its separator, not with its data rows. The fixture is a
     /// row-heading table whose first row mixes `<th>` and `<td>`: htmd's
     /// built-in rule promotes any row holding a single `<th>`, which would read
     /// `Name` as a column name and `Alice` as the value under it. Requiring
@@ -1443,7 +1443,7 @@ mod tests {
 
     /// [T-FC070] caption を持つ表で caption がヘッダ行の前に出る
     ///
-    /// U-001's contract keeps the built-in's caption placement, which emits the
+    /// The built-in's caption placement is kept, which emits the
     /// caption's own converted content ahead of the header row rather than
     /// dropping it (htmd-0.5.5/src/element_handler/table.rs:36-44).
     #[test]

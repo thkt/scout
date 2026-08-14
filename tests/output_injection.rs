@@ -333,8 +333,8 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
 
 // T-C045: row_heading_label_survives_and_column_alignment_padding_is_absent
 //
-// Exercises the same `table_handler` (src/fetch/converter.rs) U-001-U-004
-// built and unit-tested directly (T-FC060 for mixed th/td row extraction,
+// Exercises the same `table_handler` (src/fetch/converter.rs) the unit tests
+// build and check directly (T-FC060 for mixed th/td row extraction,
 // T-FC061/T-FC062 for the unpadded row/separator format), but through the
 // real `scout fetch` pipeline: HTML over the mock proxy -> Readability
 // extraction -> `markdown_converter` -> frontmatter wrapping -> stdout. A

@@ -107,8 +107,8 @@ fn browser_failed_is_io_error() {
 
 /// [T-FC018] 変換が失敗したとき exit code 65 で終わる
 ///
-/// `MarkdownConversion` carries the htmd conversion failure (fail-close, per
-/// U-002's contract) and must classify the same way `UnsupportedContentType`
+/// `MarkdownConversion` carries the htmd conversion failure (fail-close) and
+/// must classify the same way `UnsupportedContentType`
 /// does: `Classification::DataError`, which `ErrorCode::exit_code`
 /// (src/envelope.rs) maps to process exit code 65 (EX_DATAERR).
 #[test]
