@@ -327,6 +327,72 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
     );
 }
 
+// T-C045: row_heading_label_survives_and_column_alignment_padding_is_absent
+//
+// Exercises the same `table_handler` (src/fetch/converter.rs) U-001-U-004
+// built and unit-tested directly (T-FC060 for mixed th/td row extraction,
+// T-FC061/T-FC062 for the unpadded row/separator format), but through the
+// real `scout fetch` pipeline: HTML over the mock proxy -> Readability
+// extraction -> `markdown_converter` -> frontmatter wrapping -> stdout. A
+// unit test calling `to_fetch_result` directly cannot prove the handler is
+// actually reachable from a fetched page; this scenario is the seam that
+// does.
+//
+// The fixture is a row-heading table (`<th>` first cell, `<td>` second cell
+// on every row, no `<thead>`) with one short row and one long row, so that
+// htmd's built-in column-width padding — were the seam broken and this
+// fixture falling back to the built-in `table_handler` — would visibly widen
+// the short cells with run-of-spaces padding and a wider dash separator.
+#[test]
+fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
+    let context = "row heading table with column alignment";
+    let table = "<table><tbody>\
+        <tr><th>Name</th><td>Alice</td></tr>\
+        <tr><th>Occupation</th><td>Renowned Software Engineer</td></tr>\
+        </tbody></table>";
+    let Some(markdown) = fetch_markdown(&article_html(table), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    let name_row = body
+        .lines()
+        .find(|l| l.contains("Name") && l.contains("Alice"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{context}: the Name row heading and its Alice value must land in the same \
+                 row, got body:\n{body}"
+            )
+        });
+    let occupation_row = body
+        .lines()
+        .find(|l| l.contains("Occupation") && l.contains("Renowned Software Engineer"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{context}: the Occupation row heading and its value must land in the same \
+                 row, got body:\n{body}"
+            )
+        });
+
+    assert!(
+        !name_row.contains("  ") && !occupation_row.contains("  "),
+        "{context}: no table row should carry a run of two or more consecutive spaces \
+         (no column-width alignment padding), got body:\n{body}"
+    );
+
+    let separator_line = body
+        .lines()
+        .find(|l| l.starts_with('|') && l.contains('-'))
+        .unwrap_or_else(|| {
+            panic!("{context}: a dash separator row must be present, got body:\n{body}")
+        });
+    assert_eq!(
+        separator_line, "| --- | --- |",
+        "{context}: the separator row must carry exactly three dashes per cell, unpadded to \
+         column width, got body:\n{body}"
+    );
+}
+
 // T-C034: no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker
 #[test]
 fn no_line_after_first_frontmatter_block_starts_with_a_yaml_document_marker() {
