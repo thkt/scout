@@ -593,9 +593,24 @@ mod tests {
     }
 
     /// [T-MD035] 4 スペースでインデントされたフェンス行もフェンス開始として認識される
+    ///
+    /// `fence_marker` takes an already-trimmed line, so asserting on it
+    /// directly would only restate T-MD032. Both callers
+    /// (`shift_headings` here and `neutralize_yaml_markers_outside_fences` in
+    /// `yaml.rs`) trim first, which is what makes the indent irrelevant. This
+    /// goes through `shift_headings` to prove that: a `#` line between two
+    /// indented fences must not be shifted, since it sits inside a code block.
     #[test]
     fn fence_marker_recognizes_four_space_indented_fence_line() {
-        let line = "    ```";
-        assert_eq!(fence_marker(line.trim_start()), Some(('`', 3)));
+        let shifted = shift_headings("    ```\n# not a heading\n    ```\n# heading\n", 1);
+
+        assert!(
+            shifted.contains("\n# not a heading\n"),
+            "a line inside an indented fence must keep its level:\n{shifted}"
+        );
+        assert!(
+            shifted.contains("\n## heading"),
+            "a heading past the closed indented fence must still shift:\n{shifted}"
+        );
     }
 }

@@ -403,18 +403,23 @@ fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
 
 // T-C041: unclosed_fence_body_falls_back_to_asterisks
 //
-// `<code>` content of two backticks forces htmd's inline-code delimiter to
-// three backticks (`get_inline_code_delimiter`), so the paragraph's rendered
-// line opens with `` ``` `` at column 0 while its own matching close sits
-// mid-line, not at the start of any later line. `fence_marker` only reads a
-// line's leading run, so it reads this line as opening a fenced block that
-// never closes through the rest of the body — the "closes never" shape
+// `<code>` content of three backticks forces htmd's inline-code delimiter to
+// four (`get_inline_code_delimiter`), so the paragraph's rendered line opens
+// with four backticks at column 0 while its own matching close sits mid-line,
+// not at the start of any later line. `fence_marker` only reads a line's
+// leading run, so it reads this line as opening a fenced block that never
+// closes through the rest of the body — the "closes never" shape
 // `neutralize_yaml_markers_outside_fences`'s (src/yaml.rs) EOF fallback
 // exists for.
+//
+// Four backticks rather than three: a fence closes on a run at least as long
+// as the opener, so a 3-backtick opener would be closed by any later
+// 3-backtick line the page happens to carry. A 4-backtick opener needs four,
+// which no line here produces.
 #[test]
 fn unclosed_fence_body_falls_back_to_asterisks() {
     let context = "inline code opens an unmatched fence-looking line before a marker";
-    let injected = "<p><code>``</code> before marker</p><p>--- evil: true</p>";
+    let injected = "<p><code>```</code> before marker</p><p>--- evil: true</p>";
     let Some(markdown) = fetch_markdown(&article_html(injected), context) else {
         return;
     };
@@ -507,7 +512,7 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
     let context = "closed fence, paragraph, and unclosed fence combined";
     let closed_fence = "<pre>---\nevil: true\n...\n</pre>";
     let outside_marker = "<p>--- evil: true</p>";
-    let unclosed_trick = "<p><code>``</code> before marker</p><p>... evil: unclosed</p>";
+    let unclosed_trick = "<p><code>```</code> before marker</p><p>... evil: unclosed</p>";
     let injected = format!("{closed_fence}{outside_marker}{unclosed_trick}");
     let Some(markdown) = fetch_markdown(&article_html(&injected), context) else {
         return;
