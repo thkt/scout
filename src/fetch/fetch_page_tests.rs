@@ -435,3 +435,35 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
         "loopback URL must be blocked before reaching the proxy, got: {result:?}"
     );
 }
+
+/// [T-F084] 本文が薄いページを fetch_page へ通すと抽出量が閾値を下回った警告が出る
+///
+/// `is_thin_extract` gates the CDP fallback at `fetch.rs`'s two call sites, and
+/// its own unit tests (T-F033..T-F040) build `ExtractedArticle` literals, so no
+/// test reaches those sites through `fetch_page`. dom_smoothie's scoring is the
+/// input, and a change there moves the chromium launch condition silently.
+///
+/// The asserted text is the half both branches share: the message tail differs
+/// by whether `js-rendering` is on (`fetch.rs` warns "trying JS rendering
+/// fallback" with the feature, "but JS rendering unavailable" without). The
+/// chromium launch itself is not asserted.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn a_page_whose_extracted_body_is_below_the_threshold_warns_that_extraction_was_thin() {
+    // Under EXTRACT_TEXT_THRESHOLD (50) of visible text, with no nav or footer
+    // chrome that would push the raw fallback's count over it.
+    let thin = "<html><head><title>T</title></head><body><article><p>x</p></article></body></html>";
+    let Some((result, handle)) = fetch_article_via_proxy(thin, |opts| opts).await else {
+        return; // loopback bind unavailable
+    };
+
+    assert!(
+        result.is_ok(),
+        "a thin page must still return a body, not an error: {result:?}"
+    );
+    assert!(
+        logs_contain("extraction yielded too little content"),
+        "fetch_page must warn when is_thin_extract gates the CDP fallback"
+    );
+    join_server_thread(handle);
+}

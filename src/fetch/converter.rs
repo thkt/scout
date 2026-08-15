@@ -1346,6 +1346,50 @@ mod tests {
         );
     }
 
+    /// [T-FC083] code 子を持たない pre の中身が 3 連バッククォートを含むとき
+    /// フェンスが 4 連で出る
+    ///
+    /// `fence_delimiter` widens the fence past the longest backtick run in the
+    /// content. Pins the wiring, not the width rule: `markdown.rs` unit-tests
+    /// the rule itself, and a fence as wide as its content would close the
+    /// block partway through.
+    #[test]
+    fn pre_without_code_child_widens_its_fence_past_a_backtick_run_in_the_content() {
+        let article = article("<pre>a ``` b</pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("````\na ``` b\n````"),
+            "a <pre> whose content holds a 3-backtick run must be fenced with 4:\n{markdown}"
+        );
+    }
+
+    /// [T-FC082] 表の caption がヘッダ行の直前に空行なしで出る
+    ///
+    /// T-FC070 pins the order, this one the adjacency: no blank line separates
+    /// the two. Pins the shape, not an endorsement of it. Both pulldown-cmark 0.13.4 and
+    /// comrak 0.54.0 render this input and the blank-line variant to identical
+    /// HTML — `Cap` as its own paragraph, the rows as a table — because GFM's
+    /// table extension interrupts a paragraph. GitHub's own renderer,
+    /// markdown-it and marked were not measured.
+    #[test]
+    fn table_caption_precedes_the_header_row_without_a_blank_line() {
+        let article = article(
+            "<table><caption>Cap</caption><thead><tr><th>A</th><th>B</th></tr></thead>\
+             <tbody><tr><td>1</td><td>2</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Cap\n| A | B |"),
+            "the caption must sit on the line directly above the header row:\n{markdown}"
+        );
+    }
+
     /// [T-FC020] htmd が既にフェンスした pre の中の code を二重のフェンスで囲まない
     ///
     /// A `<pre><code>` pair is already turned into a single fenced block by
