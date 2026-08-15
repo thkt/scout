@@ -187,10 +187,11 @@ const SUPPRESSED_TAGS: [&str; 7] = [
     "script", "style", "noscript", "textarea", "iframe", "desc", "title",
 ];
 
-/// Whether [`suppressed_handler`] drops this element's content, which every
-/// reader of the DOM outside the handler dispatch has to agree with —
-/// `push_text_content` reads a `<pre>`'s subtree directly and would otherwise
-/// resurrect the very bodies the handler exists to remove.
+/// Whether [`suppressed_handler`] drops this element's content.
+///
+/// Every reader of the DOM outside the handler dispatch has to agree with it.
+/// `push_text_content` walks a `<pre>`'s subtree directly and would otherwise
+/// resurrect the bodies the handler removes.
 fn is_suppressed_element(node: &Rc<Node>) -> bool {
     let Some(tag) = element_tag(node) else {
         return false;
@@ -445,11 +446,7 @@ fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
     has_ancestor_matching(node, |tag| matches!(tag, "td" | "th"))
 }
 
-/// Whether any ancestor of `node` is an element whose tag satisfies
-/// `predicate`. Mirrors the take-upgrade-put-back pattern htmd's own
-/// `node_util::get_parent_node` uses to read the `Cell<Option<WeakHandle>>`
-/// parent link without leaving it empty for later traversals
-/// (htmd-0.5.5/src/node_util.rs:13-23).
+/// Whether any ancestor of `node` is an element whose tag satisfies `predicate`.
 fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
@@ -461,6 +458,10 @@ fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> b
     false
 }
 
+/// The parent link is a `Cell<Option<WeakHandle>>`, so reading it means taking
+/// the value out. Putting it back leaves the link intact for later traversals,
+/// the same take-upgrade-put-back htmd's own `node_util::get_parent_node` does
+/// (htmd-0.5.5/src/node_util.rs:13-23).
 fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let value = node.parent.take();
     let parent = value.as_ref().and_then(Weak::upgrade);
@@ -468,21 +469,19 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     parent
 }
 
-/// The text a reader sees in `node`'s subtree, depth-first. Used to read a
-/// table cell's `<pre>` content straight off the DOM: unlike the
-/// walked/escaped markdown text, this string carries none of htmd's fence-char
-/// backslash-escaping (see `raw_pre_content` above), which the inline-code-span
-/// delimiter math below must not see.
+/// The text a reader sees in `node`'s subtree, depth-first.
 ///
-/// Reading the DOM directly bypasses the handler dispatch, so the two rules
-/// that decide what a reader sees are applied here instead: a suppressed
-/// element ([`is_suppressed_element`]) contributes nothing, and a `<br>`
-/// contributes the line break it renders as. A `<br>` holds no Text child, so
-/// concatenating text alone would run the lines it separates into one word.
+/// A table cell's `<pre>` reads its content through this rather than the walked
+/// markdown text, which carries htmd's fence-char backslash-escaping (see
+/// `raw_pre_content` above) that the inline-code-span delimiter math must not
+/// count.
 ///
-/// The line break comes out as a bare `\n`, the same as a Text child's own
-/// embedded newline. Both later fold to a single space in
-/// `normalize_cell_content`, which this function does not do itself.
+/// Reading the DOM bypasses the handler dispatch, so the two rules deciding
+/// what a reader sees are applied here instead. A suppressed element
+/// ([`is_suppressed_element`]) contributes nothing. A `<br>` contributes a bare
+/// `\n`, since it holds no Text child and concatenating text alone would run
+/// the lines it separates into one word. Folding that newline to a space is
+/// `normalize_cell_content`'s job, not this function's.
 fn text_content(node: &Rc<Node>) -> String {
     let mut out = String::new();
     push_text_content(node, &mut out);
