@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
-use crate::markdown::track_fence;
+use crate::markdown::{track_fence, truncate_with_note};
 
 /// Neutralize YAML document markers in untrusted body text appended after a
 /// `---`-delimited frontmatter block.  A line that is exactly `---` or `...` (a
@@ -125,6 +125,20 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
             Cow::Owned(out)
         }
         None => Cow::Borrowed(truncated),
+    }
+}
+
+/// [`truncate_with_note`] followed by [`reneutralize_dangling_fence`] — the
+/// pairing every caller that truncates already fence-neutralized markdown
+/// needs, since a byte-cap cut can dangle open a fence that was closed when
+/// neutralization ran (see `reneutralize_dangling_fence`'s doc). Both fetch
+/// output and the research report's per-page rendering truncate that way, so
+/// they share this one call instead of each chaining the two steps itself.
+pub(crate) fn truncate_and_reneutralize(s: &str, max_bytes: usize) -> Cow<'_, str> {
+    let truncated = truncate_with_note(s, max_bytes);
+    match reneutralize_dangling_fence(&truncated) {
+        Cow::Borrowed(_) => truncated,
+        Cow::Owned(rewritten) => Cow::Owned(rewritten),
     }
 }
 
