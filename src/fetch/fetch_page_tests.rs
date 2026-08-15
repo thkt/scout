@@ -215,6 +215,237 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     join_server_thread(handle);
 }
 
+/// Shared fixture for T-F081 / T-F082: an article-shaped page (nav + footer
+/// chrome around several paragraphs) carrying one `<pre><code
+/// class="language-rust">` block, mirroring `extractor::tests::BLOG_HTML`
+/// (a fixture Readability is already pinned to extract cleanly, T-FX016) so
+/// the added `<pre>` block does not itself drop the page into raw fallback.
+fn class_language_article_html() -> String {
+    "<html><head><title>Understanding Ownership</title></head><body>\
+        <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
+        <article>\
+        <h1>Understanding Rust Ownership</h1>\
+        <p>Rust's ownership system is one of its most unique features. It enables \
+        memory safety without garbage collection. The ownership rules are checked \
+        at compile time by the borrow checker, and every value in the language \
+        obeys these rules from the moment it is created until it goes out of \
+        scope.</p>\
+        <p>Each value in Rust has a variable that is called its owner, and there \
+        can only be one owner at a time. When the owner goes out of scope, the \
+        value is dropped automatically, which is why Rust programs almost never \
+        leak memory even without a garbage collector running in the \
+        background.</p>\
+        <p>The snippet below shows a minimal Rust program that does nothing but \
+        declare a main function, and readers can compile it locally to confirm \
+        the ownership rules described above hold for the simplest possible \
+        case.</p>\
+        <pre><code class=\"language-rust\">fn main() {}</code></pre>\
+        <p>Beyond this trivial example, ownership becomes more interesting once \
+        references, borrowing, and lifetimes enter the picture, and the following \
+        sections build on this foundation one concept at a time so the rules stay \
+        easy to follow.</p>\
+        </article>\
+        <footer>Site footer: copyright notice and additional links</footer>\
+        </body></html>"
+        .to_owned()
+}
+
+/// [T-F081] 既定経路では pre の class 由来の言語指定が失われ nav が消え raw fallback にも落ちない
+///
+/// Contrasts with T-F082: the default (non-raw) path runs
+/// `extract_article -> Readability::parse` before conversion, and
+/// `Config::default()`'s `keep_classes: false` strips every `class`
+/// attribute (converter.rs T-FC017 doc comment), so the `<pre><code
+/// class="language-rust">` fence must lose its `rust` info string here even
+/// though T-FC017 pins that same class producing one when conversion runs
+/// directly on hand-authored HTML. Readability drops `<nav>` chrome
+/// (T-FX016), and the surviving paragraphs must stay well above both the
+/// thin-extract and thin-body thresholds so the fetch neither falls back to
+/// raw HTML nor takes the JS-rendering detour.
+///
+/// Routed through `spawn_forward_proxy` + `EgressMode::Proxied` rather than a
+/// direct fetch of `try_spawn_mock_server`'s loopback URI (T-F074: a literal
+/// loopback host is blocked by `ssrf_check` before any request is sent, in
+/// every mode), mirroring T-F073's pattern for exercising a real page body
+/// through `fetch_page`.
+#[tokio::test]
+async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
+    let Some((proxy_url, handle)) = spawn_forward_proxy(&class_language_article_html()) else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let (cancel, _) = watch::channel(false);
+    let opts = FetchOptions {
+        egress: EgressMode::Proxied(proxy_url.clone()),
+        ..Default::default()
+    };
+    let result = fetch_page(
+        &client,
+        "http://example.com/article",
+        opts,
+        real_resolver(),
+        &cancel,
+    )
+    .await;
+
+    let page = result.expect("a rich article page must fetch successfully");
+    assert!(
+        !page.used_raw_fallback(),
+        "a rich article with plenty of paragraph text must not fall back to raw HTML: {:?}",
+        page.markdown()
+    );
+    assert!(
+        !page.markdown().contains("```rust"),
+        "the default path strips the class attribute before conversion, so no \
+        `rust` fence info string should survive: {:?}",
+        page.markdown()
+    );
+    assert!(
+        !page.markdown().contains("Site navigation"),
+        "Readability must drop the <nav> chrome on the default path: {:?}",
+        page.markdown()
+    );
+
+    join_server_thread(handle);
+}
+
+/// [T-F082] raw 経路では pre の class 由来の言語指定がフェンスに残る
+///
+/// Same page as T-F081 with `raw: true`: `extract_raw` skips Readability
+/// entirely and carries the source HTML's `class` attribute through
+/// unchanged (converter.rs T-FC017 doc comment), so the `language-rust`
+/// class must still attach `rust` as the fence's info string once `fetch_page`
+/// converts it.
+#[tokio::test]
+async fn raw_path_keeps_pre_class_language_in_the_fence() {
+    let Some((proxy_url, handle)) = spawn_forward_proxy(&class_language_article_html()) else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let (cancel, _) = watch::channel(false);
+    let opts = FetchOptions {
+        raw: true,
+        egress: EgressMode::Proxied(proxy_url.clone()),
+        ..Default::default()
+    };
+    let result = fetch_page(
+        &client,
+        "http://example.com/article",
+        opts,
+        real_resolver(),
+        &cancel,
+    )
+    .await;
+
+    let page = result.expect("a rich article page must fetch successfully in raw mode");
+    assert!(
+        page.markdown().contains("```rust"),
+        "the raw path carries the class attribute through unchanged, so a \
+        `rust` fence info string must survive: {:?}",
+        page.markdown()
+    );
+
+    join_server_thread(handle);
+}
+
+/// [T-F083] thead と th を持つ 2 行 2 列の表が既定経路で区切り行つきに残る
+///
+/// Contrasts with T-F081/T-F082: unlike a `class` attribute, table structure
+/// (`<thead>`/`<th>`) is not stripped by Readability's class cleanup, so a
+/// small `<thead>`-header table embedded in an otherwise ordinary article
+/// must survive the default (non-raw) path with its header row followed
+/// immediately by a dash separator row, mirroring converter.rs's own pin
+/// (T-FC023) but exercised end to end through `fetch_page`.
+///
+/// Routed through `spawn_forward_proxy` for the same reason as T-F081.
+#[tokio::test]
+async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
+    let html = "<html><head><title>Population Data</title></head><body>\
+        <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
+        <article>\
+        <h1>City Population Overview</h1>\
+        <p>This article summarizes recent population figures for two \
+        representative cities, drawn from public census records, so readers \
+        can compare growth trends across regions without needing to consult \
+        the underlying government datasets directly.</p>\
+        <p>The table below lists each city alongside its most recently \
+        reported population count, giving a quick reference before the \
+        discussion moves on to the historical trends behind these numbers.</p>\
+        <table><thead><tr><th>City</th><th>Population</th></tr></thead>\
+        <tbody><tr><td>Springfield</td><td>150000</td></tr></tbody></table>\
+        <p>The figures above illustrate that even modest cities can carry \
+        meaningfully different population totals, and later sections of this \
+        guide will expand the same comparison to a wider set of regions once \
+        more data becomes available.</p>\
+        </article>\
+        <footer>Site footer: copyright notice and additional links</footer>\
+        </body></html>";
+    let Some((proxy_url, handle)) = spawn_forward_proxy(html) else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let (cancel, _) = watch::channel(false);
+    let opts = FetchOptions {
+        egress: EgressMode::Proxied(proxy_url.clone()),
+        ..Default::default()
+    };
+    let result = fetch_page(
+        &client,
+        "http://example.com/article",
+        opts,
+        real_resolver(),
+        &cancel,
+    )
+    .await;
+
+    let page = result.expect("a rich article page with a table must fetch successfully");
+    assert!(
+        !page.used_raw_fallback(),
+        "a rich article with plenty of paragraph text must not fall back to raw HTML: {:?}",
+        page.markdown()
+    );
+    let markdown = page.markdown();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let header_idx = lines
+        .iter()
+        .position(|line| {
+            line.starts_with('|') && line.contains("City") && line.contains("Population")
+        })
+        .unwrap_or_else(|| panic!("header row must survive the default path: {markdown:?}"));
+    let separator_line = lines
+        .get(header_idx + 1)
+        .unwrap_or_else(|| panic!("a line must immediately follow the header row: {markdown:?}"));
+    assert!(
+        !separator_line.is_empty()
+            && separator_line.contains('-')
+            && separator_line
+                .chars()
+                .all(|c| c == '|' || c == '-' || c == ' '),
+        "the line right after the header row must be a dash separator row: {markdown:?}"
+    );
+    assert!(
+        markdown.contains("Springfield") && markdown.contains("150000"),
+        "the data row must survive the default path: {markdown:?}"
+    );
+
+    join_server_thread(handle);
+}
+
 /// [T-F074]
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked_before_any_request_reaches_the_proxy()
