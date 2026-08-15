@@ -141,42 +141,28 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     })
 }
 
-/// Drops a target element's content instead of walking its children, so
-/// nothing inside it — however deep — reaches the markdown body. Registered
-/// for `script`, `style`, `noscript`, `textarea`, `iframe`, `desc`, and
-/// `title` (`markdown_converter` above): left unhandled, each of these tags'
-/// content would still reach the body markdown through htmd's own
-/// `block_handler` or, for the tags `block_handler` does not cover, `Pure`
-/// mode's unregistered-tag fallback in `dom_walker::walk_node` — both walk
-/// children and keep their content (mechanism measured per tag in the
-/// `noscript_textarea_iframe_child_and_svg_desc_title_content_do_not_reach_the_body`
-/// test below). `add_handler` here shadows both paths for these tags the same
-/// way `pre_handler` shadows the built-in `pre` handler.
+/// Drops a target element's content instead of walking its children.
 ///
-/// This removal happens only in this conversion layer, on the
-/// Readability-extracted or `--raw` `content_html` this file already works
-/// on — never on the freshly downloaded `html` itself. `is_js_dependent`
-/// (src/fetch.rs:371) still scans that raw byte string for `b"<script"` ahead
-/// of the `need_js` branch to detect an SPA shell, so suppressing `<script>`
-/// content in this later stage cannot break that earlier detection.
+/// Left unhandled, every one of these tags still reaches the body: htmd's own
+/// `block_handler` walks the children of the ones it covers, and `Pure` mode's
+/// unregistered-tag fallback walks the rest. `add_handler` shadows both paths,
+/// the same way `pre_handler` shadows the built-in `pre` handler.
 ///
-/// htmd's tag lookup is by local tag name only, not namespace, so the two tags
-/// SVG shares with HTML (`desc` and `title`) each need their own decision
-/// here, and the two resolve differently. `desc` is suppressed in the SVG
-/// namespace only:
-/// an HTML or custom element literally named `<desc>` renders as visible text
-/// in a browser, and dropping it would delete body text the reader sees.
-/// `title` is suppressed in every namespace, because no `<title>` renders as
-/// body text: html5ever parses one outside SVG as escapable raw text and a
-/// browser shows it in the tab, not in the page. That drop does not remove the
-/// page title from scout's output either — `make_raw` reads it separately via
-/// `extract_title_from_html` for the frontmatter, and that read never goes
-/// through this converter.
+/// The removal stays in this conversion layer and never touches the freshly
+/// downloaded `html`. `is_js_dependent` (src/fetch.rs:371) scans that raw byte
+/// string for `b"<script"` to detect an SPA shell before the `need_js` branch.
+///
+/// htmd looks tags up by local name, not namespace, so the two tags SVG shares
+/// with HTML resolve separately here. `desc` is suppressed in the SVG namespace
+/// only: an element literally named `<desc>` elsewhere renders as visible text,
+/// and dropping it would delete body text the reader sees. `title` is
+/// suppressed in every namespace, since no `<title>` renders as body text. The
+/// page title still reaches the frontmatter, which `make_raw` reads through
+/// `extract_title_from_html` without passing this converter.
 ///
 /// A non-SVG `<desc>` hands back to [`Handlers::fallback`], which finds no
-/// further handler registered for the tag and lands on `Pure` mode's
-/// walk-children default (htmd-0.5.5/src/element_handler/mod.rs:270-292) —
-/// the same path the tag took before this handler existed.
+/// further handler for the tag and lands on `Pure` mode's walk-children
+/// default (htmd-0.5.5/src/element_handler/mod.rs:270-292).
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -405,26 +391,17 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
 /// ancestor; every other span delegates to `Handlers::fallback`.
 ///
-/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110, active
-/// while exactly one handler is registered for `span`) trims every leading
-/// and trailing `\n` off the span's own walked content unconditionally,
-/// including when the span sits inside a `<pre>` and those newlines are real
-/// line breaks the surrounding preformatted text depends on. Registering a
-/// second `span` handler here (this one) raises the registered-handler count
-/// past that fast path's `== 1` gate, so htmd falls back to its normal
-/// per-element dispatch for every `<span>` instead
-/// (htmd-0.5.5/src/element_handler/mod.rs, `ElementHandlers::handle` /
-/// `find_handler`), and this handler runs first as the most-recently
-/// registered one.
+/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110) trims
+/// every leading and trailing `\n` off the span's walked content, including
+/// inside a `<pre>` where those newlines are line breaks the preformatted text
+/// depends on. That path is gated on exactly one handler being registered for
+/// `span`, so registering this second one takes htmd back to its normal
+/// per-element dispatch, where the most recently registered handler runs first.
 ///
-/// `has_pre_ancestor` below looks for a `<pre>` ancestor only, narrower than
-/// htmd's own `is_inside_pre` (htmd-0.5.5/src/element_handler/mod.rs:358-367),
-/// which counts a `<code>` ancestor as "inside pre" too. A `<span>` in inline
-/// `<code>` with no `<pre>` ancestor therefore falls to `Handlers::fallback`
-/// and htmd's built-in `span_handler` strips the newline from both edges of
-/// its content, before the inline-code handler's newline-to-space folding can
-/// reach it. T-FC054 pins that, and DR-0025 records why the narrower check
-/// stays.
+/// `has_pre_ancestor` below is narrower than htmd's own `is_inside_pre`
+/// (htmd-0.5.5/src/element_handler/mod.rs:358-367), which counts a `<code>`
+/// ancestor as inside pre too. DR-0025 records why the narrower check stays;
+/// T-FC054 pins what a `<span>` in inline `<code>` gets as a result.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -466,28 +443,19 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
 /// a missing `href`, not an empty one).
 ///
 /// Shadows `a` in the same shape as `pre_handler` above: `walk_children` runs
-/// exactly once, up front, and its content decides the branch. The suppress
-/// branch is this file's own logic and builds its `HandlerResult` straight
-/// from that decision, setting `markdown_translated: true` explicitly because
-/// discarding the anchor leaves no content behind that could still be raw
-/// HTML. Every other case — no `href` at all, a fragment `href` wrapping real
-/// content, or a non-fragment `href` regardless of content — falls to
-/// `Handlers::fallback`, which reaches the built-in anchor handler and
-/// rebuilds the correct `[text](url "title")` output (destination escaping,
-/// link styles, referenced-link bookkeeping) on its own; this handler does
-/// not re-derive that logic.
+/// once, up front, and its content decides the branch. `markdown_translated`
+/// is set explicitly on the suppress branch, since discarding the anchor
+/// leaves no content that could still be raw HTML.
 ///
-/// A link the built-in kept — non-empty content, so it did not fall into the
-/// suppress branch above — still carries the `<a>`'s `title` attribute into
-/// the delegated result as `](url "title")`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:124-128), but only when the
-/// anchor carries link text: T-FC049 pins that an absolute-URL anchor with
-/// empty content — kept, not suppressed, since only a *fragment* `href` with
-/// empty content takes the suppress branch above — must still keep its
-/// title, so the strip below is scoped to a non-empty `content` the same way
-/// `is_empty_fragment_anchor` above is. `strip_link_title` drops the title
-/// suffix off the delegated content when both that scope and a `title`
-/// attribute hold; otherwise the delegated result passes through untouched.
+/// Every other case falls to [`Handlers::fallback`]. Destination escaping,
+/// link styles and referenced-link bookkeeping live in the built-in handler,
+/// and this one does not re-derive them.
+///
+/// The built-in also carries the `<a>`'s `title` attribute into its output as
+/// `](url "title")` (htmd-0.5.5/src/element_handler/anchor.rs:124-128).
+/// `strip_link_title` drops that suffix only where `content` is non-empty:
+/// T-FC049 pins that an absolute-URL anchor with empty content keeps its
+/// title, and only a *fragment* href with empty content is suppressed.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -610,31 +578,22 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// htmd-0.5.5/src/element_handler/table.rs:223-247): a row is scanned once
 /// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
 /// no `<thead>` — loses whichever tag that row's extraction call did not ask
-/// for (table.rs:83-100: the `tbody`/`tfoot` branch takes only the row's
-/// `<th>` cells for a candidate header row and `continue`s past its `<td>`
-/// cells once that extraction is non-empty; a later mixed row falls to the
-/// `<td>`-only extraction and loses its `<th>` label the same way). This
-/// handler instead reads each row's cells positionally in one pass
-/// (`extract_row_cells` below), so a label and its value from the same
-/// source row land in the same output row, in separate cells.
+/// for (the branching that drops it is at table.rs:83-100). This handler reads
+/// each row's cells positionally in one pass, so a label and its value from
+/// the same source row land in the same output row, in separate cells.
 ///
 /// Row and separator formatting drop the built-in's column-width alignment
 /// padding, which widens every cell and dash run out to the column's longest
-/// cell. `format_table_row` below writes one space on each side of every cell
-/// regardless of a neighboring cell's width, so an empty or missing cell
-/// renders as a pipe and two spaces, and `format_separator_row` writes a
-/// fixed 3-dash run per cell.
+/// cell.
 ///
 /// Cell-content newline normalization, caption handling, and column-count
 /// estimation follow the built-in's shape.
 ///
-/// Any non-`Pure` translation mode falls straight to `Handlers::fallback`,
-/// which reaches the built-in `table_handler` and its own
-/// `serialize_if_faithful!` gate (table.rs:19-24) rather than the positional
-/// extraction below. `markdown_converter` always builds with
-/// `Options::default()`, which is `TranslationMode::Pure`, so scout's own
-/// runtime never takes that branch; T-FC068 exercises it through a
-/// `Faithful`-mode converter built in the test.
+/// Any non-`Pure` translation mode falls straight to `Handlers::fallback` and
+/// the built-in's own `serialize_if_faithful!` gate (table.rs:19-24).
+/// `markdown_converter` always builds `Pure`, so scout's runtime never takes
+/// that branch; T-FC068 exercises it through a `Faithful`-mode converter built
+/// in the test.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
