@@ -124,14 +124,21 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     // branch, which htmd already fences correctly on its own.
     let result = handlers.walk_children(element.node);
 
-    if let Some(code) = code_child(element.node) {
-        if has_table_cell_ancestor(element.node) {
-            let content = text_content(&code);
-            return Some(HandlerResult {
-                content: inline_code_span(&content),
-                markdown_translated: result.markdown_translated,
-            });
-        }
+    // Ahead of the `<code>`-child split: both shapes fence, and a fence inside
+    // a cell leaves its own backticks as cell text. Reading the whole `<pre>`
+    // rather than a `<code>` child keeps sibling text a `<code>` does not cover.
+    // Ahead of the `<code>`-child split: both shapes fence, and a fence inside
+    // a cell leaves its own backticks as cell text. Reading the whole `<pre>`
+    // rather than a `<code>` child keeps sibling text a `<code>` does not cover.
+    if has_table_cell_ancestor(element.node) {
+        let content = text_content(element.node);
+        return Some(HandlerResult {
+            content: inline_code_span(content.trim_matches('\n')),
+            markdown_translated: result.markdown_translated,
+        });
+    }
+
+    if code_child(element.node).is_some() {
         let content = result.content.trim_matches('\n');
         return Some(HandlerResult {
             content: format!("\n\n{content}\n\n"),
@@ -2823,6 +2830,51 @@ mod tests {
         assert!(
             !markdown.contains("```"),
             "a table-cell code block must not carry a 3-backtick fence:\n{markdown}"
+        );
+    }
+
+    /// [T-FC093] `<code>` 子を持たない表セルの `<pre>` もインラインコードで出る
+    ///
+    /// The cell branch sits ahead of the `<code>`-child split, so a bare
+    /// `<pre>` fences the same way outside a cell and would leave its own
+    /// backticks as cell text — the exact shape issue #406 reported.
+    #[test]
+    fn table_cell_pre_without_a_code_child_renders_as_inline_code() {
+        let article =
+            article("<table><tbody><tr><td><pre>x\ny</pre></td><td>b</td></tr></tbody></table>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("```"),
+            "a bare <pre> in a table cell must not leave fence backticks in the \
+             cell:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("`x y`"),
+            "a bare <pre> in a table cell must render as inline code:\n{markdown}"
+        );
+    }
+
+    /// [T-FC094] 表セルの `<pre>` で `<code>` の外側にある兄弟テキストが残る
+    ///
+    /// Reading only a `<code>` child would drop text the author wrote beside
+    /// it, which the non-cell path keeps.
+    #[test]
+    fn table_cell_pre_keeps_text_outside_its_code_child() {
+        let article = article(
+            "<table><tbody><tr><td><pre>prefix<code>x</code>suffix</pre></td>\
+                <td>b</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`prefixxsuffix`"),
+            "text on either side of a <code> child must survive the cell's \
+             inline-code rendering:\n{markdown}"
         );
     }
 
