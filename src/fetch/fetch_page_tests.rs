@@ -251,6 +251,10 @@ fn article_page(title: &str, payload: &str) -> String {
 /// `configure_opts` layers each caller's own option (e.g. `raw: true`) onto
 /// the shared proxied base.
 ///
+/// A direct fetch of a mock server's loopback URI is not an option here:
+/// `ssrf_check` blocks a literal loopback host before any request is sent, in
+/// every egress mode.
+///
 /// `None` carries the unavailable-loopback skip, so callers early-return the
 /// way every other proxy-backed test here does.
 async fn fetch_article_via_proxy(
@@ -286,14 +290,6 @@ async fn fetch_article_via_proxy(
 /// `class="language-rust"` fence loses its `rust` info string. Converting
 /// hand-authored HTML directly keeps it, which is why the converter's own
 /// tests see an info string the production path never produces.
-///
-/// The fixture's paragraphs stay well above the thin-extract and thin-body
-/// thresholds so the fetch neither falls back to raw HTML nor takes the
-/// JS-rendering detour.
-///
-/// Routed through `spawn_forward_proxy` + `EgressMode::Proxied` rather than a
-/// direct fetch of the mock server's loopback URI: `ssrf_check` blocks a
-/// literal loopback host before any request is sent, in every mode.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     let Some((result, handle)) = fetch_article_via_proxy(
@@ -365,9 +361,6 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
 /// Table structure survives where a `class` attribute does not: Readability's
 /// cleanup drops attributes, not elements, so a `<thead>` header table reaches
 /// conversion intact and comes out with its dash separator row.
-///
-/// Routed through `spawn_forward_proxy` for the same reason as the tests
-/// above.
 #[tokio::test]
 async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
     let html = article_page(
@@ -434,4 +427,41 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
         matches!(result, Err(FetchError::InternalHost)),
         "loopback URL must be blocked before reaching the proxy, got: {result:?}"
     );
+}
+
+/// [T-F084] 本文が薄いページを fetch_page へ通すと抽出量が閾値を下回った警告が出る
+///
+/// `is_thin_extract` gates the CDP fallback at `fetch.rs`'s two call sites, and
+/// its own unit tests (T-F033..T-F040) build `ExtractedArticle` literals, so no
+/// test reaches those sites through `fetch_page`. dom_smoothie's scoring is the
+/// input, and a change there moves the chromium launch condition silently.
+///
+/// Restricted to builds without `js-rendering`. With the feature on, taking
+/// this branch launches chromium, and the profile directory that leaves behind
+/// lands in the set `t005_t006_cdp_renders_and_removes_profile_dir` diffs
+/// around its own run. The branch under test is the same either way; only the
+/// warning's tail differs (`fetch.rs` warns "trying JS rendering fallback" with
+/// the feature, "but JS rendering unavailable" without), so the assertion
+/// covers the half they share.
+#[cfg(not(feature = "js-rendering"))]
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn a_page_whose_extracted_body_is_below_the_threshold_warns_that_extraction_was_thin() {
+    // Below EXTRACT_TEXT_THRESHOLD once extracted. No `<script>` tag or SPA
+    // root id, so `is_js_dependent` stays false regardless of body length and
+    // the fetch reaches `is_thin_extract` instead of the JS-dependent branch.
+    let thin = "<html><head><title>T</title></head><body><article><p>x</p></article></body></html>";
+    let Some((result, handle)) = fetch_article_via_proxy(thin, |opts| opts).await else {
+        return; // loopback bind unavailable
+    };
+
+    assert!(
+        result.is_ok(),
+        "a thin page must still return a body, not an error: {result:?}"
+    );
+    assert!(
+        logs_contain("extraction yielded too little content"),
+        "fetch_page must warn when is_thin_extract gates the CDP fallback"
+    );
+    join_server_thread(handle);
 }
