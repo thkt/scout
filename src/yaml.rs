@@ -73,6 +73,61 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     out
 }
 
+/// Re-neutralize the tail of already-truncated output that a byte-cap cut left
+/// with a fenced code block open.
+///
+/// [`neutralize_yaml_markers_outside_fences`] runs once, over the whole page
+/// body, before any output cap is applied: a marker line inside a fence that
+/// closes before the body ends is left verbatim, because at that point the
+/// fence genuinely protects it as quoted content rather than a forged
+/// document boundary. A later byte-cap truncation (`truncate_with_note`) can
+/// then cut the already-neutralized text past that marker but before the
+/// fence's own closing delimiter. The fence that was closed when
+/// neutralization ran is left dangling open in the truncated text, so the
+/// marker inside it is exposed as a live, unprotected column-0 `---`/`...`
+/// line — this function closes that gap.
+///
+/// Scans `truncated` forward once with [`track_fence`] and records the byte
+/// offset of the line that last opened a fence (`None` → `Some`) without that
+/// fence closing again before the text ends. A backward scan cannot make this
+/// distinction: reading from the end toward the front, a line that looks like
+/// a fence delimiter could be the dangling block's own opening line or an
+/// inner line that merely resembles one, and only a forward pass carries the
+/// open/close state needed to tell them apart.
+///
+/// When no fence is left dangling open — `truncated` was not cut, or every
+/// fence it opens also closes before the end — the text already reflects
+/// pre-truncation neutralization intact and is returned unchanged. Otherwise,
+/// [`neutralize_yaml_markers`] (the fence-unaware rewrite) reruns over the
+/// byte range from that dangling fence's own opening line to the end, so any
+/// marker line in that range — which lost its protection along with the
+/// closing delimiter that used to follow it — is rewritten to `***` like
+/// ordinary unfenced content.
+pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut dangling_start: Option<usize> = None;
+    let mut offset = 0usize;
+    for line in truncated.split('\n') {
+        let was_open = fence.is_some();
+        track_fence(&mut fence, line);
+        match (was_open, fence.is_some()) {
+            (false, true) => dangling_start = Some(offset),
+            (true, false) => dangling_start = None,
+            _ => {}
+        }
+        offset += line.len() + 1;
+    }
+    match dangling_start {
+        Some(start) => {
+            let mut out = String::with_capacity(truncated.len());
+            out.push_str(&truncated[..start]);
+            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(truncated),
+    }
+}
+
 /// If `line` is a YAML document marker (`---` start or `...` end) at column 0 —
 /// the three chars followed by end-of-line or whitespace — return the text after
 /// the marker (`""` for a bare marker).  `----` and `...foo` are not markers.

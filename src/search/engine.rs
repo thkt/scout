@@ -17,6 +17,7 @@ use crate::markdown::{
     escape_md_inline, md_link, sanitize_heading, shift_headings, truncate_with_note,
 };
 use crate::search::Lang;
+use crate::yaml::reneutralize_dangling_fence;
 
 const MAX_PAGE_BYTES: usize = 4_500;
 /// Per-source cap inside one research run. `pub(crate)` for the same config
@@ -183,7 +184,11 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     if pages.is_empty() {
         return;
     }
-    out.push_str("---\n\n## Fetched Pages\n\n");
+    // `***` renders the same thematic break as `---` (CommonMark) but is not a
+    // YAML document marker, so scout's own section divider cannot read as a
+    // live `---` to a naive multi-document YAML reader downstream (the exact
+    // gap ADR-0014's Decision Outcome names as accepted for this line).
+    out.push_str("***\n\n## Fetched Pages\n\n");
     for page in pages {
         let _ = writeln!(out, "### {}\n", sanitize_heading(page.url()));
         if page.used_raw_fallback() {
@@ -195,7 +200,8 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         // h1->h4, h2->h5, ...: unshifted, a page's own headings would collide
         // with the report's hierarchy.
         let content = shift_headings(page.markdown(), 3);
-        out.push_str(&truncate_with_note(&content, MAX_PAGE_BYTES));
+        let truncated = truncate_with_note(&content, MAX_PAGE_BYTES);
+        out.push_str(&reneutralize_dangling_fence(&truncated));
         out.push_str("\n\n");
     }
 }
