@@ -436,10 +436,14 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
 /// test reaches those sites through `fetch_page`. dom_smoothie's scoring is the
 /// input, and a change there moves the chromium launch condition silently.
 ///
-/// The asserted text is the half both branches share: the message tail differs
-/// by whether `js-rendering` is on (`fetch.rs` warns "trying JS rendering
-/// fallback" with the feature, "but JS rendering unavailable" without). The
-/// chromium launch itself is not asserted.
+/// Restricted to builds without `js-rendering`. With the feature on, taking
+/// this branch launches chromium, and the profile directory that leaves behind
+/// lands in the set `t005_t006_cdp_renders_and_removes_profile_dir` diffs
+/// around its own run. The branch under test is the same either way; only the
+/// warning's tail differs (`fetch.rs` warns "trying JS rendering fallback" with
+/// the feature, "but JS rendering unavailable" without), so the assertion
+/// covers the half they share.
+#[cfg(not(feature = "js-rendering"))]
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn a_page_whose_extracted_body_is_below_the_threshold_warns_that_extraction_was_thin() {
