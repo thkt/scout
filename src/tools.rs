@@ -31,14 +31,14 @@ use crate::envelope::CommandOutput;
 use crate::fetch::converter::{DECODE_UNCERTAIN_NOTE, FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
-use crate::markdown::{shift_headings, truncate_with_note};
+use crate::markdown::shift_headings;
 use crate::rng::Rng;
 use crate::slack::SlackClient;
 use crate::token_source::TokenSource;
+use crate::yaml::truncate_and_reneutralize;
 
-// Re-imported under `cfg(test)` so the in-module test files (which reach them
-// via `use super::*`) keep compiling after the command methods that used them
-// in production moved to `query` / `repo`.
+// Production code here does not use these; the in-module test files reach them
+// through `use super::*`, so the import stays under `cfg(test)`.
 #[cfg(test)]
 use crate::envelope::DegradedReason;
 #[cfg(test)]
@@ -301,12 +301,11 @@ impl Scout {
 
 /// Both notes ride in the body, not in the envelope alone: without `--json` the
 /// caller receives `into_markdown()` and nothing else (`src/lib.rs`), so a
-/// degradation recorded only in `degraded_reasons` reaches no one. The decode
-/// note used to be pushed to the envelope without a body counterpart, which left
-/// a default-mode reader holding a possibly garbled page with no sign of it —
-/// while the same page through `research` was labelled. The order matches
-/// `format_fetched_pages`: what produced the text, then what the text may suffer
-/// from.
+/// degradation recorded only in `degraded_reasons` leaves a default-mode reader
+/// holding a possibly garbled page with no sign of it.
+///
+/// The order matches `format_fetched_pages`: what produced the text, then what
+/// the text may suffer from.
 fn format_fetch_output(result: &FetchResult) -> String {
     let mut output = String::new();
     if result.used_raw_fallback() {
@@ -317,7 +316,7 @@ fn format_fetch_output(result: &FetchResult) -> String {
     }
     output.push_str(&shift_headings(result.markdown(), 2));
 
-    truncate_with_note(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
+    truncate_and_reneutralize(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
 }
 
 #[cfg(test)]

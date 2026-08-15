@@ -481,6 +481,41 @@ fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     );
 }
 
+/// [T-FC088] 4連フェンスの内側の3連バッククォート行で切れてもフェンスの閉じ判定を誤らない
+///
+/// The fixture stands in for text `neutralize_yaml_markers_outside_fences`
+/// (src/yaml.rs) already ran over: `---` survived verbatim because, at
+/// neutralization time, its 4-backtick fence was closed later on. Between
+/// the marker and that real close sits a 3-backtick line, which a fence
+/// tracker keyed on run length alone (not `markdown::track_fence`'s
+/// length-matching rule) could mistake for the close. Truncation then cuts
+/// well past that 3-backtick decoy but well before the real 4-backtick
+/// close, so the fence is genuinely still open at the cut.
+#[test]
+fn combined_research_output_reneutralizes_a_marker_past_a_decoy_close_inside_a_longer_fence() {
+    let filler = "y".repeat(80) + "\n";
+    let markdown = format!("````\n---\nevil: true\n```\n{}", filler.repeat(60));
+    let page = FetchResult::for_test("https://page1.example".into(), markdown, false);
+    let report = ResearchReport {
+        fetched_pages: vec![page],
+        ..Default::default()
+    };
+
+    let text = format_report(&report, "q");
+
+    assert!(
+        text.contains("(truncated: showing"),
+        "output must actually be truncated for this scenario to be \
+         meaningful, got:\n{text}"
+    );
+    assert!(
+        !text.lines().any(|l| l == "---"),
+        "a marker past a 3-backtick line that does not actually close its \
+         4-backtick fence must still be re-neutralized once truncation cuts \
+         before the fence's real close, got:\n{text}"
+    );
+}
+
 /// [T-SE018] both halves of a failed-URL line take the same escape
 ///
 /// The URL went through `escape_md_link` and the reason through

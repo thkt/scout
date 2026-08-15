@@ -5,15 +5,14 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
-use crate::markdown::track_fence;
+use crate::markdown::{track_fence, truncate_with_note};
 
 /// Neutralize YAML document markers in untrusted body text appended after a
-/// `---`-delimited frontmatter block.  A line that is exactly `---` or `...` (a
-/// YAML document start/end marker, and also a Markdown thematic break) is rewritten
-/// to `***`, which renders as the same thematic break but is not a YAML marker, so
-/// the body cannot inject a document boundary or a forged frontmatter block.  Only
-/// column-0 markers are rewritten; indented or inline `---` is ordinary content and
-/// left intact.
+/// `---`-delimited frontmatter block.
+///
+/// `***` renders as the same thematic break as `---` but is not a YAML marker,
+/// so the body cannot forge a document boundary. Indented and inline `---` are
+/// left intact: they are ordinary content to a YAML reader.
 pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     for (i, line) in body.split('\n').enumerate() {
@@ -26,9 +25,7 @@ pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
 }
 
 /// The rewrite rule shared by [`neutralize_yaml_markers`] and
-/// [`neutralize_yaml_markers_outside_fences`]: append `line` to `out`, rewriting
-/// a bare YAML document marker (see [`yaml_marker_rest`]) to `***` and leaving
-/// every other line untouched.
+/// [`neutralize_yaml_markers_outside_fences`].
 fn append_marker_rewritten(out: &mut String, line: &str) {
     match yaml_marker_rest(line) {
         Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
@@ -40,19 +37,16 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
     }
 }
 
-/// Apply [`neutralize_yaml_markers`]'s rewrite rule only to lines outside a
-/// fenced code block, so a marker line quoted inside a closed fence (e.g. shown
-/// as sample output in a code block) is left as ordinary content instead of
-/// being mistaken for an actual YAML document boundary.
+/// Apply [`neutralize_yaml_markers`]'s rewrite rule only outside a fenced code
+/// block, so a marker quoted inside a closed fence stays as written.
 ///
 /// A body ending with a fence still open falls back to the whole-body rewrite
-/// rather than keeping the partial per-line result: an unclosed fence is more
-/// likely a stray backtick run than a real code block, and a partial result
-/// would leave every line after it unprotected.
+/// rather than keeping the partial result: an unclosed fence is more likely a
+/// stray backtick run than a real code block, and the partial result would
+/// leave every line after it unprotected.
 ///
-/// `src/slack/format.rs` keeps calling the fence-unaware
-/// [`neutralize_yaml_markers`]. Slack message text passes to the leaf nearly
-/// raw, so an attacker-authored unclosed fence there would turn off
+/// `src/slack/format.rs` does not use this variant. Slack message text reaches
+/// the leaf nearly raw, so one attacker-authored unclosed fence would turn off
 /// neutralization for everything after it.
 pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
@@ -71,6 +65,55 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
         return neutralize_yaml_markers(body);
     }
     out
+}
+
+/// Re-neutralize the tail of already-truncated output that a byte-cap cut left
+/// with a fenced code block open.
+///
+/// [`neutralize_yaml_markers_outside_fences`] leaves a marker verbatim when a
+/// fence closes around it. A byte cap applied later can cut past that marker
+/// but before the closing delimiter, exposing it at column 0.
+///
+/// The scan runs forward rather than backward: read from the end, a line that
+/// looks like a fence delimiter could be the dangling block's own opening line
+/// or an inner line resembling one, and only a forward pass carries the
+/// open/close state that separates the two.
+pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut dangling_start: Option<usize> = None;
+    let mut offset = 0usize;
+    for line in truncated.split('\n') {
+        let was_open = fence.is_some();
+        track_fence(&mut fence, line);
+        match (was_open, fence.is_some()) {
+            (false, true) => dangling_start = Some(offset),
+            (true, false) => dangling_start = None,
+            _ => {}
+        }
+        offset += line.len() + 1;
+    }
+    match dangling_start {
+        Some(start) => {
+            let mut out = String::with_capacity(truncated.len());
+            out.push_str(&truncated[..start]);
+            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(truncated),
+    }
+}
+
+/// [`truncate_with_note`] followed by [`reneutralize_dangling_fence`].
+///
+/// Every caller that truncates already fence-neutralized markdown needs both
+/// steps, so they are not offered separately: chaining them at each call site
+/// is how one site ends up with only the first half.
+pub(crate) fn truncate_and_reneutralize(s: &str, max_bytes: usize) -> Cow<'_, str> {
+    let truncated = truncate_with_note(s, max_bytes);
+    match reneutralize_dangling_fence(&truncated) {
+        Cow::Borrowed(_) => truncated,
+        Cow::Owned(rewritten) => Cow::Owned(rewritten),
+    }
 }
 
 /// If `line` is a YAML document marker (`---` start or `...` end) at column 0 —
@@ -97,11 +140,10 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
 /// Escape a string for use inside a double-quoted YAML scalar.
 ///
 /// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
-/// frontmatter field reaches for that function instead. ADR-0014's
-/// neutralization table pins this escape set separately from the quoting.
+/// frontmatter field reaches for that function instead.
 fn escape_yaml(s: &str) -> Cow<'_, str> {
-    // The common frontmatter value (a plain title/author/date) carries no escapable
-    // char, so the loop below would allocate a copy identical to its input.
+    // A plain title or date carries no escapable char, so the loop below would
+    // allocate a copy identical to its input.
     if !s
         .bytes()
         .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
