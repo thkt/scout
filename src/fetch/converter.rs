@@ -124,10 +124,8 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     // branch, which htmd already fences correctly on its own.
     let result = handlers.walk_children(element.node);
 
-    if has_code_child(element.node) {
-        if has_table_cell_ancestor(element.node)
-            && let Some(code) = code_child(element.node)
-        {
+    if let Some(code) = code_child(element.node) {
+        if has_table_cell_ancestor(element.node) {
             let content = text_content(&code);
             return Some(HandlerResult {
                 content: inline_code_span(&content),
@@ -327,14 +325,9 @@ fn element_tag(node: &Rc<Node>) -> Option<&str> {
     }
 }
 
-/// Whether the element has a direct `<code>` child, the shape htmd's
+/// The element's direct `<code>` child, if it has one — the shape htmd's
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
 /// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
-fn has_code_child(node: &Rc<Node>) -> bool {
-    code_child(node).is_some()
-}
-
-/// The element's direct `<code>` child, if it has one.
 fn code_child(node: &Rc<Node>) -> Option<Rc<Node>> {
     node.children
         .borrow()
@@ -427,14 +420,25 @@ fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handl
     handlers.fallback(element)
 }
 
-/// Whether any ancestor of `node` is a `<pre>` element. Mirrors the
-/// take-upgrade-put-back pattern htmd's own `node_util::get_parent_node` uses
-/// to read the `Cell<Option<WeakHandle>>` parent link without leaving it
-/// empty for later traversals (htmd-0.5.5/src/node_util.rs:13-23).
+/// Whether any ancestor of `node` is a `<pre>` element.
 fn has_pre_ancestor(node: &Rc<Node>) -> bool {
+    has_ancestor_matching(node, |tag| tag == "pre")
+}
+
+/// Whether any ancestor of `node` is a `<td>` or `<th>` element.
+fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
+    has_ancestor_matching(node, |tag| matches!(tag, "td" | "th"))
+}
+
+/// Whether any ancestor of `node` is an element whose tag satisfies
+/// `predicate`. Mirrors the take-upgrade-put-back pattern htmd's own
+/// `node_util::get_parent_node` uses to read the `Cell<Option<WeakHandle>>`
+/// parent link without leaving it empty for later traversals
+/// (htmd-0.5.5/src/node_util.rs:13-23).
+fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
-        if element_tag(&parent) == Some("pre") {
+        if element_tag(&parent).is_some_and(&predicate) {
             return true;
         }
         current = get_parent(&parent);
@@ -447,19 +451,6 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let parent = value.as_ref().and_then(Weak::upgrade);
     node.parent.set(value);
     parent
-}
-
-/// Whether any ancestor of `node` is a `<td>` or `<th>` element. Same
-/// take-upgrade-put-back shape as [`has_pre_ancestor`].
-fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
-    let mut current = get_parent(node);
-    while let Some(parent) = current {
-        if matches!(element_tag(&parent), Some("td" | "th")) {
-            return true;
-        }
-        current = get_parent(&parent);
-    }
-    false
 }
 
 /// Concatenates every Text descendant of `node`, depth-first, ignoring
