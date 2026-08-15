@@ -29,7 +29,22 @@ htmd = "0.5.5"
 # raised past htmd on its own. Bump this pin and drop that bound together once
 # htmd moves, or renovate stops offering updates for the crate entirely.
 markup5ever_rcdom = "0.38"
-tokio = { version = "1", features = ["full"] }
+# `full` also pulls `fs` (no call site) and `parking_lot` (swaps tokio's
+# internal Mutex). The list below is what the crate actually calls; adding a
+# call site for a feature outside it fails to compile, which is the signal we
+# want over a silent dependency.
+tokio = { version = "1", features = [
+  "io-std",
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
