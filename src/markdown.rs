@@ -92,7 +92,8 @@ pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
         return Cow::Borrowed(s);
     }
     let total = s.len();
-    let end = s.floor_char_boundary(max_bytes);
+    let boundary = s.floor_char_boundary(max_bytes);
+    let end = s[..boundary].rfind('\n').map(|p| p + 1).unwrap_or(boundary);
     let mut out = s[..end].to_string();
     out.push_str(&truncation_note(end, total));
     Cow::Owned(out)
@@ -547,6 +548,48 @@ mod tests {
             result.contains("showing 99 / 150 bytes"),
             "cut must snap to the boundary below 100, got: {result}"
         );
+    }
+
+    /// [T-MD036] 改行を含む入力の打ち切りが行境界で切れ、部分行を残さない
+    ///
+    /// 6 バイトの行を 20 本並べた 120 バイト入力を max_bytes=100 で切ると、
+    /// 100 バイト目は 17 本目の行の途中 (先頭から 4 バイト目) に落ちる。行境界へ
+    /// 寄せる実装は直前の改行 (95 バイト目) まで戻り、96 バイトで 16 行分を残す。
+    #[test]
+    fn truncate_with_note_with_newlines_cuts_at_line_boundary_leaving_no_partial_line() {
+        let line = "01234\n"; // 6 bytes per line
+        let input = line.repeat(20); // 120 bytes, 20 complete lines
+        let result = truncate_with_note(&input, 100);
+        assert!(
+            result.contains("showing 96 / 120 bytes"),
+            "cut must back up to the last newline before byte 100, got: {result}"
+        );
+        let content = result.split("\n\n(truncated").next().unwrap();
+        assert_eq!(content, &input[..96]);
+        assert!(
+            content.ends_with('\n'),
+            "must not leave a partial line: {content:?}"
+        );
+    }
+
+    /// [T-MD037] "-------" を含む入力を行の途中で切っても出力の末尾行が --- にならない
+    ///
+    /// 6 バイトの行を 15 本 (90 バイト) 並べたあとに 7 個のダッシュの行を続け、
+    /// max_bytes=93 で切る。素朴な floor_char_boundary(93) はダッシュ行の 3 バイト
+    /// 目 (`---`) で止まり、その 3 文字だけの行が Markdown の thematic break として
+    /// 独立して解釈されてしまう。行境界へ寄せる実装は 90 バイト目 (15 行分) まで戻り、
+    /// ダッシュ行自体を丸ごと落とす。
+    #[test]
+    fn truncate_with_note_cutting_mid_dash_run_does_not_leave_a_lone_thematic_break() {
+        let lines = "01234\n".repeat(15); // 90 bytes, 15 complete lines
+        let input = format!("{lines}-------\n"); // + a 7-dash line, 98 bytes total
+        let result = truncate_with_note(&input, 93);
+        let content = result.split("\n\n(truncated").next().unwrap();
+        assert!(
+            !content.ends_with("---"),
+            "truncated content must not end in a bare --- line: {content:?}"
+        );
+        assert_eq!(content, &input[..90]);
     }
 
     /// [T-MD028] 最長 4 個のバッククォート列を含む内容に対して区切りは 5 個になる
