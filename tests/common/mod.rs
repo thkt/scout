@@ -266,7 +266,7 @@ mod tests {
         Err(io::Error::other("bind refused"))
     }
 
-    // T-C027: forced_run_panics_when_loopback_bind_fails
+    // T-C047: forced_run_panics_when_loopback_bind_fails
     //
     // The branch the callers cannot reach on their own: every `spawn_mock_proxy`
     // caller turns `None` into an early return, so without this the guard could
