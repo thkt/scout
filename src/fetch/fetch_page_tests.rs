@@ -5,6 +5,8 @@ use crate::test_support::{
 };
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
+use std::io;
+use std::thread::JoinHandle;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -210,6 +212,201 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
         page.markdown().contains("proxied body content"),
         "proxied fetch should return the page body, got: {:?}",
         page.markdown()
+    );
+
+    join_server_thread(handle);
+}
+
+/// Wraps `payload` in the article shell Readability is pinned to extract
+/// cleanly: nav and footer chrome around four filler paragraphs, shaped after
+/// `extractor::tests::BLOG_HTML`. The filler is what keeps the page above the
+/// thin-extract and thin-body thresholds, so `payload` alone decides what each
+/// test observes and cannot be what drops the fetch into raw fallback.
+fn article_page(title: &str, payload: &str) -> String {
+    format!(
+        "<html><head><title>{title}</title></head><body>\
+        <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
+        <article>\
+        <h1>{title}</h1>\
+        <p>This article walks through the topic in enough depth that the page \
+        carries real prose rather than a stub, which is what Readability scores \
+        when it decides whether the body is worth extracting at all.</p>\
+        <p>The second paragraph continues that discussion so the extracted body \
+        stays comfortably above the thin-extract threshold, and the fetch does \
+        not take the raw-HTML fallback or the JS-rendering detour.</p>\
+        <p>The fragment below is the part under test; everything around it is \
+        chrome and filler chosen so that it cannot be the reason extraction \
+        succeeds or fails.</p>\
+        {payload}\
+        <p>A closing paragraph follows the fragment so it sits inside the body \
+        rather than at its edge, matching how a real page surrounds the markup \
+        a reader came for.</p>\
+        </article>\
+        <footer>Site footer: copyright notice and additional links</footer>\
+        </body></html>"
+    )
+}
+
+/// Spawns a forward proxy serving `html` and runs `fetch_page` against it.
+/// `configure_opts` layers each caller's own option (e.g. `raw: true`) onto
+/// the shared proxied base.
+///
+/// `None` carries the unavailable-loopback skip, so callers early-return the
+/// way every other proxy-backed test here does.
+async fn fetch_article_via_proxy(
+    html: &str,
+    configure_opts: impl FnOnce(FetchOptions) -> FetchOptions,
+) -> Option<(Result<FetchResult, FetchError>, JoinHandle<io::Result<()>>)> {
+    let (proxy_url, handle) = spawn_forward_proxy(html)?;
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let (cancel, _) = watch::channel(false);
+    let opts = configure_opts(FetchOptions {
+        egress: EgressMode::Proxied(proxy_url),
+        ..Default::default()
+    });
+    let result = fetch_page(
+        &client,
+        "http://example.com/article",
+        opts,
+        real_resolver(),
+        &cancel,
+    )
+    .await;
+    Some((result, handle))
+}
+
+/// [T-F081] 既定経路では pre の class 由来の言語指定が失われ nav が消え raw fallback にも落ちない
+///
+/// The default path runs Readability before conversion, and its
+/// `keep_classes: false` strips every `class` attribute, so the
+/// `class="language-rust"` fence loses its `rust` info string. Converting
+/// hand-authored HTML directly keeps it, which is why the converter's own
+/// tests see an info string the production path never produces.
+///
+/// The fixture's paragraphs stay well above the thin-extract and thin-body
+/// thresholds so the fetch neither falls back to raw HTML nor takes the
+/// JS-rendering detour.
+///
+/// Routed through `spawn_forward_proxy` + `EgressMode::Proxied` rather than a
+/// direct fetch of the mock server's loopback URI: `ssrf_check` blocks a
+/// literal loopback host before any request is sent, in every mode.
+#[tokio::test]
+async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
+    let Some((result, handle)) = fetch_article_via_proxy(
+        &article_page(
+            "Understanding Rust Ownership",
+            "<pre><code class=\"language-rust\">fn main() {}</code></pre>",
+        ),
+        |opts| opts,
+    )
+    .await
+    else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let page = result.expect("a rich article page must fetch successfully");
+    assert!(
+        !page.used_raw_fallback(),
+        "a rich article with plenty of paragraph text must not fall back to raw HTML: {:?}",
+        page.markdown()
+    );
+    assert!(
+        !page.markdown().contains("```rust"),
+        "the default path strips the class attribute before conversion, so no \
+        `rust` fence info string should survive: {:?}",
+        page.markdown()
+    );
+    assert!(
+        !page.markdown().contains("Site navigation"),
+        "Readability must drop the <nav> chrome on the default path: {:?}",
+        page.markdown()
+    );
+
+    join_server_thread(handle);
+}
+
+/// [T-F082] raw 経路では pre の class 由来の言語指定がフェンスに残る
+///
+/// With `raw: true`, `extract_raw` skips Readability entirely and carries the
+/// source HTML's `class` attribute through unchanged, so `language-rust` still
+/// attaches `rust` as the fence's info string. This is the only path on which
+/// a fetched page keeps a fence language.
+#[tokio::test]
+async fn raw_path_keeps_pre_class_language_in_the_fence() {
+    let Some((result, handle)) = fetch_article_via_proxy(
+        &article_page(
+            "Understanding Rust Ownership",
+            "<pre><code class=\"language-rust\">fn main() {}</code></pre>",
+        ),
+        |opts| FetchOptions { raw: true, ..opts },
+    )
+    .await
+    else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let page = result.expect("a rich article page must fetch successfully in raw mode");
+    assert!(
+        page.markdown().contains("```rust"),
+        "the raw path carries the class attribute through unchanged, so a \
+        `rust` fence info string must survive: {:?}",
+        page.markdown()
+    );
+
+    join_server_thread(handle);
+}
+
+/// [T-F083] thead と th を持つ 2 行 2 列の表が既定経路で区切り行つきに残る
+///
+/// Table structure survives where a `class` attribute does not: Readability's
+/// cleanup drops attributes, not elements, so a `<thead>` header table reaches
+/// conversion intact and comes out with its dash separator row.
+///
+/// Routed through `spawn_forward_proxy` for the same reason as the tests
+/// above.
+#[tokio::test]
+async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
+    let html = article_page(
+        "City Population Overview",
+        "<table><thead><tr><th>City</th><th>Population</th></tr></thead>\
+        <tbody><tr><td>Springfield</td><td>150000</td></tr></tbody></table>",
+    );
+    let Some((result, handle)) = fetch_article_via_proxy(&html, |opts| opts).await else {
+        return; // loopback bind unavailable — cannot exercise the proxy path
+    };
+
+    let page = result.expect("a rich article page with a table must fetch successfully");
+    assert!(
+        !page.used_raw_fallback(),
+        "a rich article with plenty of paragraph text must not fall back to raw HTML: {:?}",
+        page.markdown()
+    );
+    let markdown = page.markdown();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let header_idx = lines
+        .iter()
+        .position(|line| {
+            line.starts_with('|') && line.contains("City") && line.contains("Population")
+        })
+        .unwrap_or_else(|| panic!("header row must survive the default path: {markdown:?}"));
+    let separator_line = lines
+        .get(header_idx + 1)
+        .unwrap_or_else(|| panic!("a line must immediately follow the header row: {markdown:?}"));
+    assert!(
+        !separator_line.is_empty()
+            && separator_line.contains('-')
+            && separator_line
+                .chars()
+                .all(|c| c == '|' || c == '-' || c == ' '),
+        "the line right after the header row must be a dash separator row: {markdown:?}"
+    );
+    assert!(
+        markdown.contains("Springfield") && markdown.contains("150000"),
+        "the data row must survive the default path: {markdown:?}"
     );
 
     join_server_thread(handle);

@@ -764,6 +764,17 @@ mod tests {
 
     /// Minimal `ExtractedArticle` fixture for tests that only vary the body
     /// HTML: no title/byline/published_time and no raw-fallback flag.
+    ///
+    /// `html` lands in `content_html` verbatim: the helper never calls
+    /// `extractor::extract_article`, so dom_smoothie's Readability pass never
+    /// touches it. Every test calling `to_fetch_result` directly exercises
+    /// htmd handling on hand-authored HTML, not the production pipeline.
+    ///
+    /// The gap is load-bearing for `class`. `extract_article` runs dom_smoothie
+    /// with `keep_classes: false`, which strips every element's `class` before
+    /// conversion sees the DOM
+    /// (dom_smoothie-0.18.0/src/readability.rs:884-891). A test here asserting
+    /// on class-driven behavior pins it for HTML that never passed that strip.
     fn article(html: &str) -> ExtractedArticle {
         ExtractedArticle {
             title: None,
@@ -1047,6 +1058,11 @@ mod tests {
     /// attribute for a `language-*` token and appends the suffix as the
     /// fence's info string with no separating space
     /// (htmd-0.5.5/src/element_handler/code.rs:58-69, 105-116).
+    ///
+    /// This holds for the `--raw` path, which skips Readability, and for direct
+    /// `to_fetch_result` callers. The default fetch path strips the `class`
+    /// first, as `article`'s doc above records, so a fetched page never reaches
+    /// conversion with one.
     #[test]
     fn code_block_with_language_class_gets_language_info_string() {
         let article = article(r#"<pre><code class="language-rust">fn main() {}</code></pre>"#);
