@@ -92,12 +92,7 @@ fn markdown_converter() -> HtmlToMarkdown {
         .add_handler(vec!["span"], span_handler)
         .add_handler(vec!["table"], table_handler)
         .add_handler(vec!["a"], a_handler)
-        .add_handler(
-            vec![
-                "script", "style", "noscript", "textarea", "iframe", "desc", "title",
-            ],
-            suppressed_handler,
-        )
+        .add_handler(SUPPRESSED_TAGS.to_vec(), suppressed_handler)
         .build()
 }
 
@@ -127,9 +122,6 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     // Ahead of the `<code>`-child split: both shapes fence, and a fence inside
     // a cell leaves its own backticks as cell text. Reading the whole `<pre>`
     // rather than a `<code>` child keeps sibling text a `<code>` does not cover.
-    // Ahead of the `<code>`-child split: both shapes fence, and a fence inside
-    // a cell leaves its own backticks as cell text. Reading the whole `<pre>`
-    // rather than a `<code>` child keeps sibling text a `<code>` does not cover.
     if has_table_cell_ancestor(element.node) {
         let content = text_content(element.node);
         return Some(HandlerResult {
@@ -138,7 +130,7 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
         });
     }
 
-    if code_child(element.node).is_some() {
+    if has_code_child(element.node) {
         let content = result.content.trim_matches('\n');
         return Some(HandlerResult {
             content: format!("\n\n{content}\n\n"),
@@ -181,13 +173,30 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
 fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if element.tag == "desc" && element_namespace(element.node) != Some(SVG_NAMESPACE) {
+    if !is_suppressed_element(element.node) {
         return handlers.fallback(element);
     }
     Some(HandlerResult {
         content: String::new(),
         markdown_translated: true,
     })
+}
+
+/// The tags [`suppressed_handler`] is registered for.
+const SUPPRESSED_TAGS: [&str; 7] = [
+    "script", "style", "noscript", "textarea", "iframe", "desc", "title",
+];
+
+/// Whether [`suppressed_handler`] drops this element's content, which every
+/// reader of the DOM outside the handler dispatch has to agree with —
+/// `push_text_content` reads a `<pre>`'s subtree directly and would otherwise
+/// resurrect the very bodies the handler exists to remove.
+fn is_suppressed_element(node: &Rc<Node>) -> bool {
+    let Some(tag) = element_tag(node) else {
+        return false;
+    };
+    SUPPRESSED_TAGS.contains(&tag)
+        && (tag != "desc" || element_namespace(node) == Some(SVG_NAMESPACE))
 }
 
 /// The namespace html5ever stamps on an SVG element. `<desc>` is an HTML
@@ -332,15 +341,14 @@ fn element_tag(node: &Rc<Node>) -> Option<&str> {
     }
 }
 
-/// The element's direct `<code>` child, if it has one — the shape htmd's
+/// Whether the element has a direct `<code>` child, the shape htmd's
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
 /// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
-fn code_child(node: &Rc<Node>) -> Option<Rc<Node>> {
+fn has_code_child(node: &Rc<Node>) -> bool {
     node.children
         .borrow()
         .iter()
-        .find(|child| element_tag(child) == Some("code"))
-        .cloned()
+        .any(|child| element_tag(child) == Some("code"))
 }
 
 /// Rebuilds a `<pre>` element's non-code content from its DOM children rather
@@ -460,11 +468,21 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     parent
 }
 
-/// Concatenates every Text descendant of `node`, depth-first, ignoring
-/// element structure. Used to read a table cell's `<code>` content straight
-/// off the DOM: unlike the walked/escaped markdown text, this string carries
-/// none of htmd's fence-char backslash-escaping (see `raw_pre_content`
-/// above), which the inline-code-span delimiter math below must not see.
+/// The text a reader sees in `node`'s subtree, depth-first. Used to read a
+/// table cell's `<pre>` content straight off the DOM: unlike the
+/// walked/escaped markdown text, this string carries none of htmd's fence-char
+/// backslash-escaping (see `raw_pre_content` above), which the inline-code-span
+/// delimiter math below must not see.
+///
+/// Reading the DOM directly bypasses the handler dispatch, so the two rules
+/// that decide what a reader sees are applied here instead: a suppressed
+/// element ([`is_suppressed_element`]) contributes nothing, and a `<br>`
+/// contributes the line break it renders as. A `<br>` holds no Text child, so
+/// concatenating text alone would run the lines it separates into one word.
+///
+/// The line break comes out as a bare `\n`, the same as a Text child's own
+/// embedded newline. Both later fold to a single space in
+/// `normalize_cell_content`, which this function does not do itself.
 fn text_content(node: &Rc<Node>) -> String {
     let mut out = String::new();
     push_text_content(node, &mut out);
@@ -473,12 +491,19 @@ fn text_content(node: &Rc<Node>) -> String {
 
 fn push_text_content(node: &Rc<Node>, out: &mut String) {
     match &node.data {
-        NodeData::Text { contents } => out.push_str(&contents.borrow()),
-        _ => {
-            for child in node.children.borrow().iter() {
-                push_text_content(child, out);
-            }
+        NodeData::Text { contents } => {
+            out.push_str(&contents.borrow());
+            return;
         }
+        NodeData::Element { .. } if is_suppressed_element(node) => return,
+        NodeData::Element { .. } if element_tag(node) == Some("br") => {
+            out.push('\n');
+            return;
+        }
+        _ => {}
+    }
+    for child in node.children.borrow().iter() {
+        push_text_content(child, out);
     }
 }
 
@@ -2875,6 +2900,54 @@ mod tests {
             markdown.contains("`prefixxsuffix`"),
             "text on either side of a <code> child must survive the cell's \
              inline-code rendering:\n{markdown}"
+        );
+    }
+
+    /// [T-FC095] 表セルの `<pre>` でも `<script>` の中身は落ちる
+    ///
+    /// `suppressed_handler` drops a `<script>` body everywhere else, the raw
+    /// fallback path included. A cell's `<pre>` reads its own subtree instead
+    /// of the walked text, so it has to apply the same suppression itself.
+    #[test]
+    fn table_cell_pre_drops_the_body_of_a_suppressed_element() {
+        let article = article(
+            "<table><tbody><tr><td><pre><code>visible\
+                <script>hidden()</script></code></pre></td><td>b</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("hidden()"),
+            "a <script> body inside a table cell's <pre> must not reach the \
+             markdown:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("`visible`"),
+            "the cell's visible code text must survive the suppression:\n{markdown}"
+        );
+    }
+
+    /// [T-FC096] 表セルの `<pre>` の `<br>` が空白 1 個の区切りとして残る
+    ///
+    /// A `<br>` carries no Text child, so concatenating text alone would run
+    /// the two lines together into one word. The cell folds the line break to
+    /// a space the same way it folds a Text child's `\n` (T-FC093).
+    #[test]
+    fn table_cell_pre_keeps_a_br_as_a_visible_separator() {
+        let article = article(
+            "<table><tbody><tr><td><pre><code>a<br>b</code></pre></td>\
+                <td>c</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`a b`"),
+            "a <br> inside a table cell's <pre> must separate the two lines \
+             rather than joining them:\n{markdown}"
         );
     }
 
