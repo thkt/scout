@@ -680,3 +680,61 @@ fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one
          body:\n{body}"
     );
 }
+
+// T-C046: 空アンカーと title 付きリンクを同時に含むページで抑止と削除が1つの出力に揃う
+//
+// Both fixtures below are proven individually at the `to_fetch_result` level
+// by `src/fetch/converter.rs`'s own unit tests
+// (`empty_anchor_inside_pre_disappears_leaving_the_original_line_and_indentation`,
+// T-FC048; `title_disappears_from_the_output_of_a_link_that_has_link_text`,
+// T-FC073). Neither proves the other reachable: a suite where `a_handler`
+// were only wired for one call shape (e.g. only the empty-fragment branch
+// registered, or only reachable outside a `<pre>`) could still pass both of
+// those in isolation while never converging on a real page. This scenario
+// puts a `pymdownx.highlight`-style per-line code anchor and a title-bearing
+// prose link in the same fetched page, so the seam from `scout fetch`'s real
+// HTTP/extraction/conversion pipeline down to the single `a_handler`
+// (src/fetch/converter.rs) both scenarios share is exercised once, together.
+#[test]
+fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output() {
+    let context = "empty per-line code anchor and titled prose link combined";
+    let code_with_line_anchors = "<pre><a href=\"#__codelineno-0-1\"></a>    def foo():\n\
+         <a href=\"#__codelineno-0-2\"></a>        return 1\n</pre>";
+    let titled_link = "<p>See <a href=\"https://example.com/target\" title=\"My Title\">link text</a> \
+         for details.</p>";
+    let injected = format!("{code_with_line_anchors}{titled_link}");
+    let Some(markdown) = fetch_markdown(&article_html(&injected), context) else {
+        return;
+    };
+    let (_, body) = split_frontmatter(&markdown, context);
+
+    // Suppression: the per-line empty fragment anchors leave no trace of
+    // their href, and the original code lines survive with indentation.
+    assert!(
+        !body.contains("__codelineno"),
+        "an empty anchor pointing only at a fragment must leave no trace of its href, \
+         got body:\n{body}"
+    );
+    assert!(
+        body.lines().any(|l| l == "    def foo():"),
+        "the first original code line and its indentation must survive with the anchor \
+         removed, got body:\n{body}"
+    );
+    assert!(
+        body.lines().any(|l| l == "        return 1"),
+        "the second original code line and its indentation must survive with the anchor \
+         removed, got body:\n{body}"
+    );
+
+    // Deletion: the titled link with link text keeps its destination and
+    // text but loses its title.
+    assert!(
+        body.contains("[link text](https://example.com/target)"),
+        "a titled link with link text must lose its title, leaving a bare [text](url), \
+         got body:\n{body}"
+    );
+    assert!(
+        !body.contains("My Title"),
+        "the title text must not survive anywhere in the output, got body:\n{body}"
+    );
+}
