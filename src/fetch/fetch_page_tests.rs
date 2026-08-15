@@ -450,8 +450,9 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn a_page_whose_extracted_body_is_below_the_threshold_warns_that_extraction_was_thin() {
-    // Under EXTRACT_TEXT_THRESHOLD (50) of visible text, with no nav or footer
-    // chrome that would push the raw fallback's count over it.
+    // Below EXTRACT_TEXT_THRESHOLD once extracted. No `<script>` tag or SPA
+    // root id, so `is_js_dependent` stays false regardless of body length and
+    // the fetch reaches `is_thin_extract` instead of the JS-dependent branch.
     let thin = "<html><head><title>T</title></head><body><article><p>x</p></article></body></html>";
     let Some((result, handle)) = fetch_article_via_proxy(thin, |opts| opts).await else {
         return; // loopback bind unavailable

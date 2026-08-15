@@ -1369,11 +1369,11 @@ mod tests {
     /// [T-FC082] 表の caption がヘッダ行の直前に空行なしで出る
     ///
     /// T-FC070 pins the order, this one the adjacency: no blank line separates
-    /// the two. Pins the shape, not an endorsement of it. Both pulldown-cmark 0.13.4 and
-    /// comrak 0.54.0 render this input and the blank-line variant to identical
-    /// HTML — `Cap` as its own paragraph, the rows as a table — because GFM's
-    /// table extension interrupts a paragraph. GitHub's own renderer,
-    /// markdown-it and marked were not measured.
+    /// the two. Both pulldown-cmark 0.13.4 and comrak 0.54.0 render this input
+    /// and the blank-line variant to identical HTML — `Cap` as its own
+    /// paragraph, the rows as a table — because GFM's table extension
+    /// interrupts a paragraph. GitHub's own renderer, markdown-it and marked
+    /// were not measured.
     #[test]
     fn table_caption_precedes_the_header_row_without_a_blank_line() {
         let article = article(
