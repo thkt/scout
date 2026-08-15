@@ -764,6 +764,24 @@ mod tests {
 
     /// Minimal `ExtractedArticle` fixture for tests that only vary the body
     /// HTML: no title/byline/published_time and no raw-fallback flag.
+    ///
+    /// `html` lands in `content_html` verbatim: this helper builds the
+    /// `ExtractedArticle` fields directly and never calls
+    /// `extractor::extract_article`, so the `dom_smoothie::Readability` pass
+    /// that function runs never touches it. Every test below that goes
+    /// through this helper (and every other test in this module calling
+    /// `to_fetch_result` directly) therefore exercises `markdown_converter`'s
+    /// htmd handling in isolation, on hand-authored HTML, not the production
+    /// `extract_article -> to_fetch_result` pipeline end to end. That gap
+    /// matters concretely for a `class` attribute: `extract_article` runs
+    /// dom_smoothie with `Config::default()`, whose `keep_classes: false` and
+    /// empty `classes_to_preserve` make `Readability::clean_classes`
+    /// unconditionally strip every element's `class` attribute
+    /// (dom_smoothie-0.18.0/src/readability.rs:884-891,
+    /// `sel.select("*[class]").remove_attr("class")`) before conversion ever
+    /// sees the DOM. A test here that asserts on a `class`-driven behavior,
+    /// such as T-FC017 below, is pinning that behavior for HTML that never
+    /// passed through that strip, not for the default (non-raw) fetch path.
     fn article(html: &str) -> ExtractedArticle {
         ExtractedArticle {
             title: None,
@@ -1047,6 +1065,18 @@ mod tests {
     /// attribute for a `language-*` token and appends the suffix as the
     /// fence's info string with no separating space
     /// (htmd-0.5.5/src/element_handler/code.rs:58-69, 105-116).
+    ///
+    /// This is a real guarantee only for HTML that reaches `htmd` with the
+    /// `class` attribute intact: the `--raw` fetch path (`extract_raw`,
+    /// which skips `dom_smoothie::Readability` entirely and carries the
+    /// source HTML through unchanged) and this test's direct call into
+    /// `to_fetch_result` on hand-authored HTML, per `article`'s doc comment
+    /// above. The default (non-raw) fetch path runs
+    /// `extract_article -> Readability::parse` first, and that pass strips
+    /// every `class` attribute before this conversion step ever runs, so a
+    /// `<code class="language-rust">` surviving from a real fetched page
+    /// cannot rely on this fence-language behavior; it applies to `--raw`
+    /// output and to direct `to_fetch_result` callers only.
     #[test]
     fn code_block_with_language_class_gets_language_info_string() {
         let article = article(r#"<pre><code class="language-rust">fn main() {}</code></pre>"#);
