@@ -79,7 +79,7 @@ pub(crate) struct FetchParams {
     /// Force JavaScript rendering via headless Chrome / CDP (requires the `js-rendering` build feature and Chrome/Chromium). Usually unnecessary — auto-detected for SPA pages and pages with too little extracted content.
     #[arg(long)]
     pub(super) js: bool,
-    /// Skip Readability extraction and convert entire page
+    /// Skip Readability extraction and convert the whole page. Script, style and other active HTML still have their content dropped.
     #[arg(long)]
     pub(super) raw: bool,
 }

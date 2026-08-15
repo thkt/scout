@@ -182,7 +182,7 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 | Flag    | Description                                                           |
 | ------- | --------------------------------------------------------------------- |
 | `--js`  | Force JS rendering via CDP (requires `js-rendering` feature + Chrome) |
-| `--raw` | Skip Readability, convert entire page                                 |
+| `--raw` | Skip Readability, convert the whole page except active HTML           |
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
