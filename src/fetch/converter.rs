@@ -91,6 +91,12 @@ fn markdown_converter() -> HtmlToMarkdown {
         .add_handler(vec!["span"], span_handler)
         .add_handler(vec!["table"], table_handler)
         .add_handler(vec!["a"], a_handler)
+        .add_handler(
+            vec![
+                "script", "style", "noscript", "textarea", "iframe", "desc", "title",
+            ],
+            suppressed_handler,
+        )
         .build()
 }
 
@@ -131,6 +137,41 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     Some(HandlerResult {
         content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
         markdown_translated,
+    })
+}
+
+/// Drops a target element's content instead of walking its children, so
+/// nothing inside it — however deep — reaches the markdown body. Registered
+/// for `script`, `style`, `noscript`, `textarea`, `iframe`, and SVG's `desc`
+/// and `title` (`markdown_converter` below): measured, `script`/`style`
+/// content reaches the body through htmd's own `block_handler` (which walks
+/// children in `Pure` mode), and `noscript`/`iframe`'s children and SVG's
+/// `desc`/`title` reach it through `Pure` mode's unregistered-tag fallback in
+/// `dom_walker::walk_node`, which also just walks children
+/// (htmd-0.5.5/src/dom_walker.rs:111-119). `add_handler` here shadows both
+/// paths for these tags the same way `pre_handler` shadows the built-in `pre`
+/// handler.
+///
+/// This removal happens only in this conversion layer, on the
+/// Readability-extracted or `--raw` `content_html` this file already works
+/// on — never on the freshly downloaded `html` itself. `is_js_dependent`
+/// (src/fetch.rs:371) still scans that raw byte string for `b"<script"` ahead
+/// of the `need_js` branch to detect an SPA shell, so suppressing `<script>`
+/// content in this later stage cannot break that earlier detection.
+///
+/// htmd's tag lookup is by local tag name only, not namespace, so this
+/// handler also drops a top-level `<head><title>` the same way it drops
+/// SVG's `<title>`. That does not remove the page title from scout's output:
+/// `make_raw` reads it separately via `extract_title_from_html` for the
+/// frontmatter, and that read never goes through this converter, so dropping
+/// `<title>` here does not affect it.
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn suppressed_handler(_handlers: &dyn Handlers, _element: htmd::Element) -> Option<HandlerResult> {
+    Some(HandlerResult {
+        content: String::new(),
+        markdown_translated: true,
     })
 }
 
@@ -2326,6 +2367,134 @@ mod tests {
         assert!(
             !markdown.contains("\"\""),
             "no empty title marker must survive:\n{markdown}"
+        );
+    }
+
+    /// [T-FC084] `content_html` に残った `<script>` と `<style>` の中身が本文へ出ない
+    ///
+    /// htmd's own `block_handler` registers `script` and `style` among its
+    /// "other block elements"
+    /// (htmd-0.5.5/src/element_handler/mod.rs:178-231), but in `Pure`
+    /// translation mode `block_handler` walks the element's children and keeps
+    /// their content, wrapped in blank lines
+    /// (htmd-0.5.5/src/element_handler/mod.rs:371-380). A `<script>`/`<style>`
+    /// element's sole child is the raw JS/CSS source as a single Text node, so
+    /// that source text reaches the walked content and, today, the markdown
+    /// body.
+    #[test]
+    fn script_and_style_content_left_in_content_html_does_not_reach_the_body() {
+        let article = article(
+            "<div><p>Visible text</p>\
+             <script>var scriptSecret = 'do-not-show';</script>\
+             <style>.hiddenStyleRule { color: red; }</style></div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("scriptSecret"),
+            "a <script> element's source text must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("hiddenStyleRule"),
+            "a <style> element's source text must not reach the body:\n{markdown}"
+        );
+    }
+
+    /// [T-FC085] `noscript`, `textarea`, `iframe` の子, `svg` の `desc`, `title` の中身が本文へ出ない
+    ///
+    /// None of these five tags is `script`/`style`, so T-FC084's block_handler
+    /// path does not even apply uniformly: `textarea` and `iframe` do sit in
+    /// htmd's own block-element list and share `block_handler`'s walk-and-keep
+    /// behavior, but `noscript`, `svg`, and `svg`'s `desc` carry no htmd
+    /// handler registration at all, so `Pure`-mode's own "unregistered tag"
+    /// fallback in `dom_walker::walk_node` walks their children and keeps the
+    /// content the same way
+    /// (htmd-0.5.5/src/dom_walker.rs:111-119). `svg`'s `title` reaches the
+    /// body via the same `block_handler` path as top-level `<title>`, since
+    /// htmd's handler lookup is keyed by local tag name only, not namespace
+    /// (htmd-0.5.5/src/element_handler/mod.rs:230, "title" in the block list).
+    /// `markdown_converter` builds with `scripting_enabled` left at its
+    /// default `true` (htmd-0.5.5/src/lib.rs:91), which makes `<noscript>` and
+    /// `<iframe>` raw-text elements in html5ever's parse: the markup written
+    /// inside them below is captured as one literal Text child rather than
+    /// parsed into elements, so the fixture text still reaches the body as a
+    /// verbatim substring however that child is walked.
+    #[test]
+    fn noscript_textarea_iframe_child_and_svg_desc_title_content_do_not_reach_the_body() {
+        let article = article(
+            "<div><p>Visible text</p>\
+             <noscript>noscript fallback content</noscript>\
+             <textarea>textarea leaked content</textarea>\
+             <iframe><p>iframe fallback content</p></iframe>\
+             <svg><title>svg title content</title><desc>svg desc content</desc></svg>\
+             </div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("noscript fallback content"),
+            "a <noscript> element's content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("textarea leaked content"),
+            "a <textarea> element's content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("iframe fallback content"),
+            "an <iframe> element's child content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("svg title content"),
+            "an <svg> element's <title> content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("svg desc content"),
+            "an <svg> element's <desc> content must not reach the body:\n{markdown}"
+        );
+    }
+
+    /// [T-FC086] `--raw` の end-to-end で `<script>` の中身が本文へ出ない
+    ///
+    /// Seam test: runs the real `--raw` path's own extraction
+    /// (`extractor::extract_raw`, the function `fetch_page` calls when
+    /// `opts.raw` is set) into this file's own `to_fetch_result`, rather than
+    /// hand-building an `ExtractedArticle` the way `article()` above does.
+    /// `extract_raw` skips Readability entirely and carries the full source
+    /// HTML into `content_html` unchanged, so this pins that the element
+    /// suppression T-FC084 exercises through Readability-cleaned content also
+    /// holds on this raw path, which never runs Readability's own DOM
+    /// cleanup.
+    #[test]
+    fn raw_extraction_end_to_end_does_not_leak_script_content_into_the_body() {
+        let html = "<html><head><title>Page</title></head><body>\
+             <p>Visible text</p>\
+             <script>var rawPathSecret = 'do-not-show';</script>\
+             </body></html>";
+        let raw_article = super::super::extractor::extract_raw(html);
+
+        let result = to_fetch_result(&raw_article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("rawPathSecret"),
+            "a <script> element's source text must not reach the body on the raw \
+             end-to-end path:\n{markdown}"
         );
     }
 }
