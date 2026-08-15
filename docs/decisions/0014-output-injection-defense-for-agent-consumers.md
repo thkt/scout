@@ -86,17 +86,19 @@ scout は素通しし parser 側の安全性に依存する。
 
 ### 中和点 (一次ソース)
 
-| 関数                                     | 場所                    | 中和内容                                                                                                                                                                     |
-| ---------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `md_link`                                | src/markdown.rs:26-40   | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                 |
-| `escape_md_inline`                       | src/markdown.rs:44-57   | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                         |
-| `escape_md_link`                         | src/markdown.rs:6-19    | link target の `[]()` escape、改行畳み                                                                                                                                       |
-| `sanitize_heading`                       | src/markdown.rs:64-71   | 見出し内改行を空白へ                                                                                                                                                         |
-| `shift_headings`                         | src/markdown.rs:109-140 | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                     |
-| `fence_marker`                           | src/markdown.rs:176-183 | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                              |
-| `escape_yaml`                            | src/yaml.rs:61-83       | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                      |
-| `neutralize_yaml_markers`                | src/yaml.rs:17-26       | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
-| `neutralize_yaml_markers_outside_fences` | src/yaml.rs:62-87       | fetch 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
+場所はファイルまでとし、行番号は書かない。行番号はこの表の外の変更で古くなり、古いことが誰にも見えない。関数名は `ugrep -F 'fn <name>'` で一意に引ける。
+
+| 関数                                     | 場所            | 中和内容                                                                                                                                                                     |
+| ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `md_link`                                | src/markdown.rs | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                 |
+| `escape_md_inline`                       | src/markdown.rs | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                         |
+| `escape_md_link`                         | src/markdown.rs | link target の `[]()` escape、改行畳み                                                                                                                                       |
+| `sanitize_heading`                       | src/markdown.rs | 見出し内改行を空白へ                                                                                                                                                         |
+| `shift_headings`                         | src/markdown.rs | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                     |
+| `fence_marker`                           | src/markdown.rs | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                              |
+| `escape_yaml`                            | src/yaml.rs     | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                      |
+| `neutralize_yaml_markers`                | src/yaml.rs     | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
+| `neutralize_yaml_markers_outside_fences` | src/yaml.rs     | fetch 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
 
 ### HTML 層の分担
 
@@ -119,5 +121,5 @@ Readability (dom_smoothie) は抽出時に `<script>`/`<style>` 等を DOM か�
 - `src/fetch/converter.rs` (frontmatter 組み立て + テスト T-FC001, T-FC002, T-FC008。`format_with_frontmatter` は `neutralize_yaml_markers_outside_fences` を経由する)
 - `tests/output_injection.rs:T-C032, T-C041` (fetch 出力での閉じたフェンス保存/閉じないフェンスの fail-closed 切り替えを、実際の変換経路越しに固定する統合テスト)
 - `src/search/engine.rs` + `src/search/engine/tests.rs:T-SE010` (search 出力中和)
-- `src/slack/format.rs:90-130` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用。フェンス非対応のまま直接経由することを `src/slack/format/format_tests.rs:T-SK088` が pin する)
+- `src/slack/format.rs` (`format_slack_output` が共有 leaf `src/yaml.rs` の `write_yaml_str`/`neutralize_yaml_markers` を再利用。フェンス非対応のまま直接経由することを `src/slack/format/format_tests.rs:T-SK088` が pin する)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #2)
