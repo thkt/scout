@@ -251,6 +251,10 @@ fn article_page(title: &str, payload: &str) -> String {
 /// `configure_opts` layers each caller's own option (e.g. `raw: true`) onto
 /// the shared proxied base.
 ///
+/// A direct fetch of a mock server's loopback URI is not an option here:
+/// `ssrf_check` blocks a literal loopback host before any request is sent, in
+/// every egress mode.
+///
 /// `None` carries the unavailable-loopback skip, so callers early-return the
 /// way every other proxy-backed test here does.
 async fn fetch_article_via_proxy(
@@ -286,14 +290,6 @@ async fn fetch_article_via_proxy(
 /// `class="language-rust"` fence loses its `rust` info string. Converting
 /// hand-authored HTML directly keeps it, which is why the converter's own
 /// tests see an info string the production path never produces.
-///
-/// The fixture's paragraphs stay well above the thin-extract and thin-body
-/// thresholds so the fetch neither falls back to raw HTML nor takes the
-/// JS-rendering detour.
-///
-/// Routed through `spawn_forward_proxy` + `EgressMode::Proxied` rather than a
-/// direct fetch of the mock server's loopback URI: `ssrf_check` blocks a
-/// literal loopback host before any request is sent, in every mode.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     let Some((result, handle)) = fetch_article_via_proxy(
@@ -365,9 +361,6 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
 /// Table structure survives where a `class` attribute does not: Readability's
 /// cleanup drops attributes, not elements, so a `<thead>` header table reaches
 /// conversion intact and comes out with its dash separator row.
-///
-/// Routed through `spawn_forward_proxy` for the same reason as the tests
-/// above.
 #[tokio::test]
 async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
     let html = article_page(
