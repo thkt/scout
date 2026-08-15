@@ -5,6 +5,8 @@ use crate::test_support::{
 };
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
+use std::io;
+use std::thread::JoinHandle;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -250,6 +252,39 @@ fn class_language_article_html() -> String {
         .to_owned()
 }
 
+/// Shared by T-F081/T-F082/T-F083: spawn a forward proxy serving `html`,
+/// build the proxied client + cancel channel + `EgressMode::Proxied` options
+/// `fetch_page` needs, and run the fetch. `configure_opts` layers each
+/// test's own option (e.g. `raw: true`) onto the shared proxied base.
+/// Returns `None` when the loopback bind is unavailable, matching
+/// `spawn_forward_proxy` and `try_spawn_mock_server` so callers can
+/// early-return the same way.
+async fn fetch_article_via_proxy(
+    html: &str,
+    configure_opts: impl FnOnce(FetchOptions) -> FetchOptions,
+) -> Option<(Result<FetchResult, FetchError>, JoinHandle<io::Result<()>>)> {
+    let (proxy_url, handle) = spawn_forward_proxy(html)?;
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
+        .build()
+        .unwrap();
+    let (cancel, _) = watch::channel(false);
+    let opts = configure_opts(FetchOptions {
+        egress: EgressMode::Proxied(proxy_url),
+        ..Default::default()
+    });
+    let result = fetch_page(
+        &client,
+        "http://example.com/article",
+        opts,
+        real_resolver(),
+        &cancel,
+    )
+    .await;
+    Some((result, handle))
+}
+
 /// [T-F081] 既定経路では pre の class 由来の言語指定が失われ nav が消え raw fallback にも落ちない
 ///
 /// Contrasts with T-F082: the default (non-raw) path runs
@@ -270,28 +305,11 @@ fn class_language_article_html() -> String {
 /// through `fetch_page`.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
-    let Some((proxy_url, handle)) = spawn_forward_proxy(&class_language_article_html()) else {
+    let Some((result, handle)) =
+        fetch_article_via_proxy(&class_language_article_html(), |opts| opts).await
+    else {
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
-
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
-        .build()
-        .unwrap();
-    let (cancel, _) = watch::channel(false);
-    let opts = FetchOptions {
-        egress: EgressMode::Proxied(proxy_url.clone()),
-        ..Default::default()
-    };
-    let result = fetch_page(
-        &client,
-        "http://example.com/article",
-        opts,
-        real_resolver(),
-        &cancel,
-    )
-    .await;
 
     let page = result.expect("a rich article page must fetch successfully");
     assert!(
@@ -323,29 +341,13 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
 /// converts it.
 #[tokio::test]
 async fn raw_path_keeps_pre_class_language_in_the_fence() {
-    let Some((proxy_url, handle)) = spawn_forward_proxy(&class_language_article_html()) else {
+    let Some((result, handle)) = fetch_article_via_proxy(&class_language_article_html(), |opts| {
+        FetchOptions { raw: true, ..opts }
+    })
+    .await
+    else {
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
-
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
-        .build()
-        .unwrap();
-    let (cancel, _) = watch::channel(false);
-    let opts = FetchOptions {
-        raw: true,
-        egress: EgressMode::Proxied(proxy_url.clone()),
-        ..Default::default()
-    };
-    let result = fetch_page(
-        &client,
-        "http://example.com/article",
-        opts,
-        real_resolver(),
-        &cancel,
-    )
-    .await;
 
     let page = result.expect("a rich article page must fetch successfully in raw mode");
     assert!(
@@ -390,28 +392,9 @@ async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
         </article>\
         <footer>Site footer: copyright notice and additional links</footer>\
         </body></html>";
-    let Some((proxy_url, handle)) = spawn_forward_proxy(html) else {
+    let Some((result, handle)) = fetch_article_via_proxy(html, |opts| opts).await else {
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
-
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .proxy(Proxy::all(&proxy_url).expect("proxy url"))
-        .build()
-        .unwrap();
-    let (cancel, _) = watch::channel(false);
-    let opts = FetchOptions {
-        egress: EgressMode::Proxied(proxy_url.clone()),
-        ..Default::default()
-    };
-    let result = fetch_page(
-        &client,
-        "http://example.com/article",
-        opts,
-        real_resolver(),
-        &cancel,
-    )
-    .await;
 
     let page = result.expect("a rich article page with a table must fetch successfully");
     assert!(
