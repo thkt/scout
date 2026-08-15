@@ -95,14 +95,11 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
 /// inner line that merely resembles one, and only a forward pass carries the
 /// open/close state needed to tell them apart.
 ///
-/// When no fence is left dangling open — `truncated` was not cut, or every
-/// fence it opens also closes before the end — the text already reflects
-/// pre-truncation neutralization intact and is returned unchanged. Otherwise,
-/// [`neutralize_yaml_markers`] (the fence-unaware rewrite) reruns over the
-/// byte range from that dangling fence's own opening line to the end, so any
-/// marker line in that range — which lost its protection along with the
-/// closing delimiter that used to follow it — is rewritten to `***` like
-/// ordinary unfenced content.
+/// Once a dangling fence is found, [`neutralize_yaml_markers`] (the
+/// fence-unaware rewrite) reruns over the byte range from that fence's own
+/// opening line to the end, so any marker line in that range — which lost its
+/// protection along with the closing delimiter that used to follow it — is
+/// rewritten to `***` like ordinary unfenced content.
 pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
     let mut fence: Option<(char, usize)> = None;
     let mut dangling_start: Option<usize> = None;

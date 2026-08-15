@@ -182,10 +182,8 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     if pages.is_empty() {
         return;
     }
-    // `***` renders the same thematic break as `---` (CommonMark) but is not a
-    // YAML document marker, so scout's own section divider cannot read as a
-    // live `---` to a naive multi-document YAML reader downstream (the exact
-    // gap ADR-0014's Decision Outcome names as accepted for this line).
+    // Was `---`; closes the gap ADR-0014's Decision Outcome names for this
+    // divider (#405).
     out.push_str("***\n\n## Fetched Pages\n\n");
     for page in pages {
         let _ = writeln!(out, "### {}\n", sanitize_heading(page.url()));
