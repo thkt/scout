@@ -35,7 +35,7 @@ Chosen option: Option A。出力境界の中和を `src/markdown.rs` と `src/fe
 
 本文行頭の `---`/`...` の書き換えは、fetch と Slack で経路を分ける。fetch は `neutralize_yaml_markers_outside_fences` (src/yaml.rs) を経由し、`fence_marker` (src/markdown.rs) でフェンスの開始・継続・終了を追跡する。閉じたフェンスの内側にあるマーカー行は取得元ページのコードブロックの一部として原文のまま返す。フェンスが本文の終わりまで閉じない場合は、開いたと判定したフェンス自体を信用せず、本文全体を fence 非対応の `neutralize_yaml_markers` に通した結果へ fail-closed で切り替え、フェンス以降を無中和のまま残さない。Slack は `neutralize_yaml_markers` を直接経由し、フェンスの内外を区別せず全行を書き換える。Slack の message 本文はほぼ生のまま leaf に渡るため、fetch と同じフェンス追跡を持ち込むと、攻撃者が閉じないフェンスを 1 行打つだけで以降の本文が無中和になる経路を開く。fetch 側の忠実性向上のためだけに Slack 側の注入防御を緩める変更はしない。
 
-`<script>`/`<style>` 等 active HTML の除去は Readability (dom_smoothie) と html2md (fast_html2md) に委譲し、scout は変換後の markdown/YAML 層を担う。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
+`<script>`/`<style>` 等 active HTML の除去は Readability (dom_smoothie) に委譲し、scout は変換後の markdown/YAML 層を担う。Readability を迂回する `--raw` にはこの委譲が及ばない (#403)。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
 
 Option B は policy 管理コストが高く per-site ルールが脆いため却下。エージェント consumer は全取得元に対し予測可能な保証を要する。Option C は防御を下流 (時に人間の端末) に押し付け誤りやすいため却下。
 
@@ -50,7 +50,7 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 - Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。その穴は scout 自身が出す Slack の reply 区切りと research 出力の `---` で既に開いており、フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
-- Bad, because HTML 層の script 除去は fast_html2md に依存し scout は再検証しないため、ライブラリが退行すると実行可能 markup が漏れうる
+- Bad, because HTML 層の script 除去は dom_smoothie に依存し scout は再検証しないため、ライブラリが退行すると script の中身が本文へ漏れうる。`--raw` は Readability 自体を通らないため、この経路では現に漏れる (#403)
 
 ### Confirmation
 
@@ -100,7 +100,9 @@ scout は素通しし parser 側の安全性に依存する。
 
 ### HTML 層の分担
 
-`html2md::rewrite_html` (src/fetch/converter.rs) と Readability (dom_smoothie) が `<script>`/`<style>` 等を除去する。scout 側は変換後テキストに対し上表の markdown/YAML 保証を上乗せする二層構造で、HTML パース自体は再実装しない。
+Readability (dom_smoothie) が `<script>`/`<style>` 等を除去する。変換層 (htmd) はタグを落とすがその中身をテキストとして本文へ出すため、除去を担うのは Readability だけである。scout 側は変換後テキストに対し上表の markdown/YAML 保証を上乗せする二層構造で、HTML パース自体は再実装しない。
+
+`--raw` は `extract_raw` が Readability を迂回するため、この分担が成立しない。`<script>` と `<style>` の中身が本文テキストとして出力へ入る。除去する層を足すか既知の限界とするかは #403 で判断する。
 
 ### 参照
 
