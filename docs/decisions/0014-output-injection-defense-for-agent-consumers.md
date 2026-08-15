@@ -47,7 +47,7 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 - Good, because escape 系関数は clean input で借用を返し common path でゼロアロケーション
 - Good, because fetch はフェンスが本文末尾まで閉じない場合、開いたと判定したフェンス自体を信用せず本文全体を書き換える fail-closed に倒すため、フェンス構文の偽装による中和回避を許さない
 - Bad, because Slack はフェンス追跡を持たないため、Slack 上のコードブロックであっても `---`/`...` を含む行は `***` に書き換わり、fetch と異なり原文と一致しない。message 本文がほぼ生で共有 leaf に渡る Slack でフェンス追跡を緩めると、攻撃者が閉じないフェンスを打つだけで以降が無中和になるため、意図して見送る
-- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。その穴は scout 自身が出す Slack の reply 区切りと research 出力の `---` で既に開いており、フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない
+- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
 - Bad, because HTML 層の script 除去は dom_smoothie に依存し scout は再検証しないため、ライブラリが退行すると script の中身が本文へ漏れうる。`--raw` は Readability 自体を通らないため、この経路では現に漏れる (#403)
