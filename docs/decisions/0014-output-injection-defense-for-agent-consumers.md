@@ -35,7 +35,7 @@ Chosen option: Option A。出力境界の中和を `src/markdown.rs` と `src/fe
 
 本文行頭の `---`/`...` の書き換えは、fetch と Slack で経路を分ける。fetch は `neutralize_yaml_markers_outside_fences` (src/yaml.rs) を経由し、`fence_marker` (src/markdown.rs) でフェンスの開始・継続・終了を追跡する。閉じたフェンスの内側にあるマーカー行は取得元ページのコードブロックの一部として原文のまま返す。フェンスが本文の終わりまで閉じない場合は、開いたと判定したフェンス自体を信用せず、本文全体を fence 非対応の `neutralize_yaml_markers` に通した結果へ fail-closed で切り替え、フェンス以降を無中和のまま残さない。Slack は `neutralize_yaml_markers` を直接経由し、フェンスの内外を区別せず全行を書き換える。Slack の message 本文はほぼ生のまま leaf に渡るため、fetch と同じフェンス追跡を持ち込むと、攻撃者が閉じないフェンスを 1 行打つだけで以降の本文が無中和になる経路を開く。fetch 側の忠実性向上のためだけに Slack 側の注入防御を緩める変更はしない。
 
-`<script>`/`<style>` 等 active HTML の除去は Readability (dom_smoothie) に委譲し、scout は変換後の markdown/YAML 層を担う。Readability を迂回する `--raw` にはこの委譲が及ばない (#403)。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
+`<script>`/`<style>` 等 active HTML は Readability (dom_smoothie) と変換層の 2 箇所で除去する。変換層の除去は Readability を迂回する `--raw` にも及ぶ (#403)。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
 
 Option B は policy 管理コストが高く per-site ルールが脆いため却下。エージェント consumer は全取得元に対し予測可能な保証を要する。Option C は防御を下流 (時に人間の端末) に押し付け誤りやすいため却下。
 
@@ -50,11 +50,11 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 - Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
-- Bad, because HTML 層の script 除去は dom_smoothie に依存し scout は再検証しないため、ライブラリが退行すると script の中身が本文へ漏れうる。`--raw` は Readability 自体を通らないため、この経路では現に漏れる (#403)
+- Bad, because HTML 層の script 除去が dom_smoothie 単独への依存のままなら、ライブラリが退行したとき script の中身が本文へ漏れる。`--raw` は Readability 自体を通らないため、この経路では現に漏れていた。変換層の `suppressed_handler` (`src/fetch/converter.rs`) が script/style/noscript/textarea/iframe/title と SVG 名前空間の desc を Readability の成否と独立に除去する二重化により、dom_smoothie が退行しても変換層側の除去が残る。`--raw` の `content_html` も同じ変換層を経由するため、この経路でも漏れない (#403)
 
 ### Confirmation
 
-中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C032, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
+中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C032, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。HTML 層は `src/fetch/converter.rs` の `[T-FC084, T-FC085]` が `suppressed_handler` の 7 タグの中身が本文へ出ないことを、`[T-FC086]` が `--raw` の経路で同じことを pin する。除去が本文を巻き添えにしないことは、`[T-FC089, T-FC090]` が自己終了した raw-text タグの後続本文が残ることを、`[T-FC091]` が SVG 名前空間の外の `<desc>` のテキストが残ることを pin する。書き換えの側が新しい漏れを作らないことは、`[T-FC092]` が JS ソースの中に書かれた `<script … />` を書き換えないことで pin する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
 
 ## Pros and Cons of the Options
 
@@ -100,9 +100,17 @@ scout は素通しし parser 側の安全性に依存する。
 
 ### HTML 層の分担
 
-Readability (dom_smoothie) が `<script>`/`<style>` 等を除去する。変換層 (htmd) はタグを落とすがその中身をテキストとして本文へ出すため、除去を担うのは Readability だけである。scout 側は変換後テキストに対し上表の markdown/YAML 保証を上乗せする二層構造で、HTML パース自体は再実装しない。
+Readability (dom_smoothie) は抽出時に `<script>`/`<style>` 等を DOM から落とす。ただし除去を担うのはこの層だけではない。変換層 (`src/fetch/converter.rs` の `markdown_converter` に登録された `suppressed_handler`) が `script`/`style`/`noscript`/`textarea`/`iframe`/`title` と SVG 名前空間の `desc` に対し、子要素を辿らず空の `HandlerResult` を返すことで、同じ 7 タグを Readability の成否と独立に除去する。scout 側は変換後テキストに対し上表の markdown/YAML 保証を上乗せする二層構造で HTML パース自体は再実装しないが、active HTML の除去そのものは Readability と変換層の二重チェックになっている。
 
-`--raw` は `extract_raw` が Readability を迂回するため、この分担が成立しない。`<script>` と `<style>` の中身が本文テキストとして出力へ入る。除去する層を足すか既知の限界とするかは #403 で判断する。
+`desc` だけが名前空間で絞られるのは、SVG の外の `<desc>` はブラウザが本文として描画するためである。htmd のハンドラ振り分けはローカルタグ名だけを見るので、絞らなければ HTML の `<desc>` やその名前のカスタム要素の可視テキストまで消える。`title` を絞らないのは逆の理由で、SVG の外の `<title>` もブラウザは本文に描画しない (タブに出す)。frontmatter の title は `src/fetch/extractor.rs` の `make_raw` が `extract_title_from_html` で別途読むため、この除去では失われない。
+
+変換層の除去は、自己終了記法の raw-text タグを開始タグと終了タグの対へ書き換える前処理 (`close_self_closed_raw_text_tags`) と対で成立する。`check_content_type` (`src/fetch/download.rs`) は `application/xhtml+xml` を受理するが、htmd は受理した本文を HTML として解析する。HTML の tokenizer は raw-text タグの自己終了フラグを無視して raw-text 状態へ入るため、XHTML 式に書かれた `<script src="app.js" />` は以降の本文すべてを自分の Text 子として飲み込む。前処理が無ければ `suppressed_handler` がその本文ごと落とす。この書き換えが変えるのは解析構造だけで、書き換え後の要素は中身が空のまま除去される。scout が XHTML を解析できるようになるわけではない。
+
+`--raw` は `extract_raw` が Readability を迂回するため、Readability 側の除去は効かない。しかし `--raw` の `content_html` も同じ変換層 (`markdown_converter`) を経由するため、`suppressed_handler` による除去は Readability の有無に関係なく成立する。除去する層を足すか既知の限界とするかの判断は、変換層に独立した除去を足すことで決着した (#403)。
+
+`template` の中身は `suppressed_handler` の対象外である。html5ever は `<template>` の子孫を通常の `children` とは別の `template_contents` に格納し、htmd の DOM walk は `children` しか辿らないため、ハンドラを登録しなくても中身は最初から本文に出ない。HTML コメントも対象外である。`markdown_converter` が使う `Pure` 翻訳モードでは htmd はコメントノードを一切出力せず (`Faithful` モードのみ `<!--...-->` を復元する)、除去を追加する必要がない。いずれも本文へ漏れる経路自体が無いため、対象タグに加える意味がない。
+
+`suppressed_handler` はタグ名だけで判定し属性を見ないため、`<script type="application/ld+json">` のような非実行の構造化データも実行可能な JS と区別されず本文から消える。除去範囲を広げた副作用であり、構造化データの保全は scope 外の限界として残る。
 
 ### 参照
 

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::rc::{Rc, Weak};
 
 use htmd::element_handler::{HandlerResult, Handlers};
@@ -91,6 +92,12 @@ fn markdown_converter() -> HtmlToMarkdown {
         .add_handler(vec!["span"], span_handler)
         .add_handler(vec!["table"], table_handler)
         .add_handler(vec!["a"], a_handler)
+        .add_handler(
+            vec![
+                "script", "style", "noscript", "textarea", "iframe", "desc", "title",
+            ],
+            suppressed_handler,
+        )
         .build()
 }
 
@@ -132,6 +139,175 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
         content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
         markdown_translated,
     })
+}
+
+/// Drops a target element's content instead of walking its children.
+///
+/// Left unhandled, every one of these tags still reaches the body: htmd's own
+/// `block_handler` walks the children of the ones it covers, and `Pure` mode's
+/// unregistered-tag fallback walks the rest. `add_handler` shadows both paths,
+/// the same way `pre_handler` shadows the built-in `pre` handler.
+///
+/// The removal stays in this conversion layer and never touches the freshly
+/// downloaded `html`. `is_js_dependent` (src/fetch.rs:371) scans that raw byte
+/// string for `b"<script"` to detect an SPA shell before the `need_js` branch.
+///
+/// htmd looks tags up by local name, not namespace, so the two tags SVG shares
+/// with HTML resolve separately here. `desc` is suppressed in the SVG namespace
+/// only: an element literally named `<desc>` elsewhere renders as visible text,
+/// and dropping it would delete body text the reader sees. `title` is
+/// suppressed in every namespace, since no `<title>` renders as body text. The
+/// page title still reaches the frontmatter, which `make_raw` reads through
+/// `extract_title_from_html` without passing this converter.
+///
+/// A non-SVG `<desc>` hands back to [`Handlers::fallback`], which finds no
+/// further handler for the tag and lands on `Pure` mode's walk-children
+/// default (htmd-0.5.5/src/element_handler/mod.rs:270-292).
+// `Element` must stay by-value for the same `add_handler` signature reason as
+// `pre_handler` above.
+#[allow(clippy::needless_pass_by_value)]
+fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
+    if element.tag == "desc" && element_namespace(element.node) != Some(SVG_NAMESPACE) {
+        return handlers.fallback(element);
+    }
+    Some(HandlerResult {
+        content: String::new(),
+        markdown_translated: true,
+    })
+}
+
+/// The namespace html5ever stamps on an SVG element. `<desc>` is an HTML
+/// integration point, so its children parse as HTML, but the element itself
+/// still carries this namespace (measured; pinned by T-FC091).
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+
+/// The element's namespace URI, or `None` when the node is not an element.
+fn element_namespace(node: &Rc<Node>) -> Option<&str> {
+    match &node.data {
+        NodeData::Element { name, .. } => Some(name.ns.as_ref()),
+        _ => None,
+    }
+}
+
+/// Tags whose content html5ever tokenizes as raw text, so an unclosed one
+/// consumes every following byte until its own end tag. Every entry is also a
+/// `suppressed_handler` tag, which is what turns the swallow into a silent
+/// loss rather than garbled output. `desc` is deliberately absent: it holds
+/// ordinary parsed children and cannot swallow anything.
+const RAW_TEXT_TAGS: [&str; 6] = ["script", "style", "textarea", "iframe", "noscript", "title"];
+
+/// Rewrites a self-closed raw-text start tag (`<script src="app.js" />`) into
+/// an explicit open/close pair (`<script src="app.js"></script>`), so it
+/// cannot swallow the rest of the document.
+///
+/// The HTML tokenizer ignores the self-closing flag on a raw-text start tag
+/// and switches to raw-text state regardless, so everything up to the matching
+/// end tag — in an XHTML page written with `<script … />`, that is the whole
+/// remaining body — becomes one Text child of that element. `check_content_type`
+/// (src/fetch/download.rs) accepts `application/xhtml+xml`, and htmd parses
+/// what it accepts as HTML, so such a page reaches this converter mis-parsed.
+/// `suppressed_handler` then drops the swallowed body along with the element.
+///
+/// This rewrite changes parse structure only. A rewritten element still has
+/// empty content and is still suppressed; the swallowed markup becomes the
+/// sibling elements the author wrote. It does not make scout an XHTML parser:
+/// the rest of XML's syntax stays unhandled.
+///
+/// The scan reads the byte string, not a parse tree, so a `<script … />`
+/// written inside an HTML comment or inside a quoted attribute value is
+/// rewritten there too. Neither position reaches the body, so the rewritten
+/// text stays inert.
+fn close_self_closed_raw_text_tags(html: &str) -> Cow<'_, str> {
+    let bytes = html.as_bytes();
+    let mut rewritten: Option<String> = None;
+    let mut copied_to = 0;
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'<' {
+            cursor += 1;
+            continue;
+        }
+        let Some(tag) = raw_text_tag_at(bytes, cursor + 1) else {
+            cursor += 1;
+            continue;
+        };
+        // An unterminated start tag has no `>` to rewrite, and nothing after
+        // it can be a start tag either, so the scan is done.
+        let Some(tag_end) = start_tag_end(bytes, cursor + 1 + tag.len()) else {
+            break;
+        };
+        if bytes[tag_end - 1] == b'/' {
+            let out = rewritten.get_or_insert_with(String::new);
+            out.push_str(&html[copied_to..tag_end - 1]);
+            out.push_str("></");
+            out.push_str(tag);
+            out.push('>');
+            copied_to = tag_end + 1;
+            cursor = tag_end + 1;
+            continue;
+        }
+        // The tag opened the ordinary way, so the tokenizer is now in raw-text
+        // state and the scan must jump over the content to stay in step with
+        // it. Rewriting a `<script … />` that a JS string happens to contain
+        // would insert a real `</script>` into script data and end the element
+        // early, spilling the rest of the source into the body — the leak
+        // `suppressed_handler` exists to prevent.
+        cursor = end_tag_at_or_after(bytes, tag_end + 1, tag).unwrap_or(bytes.len());
+    }
+
+    match rewritten {
+        Some(mut out) => {
+            out.push_str(&html[copied_to..]);
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(html),
+    }
+}
+
+/// The [`RAW_TEXT_TAGS`] entry naming the start tag that begins at `from`, or
+/// `None` when no entry matches. Tag names are ASCII case-insensitive, and the
+/// name must end on a character the tokenizer treats as a name boundary, so
+/// `<scriptlet>` does not match `script`.
+fn raw_text_tag_at(bytes: &[u8], from: usize) -> Option<&'static str> {
+    RAW_TEXT_TAGS.into_iter().find(|tag| {
+        let end = from + tag.len();
+        bytes.len() > end
+            && bytes[from..end].eq_ignore_ascii_case(tag.as_bytes())
+            && matches!(
+                bytes[end],
+                b' ' | b'\t' | b'\n' | b'\r' | 0x0c | b'/' | b'>'
+            )
+    })
+}
+
+/// The index of the `<` beginning `tag`'s own end tag at or after `from`, or
+/// `None` when the element never closes. In raw-text state the tokenizer ends
+/// the content on `</` plus this tag's name plus a name boundary and on
+/// nothing else, so a start tag written inside the content stays text.
+fn end_tag_at_or_after(bytes: &[u8], from: usize, tag: &str) -> Option<usize> {
+    (from..bytes.len().saturating_sub(1)).find(|&index| {
+        bytes[index] == b'<'
+            && bytes[index + 1] == b'/'
+            && raw_text_tag_at(bytes, index + 2) == Some(tag)
+    })
+}
+
+/// The index of the `>` closing the start tag whose attribute list begins at
+/// `from`, or `None` when the tag never closes. A `>` inside a quoted
+/// attribute value does not close the tag, so quoting is tracked.
+fn start_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    for (offset, &byte) in bytes[from..].iter().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if byte == b'"' || byte == b'\'' => quote = Some(byte),
+            None if byte == b'>' => return Some(from + offset),
+            None => {}
+        }
+    }
+    None
 }
 
 /// The element's tag name, or `None` when the node is not an element.
@@ -215,26 +391,17 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
 /// ancestor; every other span delegates to `Handlers::fallback`.
 ///
-/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110, active
-/// while exactly one handler is registered for `span`) trims every leading
-/// and trailing `\n` off the span's own walked content unconditionally,
-/// including when the span sits inside a `<pre>` and those newlines are real
-/// line breaks the surrounding preformatted text depends on. Registering a
-/// second `span` handler here (this one) raises the registered-handler count
-/// past that fast path's `== 1` gate, so htmd falls back to its normal
-/// per-element dispatch for every `<span>` instead
-/// (htmd-0.5.5/src/element_handler/mod.rs, `ElementHandlers::handle` /
-/// `find_handler`), and this handler runs first as the most-recently
-/// registered one.
+/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110) trims
+/// every leading and trailing `\n` off the span's walked content, including
+/// inside a `<pre>` where those newlines are line breaks the preformatted text
+/// depends on. That path is gated on exactly one handler being registered for
+/// `span`, so registering this second one takes htmd back to its normal
+/// per-element dispatch, where the most recently registered handler runs first.
 ///
-/// `has_pre_ancestor` below looks for a `<pre>` ancestor only, narrower than
-/// htmd's own `is_inside_pre` (htmd-0.5.5/src/element_handler/mod.rs:358-367),
-/// which counts a `<code>` ancestor as "inside pre" too. A `<span>` in inline
-/// `<code>` with no `<pre>` ancestor therefore falls to `Handlers::fallback`
-/// and htmd's built-in `span_handler` strips the newline from both edges of
-/// its content, before the inline-code handler's newline-to-space folding can
-/// reach it. T-FC054 pins that, and DR-0025 records why the narrower check
-/// stays.
+/// `has_pre_ancestor` below is narrower than htmd's own `is_inside_pre`
+/// (htmd-0.5.5/src/element_handler/mod.rs:358-367), which counts a `<code>`
+/// ancestor as inside pre too. DR-0025 records why the narrower check stays;
+/// T-FC054 pins what a `<span>` in inline `<code>` gets as a result.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -276,28 +443,19 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
 /// a missing `href`, not an empty one).
 ///
 /// Shadows `a` in the same shape as `pre_handler` above: `walk_children` runs
-/// exactly once, up front, and its content decides the branch. The suppress
-/// branch is this file's own logic and builds its `HandlerResult` straight
-/// from that decision, setting `markdown_translated: true` explicitly because
-/// discarding the anchor leaves no content behind that could still be raw
-/// HTML. Every other case — no `href` at all, a fragment `href` wrapping real
-/// content, or a non-fragment `href` regardless of content — falls to
-/// `Handlers::fallback`, which reaches the built-in anchor handler and
-/// rebuilds the correct `[text](url "title")` output (destination escaping,
-/// link styles, referenced-link bookkeeping) on its own; this handler does
-/// not re-derive that logic.
+/// once, up front, and its content decides the branch. `markdown_translated`
+/// is set explicitly on the suppress branch, since discarding the anchor
+/// leaves no content that could still be raw HTML.
 ///
-/// A link the built-in kept — non-empty content, so it did not fall into the
-/// suppress branch above — still carries the `<a>`'s `title` attribute into
-/// the delegated result as `](url "title")`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:124-128), but only when the
-/// anchor carries link text: T-FC049 pins that an absolute-URL anchor with
-/// empty content — kept, not suppressed, since only a *fragment* `href` with
-/// empty content takes the suppress branch above — must still keep its
-/// title, so the strip below is scoped to a non-empty `content` the same way
-/// `is_empty_fragment_anchor` above is. `strip_link_title` drops the title
-/// suffix off the delegated content when both that scope and a `title`
-/// attribute hold; otherwise the delegated result passes through untouched.
+/// Every other case falls to [`Handlers::fallback`]. Destination escaping,
+/// link styles and referenced-link bookkeeping live in the built-in handler,
+/// and this one does not re-derive them.
+///
+/// The built-in also carries the `<a>`'s `title` attribute into its output as
+/// `](url "title")` (htmd-0.5.5/src/element_handler/anchor.rs:124-128).
+/// `strip_link_title` drops that suffix only where `content` is non-empty:
+/// T-FC049 pins that an absolute-URL anchor with empty content keeps its
+/// title, and only a *fragment* href with empty content is suppressed.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -420,31 +578,22 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// htmd-0.5.5/src/element_handler/table.rs:223-247): a row is scanned once
 /// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
 /// no `<thead>` — loses whichever tag that row's extraction call did not ask
-/// for (table.rs:83-100: the `tbody`/`tfoot` branch takes only the row's
-/// `<th>` cells for a candidate header row and `continue`s past its `<td>`
-/// cells once that extraction is non-empty; a later mixed row falls to the
-/// `<td>`-only extraction and loses its `<th>` label the same way). This
-/// handler instead reads each row's cells positionally in one pass
-/// (`extract_row_cells` below), so a label and its value from the same
-/// source row land in the same output row, in separate cells.
+/// for (the branching that drops it is at table.rs:83-100). This handler reads
+/// each row's cells positionally in one pass, so a label and its value from
+/// the same source row land in the same output row, in separate cells.
 ///
 /// Row and separator formatting drop the built-in's column-width alignment
 /// padding, which widens every cell and dash run out to the column's longest
-/// cell. `format_table_row` below writes one space on each side of every cell
-/// regardless of a neighboring cell's width, so an empty or missing cell
-/// renders as a pipe and two spaces, and `format_separator_row` writes a
-/// fixed 3-dash run per cell.
+/// cell.
 ///
 /// Cell-content newline normalization, caption handling, and column-count
 /// estimation follow the built-in's shape.
 ///
-/// Any non-`Pure` translation mode falls straight to `Handlers::fallback`,
-/// which reaches the built-in `table_handler` and its own
-/// `serialize_if_faithful!` gate (table.rs:19-24) rather than the positional
-/// extraction below. `markdown_converter` always builds with
-/// `Options::default()`, which is `TranslationMode::Pure`, so scout's own
-/// runtime never takes that branch; T-FC068 exercises it through a
-/// `Faithful`-mode converter built in the test.
+/// Any non-`Pure` translation mode falls straight to `Handlers::fallback` and
+/// the built-in's own `serialize_if_faithful!` gate (table.rs:19-24).
+/// `markdown_converter` always builds `Pure`, so scout's runtime never takes
+/// that branch; T-FC068 exercises it through a `Faithful`-mode converter built
+/// in the test.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -710,8 +859,9 @@ pub(super) fn to_fetch_result(
 ) -> Result<FetchResult, FetchError> {
     // Fail-close: a conversion error must surface as a `FetchError`, not as an
     // empty or partial markdown body silently returned to the caller.
+    let content_html = close_self_closed_raw_text_tags(&article.content_html);
     let markdown = markdown_converter()
-        .convert(&article.content_html)
+        .convert(&content_html)
         .map_err(|e| FetchError::MarkdownConversion(e.to_string()))?;
     let output = format_with_frontmatter(article, &markdown);
 
@@ -2326,6 +2476,258 @@ mod tests {
         assert!(
             !markdown.contains("\"\""),
             "no empty title marker must survive:\n{markdown}"
+        );
+    }
+
+    /// [T-FC084] `content_html` に残った `<script>` と `<style>` の中身が本文へ出ない
+    ///
+    /// htmd's own `block_handler` registers `script` and `style` among its
+    /// "other block elements"
+    /// (htmd-0.5.5/src/element_handler/mod.rs:178-231), but in `Pure`
+    /// translation mode `block_handler` walks the element's children and keeps
+    /// their content, wrapped in blank lines
+    /// (htmd-0.5.5/src/element_handler/mod.rs:371-380). A `<script>`/`<style>`
+    /// element's sole child is the raw JS/CSS source as a single Text node, so
+    /// that source text reaches the walked content and, today, the markdown
+    /// body.
+    #[test]
+    fn script_and_style_content_left_in_content_html_does_not_reach_the_body() {
+        let article = article(
+            "<div><p>Visible text</p>\
+             <script>var scriptSecret = 'do-not-show';</script>\
+             <style>.hiddenStyleRule { color: red; }</style></div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("scriptSecret"),
+            "a <script> element's source text must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("hiddenStyleRule"),
+            "a <style> element's source text must not reach the body:\n{markdown}"
+        );
+    }
+
+    /// [T-FC085] `noscript`, `textarea`, `iframe` の子, `svg` の `desc`, `title` の中身が本文へ出ない
+    ///
+    /// None of these five tags is `script`/`style`, so T-FC084's block_handler
+    /// path does not even apply uniformly: `textarea` and `iframe` do sit in
+    /// htmd's own block-element list and share `block_handler`'s walk-and-keep
+    /// behavior, but `noscript`, `svg`, and `svg`'s `desc` carry no htmd
+    /// handler registration at all, so `Pure`-mode's own "unregistered tag"
+    /// fallback in `dom_walker::walk_node` walks their children and keeps the
+    /// content the same way
+    /// (htmd-0.5.5/src/dom_walker.rs:111-119). `svg`'s `title` reaches the
+    /// body via the same `block_handler` path as top-level `<title>`, since
+    /// htmd's handler lookup is keyed by local tag name only, not namespace
+    /// (htmd-0.5.5/src/element_handler/mod.rs:230, "title" in the block list).
+    /// `markdown_converter` builds with `scripting_enabled` left at its
+    /// default `true` (htmd-0.5.5/src/lib.rs:91), which makes `<noscript>` and
+    /// `<iframe>` raw-text elements in html5ever's parse: the markup written
+    /// inside them below is captured as one literal Text child rather than
+    /// parsed into elements, so the fixture text still reaches the body as a
+    /// verbatim substring however that child is walked.
+    #[test]
+    fn noscript_textarea_iframe_child_and_svg_desc_title_content_do_not_reach_the_body() {
+        let article = article(
+            "<div><p>Visible text</p>\
+             <noscript>noscript fallback content</noscript>\
+             <textarea>textarea leaked content</textarea>\
+             <iframe><p>iframe fallback content</p></iframe>\
+             <svg><title>svg title content</title><desc>svg desc content</desc></svg>\
+             </div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("noscript fallback content"),
+            "a <noscript> element's content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("textarea leaked content"),
+            "a <textarea> element's content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("iframe fallback content"),
+            "an <iframe> element's child content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("svg title content"),
+            "an <svg> element's <title> content must not reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("svg desc content"),
+            "an <svg> element's <desc> content must not reach the body:\n{markdown}"
+        );
+    }
+
+    /// [T-FC086] `--raw` の end-to-end で `<script>` の中身が本文へ出ない
+    ///
+    /// Seam test: runs the real `--raw` path's own extraction
+    /// (`extractor::extract_raw`, the function `fetch_page` calls when
+    /// `opts.raw` is set) into this file's own `to_fetch_result`, rather than
+    /// hand-building an `ExtractedArticle` the way `article()` above does.
+    /// `extract_raw` skips Readability entirely and carries the full source
+    /// HTML into `content_html` unchanged, so this pins that the element
+    /// suppression T-FC084 exercises through Readability-cleaned content also
+    /// holds on this raw path, which never runs Readability's own DOM
+    /// cleanup.
+    #[test]
+    fn raw_extraction_end_to_end_does_not_leak_script_content_into_the_body() {
+        let html = "<html><head><title>Page</title></head><body>\
+             <p>Visible text</p>\
+             <script>var rawPathSecret = 'do-not-show';</script>\
+             </body></html>";
+        let raw_article = super::super::extractor::extract_raw(html);
+
+        let result = to_fetch_result(&raw_article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("rawPathSecret"),
+            "a <script> element's source text must not reach the body on the raw \
+             end-to-end path:\n{markdown}"
+        );
+    }
+
+    /// [T-FC089] XHTML 式に自己終了した `<script />` の後ろの本文が消えない
+    ///
+    /// `check_content_type` (src/fetch/download.rs) accepts
+    /// `application/xhtml+xml`, but htmd parses every accepted body as HTML.
+    /// The HTML tokenizer ignores the self-closing flag on `script` and enters
+    /// raw-text state anyway, so without
+    /// `close_self_closed_raw_text_tags` the whole remainder of the document
+    /// becomes one Text child of that `<script>` and `suppressed_handler`
+    /// drops it with the element. `iframe` covers the same shape for a
+    /// raw-text element htmd itself registers as a block element.
+    #[test]
+    fn body_after_a_self_closed_raw_text_tag_still_reaches_the_body() {
+        let article = article(
+            "<div><p>Before script</p><script src=\"app.js\" />\
+             <p>After script</p><iframe src=\"embed.html\"/>\
+             <p>After iframe</p></div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Before script"),
+            "text ahead of the self-closed tag must reach the body:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("After script"),
+            "text after a self-closed <script /> must reach the body:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("After iframe"),
+            "text after a self-closed <iframe /> must reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("app.js"),
+            "the rewritten <script> must still be suppressed, attributes \
+             included:\n{markdown}"
+        );
+    }
+
+    /// [T-FC092] JS ソースの中の `<script … />` は書き換えず本文へ漏らさない
+    ///
+    /// The rewrite scans the byte string, so it has to track raw-text state
+    /// itself or it will rewrite a `<script … />` that a JS string literal
+    /// contains. In raw-text state the tokenizer ends `<script>` on `</script`
+    /// and nothing else, so inserting one there closes the element early and
+    /// spills the remaining source into the body as text — the exact leak
+    /// `suppressed_handler` closes.
+    #[test]
+    fn a_script_tag_inside_js_source_is_not_rewritten_into_an_early_close() {
+        let article = article(
+            "<div><p>Visible text</p>\
+             <script>document.write('<script src=\"x\" />'); var leaked = 'nestedSecret';</script>\
+             </div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("Visible text"),
+            "ordinary sibling text must still reach the body:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("nestedSecret"),
+            "script source following a <script … /> written inside it must not \
+             reach the body:\n{markdown}"
+        );
+    }
+
+    /// [T-FC090] 自己終了タグの書き換えがタグ名境界と引用符つき属性値を守る
+    ///
+    /// Two ways the scan can overreach: matching a longer tag name that merely
+    /// starts with a target name, and reading the `>` inside a quoted
+    /// attribute value as the end of the start tag. The third case pins that a
+    /// tag closed the ordinary way is returned untouched, so the rewrite adds
+    /// no end tag where the author already wrote one.
+    #[test]
+    fn self_closed_tag_rewrite_respects_name_boundaries_and_quoted_attributes() {
+        assert_eq!(
+            close_self_closed_raw_text_tags("<scriptlet a=\"b\" />x"),
+            "<scriptlet a=\"b\" />x",
+            "a longer tag name starting with a target name must not be rewritten"
+        );
+        assert_eq!(
+            close_self_closed_raw_text_tags("<script data-x=\"a>b\" />x"),
+            "<script data-x=\"a>b\" ></script>x",
+            "a > inside a quoted attribute value must not end the start tag"
+        );
+        assert_eq!(
+            close_self_closed_raw_text_tags("<script>var a = 1;</script>x"),
+            "<script>var a = 1;</script>x",
+            "an ordinarily closed tag must pass through unchanged"
+        );
+    }
+
+    /// [T-FC091] SVG 名前空間の外の `<desc>` の中身は本文に残る
+    ///
+    /// htmd dispatches handlers by local tag name only, so registering `desc`
+    /// for suppression reaches every element with that name. Outside `<svg>`,
+    /// html5ever puts `<desc>` in the XHTML namespace and a browser renders
+    /// its text like any unknown inline element, so suppressing it would
+    /// delete text the reader sees. This pins both sides of the namespace
+    /// check in one fixture: the SVG `<desc>` still goes away.
+    #[test]
+    fn desc_outside_the_svg_namespace_keeps_its_text_in_the_body() {
+        let article = article(
+            "<div><p>before <desc>html desc content</desc> after</p>\
+             <svg><desc>svg desc content</desc></svg></div>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("html desc content"),
+            "a <desc> outside the SVG namespace must keep its text:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("svg desc content"),
+            "an SVG <desc> must still be suppressed:\n{markdown}"
         );
     }
 }
