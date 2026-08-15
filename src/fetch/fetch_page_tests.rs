@@ -217,11 +217,11 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     join_server_thread(handle);
 }
 
-/// Shared fixture for T-F081 / T-F082: an article-shaped page (nav + footer
-/// chrome around several paragraphs) carrying one `<pre><code
-/// class="language-rust">` block, mirroring `extractor::tests::BLOG_HTML`
-/// (a fixture Readability is already pinned to extract cleanly, T-FX016) so
-/// the added `<pre>` block does not itself drop the page into raw fallback.
+/// An article-shaped page (nav and footer chrome around several paragraphs)
+/// carrying one `<pre><code class="language-rust">` block. Shaped after
+/// `extractor::tests::BLOG_HTML`, which Readability is already pinned to
+/// extract cleanly, so the added `<pre>` cannot be what drops the page into
+/// raw fallback.
 fn class_language_article_html() -> String {
     "<html><head><title>Understanding Ownership</title></head><body>\
         <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
@@ -252,13 +252,12 @@ fn class_language_article_html() -> String {
         .to_owned()
 }
 
-/// Shared by T-F081/T-F082/T-F083: spawn a forward proxy serving `html`,
-/// build the proxied client + cancel channel + `EgressMode::Proxied` options
-/// `fetch_page` needs, and run the fetch. `configure_opts` layers each
-/// test's own option (e.g. `raw: true`) onto the shared proxied base.
-/// Returns `None` when the loopback bind is unavailable, matching
-/// `spawn_forward_proxy` and `try_spawn_mock_server` so callers can
-/// early-return the same way.
+/// Spawns a forward proxy serving `html` and runs `fetch_page` against it.
+/// `configure_opts` layers each caller's own option (e.g. `raw: true`) onto
+/// the shared proxied base.
+///
+/// `None` carries the unavailable-loopback skip, so callers early-return the
+/// way every other proxy-backed test here does.
 async fn fetch_article_via_proxy(
     html: &str,
     configure_opts: impl FnOnce(FetchOptions) -> FetchOptions,
@@ -287,22 +286,19 @@ async fn fetch_article_via_proxy(
 
 /// [T-F081] 既定経路では pre の class 由来の言語指定が失われ nav が消え raw fallback にも落ちない
 ///
-/// Contrasts with T-F082: the default (non-raw) path runs
-/// `extract_article -> Readability::parse` before conversion, and
-/// `Config::default()`'s `keep_classes: false` strips every `class`
-/// attribute (converter.rs T-FC017 doc comment), so the `<pre><code
-/// class="language-rust">` fence must lose its `rust` info string here even
-/// though T-FC017 pins that same class producing one when conversion runs
-/// directly on hand-authored HTML. Readability drops `<nav>` chrome
-/// (T-FX016), and the surviving paragraphs must stay well above both the
-/// thin-extract and thin-body thresholds so the fetch neither falls back to
-/// raw HTML nor takes the JS-rendering detour.
+/// The default path runs Readability before conversion, and its
+/// `keep_classes: false` strips every `class` attribute, so the
+/// `class="language-rust"` fence loses its `rust` info string. Converting
+/// hand-authored HTML directly keeps it, which is why the converter's own
+/// tests see an info string the production path never produces.
+///
+/// The fixture's paragraphs stay well above the thin-extract and thin-body
+/// thresholds so the fetch neither falls back to raw HTML nor takes the
+/// JS-rendering detour.
 ///
 /// Routed through `spawn_forward_proxy` + `EgressMode::Proxied` rather than a
-/// direct fetch of `try_spawn_mock_server`'s loopback URI (T-F074: a literal
-/// loopback host is blocked by `ssrf_check` before any request is sent, in
-/// every mode), mirroring T-F073's pattern for exercising a real page body
-/// through `fetch_page`.
+/// direct fetch of the mock server's loopback URI: `ssrf_check` blocks a
+/// literal loopback host before any request is sent, in every mode.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     let Some((result, handle)) =
@@ -334,11 +330,10 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
 
 /// [T-F082] raw 経路では pre の class 由来の言語指定がフェンスに残る
 ///
-/// Same page as T-F081 with `raw: true`: `extract_raw` skips Readability
-/// entirely and carries the source HTML's `class` attribute through
-/// unchanged (converter.rs T-FC017 doc comment), so the `language-rust`
-/// class must still attach `rust` as the fence's info string once `fetch_page`
-/// converts it.
+/// With `raw: true`, `extract_raw` skips Readability entirely and carries the
+/// source HTML's `class` attribute through unchanged, so `language-rust` still
+/// attaches `rust` as the fence's info string. This is the only path on which
+/// a fetched page keeps a fence language.
 #[tokio::test]
 async fn raw_path_keeps_pre_class_language_in_the_fence() {
     let Some((result, handle)) = fetch_article_via_proxy(&class_language_article_html(), |opts| {
@@ -362,14 +357,12 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
 
 /// [T-F083] thead と th を持つ 2 行 2 列の表が既定経路で区切り行つきに残る
 ///
-/// Contrasts with T-F081/T-F082: unlike a `class` attribute, table structure
-/// (`<thead>`/`<th>`) is not stripped by Readability's class cleanup, so a
-/// small `<thead>`-header table embedded in an otherwise ordinary article
-/// must survive the default (non-raw) path with its header row followed
-/// immediately by a dash separator row, mirroring converter.rs's own pin
-/// (T-FC023) but exercised end to end through `fetch_page`.
+/// Table structure survives where a `class` attribute does not: Readability's
+/// cleanup drops attributes, not elements, so a `<thead>` header table reaches
+/// conversion intact and comes out with its dash separator row.
 ///
-/// Routed through `spawn_forward_proxy` for the same reason as T-F081.
+/// Routed through `spawn_forward_proxy` for the same reason as the tests
+/// above.
 #[tokio::test]
 async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
     let html = "<html><head><title>Population Data</title></head><body>\
