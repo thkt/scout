@@ -1,13 +1,11 @@
 use std::borrow::Cow;
 
-/// Escape characters that break Markdown link syntax: `[`, `]`, `(`, `)`.
-/// Newlines are folded to spaces so an untrusted value cannot break onto a new
-/// line and inject block Markdown (a heading or list item).
+/// Escape characters that break Markdown link syntax, folding newlines to
+/// spaces so an untrusted value cannot inject block Markdown.
 ///
-/// For a link target only — `|` is deliberately absent, since a URL inside
-/// `[](…)` has no table column to break out of. Text that is not a link target
-/// wants [`escape_md_inline`], which does escape it; that is why this is private
-/// to the module and reachable only through [`md_link`].
+/// `|` is absent: a URL inside `[](…)` has no table column to break out of.
+/// Text that is not a link target wants [`escape_md_inline`], which does escape
+/// it, so this stays private and reachable only through [`md_link`].
 fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -24,16 +22,16 @@ fn escape_md_link(s: &str) -> String {
 }
 
 /// Render a Markdown link `[text](url)` only when `url` carries an http/https
-/// scheme.  Untrusted URLs with any other scheme (`javascript:`, `data:`, …) are
-/// emitted as inert escaped text `text (url)` so they can never become a
-/// clickable/executable link target.  Allowlisting fails closed: obfuscated or
-/// whitespace-prefixed schemes do not match http/https and are neutralized.
+/// scheme, emitting anything else as inert `text (url)`.
+///
+/// The scheme check is an allowlist rather than a `javascript:`/`data:` denylist,
+/// so an obfuscated or whitespace-prefixed scheme fails to match and lands in
+/// the inert branch instead of slipping past a pattern nobody listed.
 pub(crate) fn md_link(text: &str, url: &str) -> String {
     let lower = url.to_ascii_lowercase();
     let scheme_ok = lower.starts_with("http://") || lower.starts_with("https://");
-    // A real URL carries no ASCII whitespace or control chars; a raw newline in the
-    // link target would break out of `[](…)` and inject Markdown, so route any such
-    // value to the inert branch (where newlines are collapsed to spaces).
+    // A real URL carries no ASCII whitespace or control chars, and a raw newline
+    // here would break out of `[](…)`.
     let clean = !url
         .bytes()
         .any(|b| b.is_ascii_whitespace() || b.is_ascii_control());
@@ -61,11 +59,10 @@ pub(crate) fn escape_md_inline(s: &str) -> String {
     out
 }
 
-/// Sanitize user input for embedding in a Markdown heading.
-/// Replaces newlines (which would break heading structure) with spaces.
+/// Replace newlines, which would break heading structure, with spaces.
 ///
-/// Returns the input borrowed when it carries no newline, which is the common case
-/// for headings (titles, URLs), so no allocation happens on that path.
+/// Returns the input borrowed when it carries no newline. Headings are titles
+/// and URLs, so that is the common path and it allocates nothing.
 pub(crate) fn sanitize_heading(s: &str) -> Cow<'_, str> {
     if !s.contains(['\n', '\r']) {
         return Cow::Borrowed(s);
@@ -84,7 +81,13 @@ pub(crate) fn truncation_note(shown: usize, total: usize) -> String {
     format!("\n\n(truncated: showing {shown} / {total} bytes)")
 }
 
-/// Truncate a string at a char boundary and append a byte-count note.
+/// Truncate a string at a line boundary and append a byte-count note.
+///
+/// The cut lands on a line boundary, not the byte cap: cutting mid-line can
+/// leave a partial line that reads as syntax it was not, such as `-------`
+/// becoming a bare `---` that the appended note then terminates. Falling back
+/// to the byte cap happens only when no newline precedes it, and there the
+/// line starts at offset 0, so no partial line can form.
 ///
 /// Returns the input borrowed if it fits within `max_bytes`.
 pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
@@ -120,11 +123,9 @@ fn frontmatter_len(lines: &[&str]) -> usize {
 /// Return the setext heading level if `text` followed by `underline` forms one
 /// (CommonMark §4.3): `=` underlines an h1, `-` an h2.
 ///
-/// `-` is also a thematic break and a list bullet, and the rule that separates
-/// them is what the underline sits under: a setext underline follows a paragraph
-/// line, a thematic break follows a blank one. So `text` has to be ordinary
-/// prose — a blank line, an ATX heading, a list item, a quote, a table row or a
-/// fence above the dashes leaves them alone.
+/// `-` is also a thematic break and a list bullet, and what separates them is
+/// the line the underline sits under: a setext underline follows a paragraph
+/// line, a thematic break follows a blank one. Hence the check on `text`.
 fn setext_heading_level(text: &str, underline: &str) -> Option<usize> {
     let text = text.trim();
     if text.is_empty() || text.starts_with(['#', '-', '*', '+', '>', '|', '=']) {
@@ -177,9 +178,10 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
 ///
 /// A fence closes only at a line whose run of the same character is at least
 /// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
-/// stays open through a nested 3-backtick line. The trim happens here, so
-/// callers must not pre-trim: an indented delimiter would otherwise reach the
-/// caller's own indent handling already stripped.
+/// stays open through a nested 3-backtick line.
+///
+/// Callers must not pre-trim. The trim happens here, and an indented delimiter
+/// would otherwise arrive with the caller's indent handling already applied.
 pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool {
     let marker = fence_marker(line.trim_start());
     match (*fence, marker) {

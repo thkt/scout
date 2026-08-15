@@ -47,8 +47,8 @@ pub(crate) struct ResearchRequest<'a> {
     pub(crate) lang: Lang,
     /// Carried for the same reason `fetch` carries it (ADR-0023): under a proxy
     /// the local DNS pre-check validates addresses scout never connects to, and
-    /// rejects hosts only the proxy can resolve. Defaulting to `Direct` here made
-    /// every research source fail behind a proxy that `fetch` handled fine.
+    /// rejects hosts only the proxy can resolve. A `Direct` default here fails
+    /// every research source behind a proxy that `fetch` handles fine.
     pub(crate) egress: EgressMode,
 }
 
@@ -135,10 +135,9 @@ async fn fetch_sources(
 /// ranking order in both.
 ///
 /// `buffer_unordered` yields in completion order, so the index captured at
-/// dispatch is the only remaining record of where a URL ranked. Sorting only
-/// the successes — as this did before — left the failed list in whatever order
-/// the timeouts happened to return, so two runs over the same sources printed
-/// them differently.
+/// dispatch is the only remaining record of where a URL ranked. Both lists are
+/// sorted, not just the successes: leaving the failures in completion order
+/// makes two runs over the same sources print them differently.
 fn partition_by_rank(
     outcomes: Vec<(usize, &str, Result<FetchResult, fetch::FetchError>)>,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
@@ -182,8 +181,8 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     if pages.is_empty() {
         return;
     }
-    // Was `---`; closes the gap ADR-0014's Decision Outcome names for this
-    // divider (#405).
+    // `***` renders the same thematic break without being a YAML document
+    // marker, so scout's own divider cannot forge one (ADR-0014).
     out.push_str("***\n\n## Fetched Pages\n\n");
     for page in pages {
         let _ = writeln!(out, "### {}\n", sanitize_heading(page.url()));
@@ -205,10 +204,9 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
 /// [`md_link`]: the fetch behind each one already failed, so offering it as
 /// something to follow points the reader at the failure again.
 ///
-/// Both halves of the line take the same escape. They used to differ — the URL
-/// went through `escape_md_link`, which leaves `|` alone because a link target
-/// has no column to break — but nothing here sits inside a link, so the two
-/// fields ended up disagreeing about `|` within one line.
+/// Both halves take the same escape. `escape_md_link` does not fit the URL
+/// here: it leaves `|` alone because a link target has no column to break, and
+/// nothing on this line sits inside a link.
 fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     if failed.is_empty() {
         return;
