@@ -125,6 +125,15 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     let result = handlers.walk_children(element.node);
 
     if has_code_child(element.node) {
+        if has_table_cell_ancestor(element.node)
+            && let Some(code) = code_child(element.node)
+        {
+            let content = text_content(&code);
+            return Some(HandlerResult {
+                content: inline_code_span(&content),
+                markdown_translated: result.markdown_translated,
+            });
+        }
         let content = result.content.trim_matches('\n');
         return Some(HandlerResult {
             content: format!("\n\n{content}\n\n"),
@@ -322,10 +331,16 @@ fn element_tag(node: &Rc<Node>) -> Option<&str> {
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
 /// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
 fn has_code_child(node: &Rc<Node>) -> bool {
+    code_child(node).is_some()
+}
+
+/// The element's direct `<code>` child, if it has one.
+fn code_child(node: &Rc<Node>) -> Option<Rc<Node>> {
     node.children
         .borrow()
         .iter()
-        .any(|child| element_tag(child) == Some("code"))
+        .find(|child| element_tag(child) == Some("code"))
+        .cloned()
 }
 
 /// Rebuilds a `<pre>` element's non-code content from its DOM children rather
@@ -432,6 +447,69 @@ fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let parent = value.as_ref().and_then(Weak::upgrade);
     node.parent.set(value);
     parent
+}
+
+/// Whether any ancestor of `node` is a `<td>` or `<th>` element. Same
+/// take-upgrade-put-back shape as [`has_pre_ancestor`].
+fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
+    let mut current = get_parent(node);
+    while let Some(parent) = current {
+        if matches!(element_tag(&parent), Some("td" | "th")) {
+            return true;
+        }
+        current = get_parent(&parent);
+    }
+    false
+}
+
+/// Concatenates every Text descendant of `node`, depth-first, ignoring
+/// element structure. Used to read a table cell's `<code>` content straight
+/// off the DOM: unlike the walked/escaped markdown text, this string carries
+/// none of htmd's fence-char backslash-escaping (see `raw_pre_content`
+/// above), which the inline-code-span delimiter math below must not see.
+fn text_content(node: &Rc<Node>) -> String {
+    let mut out = String::new();
+    push_text_content(node, &mut out);
+    out
+}
+
+fn push_text_content(node: &Rc<Node>, out: &mut String) {
+    match &node.data {
+        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        _ => {
+            for child in node.children.borrow().iter() {
+                push_text_content(child, out);
+            }
+        }
+    }
+}
+
+/// Builds a CommonMark 0.31.2 §6.3 inline code span for a table cell's code
+/// content.
+///
+/// The delimiter length is the content's longest backtick run + 1, computed
+/// the same way `fence_delimiter` computes a block fence's run length, but
+/// with no 3-backtick floor: an inline span may open with a single backtick.
+/// When the content starts or ends with a backtick, one inner space next to
+/// each delimiter keeps that backtick from reading as part of the delimiter.
+fn inline_code_span(content: &str) -> String {
+    let max_run = content
+        .bytes()
+        .fold((0usize, 0usize), |(longest, run), b| {
+            if b == b'`' {
+                let next = run + 1;
+                (longest.max(next), next)
+            } else {
+                (longest, 0)
+            }
+        })
+        .0;
+    let delimiter = "`".repeat(max_run + 1);
+    if content.starts_with('`') || content.ends_with('`') {
+        format!("{delimiter} {content} {delimiter}")
+    } else {
+        format!("{delimiter}{content}{delimiter}")
+    }
 }
 
 /// Suppresses an `<a>` whose `href` is a same-page fragment (`#…`) and whose
@@ -2728,6 +2806,96 @@ mod tests {
         assert!(
             !markdown.contains("svg desc content"),
             "an SVG <desc> must still be suppressed:\n{markdown}"
+        );
+    }
+
+    /// [T-FC078] 表セルの中のコードブロックがバッククォート 1 個で挟んだインラインコードで出る
+    ///
+    /// A `<pre><code>` written inside a `<td>`/`<th>` must render as inline
+    /// code delimited by a single backtick, not as the 3-line fenced block a
+    /// `<pre><code>` gets outside a table (T-FC020, T-FC081).
+    #[test]
+    fn table_cell_code_block_renders_as_inline_code_with_one_backtick_delimiter() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>let x = 1;</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| `let x = 1;` |"),
+            "a table-cell code block must render as inline code with a \
+             1-backtick delimiter:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("```"),
+            "a table-cell code block must not carry a 3-backtick fence:\n{markdown}"
+        );
+    }
+
+    /// [T-FC079] セルの中身が 3 連バッククォートを含むとき区切りが 4 連へ伸びる
+    ///
+    /// The delimiter width is the content's longest backtick run plus 1
+    /// (CommonMark 0.31.2 §6.3), the same rule `fence_delimiter` applies for a
+    /// block fence but computed independently here for an inline delimiter,
+    /// which carries no 3-backtick floor.
+    #[test]
+    fn table_cell_code_delimiter_widens_to_four_backticks_when_content_has_a_three_backtick_run() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>a ``` b</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| ````a ``` b```` |"),
+            "a 3-backtick run in the cell content must widen the delimiter to \
+             4 backticks:\n{markdown}"
+        );
+    }
+
+    /// [T-FC080] セルの中身の先頭と末尾がバッククォートのとき区切りの内側に空白 1 個が入る
+    ///
+    /// CommonMark 0.31.2 §6.3: when the code span's contents start or end
+    /// with a backtick, a single space inside each delimiter keeps the
+    /// content's own backtick from reading as part of the delimiter.
+    #[test]
+    fn table_cell_code_delimiter_gets_inner_space_when_content_starts_and_ends_with_backtick() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>`code`</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| `` `code` `` |"),
+            "content starting and ending with a backtick must get a single \
+             inner space next to each delimiter:\n{markdown}"
+        );
+    }
+
+    /// [T-FC081] 表の外の `<pre>` は従来どおりフェンスで出る
+    ///
+    /// Regression guard alongside T-FC078-080: only a `<pre>` with a
+    /// `<td>`/`<th>` ancestor switches to inline code. A `<pre><code>` with no
+    /// such ancestor must keep the 3-line fenced block T-FC020 already pins.
+    #[test]
+    fn pre_outside_a_table_still_renders_as_a_fenced_block() {
+        let article = article("<pre><code>fn main() {}</code></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nfn main() {}\n```"),
+            "a <pre><code> outside any table must still render as a fenced \
+             block:\n{markdown}"
         );
     }
 }
