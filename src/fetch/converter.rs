@@ -92,12 +92,7 @@ fn markdown_converter() -> HtmlToMarkdown {
         .add_handler(vec!["span"], span_handler)
         .add_handler(vec!["table"], table_handler)
         .add_handler(vec!["a"], a_handler)
-        .add_handler(
-            vec![
-                "script", "style", "noscript", "textarea", "iframe", "desc", "title",
-            ],
-            suppressed_handler,
-        )
+        .add_handler(SUPPRESSED_TAGS.to_vec(), suppressed_handler)
         .build()
 }
 
@@ -123,6 +118,17 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
     // below reads them. The walked string is used only by the `<pre><code>`
     // branch, which htmd already fences correctly on its own.
     let result = handlers.walk_children(element.node);
+
+    // Ahead of the `<code>`-child split: both shapes fence, and a fence inside
+    // a cell leaves its own backticks as cell text. Reading the whole `<pre>`
+    // rather than a `<code>` child keeps sibling text a `<code>` does not cover.
+    if has_table_cell_ancestor(element.node) {
+        let content = text_content(element.node);
+        return Some(HandlerResult {
+            content: inline_code_span(content.trim_matches('\n')),
+            markdown_translated: result.markdown_translated,
+        });
+    }
 
     if has_code_child(element.node) {
         let content = result.content.trim_matches('\n');
@@ -167,13 +173,31 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
 fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if element.tag == "desc" && element_namespace(element.node) != Some(SVG_NAMESPACE) {
+    if !is_suppressed_element(element.node) {
         return handlers.fallback(element);
     }
     Some(HandlerResult {
         content: String::new(),
         markdown_translated: true,
     })
+}
+
+/// The tags [`suppressed_handler`] is registered for.
+const SUPPRESSED_TAGS: [&str; 7] = [
+    "script", "style", "noscript", "textarea", "iframe", "desc", "title",
+];
+
+/// Whether [`suppressed_handler`] drops this element's content.
+///
+/// Every reader of the DOM outside the handler dispatch has to agree with it.
+/// `push_text_content` walks a `<pre>`'s subtree directly and would otherwise
+/// resurrect the bodies the handler removes.
+fn is_suppressed_element(node: &Rc<Node>) -> bool {
+    let Some(tag) = element_tag(node) else {
+        return false;
+    };
+    SUPPRESSED_TAGS.contains(&tag)
+        && (tag != "desc" || element_namespace(node) == Some(SVG_NAMESPACE))
 }
 
 /// The namespace html5ever stamps on an SVG element. `<desc>` is an HTML
@@ -412,14 +436,21 @@ fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handl
     handlers.fallback(element)
 }
 
-/// Whether any ancestor of `node` is a `<pre>` element. Mirrors the
-/// take-upgrade-put-back pattern htmd's own `node_util::get_parent_node` uses
-/// to read the `Cell<Option<WeakHandle>>` parent link without leaving it
-/// empty for later traversals (htmd-0.5.5/src/node_util.rs:13-23).
+/// Whether any ancestor of `node` is a `<pre>` element.
 fn has_pre_ancestor(node: &Rc<Node>) -> bool {
+    has_ancestor_matching(node, |tag| tag == "pre")
+}
+
+/// Whether any ancestor of `node` is a `<td>` or `<th>` element.
+fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
+    has_ancestor_matching(node, |tag| matches!(tag, "td" | "th"))
+}
+
+/// Whether any ancestor of `node` is an element whose tag satisfies `predicate`.
+fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
-        if element_tag(&parent) == Some("pre") {
+        if element_tag(&parent).is_some_and(&predicate) {
             return true;
         }
         current = get_parent(&parent);
@@ -427,11 +458,80 @@ fn has_pre_ancestor(node: &Rc<Node>) -> bool {
     false
 }
 
+/// The parent link is a `Cell<Option<WeakHandle>>`, so reading it means taking
+/// the value out. Putting it back leaves the link intact for later traversals,
+/// the same take-upgrade-put-back htmd's own `node_util::get_parent_node` does
+/// (htmd-0.5.5/src/node_util.rs:13-23).
 fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let value = node.parent.take();
     let parent = value.as_ref().and_then(Weak::upgrade);
     node.parent.set(value);
     parent
+}
+
+/// The text a reader sees in `node`'s subtree, depth-first.
+///
+/// A table cell's `<pre>` reads its content through this rather than the walked
+/// markdown text, which carries htmd's fence-char backslash-escaping (see
+/// `raw_pre_content` above) that the inline-code-span delimiter math must not
+/// count.
+///
+/// Reading the DOM bypasses the handler dispatch, so the two rules deciding
+/// what a reader sees are applied here instead. A suppressed element
+/// ([`is_suppressed_element`]) contributes nothing. A `<br>` contributes a bare
+/// `\n`, since it holds no Text child and concatenating text alone would run
+/// the lines it separates into one word. Folding that newline to a space is
+/// `normalize_cell_content`'s job, not this function's.
+fn text_content(node: &Rc<Node>) -> String {
+    let mut out = String::new();
+    push_text_content(node, &mut out);
+    out
+}
+
+fn push_text_content(node: &Rc<Node>, out: &mut String) {
+    match &node.data {
+        NodeData::Text { contents } => {
+            out.push_str(&contents.borrow());
+            return;
+        }
+        NodeData::Element { .. } if is_suppressed_element(node) => return,
+        NodeData::Element { .. } if element_tag(node) == Some("br") => {
+            out.push('\n');
+            return;
+        }
+        _ => {}
+    }
+    for child in node.children.borrow().iter() {
+        push_text_content(child, out);
+    }
+}
+
+/// Builds a CommonMark 0.31.2 §6.3 inline code span for a table cell's code
+/// content.
+///
+/// The delimiter length is the content's longest backtick run + 1, computed
+/// the same way `fence_delimiter` computes a block fence's run length, but
+/// with no 3-backtick floor: an inline span may open with a single backtick.
+/// When the content starts or ends with a backtick, one inner space next to
+/// each delimiter keeps that backtick from reading as part of the delimiter.
+fn inline_code_span(content: &str) -> String {
+    let max_run = content
+        .bytes()
+        .fold((0usize, 0usize), |(longest, run), b| {
+            if b == b'`' {
+                let next = run + 1;
+                (longest.max(next), next)
+            } else {
+                (longest, 0)
+            }
+        })
+        .0;
+    let delimiter = "`".repeat(max_run + 1);
+    if content.starts_with('`') || content.ends_with('`') {
+        format!("{delimiter} {content} {delimiter}")
+    } else {
+        format!("{delimiter}{content}{delimiter}")
+    }
 }
 
 /// Suppresses an `<a>` whose `href` is a same-page fragment (`#…`) and whose
@@ -2728,6 +2828,189 @@ mod tests {
         assert!(
             !markdown.contains("svg desc content"),
             "an SVG <desc> must still be suppressed:\n{markdown}"
+        );
+    }
+
+    /// [T-FC078] 表セルの中のコードブロックがバッククォート 1 個で挟んだインラインコードで出る
+    ///
+    /// A `<pre><code>` written inside a `<td>`/`<th>` must render as inline
+    /// code delimited by a single backtick, not as the 3-line fenced block a
+    /// `<pre><code>` gets outside a table (T-FC020, T-FC081).
+    #[test]
+    fn table_cell_code_block_renders_as_inline_code_with_one_backtick_delimiter() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>let x = 1;</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| `let x = 1;` |"),
+            "a table-cell code block must render as inline code with a \
+             1-backtick delimiter:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("```"),
+            "a table-cell code block must not carry a 3-backtick fence:\n{markdown}"
+        );
+    }
+
+    /// [T-FC093] `<code>` 子を持たない表セルの `<pre>` もインラインコードで出る
+    ///
+    /// The cell branch sits ahead of the `<code>`-child split, so a bare
+    /// `<pre>` fences the same way outside a cell and would leave its own
+    /// backticks as cell text — the exact shape issue #406 reported.
+    #[test]
+    fn table_cell_pre_without_a_code_child_renders_as_inline_code() {
+        let article =
+            article("<table><tbody><tr><td><pre>x\ny</pre></td><td>b</td></tr></tbody></table>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("```"),
+            "a bare <pre> in a table cell must not leave fence backticks in the \
+             cell:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("`x y`"),
+            "a bare <pre> in a table cell must render as inline code:\n{markdown}"
+        );
+    }
+
+    /// [T-FC094] 表セルの `<pre>` で `<code>` の外側にある兄弟テキストが残る
+    ///
+    /// Reading only a `<code>` child would drop text the author wrote beside
+    /// it, which the non-cell path keeps.
+    #[test]
+    fn table_cell_pre_keeps_text_outside_its_code_child() {
+        let article = article(
+            "<table><tbody><tr><td><pre>prefix<code>x</code>suffix</pre></td>\
+                <td>b</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`prefixxsuffix`"),
+            "text on either side of a <code> child must survive the cell's \
+             inline-code rendering:\n{markdown}"
+        );
+    }
+
+    /// [T-FC095] 表セルの `<pre>` でも `<script>` の中身は落ちる
+    ///
+    /// `suppressed_handler` drops a `<script>` body everywhere else, the raw
+    /// fallback path included. A cell's `<pre>` reads its own subtree instead
+    /// of the walked text, so it has to apply the same suppression itself.
+    #[test]
+    fn table_cell_pre_drops_the_body_of_a_suppressed_element() {
+        let article = article(
+            "<table><tbody><tr><td><pre><code>visible\
+                <script>hidden()</script></code></pre></td><td>b</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("hidden()"),
+            "a <script> body inside a table cell's <pre> must not reach the \
+             markdown:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("`visible`"),
+            "the cell's visible code text must survive the suppression:\n{markdown}"
+        );
+    }
+
+    /// [T-FC096] 表セルの `<pre>` の `<br>` が空白 1 個の区切りとして残る
+    ///
+    /// A `<br>` carries no Text child, so concatenating text alone would run
+    /// the two lines together into one word. The cell folds the line break to
+    /// a space the same way it folds a Text child's `\n` (T-FC093).
+    #[test]
+    fn table_cell_pre_keeps_a_br_as_a_visible_separator() {
+        let article = article(
+            "<table><tbody><tr><td><pre><code>a<br>b</code></pre></td>\
+                <td>c</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`a b`"),
+            "a <br> inside a table cell's <pre> must separate the two lines \
+             rather than joining them:\n{markdown}"
+        );
+    }
+
+    /// [T-FC079] セルの中身が 3 連バッククォートを含むとき区切りが 4 連へ伸びる
+    ///
+    /// The delimiter width is the content's longest backtick run plus 1
+    /// (CommonMark 0.31.2 §6.3), the same rule `fence_delimiter` applies for a
+    /// block fence but computed independently here for an inline delimiter,
+    /// which carries no 3-backtick floor.
+    #[test]
+    fn table_cell_code_delimiter_widens_to_four_backticks_when_content_has_a_three_backtick_run() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>a ``` b</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| ````a ``` b```` |"),
+            "a 3-backtick run in the cell content must widen the delimiter to \
+             4 backticks:\n{markdown}"
+        );
+    }
+
+    /// [T-FC080] セルの中身の先頭と末尾がバッククォートのとき区切りの内側に空白 1 個が入る
+    ///
+    /// CommonMark 0.31.2 §6.3: when the code span's contents start or end
+    /// with a backtick, a single space inside each delimiter keeps the
+    /// content's own backtick from reading as part of the delimiter.
+    #[test]
+    fn table_cell_code_delimiter_gets_inner_space_when_content_starts_and_ends_with_backtick() {
+        let article = article(
+            "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>\
+                <pre><code>`code`</code></pre></td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("| `` `code` `` |"),
+            "content starting and ending with a backtick must get a single \
+             inner space next to each delimiter:\n{markdown}"
+        );
+    }
+
+    /// [T-FC081] 表の外の `<pre>` は従来どおりフェンスで出る
+    ///
+    /// Regression guard alongside T-FC078-080: only a `<pre>` with a
+    /// `<td>`/`<th>` ancestor switches to inline code. A `<pre><code>` with no
+    /// such ancestor must keep the 3-line fenced block T-FC020 already pins.
+    #[test]
+    fn pre_outside_a_table_still_renders_as_a_fenced_block() {
+        let article = article("<pre><code>fn main() {}</code></pre>");
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("```\nfn main() {}\n```"),
+            "a <pre><code> outside any table must still render as a fenced \
+             block:\n{markdown}"
         );
     }
 }
