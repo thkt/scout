@@ -217,39 +217,34 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     join_server_thread(handle);
 }
 
-/// An article-shaped page (nav and footer chrome around several paragraphs)
-/// carrying one `<pre><code class="language-rust">` block. Shaped after
-/// `extractor::tests::BLOG_HTML`, which Readability is already pinned to
-/// extract cleanly, so the added `<pre>` cannot be what drops the page into
-/// raw fallback.
-fn class_language_article_html() -> String {
-    "<html><head><title>Understanding Ownership</title></head><body>\
+/// Wraps `payload` in the article shell Readability is pinned to extract
+/// cleanly: nav and footer chrome around four filler paragraphs, shaped after
+/// `extractor::tests::BLOG_HTML`. The filler is what keeps the page above the
+/// thin-extract and thin-body thresholds, so `payload` alone decides what each
+/// test observes and cannot be what drops the fetch into raw fallback.
+fn article_page(title: &str, payload: &str) -> String {
+    format!(
+        "<html><head><title>{title}</title></head><body>\
         <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
         <article>\
-        <h1>Understanding Rust Ownership</h1>\
-        <p>Rust's ownership system is one of its most unique features. It enables \
-        memory safety without garbage collection. The ownership rules are checked \
-        at compile time by the borrow checker, and every value in the language \
-        obeys these rules from the moment it is created until it goes out of \
-        scope.</p>\
-        <p>Each value in Rust has a variable that is called its owner, and there \
-        can only be one owner at a time. When the owner goes out of scope, the \
-        value is dropped automatically, which is why Rust programs almost never \
-        leak memory even without a garbage collector running in the \
-        background.</p>\
-        <p>The snippet below shows a minimal Rust program that does nothing but \
-        declare a main function, and readers can compile it locally to confirm \
-        the ownership rules described above hold for the simplest possible \
-        case.</p>\
-        <pre><code class=\"language-rust\">fn main() {}</code></pre>\
-        <p>Beyond this trivial example, ownership becomes more interesting once \
-        references, borrowing, and lifetimes enter the picture, and the following \
-        sections build on this foundation one concept at a time so the rules stay \
-        easy to follow.</p>\
+        <h1>{title}</h1>\
+        <p>This article walks through the topic in enough depth that the page \
+        carries real prose rather than a stub, which is what Readability scores \
+        when it decides whether the body is worth extracting at all.</p>\
+        <p>The second paragraph continues that discussion so the extracted body \
+        stays comfortably above the thin-extract threshold, and the fetch does \
+        not take the raw-HTML fallback or the JS-rendering detour.</p>\
+        <p>The fragment below is the part under test; everything around it is \
+        chrome and filler chosen so that it cannot be the reason extraction \
+        succeeds or fails.</p>\
+        {payload}\
+        <p>A closing paragraph follows the fragment so it sits inside the body \
+        rather than at its edge, matching how a real page surrounds the markup \
+        a reader came for.</p>\
         </article>\
         <footer>Site footer: copyright notice and additional links</footer>\
         </body></html>"
-        .to_owned()
+    )
 }
 
 /// Spawns a forward proxy serving `html` and runs `fetch_page` against it.
@@ -301,8 +296,14 @@ async fn fetch_article_via_proxy(
 /// literal loopback host before any request is sent, in every mode.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
-    let Some((result, handle)) =
-        fetch_article_via_proxy(&class_language_article_html(), |opts| opts).await
+    let Some((result, handle)) = fetch_article_via_proxy(
+        &article_page(
+            "Understanding Rust Ownership",
+            "<pre><code class=\"language-rust\">fn main() {}</code></pre>",
+        ),
+        |opts| opts,
+    )
+    .await
     else {
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
@@ -336,9 +337,13 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
 /// a fetched page keeps a fence language.
 #[tokio::test]
 async fn raw_path_keeps_pre_class_language_in_the_fence() {
-    let Some((result, handle)) = fetch_article_via_proxy(&class_language_article_html(), |opts| {
-        FetchOptions { raw: true, ..opts }
-    })
+    let Some((result, handle)) = fetch_article_via_proxy(
+        &article_page(
+            "Understanding Rust Ownership",
+            "<pre><code class=\"language-rust\">fn main() {}</code></pre>",
+        ),
+        |opts| FetchOptions { raw: true, ..opts },
+    )
     .await
     else {
         return; // loopback bind unavailable — cannot exercise the proxy path
@@ -365,27 +370,12 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
 /// above.
 #[tokio::test]
 async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
-    let html = "<html><head><title>Population Data</title></head><body>\
-        <nav>Site navigation: Home About Blog Contact archives categories tags</nav>\
-        <article>\
-        <h1>City Population Overview</h1>\
-        <p>This article summarizes recent population figures for two \
-        representative cities, drawn from public census records, so readers \
-        can compare growth trends across regions without needing to consult \
-        the underlying government datasets directly.</p>\
-        <p>The table below lists each city alongside its most recently \
-        reported population count, giving a quick reference before the \
-        discussion moves on to the historical trends behind these numbers.</p>\
-        <table><thead><tr><th>City</th><th>Population</th></tr></thead>\
-        <tbody><tr><td>Springfield</td><td>150000</td></tr></tbody></table>\
-        <p>The figures above illustrate that even modest cities can carry \
-        meaningfully different population totals, and later sections of this \
-        guide will expand the same comparison to a wider set of regions once \
-        more data becomes available.</p>\
-        </article>\
-        <footer>Site footer: copyright notice and additional links</footer>\
-        </body></html>";
-    let Some((result, handle)) = fetch_article_via_proxy(html, |opts| opts).await else {
+    let html = article_page(
+        "City Population Overview",
+        "<table><thead><tr><th>City</th><th>Population</th></tr></thead>\
+        <tbody><tr><td>Springfield</td><td>150000</td></tr></tbody></table>",
+    );
+    let Some((result, handle)) = fetch_article_via_proxy(&html, |opts| opts).await else {
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
 
