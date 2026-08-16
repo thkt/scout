@@ -112,9 +112,9 @@ async fn repo_tree_path_filter_excludes_non_matching_files() {
 ///
 /// `parse_line_range` only ever inspects the string's shape — empty, a bad
 /// number, a zero start, an end below the start — so none of it needs the file.
-/// It used to run after `get_contents`, and after the blob fetch and the decode
-/// that can follow, which spent one or two rate-limited calls to report a typo
-/// the caller made. Every other caller-supplied value (`repository`, `path`,
+/// Running it after `get_contents`, and after the blob fetch and the decode
+/// that can follow, spends one or two rate-limited calls to report a typo the
+/// caller made. Every other caller-supplied value (`repository`, `path`,
 /// `ref`) is already checked on this side of the network.
 #[tokio::test]
 async fn repo_read_invalid_line_range_fails_before_any_request() {

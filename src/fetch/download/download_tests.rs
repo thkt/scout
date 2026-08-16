@@ -68,7 +68,7 @@ async fn download_success_returns_html() {
 }
 
 /// [T-F067] download flags `decode_uncertain` for a body that cannot be decoded
-/// cleanly under its label and that detection refuses (issue #241). Windows-1252
+/// cleanly under its label and that detection refuses. Windows-1252
 /// smart quotes mislabeled as utf-8 are the realistic single-byte case: the body
 /// still comes back (best-effort lossy, exit 0), but the uncertain flag is set.
 #[tokio::test]
@@ -103,7 +103,7 @@ async fn download_flags_decode_uncertain_for_undecodable_body() {
 }
 
 /// [T-F069] download recovers a mislabeled multi-byte body via detection and does
-/// NOT flag `decode_uncertain` (issue #241). Shift_JIS content mislabeled as utf-8
+/// NOT flag `decode_uncertain`. Shift_JIS content mislabeled as utf-8
 /// is the recoverable case the reliability gate trusts.
 #[tokio::test]
 async fn download_recovers_mislabeled_multibyte_without_uncertain() {
@@ -289,7 +289,7 @@ async fn too_many_redirects_returns_error() {
 /// [T-F056] redirect_cap_exceeded_emits_calibration_warn — `redirect cap
 /// exceeded` warn must carry structured fields (`redirect_chain_length`,
 /// `max_redirects`, `final_url`) so caller logs can sample retry-success
-/// rate for the DataError vs TempFailure flip decision (issue #145).
+/// rate for the DataError vs TempFailure flip decision.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn redirect_cap_exceeded_emits_calibration_warn() {
@@ -339,7 +339,7 @@ async fn redirect_missing_location_header_returns_error() {
     );
 }
 
-/// [T-F058] download_transparently_decodes_gzip_response (issue #202): a server
+/// [T-F058] download_transparently_decodes_gzip_response: a server
 /// that returns `Content-Encoding: gzip` even without an `Accept-Encoding`
 /// request header must be transparently decompressed, not handed to the charset
 /// decoder as raw gzip bytes (which yields mojibake). Requires reqwest's `gzip`
@@ -370,7 +370,7 @@ async fn download_transparently_decodes_gzip_response() {
     );
 }
 
-/// [T-F059] (issue #202) Pins a second enabled codec beyond gzip.
+/// [T-F059] Pins a second enabled codec beyond gzip.
 /// `Content-Encoding: deflate` carries zlib-wrapped data; reqwest's `deflate`
 /// feature must transparently decompress it rather than hand the raw bytes to
 /// the charset decoder.

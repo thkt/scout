@@ -23,7 +23,7 @@ pub(crate) struct FetchResult {
     /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
     #[serde(skip_serializing)]
     used_raw_fallback: bool,
-    /// Internal flag (issue #241): the body could not be decoded cleanly, so the
+    /// Internal flag: the body could not be decoded cleanly, so the
     /// markdown is a best-effort lossy rendering. Surfaced as `DECODE_UNCERTAIN`
     /// in `degraded_reasons`, not as data.
     #[serde(skip_serializing)]
@@ -2914,7 +2914,7 @@ mod tests {
     ///
     /// The cell branch sits ahead of the `<code>`-child split, so a bare
     /// `<pre>` fences the same way outside a cell and would leave its own
-    /// backticks as cell text — the exact shape issue #406 reported.
+    /// backticks as cell text.
     #[test]
     fn table_cell_pre_without_a_code_child_renders_as_inline_code() {
         let article =

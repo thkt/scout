@@ -232,7 +232,7 @@ fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline
 /// with an HTTP/1.1 response declaring `Content-Length: 1000` but writing
 /// only `hello` before dropping the socket. reqwest surfaces the resulting
 /// mid-stream close as `is_decode() == true` with an `io::Error` of kind
-/// `UnexpectedEof` in the source chain (issue #113).
+/// `UnexpectedEof` in the source chain.
 ///
 /// Returns `None` when loopback bind is unavailable so callers can early-return
 /// in restricted environments, matching the `try_spawn_mock_server` pattern.
@@ -257,7 +257,7 @@ pub(crate) fn spawn_mid_stream_drop_server(
 /// before dropping the socket (EOF delimits the body). reqwest sees
 /// `content_length() == None`, so `read_body_capped`'s pre-check goes inert
 /// and the chunk loop becomes the live cap guard — the path a compressed or
-/// Content-Length-absent upstream drives (issue #219).
+/// Content-Length-absent upstream drives.
 ///
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
@@ -284,8 +284,7 @@ pub(crate) fn spawn_close_delimited_body_server(
 /// written, an implementation that tried to read past the pre-check would
 /// see the connection close before satisfying `declared_len`, which reqwest
 /// surfaces as a decode/network error — not `too_large`. Observing
-/// `too_large` therefore is itself the proof that the body was never read
-/// (issue #219 / TC-006).
+/// `too_large` therefore is itself the proof that the body was never read.
 ///
 /// Returns `None` when loopback bind is unavailable so callers can
 /// early-return in restricted environments, matching
@@ -334,9 +333,10 @@ struct ScannedToken {
 }
 
 /// The T-201 ids in `src/fetch/cdp/proxy/proxy_tests.rs` and
-/// `src/fetch/cdp/launch/cdp_launch_tests.rs` number after issue #201, not after a
-/// subject prefix, so they start with a digit. Renumbering them would break the
-/// citations in ADR-0021, ADR-0012 and two audit records, so #356 allow-listed them
+/// `src/fetch/cdp/launch/cdp_launch_tests.rs` number after the proxy work, not
+/// after a subject prefix, so they start with a digit. Renumbering them would
+/// break the citations in ADR-0021, ADR-0012 and two audit records, so they are
+/// allow-listed
 /// instead. The series is closed at 201-16: a new test in either file takes a
 /// prefixed id and does not get an entry here.
 const DIGIT_LEADING_ALLOWLIST: &[&str] = &[

@@ -51,9 +51,9 @@ impl Classification {
 
     /// The ADR-0003 HTTP-status table, in one place.
     ///
-    /// Three backends used to re-derive it from raw status integers, and they
-    /// had drifted: a GitHub 408 answered DataError instead of TempFailure, a
-    /// Brave 404 answered DataError instead of NotFound. A backend that needs a
+    /// Three backends re-deriving it from raw status integers drift apart: a
+    /// GitHub 408 answers DataError instead of TempFailure, a Brave 404 answers
+    /// DataError instead of NotFound. A backend that needs a
     /// different code for a status — not just a different hint — adds its own arm
     /// ahead of the delegating one, which makes the deviation visible; ADR-0003
     /// requires such a reclassification to say so in a doc comment.

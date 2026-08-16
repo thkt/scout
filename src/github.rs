@@ -35,9 +35,10 @@ pub(crate) use errors::GitHubError;
 
 const API_BASE: &str = "https://api.github.com";
 
-/// Upper bound on JSON response body bytes accepted from the GitHub backend
-/// (issue #186). GitHub's payloads are an order of magnitude larger than
-/// Brave/Slack: `git/trees?recursive=1` is served up to GitHub's own ~7 MB
+/// Upper bound on JSON response body bytes accepted from the GitHub backend.
+///
+/// GitHub's payloads are an order of magnitude larger than Brave/Slack:
+/// `git/trees?recursive=1` is served up to GitHub's own ~7 MB
 /// truncation ceiling, and `git/blobs` returns base64-inflated file content.
 /// 10 MB matches `fetch.rs`'s `MAX_RESPONSE_BYTES` (the largest content scout
 /// already returns) so legitimate large-repo trees and files are not rejected,
@@ -185,11 +186,11 @@ impl GitHubClient {
         debug!(path, status = %status, "github API response");
         match status.as_u16() {
             // Body capped at `MAX_GITHUB_RESPONSE_BYTES` to bound the memory an
-            // oversized response can consume (issue #186). Splitting the read
+            // oversized response can consume. Splitting the read
             // from the parse also separates failure modes: a transport drop is
             // mapped to `Network` by `GitHubError::from` (→ retry loop), while a
             // schema mismatch surfaces from `serde_json::from_slice` as terminal
-            // `Decode` (issue #113).
+            // `Decode`.
             200..=299 => {
                 let bytes = read_body_capped(
                     response,
@@ -353,7 +354,7 @@ impl GitHubClient {
 }
 
 /// ADR-0004 Rule 2: per_page is constrained to 1..=100 at the type level rather
-/// than silently clamped (originally `per_page.min(100)`). 0 — which the GitHub
+/// than silently clamped. 0 — which the GitHub
 /// API treats as implementation-defined — is rejected for the same reason as
 /// values over 100.
 #[derive(Debug, Clone, Copy)]

@@ -12,8 +12,8 @@ use wiremock::{Mock, ResponseTemplate};
 /// exercise only `read_body_capped`'s Content-Length pre-check. Its chunk
 /// loop, the `body.len() > cap` arm, is the defense-in-depth guard for
 /// upstreams that omit Content-Length (compression → `content_length() ==
-/// None`, chunked or close-delimited transfer); before this test it had zero
-/// coverage. A close-delimited response (no Content-Length, EOF-terminated
+/// None`, chunked or close-delimited transfer). A close-delimited response
+/// (no Content-Length, EOF-terminated
 /// body) forces `content_length() == None`, so the chunk loop — not the
 /// pre-check — must be what rejects the oversized body. CAP is tiny to keep
 /// the transfer cheap; the branch under test is identical regardless of cap

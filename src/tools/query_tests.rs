@@ -223,8 +223,8 @@ async fn research_json_schema_includes_required_keys() {
 /// Action: `Scout::research(...)` is invoked.
 /// Expected: returns `Ok(CommandOutput)` (no hard-fail);
 /// `degraded_reasons` contains `BraveSearchFailed`; `data.sources` is empty.
-/// RC-03 fix: cascade no longer propagates `BraveError`; failure is absorbed
-/// into the degraded report envelope.
+/// The cascade does not propagate `BraveError`; failure is absorbed into the
+/// degraded report envelope.
 #[tokio::test]
 async fn research_brave_failure_returns_degraded_report() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -522,7 +522,7 @@ fn to_data_value_serializes_owned_value() {
 
 /// [T-TDV002] to_data_value maps a serialize failure to an Internal (exit 70)
 /// ScoutError naming the value, so a handler serde failure surfaces through the
-/// JSON error envelope via `?` instead of `.expect()` panicking (issue #192).
+/// JSON error envelope via `?` instead of `.expect()` panicking.
 #[test]
 fn to_data_value_maps_serialize_failure_to_internal_bug() {
     let err = to_data_value(&FailingSerialize, "fetch result").unwrap_err();
@@ -631,7 +631,7 @@ async fn fetch_flags_decode_uncertain_for_undecodable_body() {
 /// input carries no `---\n\n` frontmatter terminator. `format_slack_output`
 /// always emits that terminator, so this path is unreachable in production, but
 /// the fallback prepends rather than silently dropping the cap notes if that
-/// shape ever changes (issue #222 defensive seam).
+/// shape ever changes.
 #[test]
 fn insert_preamble_notes_prepends_when_frontmatter_absent() {
     let out = super::query::insert_preamble_notes(

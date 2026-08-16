@@ -10,7 +10,7 @@
 //! `--features js-rendering` on a host where `resolve_browser_binary()`
 //! succeeds. A plain `cargo test` reports it as ignored rather than passed, and
 //! CI runs it via `--run-ignored all` (.github/workflows/ci.yml), so a missing
-//! chromium fails CI instead of leaving the tunnel unexercised (issue #319).
+//! chromium fails CI instead of leaving the tunnel unexercised.
 
 use std::net::IpAddr;
 use std::sync::Arc;

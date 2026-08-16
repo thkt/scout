@@ -197,9 +197,9 @@ pub(crate) fn filter_tree_entries<'a>(
         })
         .filter(|e| {
             // ADR-0004 Rule 3: glob matches against the full repo-relative path
-            // (e.g., `src/*.rs` matches `src/main.rs`). Previously matched only
-            // the filename component, causing path-scoped patterns to silently
-            // produce zero results.
+            // (e.g., `src/*.rs` matches `src/main.rs`). Matching the filename
+            // component alone makes a path-scoped pattern silently produce zero
+            // results.
             matcher.as_ref().is_none_or(|m| m.is_match(&e.path))
         })
         .collect())

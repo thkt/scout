@@ -193,7 +193,7 @@ fn format_report_includes_fetched_pages() {
     );
 }
 
-/// [T-SE011] format_report prepends the decode-uncertain note for a flagged page (issue #241)
+/// [T-SE011] format_report prepends the decode-uncertain note for a flagged page
 #[test]
 fn format_report_prepends_decode_uncertain_note() {
     let report = ResearchReport {
@@ -346,8 +346,8 @@ async fn research_search_failure_returns_error() {
 
 /// [T-SE015] Pins the payload rule stated on `FetchError::Timeout`
 /// (src/fetch.rs) for the research call site, which reported a source that
-/// outlasted its budget as "fetch timed out: page fetch timed out after 15s"
-/// until issue #329.
+/// can otherwise double the payload into "fetch timed out: page fetch timed
+/// out after 15s".
 ///
 /// The client reaches the loopback wiremock the way `scout_reaching`
 /// (src/tools/test_helpers.rs) does — a `.resolve()` client paired with a

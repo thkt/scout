@@ -84,7 +84,7 @@ impl From<CdpInterceptError> for BrowserError {
 /// Per-stage cap inside a `--js` fetch: once on the wait for chromium's
 /// DevTools URL, once on the navigation. `pub(crate)` so the config invariant
 /// test can assert the outer `fetch_timeout` exceeds one stage, mirroring what
-/// `HTTP_TIMEOUT` does for `github_timeout` (issue #185); `mod cdp` stays
+/// `HTTP_TIMEOUT` does for `github_timeout`; `mod cdp` stays
 /// private, so the only way in is `fetch`'s re-export.
 ///
 /// The two stages are serial, so their sum (120s) exceeds the `fetch_timeout`
@@ -110,8 +110,7 @@ impl Drop for AbortOnDrop {
 }
 
 /// Resolve the browser binary, then render via CDP. Binary discovery runs per
-/// call (no process-global cache) so the path stays injectable for tests
-/// (issue #227, the #191 DI seam pattern).
+/// call (no process-global cache) so the path stays injectable for tests.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,
@@ -141,7 +140,7 @@ pub(super) async fn fetch_with_cdp_with(
     // Launch the loopback SSRF proxy before chromium so its port can be wired
     // into the proxy flags. chromium routes every TCP egress through it and the
     // proxy re-validates connect-time IPs, closing the DNS-rebind gap that the
-    // resolve-time `check_browser_request` pre-flight cannot reach (issue #201).
+    // resolve-time `check_browser_request` pre-flight cannot reach.
     let (proxy_port, proxy_task) =
         proxy::spawn_ssrf_proxy(Arc::clone(&resolver), cancel.subscribe())
             .await
@@ -156,7 +155,7 @@ pub(super) async fn fetch_with_cdp_with(
 
     // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
     // function returns — i.e. after every `reap_pgroup` path below — so its
-    // `Drop` removes the dir only once chromium has exited (issue #198).
+    // `Drop` removes the dir only once chromium has exited.
     let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(browser_path, proxy_port)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
@@ -214,7 +213,7 @@ pub(super) async fn fetch_with_cdp_with(
     // an `Err` from close() means CDP refused the teardown, an `Elapsed`
     // means chromium hung past the budget; either way `reap_pgroup` below
     // will SIGTERM/SIGKILL but operators need to see why the graceful path
-    // failed (issue #152).
+    // failed.
     match timeout(Duration::from_secs(5), browser.close()).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => warn!(error = ?e, "CDP browser.close() returned error"),

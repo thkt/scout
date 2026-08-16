@@ -23,7 +23,7 @@ fn token_not_set_is_usage_error_with_token_hint() {
 }
 
 /// [T-SLC011] Same caller-facing treatment as `TokenNotSet`: both are a
-/// misconfigured credential the user must fix before retrying (issue #261).
+/// misconfigured credential the user must fix before retrying.
 #[test]
 fn token_wrong_type_is_usage_error_with_token_hint() {
     let c = SlackError::TokenWrongType.classify();
@@ -46,7 +46,7 @@ fn insecure_url_is_data_error() {
 
 /// [T-SLC003] scout's internal "message not found" (space form) must classify the same
 /// as Slack's `message_not_found` (underscore) — both should land on
-/// EX_NOINPUT(66) per issue #114.
+/// EX_NOINPUT(66).
 #[test]
 fn api_not_found_codes_classify_as_not_found() {
     for code in [
@@ -70,8 +70,8 @@ fn api_not_found_codes_classify_as_not_found() {
 /// [T-SLC010] scout's ts-bearing "message {ts} not found in thread" string
 /// (built at client.rs when `extract_target` misses — target absent or in a
 /// truncated page) classifies as NotFound, same as the bare "message not found"
-/// form. Guards issue #224: the interpolated `{ts}` made the old exact-match arm
-/// miss this string, dropping it to UsageError (exit 64) instead of NotFound
+/// form. An exact-match arm misses this string because of the interpolated
+/// `{ts}`, dropping it to UsageError (exit 64) instead of NotFound
 /// (exit 66).
 #[test]
 fn api_not_found_in_thread_with_ts_classifies_as_not_found() {

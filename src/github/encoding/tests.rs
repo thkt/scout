@@ -286,13 +286,13 @@ fn decode_base64_invalid_input_returns_decode_error() {
     );
 }
 
-// ── Fallback logging (issue #189) ──
+// ── Fallback logging ──
 
 /// [T-GE015] a BOM whose bytes do not decode is an error, not a lossy success
 ///
-/// The three decode paths used to disagree about `had_errors`: `decode_explicit`
-/// failed on it, `decode_detect` fell through to the next strategy, and
-/// `decode_bom` returned the replacement characters under
+/// The three decode paths can disagree about `had_errors`: `decode_explicit`
+/// fails on it, `decode_detect` falls through to the next strategy, and
+/// `decode_bom` returns the replacement characters under
 /// `DetectionSource::Bom`. That made the weakest declaration (a BOM in the file)
 /// the most permissive, and left the caller reading a settled encoding off a
 /// mojibake body — the GitHub path has no counterpart to fetch's

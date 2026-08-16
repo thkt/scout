@@ -23,8 +23,8 @@ fn chromium_profile_dirs() -> HashSet<PathBuf> {
 
 /// [T-F060] `fetch_with_cdp_with` honors the injected browser binary path.
 ///
-/// Guards issue #227: the binary path is now an explicit parameter (no
-/// process-global `OnceLock` cache), so a test can drive the launch path
+/// The binary path is an explicit parameter rather than a process-global
+/// `OnceLock` cache, so a test can drive the launch path
 /// without a real Chrome on the host. Injecting a path that is not an
 /// executable makes `spawn_chromium_pgroup` fail at spawn time, surfacing
 /// `BrowserError::ProcessFailed`. This exercises the seam (#191 DI pattern)
@@ -63,7 +63,7 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 /// removes the cross-test race entirely.
 ///
 /// - T-F051: the rendered HTML contains example.com page content.
-/// - T-F057 (issue #198): the chromium `--user-data-dir` created for the fetch
+/// - T-F057: the chromium `--user-data-dir` created for the fetch
 ///   is deleted once the fetch completes, leaving no new `scout-chromium-*` dir
 ///   in the temp dir.
 ///

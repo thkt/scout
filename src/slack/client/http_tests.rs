@@ -142,10 +142,9 @@ async fn api_get_once_api_error_returns_api_variant() {
     ));
 }
 
-/// [T-SK031] ok:false without an `error` field surfaces as SlackError::Decode
-/// (issue #114 condition 5). The previous code substituted the literal
-/// "unknown" string and mapped to UsageError; a missing `error` is a
-/// Slack API contract violation, not a user-fixable failure.
+/// [T-SK031] ok:false without an `error` field surfaces as SlackError::Decode.
+/// Substituting a literal "unknown" and mapping to UsageError would call a
+/// Slack API contract violation a user-fixable failure.
 #[tokio::test]
 async fn api_get_once_ok_false_without_error_field_returns_decode() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -166,7 +165,7 @@ async fn api_get_once_ok_false_without_error_field_returns_decode() {
     );
 }
 
-/// [T-SK032] (issue #165 / CHX-009)
+/// [T-SK032]
 /// Setup: wiremock returns a 2xx whose body exceeds
 /// `MAX_API_RESPONSE_BYTES` (1 MiB), simulating a runaway Slack
 /// thread/channel response.
@@ -201,7 +200,7 @@ async fn api_get_once_oversized_body_returns_decode() {
 /// [T-SK030] Mid-stream body drop on 2xx routes through SlackError::Network
 /// (transient, retry path) rather than SlackError::Decode (terminal). reqwest
 /// 0.13 reports the drop as `is_decode() == true`; `is_transient_decode`
-/// distinguishes it from a schema fail via the io::Error source chain (issue #113).
+/// distinguishes it from a schema fail via the io::Error source chain.
 #[tokio::test]
 async fn api_get_once_2xx_mid_stream_drop_returns_network() {
     let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
@@ -218,7 +217,7 @@ async fn api_get_once_2xx_mid_stream_drop_returns_network() {
 
 /// [T-SK040] conversations.info 200 with a null channel.name emits a WARN
 /// before falling back to the raw channel ID. Without it the label-resolution
-/// degradation is silent to operators (issue #188 claim 1). The Err branch
+/// degradation is silent to operators. The Err branch
 /// already warns; this covers the Ok-but-null path.
 #[tokio::test]
 #[traced_test]
@@ -249,7 +248,7 @@ async fn resolve_channel_null_name_warns_then_falls_back() {
 }
 
 /// [T-SK041] users.info 200 with a null user emits a WARN before falling back
-/// to the raw user ID (issue #188 claim 1). Mirrors T-SK040 for the user path.
+/// to the raw user ID. Mirrors T-SK040 for the user path.
 #[tokio::test]
 #[traced_test]
 async fn fetch_user_name_null_user_warns_then_falls_back() {
@@ -281,7 +280,7 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
 /// lands on the second page (page 1 returns has_more:true + next_cursor) is
 /// still found. Before the pagination loop, serde dropped has_more/next_cursor
 /// and only page 1 was fetched, so a >200-reply thread lost the target and
-/// fetch_message returned "not found" (issue #188 claim 2).
+/// fetch_message returned "not found".
 #[tokio::test]
 async fn fetch_replies_paginates_to_find_target_on_page_two() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -336,7 +335,7 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
 /// SLACK_MAX_USER_LOOKUPS caps the number of users.info requests at the limit,
 /// so a mass-mention message cannot exhaust Slack's per-minute rate budget.
 /// Excess mentions degrade to raw IDs. The `.expect(cap)` on the users.info
-/// mock fails on server drop if the cap is not enforced (issue #188 claim 3).
+/// mock fails on server drop if the cap is not enforced.
 #[tokio::test]
 async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -384,7 +383,7 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
 /// are kept in the lookup set ahead of mentions. Authors render on every
 /// message, so dropping one degrades visible output more than dropping a
 /// mention. The earlier cap took an arbitrary HashSet slice, so authors could
-/// be evicted nondeterministically (issue #188 audit RU7/SF-1). Here three
+/// be evicted nondeterministically. Here three
 /// distinct authors compete with thousands of mentions for a 50-slot cap; with
 /// author-first priority every author resolves to a name, so no raw "UAUTHOR"
 /// ID leaks into the rendered output.
@@ -448,7 +447,7 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
 /// across pages was counted once per page: extract_target removes only the
 /// first copy, leaving the rest as duplicate replies that inflate
 /// context_messages and re-render the parent body. Dedup by ts so the parent
-/// appears once regardless of page count (issue #188 audit RU1/RU2).
+/// appears once regardless of page count.
 #[tokio::test]
 async fn fetch_replies_dedups_parent_repeated_across_pages() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -520,8 +519,8 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
 
 /// [T-SK046] A thread whose reply pages never stop (every page returns
 /// has_more:true + a cursor) stops paginating at SLACK_MAX_REPLY_PAGES and
-/// emits a WARN that the thread was truncated, rather than looping forever
-/// (issue #188 claim 2, cap path). Covers the post-loop cap-hit branch in
+/// emits a WARN that the thread was truncated, rather than looping forever.
+/// Covers the post-loop cap-hit branch in
 /// fetch_replies. The parent recurs on every page and is deduped by ts, so the
 /// returned thread is the parent alone and fetch_message still succeeds.
 #[tokio::test]
@@ -625,8 +624,8 @@ async fn missing_target_in_a_capped_thread_names_the_page_cap() {
 /// [T-SK047] A message-permalink URL (no thread_ts) whose target has replies
 /// triggers the conversations.history reply_count probe; when reply_count > 0
 /// fetch_thread re-fetches the full thread via conversations.replies and marks
-/// the result as a thread, so the replies render (issue #188 claim 2, probe
-/// path). Covers the has_replies branch in fetch_thread. Without it a permalink
+/// the result as a thread, so the replies render. Covers the has_replies
+/// branch in fetch_thread. Without it a permalink
 /// to a thread root would show only the root with no replies.
 #[tokio::test]
 async fn fetch_message_link_with_replies_fetches_thread() {
@@ -679,7 +678,7 @@ async fn fetch_message_link_with_replies_fetches_thread() {
 /// across runs. A thread carrying SLACK_MAX_USER_LOOKUPS + 10 distinct authors
 /// keeps exactly the first 50 by message order; authors 50..59 are evicted and
 /// render as raw IDs. T-SK044 has only 3 authors « cap, so it never exercises
-/// this path (issue #221).
+/// this path.
 #[tokio::test]
 async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -739,7 +738,7 @@ async fn fetch_message_keeps_first_occurrence_authors_when_capping() {
 /// in two passes — all authors first, then mentions — sharing one `seen` set, so
 /// the author role wins a dual-role ID's single slot. A single interleaved pass
 /// would record the early mention first and evict the late author, shrinking
-/// effective author coverage (issue #221 implementation hazard).
+/// effective author coverage.
 #[tokio::test]
 async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -1006,7 +1005,7 @@ async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
 /// `fetch_user_name` through `api_get` would retry a 500 up to
 /// `1 + DEFAULT_MAX_RETRIES` times per ID — 50 failing lookups issuing 150
 /// requests instead of 50. The `.expect(1)` mock pins the `api_get_once`
-/// call and panics if a second request lands (issue #346).
+/// call and panics if a second request lands.
 #[tokio::test(start_paused = true)]
 async fn users_info_500_returns_after_1_request_per_id() {
     let Some(server) = try_spawn_mock_server("slack::http_users_500").await else {
@@ -1032,7 +1031,7 @@ async fn users_info_500_returns_after_1_request_per_id() {
 ///
 /// Mirrors T-SK073 for `resolve_channel`, which shares the retry-amplification
 /// path and additionally blocks the `tokio::join!` in `fetch_message` for the
-/// whole `Retry-After` (issue #346).
+/// whole `Retry-After`.
 #[tokio::test(start_paused = true)]
 async fn conversations_info_500_returns_after_1_request() {
     let Some(server) = try_spawn_mock_server("slack::http_channel_500").await else {

@@ -213,9 +213,8 @@ async fn fetch_error_http_connection_refused_is_transient() {
 ///
 /// A rising `Unknown` rate is the signal ADR-0011 asks for when the
 /// classification has missed a case; calling an unrecognized transport failure
-/// retryable buries it instead. github and brave used to blanket-map this to
-/// TempFailure, each in its own arm — the shared `Classification::from_reqwest`
-/// is what keeps the three answers the same from here on.
+/// retryable buries it instead. A per-backend arm blanket-mapping this to
+/// TempFailure is what the shared `Classification::from_reqwest` prevents.
 #[expect(
     clippy::disallowed_methods,
     reason = "the decode failure is the fixture, not a body this test wants; the mock serves 8 bytes"

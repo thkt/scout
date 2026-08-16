@@ -111,7 +111,7 @@ fn decode_body_marks_undecodable_bytes_uncertain() {
         b"It\x92s a nice day, isn\x92t it? \x93quoted\x94 and an \x97 em dash, plus more text.";
     let decoded = decode_body(bytes, Some("utf-8"));
     assert!(decoded.uncertain);
-    // The body is still returned (lossy), never empty (issue #241: exit 0 + body).
+    // The body is still returned (lossy), never empty.
     assert!(!decoded.text.is_empty());
 }
 

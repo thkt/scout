@@ -11,7 +11,7 @@ const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 95;
 const DEFAULT_RESEARCH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_SLACK_TIMEOUT_SECS: u64 = 60;
 /// Outer cap for a single GitHub command (`repo-tree` / `repo-read` /
-/// `repo-overview`). Fail-fast bias by design (issue #185). 180s clears the
+/// `repo-overview`). Fail-fast bias by design. 180s clears the
 /// happy path of the most complex command — `repo-overview` runs a sequential
 /// `get_repo`, four parallel calls, and a conditional README blob fetch, ~30s
 /// `HTTP_TIMEOUT` each, so well under 180s when calls succeed — and clears every
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG-LOG001] (issue #167 / OPS-005)
+    /// [T-CFG-LOG001]
     /// Setup: env reader returns a non-default `SCOUT_FETCH_TIMEOUT_SECS`.
     /// Action: `RuntimeConfig::from_env_with(...)` runs under `traced_test`.
     /// Expected: an INFO event `SCOUT_FETCH_TIMEOUT_SECS override applied`
@@ -391,8 +391,7 @@ mod tests {
     /// When the outer GitHub-command timeout is at or below the inner
     /// per-request timeout, the outer one fires before a single request can
     /// finish. Pinning the hierarchy (outer > inner) as values catches a future
-    /// change that shrinks an inner constant and breaks the inequality
-    /// (issue #185).
+    /// change that shrinks an inner constant and breaks the inequality.
     #[test]
     fn github_timeout_exceeds_inner_request_timeouts() {
         use crate::tools::builder::HTTP_TIMEOUT;

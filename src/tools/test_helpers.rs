@@ -16,7 +16,7 @@ pub(super) fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
 
 /// Builds a `Scout` whose outer GitHub-command timeout is `timeout`, so a test
 /// can trip the `run()`-level guard against a delayed wiremock response without
-/// waiting the production 120s (issue #185).
+/// waiting the production default.
 pub(super) fn scout_with_github_timeout(
     brave_uri: &str,
     github_uri: &str,
