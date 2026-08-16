@@ -42,12 +42,12 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 ### Consequences
 
 - Good, because 未知 scheme・難読化 URL・制御文字を素通しせず fail-closed で中和し、`javascript:` URL が clickable link になることを防ぐ
-- Good, because fetch/search/Slack/GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する。フェンス追跡のように経路が分かれる箇所は、分ける理由 (fetch は取得ページの忠実な再現、Slack は生に近い攻撃者制御入力) を関数選択の差として明示する
+- Good, because fetch/search/Slack/GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する。GitHub は repo-overview の README を `format_readme_section` (src/github/format.rs) 経由で `neutralize_yaml_markers_outside_fences` に通し、fetch と同じフェンス追跡型の経路を辿る。フェンス追跡のように経路が分かれる箇所は、分ける理由 (フェンス追跡型の fetch・GitHub README は取得元の忠実な再現、直接型の Slack は生に近い攻撃者制御入力) を関数選択の差として明示する
 - Good, because HTML 層の script 除去は変換ライブラリに委譲し、scout は markdown/YAML 層の保証に集中する
 - Good, because escape 系関数は clean input で借用を返し common path でゼロアロケーション
 - Good, because fetch はフェンスが本文末尾まで閉じない場合、開いたと判定したフェンス自体を信用せず本文全体を書き換える fail-closed に倒すため、フェンス構文の偽装による中和回避を許さない
 - Bad, because Slack はフェンス追跡を持たないため、Slack 上のコードブロックであっても `---`/`...` を含む行は `***` に書き換わり、fetch と異なり原文と一致しない。message 本文がほぼ生で共有 leaf に渡る Slack でフェンス追跡を緩めると、攻撃者が閉じないフェンスを打つだけで以降が無中和になるため、意図して見送る
-- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
+- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch と GitHub README の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
 - Bad, because HTML 層の script 除去が dom_smoothie 単独への依存のままなら、ライブラリが退行したとき script の中身が本文へ漏れる。`--raw` は Readability 自体を通らないため、この経路では現に漏れていた。変換層の `suppressed_handler` (`src/fetch/converter.rs`) が script/style/noscript/textarea/iframe/title と SVG 名前空間の desc を Readability の成否と独立に除去する二重化により、dom_smoothie が退行しても変換層側の除去が残る。`--raw` の `content_html` も同じ変換層を経由するため、この経路でも漏れない (#403)
@@ -88,17 +88,18 @@ scout は素通しし parser 側の安全性に依存する。
 
 場所はファイルまでとし、行番号は書かない。行番号はこの表の外の変更で古くなり、古いことが誰にも見えない。関数名は `ugrep -F 'fn <name>'` で一意に引ける。
 
-| 関数                                     | 場所            | 中和内容                                                                                                                                                                     |
-| ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `md_link`                                | src/markdown.rs | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                 |
-| `escape_md_inline`                       | src/markdown.rs | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                         |
-| `escape_md_link`                         | src/markdown.rs | link target の `[]()` escape、改行畳み                                                                                                                                       |
-| `sanitize_heading`                       | src/markdown.rs | 見出し内改行を空白へ                                                                                                                                                         |
-| `shift_headings`                         | src/markdown.rs | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                     |
-| `fence_marker`                           | src/markdown.rs | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                              |
-| `escape_yaml`                            | src/yaml.rs     | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                      |
-| `neutralize_yaml_markers`                | src/yaml.rs     | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
-| `neutralize_yaml_markers_outside_fences` | src/yaml.rs     | fetch 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
+| 関数                                     | 場所                 | 中和内容                                                                                                                                                                                      |
+| ---------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `md_link`                                | src/markdown.rs      | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                                  |
+| `escape_md_inline`                       | src/markdown.rs      | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                                          |
+| `escape_md_link`                         | src/markdown.rs      | link target の `[]()` escape、改行畳み                                                                                                                                                        |
+| `sanitize_heading`                       | src/markdown.rs      | 見出し内改行を空白へ                                                                                                                                                                          |
+| `shift_headings`                         | src/markdown.rs      | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                                      |
+| `fence_marker`                           | src/markdown.rs      | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                                               |
+| `escape_yaml`                            | src/yaml.rs          | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                                       |
+| `neutralize_yaml_markers`                | src/yaml.rs          | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch と GitHub README はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
+| `neutralize_yaml_markers_outside_fences` | src/yaml.rs          | fetch と GitHub README 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
+| `format_readme_section`                  | src/github/format.rs | GitHub repo-overview の README を `shift_headings` で見出しシフトし `neutralize_yaml_markers_outside_fences` へ通す。フェンス追跡は fetch と共有する                                          |
 
 ### HTML 層の分担
 
