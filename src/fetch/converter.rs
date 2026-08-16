@@ -77,10 +77,10 @@ pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could
 /// from caching an instance across calls.
 ///
 /// `Options::default()` already sets `translation_mode: TranslationMode::Pure`
-/// (htmd-0.5.5/src/options.rs:19-35); `preformatted_code: true` is the one
+/// (htmd's options.rs `Options`); `preformatted_code: true` is the one
 /// field the contract adds on top, so it keeps whitespace inside inline
 /// `<code>` instead of collapsing it
-/// (htmd-0.5.5/src/element_handler/code.rs:118-131).
+/// (htmd's element_handler/code.rs `handle_inline_code`).
 fn markdown_converter() -> HtmlToMarkdown {
     let options = Options {
         preformatted_code: true,
@@ -97,11 +97,11 @@ fn markdown_converter() -> HtmlToMarkdown {
 }
 
 /// Fences a `<pre>` with no `<code>` child, which htmd's built-in `pre_handler`
-/// otherwise emits unfenced (htmd-0.5.5/src/element_handler/pre.rs:29-40,
+/// otherwise emits unfenced (htmd's element_handler/pre.rs `pre_handler`,
 /// `concat_strings!("\n\n", content, "\n\n")` with no fence markers).
 ///
 /// A `<pre><code>` pair arrives already fenced by htmd's built-in
-/// `code_handler` (htmd-0.5.5/src/element_handler/code.rs:44-73, registered
+/// `code_handler` (htmd's element_handler/code.rs `code_handler`, registered
 /// ahead of this handler in `ElementHandlers::new` so `add_handler` shadows
 /// only the outer `pre` dispatch, not the inner `code` one), so it passes
 /// through unchanged. Telling the two shapes apart reads the DOM, not the
@@ -109,7 +109,7 @@ fn markdown_converter() -> HtmlToMarkdown {
 /// own leading backtick raw and reads as already fenced.
 // `Element` must stay by-value: htmd's blanket `ElementHandler` impl only
 // covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
-// (htmd-0.5.5/src/element_handler/mod.rs:95-100), so a `&Element` signature
+// (htmd's element_handler/mod.rs `handle`), so a `&Element` signature
 // would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
 #[allow(clippy::needless_pass_by_value)]
 fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
@@ -168,7 +168,7 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 ///
 /// A non-SVG `<desc>` hands back to [`Handlers::fallback`], which finds no
 /// further handler for the tag and lands on `Pure` mode's walk-children
-/// default (htmd-0.5.5/src/element_handler/mod.rs:270-292).
+/// default (htmd's element_handler/mod.rs `handle`).
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
 #[allow(clippy::needless_pass_by_value)]
@@ -344,7 +344,7 @@ fn element_tag(node: &Rc<Node>) -> Option<&str> {
 
 /// Whether the element has a direct `<code>` child, the shape htmd's
 /// `code_handler` fences on its own: it fences exactly when the `<code>`
-/// element's parent is `<pre>` (htmd-0.5.5/src/element_handler/code.rs:33-41).
+/// element's parent is `<pre>` (htmd's element_handler/code.rs `code_handler`).
 fn has_code_child(node: &Rc<Node>) -> bool {
     node.children
         .borrow()
@@ -356,14 +356,14 @@ fn has_code_child(node: &Rc<Node>) -> bool {
 /// than htmd's walked text.
 ///
 /// `escape_pre_text_if_needed` backslash-escapes a leading `` ` `` or `~` only
-/// while htmd walks the text (htmd-0.5.5/src/dom_walker.rs:34-41, 423-436).
+/// while htmd walks the text (htmd's dom_walker.rs `walk_node` / `escape_pre_text_if_needed`).
 /// Reading a Text child's `contents` off the DOM never introduces that
 /// backslash, at any child position, so nothing has to be reverse-escaped
 /// afterwards.
 ///
 /// Requires `pre_handler`'s discarded `walk_children` call to have run first:
 /// that is what merges adjacent same-tag same-attrs `<span>`s
-/// (`dom_walker::can_combine`, htmd-0.5.5/src/dom_walker.rs:243-297) into the
+/// (htmd's dom_walker.rs `can_combine`) into the
 /// single node this loop then sees.
 ///
 /// `markdown_translated` aggregates from Element children alone. A Text child
@@ -415,7 +415,7 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// Passes a `<span>`'s content through unmodified when the span has a `<pre>`
 /// ancestor; every other span delegates to `Handlers::fallback`.
 ///
-/// htmd's own `span` fast path (htmd-0.5.5/src/dom_walker.rs:87-110) trims
+/// htmd's own `span` fast path (htmd's dom_walker.rs `walk_node`) trims
 /// every leading and trailing `\n` off the span's walked content, including
 /// inside a `<pre>` where those newlines are line breaks the preformatted text
 /// depends on. That path is gated on exactly one handler being registered for
@@ -423,7 +423,7 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// per-element dispatch, where the most recently registered handler runs first.
 ///
 /// `has_pre_ancestor` below is narrower than htmd's own `is_inside_pre`
-/// (htmd-0.5.5/src/element_handler/mod.rs:358-367), which counts a `<code>`
+/// (htmd's element_handler/mod.rs `is_inside_pre`), which counts a `<code>`
 /// ancestor as inside pre too. DR-0025 records why the narrower check stays;
 /// T-FC054 pins what a `<span>` in inline `<code>` gets as a result.
 // `Element` must stay by-value for the same `add_handler` signature reason as
@@ -461,7 +461,7 @@ fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> b
 /// The parent link is a `Cell<Option<WeakHandle>>`, so reading it means taking
 /// the value out. Putting it back leaves the link intact for later traversals,
 /// the same take-upgrade-put-back htmd's own `node_util::get_parent_node` does
-/// (htmd-0.5.5/src/node_util.rs:13-23).
+/// (htmd's node_util.rs `get_parent_node`).
 fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
     let value = node.parent.take();
     let parent = value.as_ref().and_then(Weak::upgrade);
@@ -539,7 +539,7 @@ fn inline_code_span(content: &str) -> String {
 /// anchor, or a Sphinx-style `<a class="headerlink" href="#…"></a>`. Neither
 /// carries a destination a reader could follow, so htmd's own
 /// `AnchorElementHandler` would still emit a bare `[](#…)`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:44-77, which only special-cases
+/// (htmd's element_handler/anchor.rs `handle`, which only special-cases
 /// a missing `href`, not an empty one).
 ///
 /// Shadows `a` in the same shape as `pre_handler` above: `walk_children` runs
@@ -552,7 +552,7 @@ fn inline_code_span(content: &str) -> String {
 /// and this one does not re-derive them.
 ///
 /// The built-in also carries the `<a>`'s `title` attribute into its output as
-/// `](url "title")` (htmd-0.5.5/src/element_handler/anchor.rs:124-128).
+/// `](url "title")` (htmd's element_handler/anchor.rs `build_inlined_anchor`).
 /// `strip_link_title` drops that suffix only where `content` is non-empty:
 /// T-FC049 pins that an absolute-URL anchor with empty content keeps its
 /// title, and only a *fragment* href with empty content is suppressed.
@@ -607,7 +607,7 @@ fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
 
 /// Drops the ` "title")` suffix htmd's built-in `AnchorElementHandler`
 /// writes onto a delegated link's tail
-/// (htmd-0.5.5/src/element_handler/anchor.rs:124-129, the `Inlined` /
+/// (htmd's element_handler/anchor.rs `build_inlined_anchor`, the `Inlined` /
 /// `InlinedPreferAutolinks` styles `markdown_converter` always builds with).
 /// The match is by tail position, never by searching for the title text
 /// anywhere in `content`: a title that also reads as ordinary link text must
@@ -634,7 +634,7 @@ fn strip_link_title(content: &str, title_attr: &str) -> String {
 }
 
 /// Reimplements htmd's private `process_title`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:186-207). `strip_link_title`
+/// (htmd's element_handler/anchor.rs `process_title`). `strip_link_title`
 /// above has to reproduce htmd's transform byte for byte to locate the title
 /// htmd already wrote, so this makes no escaping decision of its own.
 fn process_title_like_htmd(text: &str) -> String {
@@ -664,7 +664,7 @@ fn process_title_like_htmd(text: &str) -> String {
 /// trims from both ends). `AnchorElementHandler::build_inlined_anchor`
 /// strips the anchor's own trailing whitespace off the link text before
 /// building `[text](url "title")` and re-appends it after the closing `)`
-/// (htmd-0.5.5/src/element_handler/anchor.rs:106-133), so a tail match against
+/// (htmd's element_handler/anchor.rs `build_inlined_anchor`), so a tail match against
 /// the raw `content` misses whenever that whitespace is present. The leading
 /// side is left alone: `content` always opens with `[`.
 fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
@@ -675,7 +675,7 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// Fixes htmd's built-in `table_handler`'s per-tag row extraction
 /// (`extract_row_cells(handlers, row_node, "th")` /
 /// `extract_row_cells(handlers, row_node, "td")`,
-/// htmd-0.5.5/src/element_handler/table.rs:223-247): a row is scanned once
+/// htmd's element_handler/table.rs `extract_row_cells`): a row is scanned once
 /// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
 /// no `<thead>` — loses whichever tag that row's extraction call did not ask
 /// for (the branching that drops it is at table.rs:83-100). This handler reads
@@ -827,7 +827,7 @@ fn is_row(node: &Rc<Node>) -> bool {
 /// Whether every cell in `row_node` is a `<th>`, and there is at least one.
 ///
 /// The built-in promotes any row holding a single `<th>`
-/// (htmd-0.5.5/src/element_handler/table.rs:83-93, 106-117). That rule turns a
+/// (htmd's element_handler/table.rs `table_handler`). That rule turns a
 /// `<tr><th>label</th><td>value</td></tr>` row-heading row into a column
 /// header, inventing a column name out of the row's own label — nginx's
 /// directive tables read `Syntax:` as a column that way. Requiring every cell
@@ -907,7 +907,7 @@ fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<Strin
 /// among them; a general whitespace collapse would eat those too.
 ///
 /// The pipe escape is `\|`, where htmd writes `&#124;`
-/// (htmd-0.5.5/src/element_handler/table.rs:250-256). GFM unescapes `\|` while
+/// (htmd's element_handler/table.rs `normalize_cell_content`). GFM unescapes `\|` while
 /// splitting the row into cells, ahead of inline parsing, so it resolves
 /// wherever it lands; an entity reference stays six literal characters inside a
 /// code span. htmd needs the entity because its `format_row_padded` counts
@@ -924,7 +924,8 @@ fn normalize_cell_content(content: &str) -> String {
 
 /// Trims the same whitespace set as htmd's private
 /// `TrimDocumentWhitespace::trim_document_whitespace`
-/// (htmd-0.5.5/src/text_util.rs:14-16, 215-217): tab, newline, CR, and space
+/// (htmd's text_util.rs `trim_document_whitespace` / `is_document_whitespace`):
+/// tab, newline, CR, and space
 /// only, so NBSP and other non-ASCII whitespace-like characters are left in
 /// place.
 fn trim_document_whitespace(s: &str) -> &str {
@@ -1084,8 +1085,7 @@ mod tests {
     /// `list_item_handler` walks the `<li>`'s children into one string and
     /// indents every line but the first by the marker's width before
     /// prefixing the marker
-    /// (htmd-0.5.5/src/element_handler/li.rs:9-21,
-    /// `indent_text_except_first_line`).
+    /// (htmd's element_handler/li.rs `indent_text_except_first_line`).
     #[test]
     fn li_pre_stays_in_the_same_item_as_the_list_marker() {
         let article = article("<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>");
@@ -1163,7 +1163,7 @@ mod tests {
     ///
     /// `AnchorElementHandler::escape_link_destination` backslash-escapes
     /// every `(` and `)` in the href before writing it as the link
-    /// destination (htmd-0.5.5/src/element_handler/anchor.rs:170-177), so the
+    /// destination (htmd's element_handler/anchor.rs `escape_link_destination`), so the
     /// part of the URL after an opening paren cannot be misread as closing the
     /// Markdown link early.
     #[test]
@@ -1274,10 +1274,10 @@ mod tests {
     /// [T-FC015] pre の中の code が含むエスケープ対象 6 文字にバックスラッシュが付かない
     ///
     /// htmd 0.5.5's `escape_if_needed` backslash-escapes six ASCII bytes in
-    /// ordinary text — `\ * _ \` [ ]` (htmd-0.5.5/src/dom_walker.rs:374-406) —
+    /// ordinary text — `\ * _ \` [ ]` (htmd's dom_walker.rs `escape_if_needed`) —
     /// but a `<pre><code>` text node takes the `is_pre && parent_tag != "pre"`
     /// branch, which copies the text through with no escaping at all
-    /// (htmd-0.5.5/src/dom_walker.rs:34-41).
+    /// (htmd's dom_walker.rs `walk_node`).
     #[test]
     fn pre_code_escape_target_chars_are_not_backslash_escaped() {
         let article = article(r#"<pre><code>\ * _ ` [ ] end</code></pre>"#);
@@ -1295,7 +1295,7 @@ mod tests {
     ///
     /// htmd's `get_code_fence_marker` sets the fence width to
     /// `3.max(longest_backtick_run_in_content + 1)`
-    /// (htmd-0.5.5/src/element_handler/code.rs:85-103), so a code block
+    /// (htmd's element_handler/code.rs `get_code_fence_marker`), so a code block
     /// containing a run of 3 backticks must be wrapped in a 4-backtick fence
     /// rather than the usual 3, or the fence would terminate the block early.
     #[test]
@@ -1316,7 +1316,7 @@ mod tests {
     /// htmd's `find_language_from_attrs` reads the `code` element's `class`
     /// attribute for a `language-*` token and appends the suffix as the
     /// fence's info string with no separating space
-    /// (htmd-0.5.5/src/element_handler/code.rs:58-69, 105-116).
+    /// (htmd's element_handler/code.rs `handle_code_block` / `find_language_from_attrs`).
     ///
     /// This holds for the `--raw` path, which skips Readability, and for direct
     /// `to_fetch_result` callers. The default fetch path strips the `class`
@@ -1339,7 +1339,7 @@ mod tests {
     ///
     /// htmd's built-in `pre_handler` wraps a `<pre>` with no `<code>` child in
     /// blank lines only, with no fence markers at all
-    /// (htmd-0.5.5/src/element_handler/pre.rs:29-40,
+    /// (htmd's element_handler/pre.rs `pre_handler`,
     /// `concat_strings!("\n\n", content, "\n\n")`). This crate's own `pre`
     /// handler fences the case instead, using `crate::markdown::fence_delimiter`.
     #[test]
@@ -1403,7 +1403,7 @@ mod tests {
     ///
     /// A `<pre><code>` pair is already turned into a single fenced block by
     /// htmd's built-in `code_handler`
-    /// (htmd-0.5.5/src/element_handler/code.rs:44-73). The added `pre` handler
+    /// (htmd's element_handler/code.rs `code_handler`). The added `pre` handler
     /// must recognize this case by the direct `<code>` child in the DOM, and
     /// pass it through instead of wrapping it in a second fence.
     #[test]
@@ -1430,7 +1430,7 @@ mod tests {
     /// `dom_walker::escape_pre_text_if_needed` prepends a backslash to a
     /// `<pre>` direct text node whose first character is a fence character
     /// (`` ` `` or `~`), so htmd's own unfenced output cannot be misread as
-    /// opening a fence (htmd-0.5.5/src/dom_walker.rs:423-436). Once the added
+    /// opening a fence (htmd's dom_walker.rs `escape_pre_text_if_needed`). Once the added
     /// `pre` handler wraps that content in its own fence, the character is
     /// already protected and the extra backslash must not survive.
     #[test]
@@ -1454,7 +1454,7 @@ mod tests {
     /// [T-FC022] 原文の行頭にあるバックスラッシュとバッククォートの並びがそのまま残る
     ///
     /// `escape_pre_text_if_needed` only ever escapes a text node's very first
-    /// character (htmd-0.5.5/src/dom_walker.rs:423-426), so a `` \` `` sequence
+    /// character (htmd's dom_walker.rs `escape_pre_text_if_needed`), so a `` \` `` sequence
     /// occurring later in the same text is source content htmd never touches
     /// either. `raw_pre_content` copies a Text child's `contents` straight off
     /// the DOM with no position-based logic of its own, so a mid-content
@@ -1478,7 +1478,7 @@ mod tests {
     ///
     /// `escape_pre_text_if_needed` prepends its own backslash only when the
     /// text node's first character is `` ` `` or `~`
-    /// (htmd-0.5.5/src/dom_walker.rs:423-436), so a text node whose source
+    /// (htmd's dom_walker.rs `escape_pre_text_if_needed`), so a text node whose source
     /// already opens with `` \` `` reaches htmd's walk untouched: the walked
     /// content is the same `` \` `` either way. `raw_pre_content` never reads
     /// that walked content for a Text child, so it does not need to tell the
@@ -1523,7 +1523,7 @@ mod tests {
     ///
     /// Syntax highlighters wrap code lines in `<span>` without a `<code>`
     /// child. htmd escapes only text nodes whose direct parent is `<pre>`
-    /// (htmd-0.5.5/src/dom_walker.rs:34-41), so text nested in a `<span>`
+    /// (htmd's dom_walker.rs `walk_node`), so text nested in a `<span>`
     /// reaches the handler with its leading fence character raw, looking
     /// exactly like the already-fenced output of htmd's `code_handler`.
     #[test]
@@ -1590,7 +1590,7 @@ mod tests {
     ///
     /// The passthrough branch checks for a `<pre>` ancestor only, so this span
     /// falls to htmd's built-in span handler, whose `content.trim_matches('\n')`
-    /// (htmd-0.5.5/src/element_handler/span.rs:33) strips both edges before
+    /// (htmd's element_handler/span.rs `span_handler`) strips both edges before
     /// `handle_preformatted_code` can fold the newline to a space. The lines
     /// join with no separator at all.
     ///
@@ -1658,7 +1658,7 @@ mod tests {
     ///
     /// htmd's built-in row formatter pads every cell out to the column's max
     /// width across the whole table (`compute_column_widths` /
-    /// `format_row_padded`, htmd-0.5.5/src/element_handler/table.rs:258-299),
+    /// `format_row_padded`, htmd's element_handler/table.rs `format_row_padded`),
     /// so a cell shorter than its column produces a run of two or more spaces
     /// before the next `|`. The fixture's cells differ in width, which is what
     /// makes the absence of such a run discriminating.
@@ -1687,9 +1687,9 @@ mod tests {
     /// [T-FC062] 区切り行がセルごとにダッシュ 3 本で出る
     ///
     /// htmd's built-in `format_separator_padded` widens each column's dash run
-    /// to that column's computed width (htmd-0.5.5/src/element_handler/
-    /// table.rs:272-279), so "Name"/"Alice" produce a 5-dash column rather
-    /// than the fixed 3 the contract specifies.
+    /// to that column's computed width (htmd's element_handler/table.rs
+    /// `format_separator_padded`), so "Name"/"Alice" produce a 5-dash column
+    /// rather than the fixed 3 the contract specifies.
     #[test]
     fn separator_row_has_exactly_three_dashes_per_cell() {
         let article = article(
@@ -1718,7 +1718,7 @@ mod tests {
     ///
     /// The contract requires cell-content newline normalization to follow the
     /// built-in form (`normalize_cell_content` replaces `\n`/`\r` only,
-    /// htmd-0.5.5/src/element_handler/table.rs:250-256) rather than a general
+    /// htmd's element_handler/table.rs `normalize_cell_content`) rather than a general
     /// whitespace collapse that would fold U+00A0 into an ASCII space. This
     /// pins that a literal NBSP inside a cell reaches the output unchanged.
     #[test]
@@ -1851,7 +1851,7 @@ mod tests {
     /// in `Faithful` mode with the same handlers registered.
     ///
     /// Delegation shows up as raw HTML because the built-in opens with
-    /// `serialize_if_faithful!` (htmd-0.5.5/src/element_handler/table.rs:19),
+    /// `serialize_if_faithful!` (htmd's element_handler/table.rs `table_handler`),
     /// which serializes the element unconverted. Running the positional
     /// extraction instead would emit a pipe table, since that path carries no
     /// mode check of its own. The table needs an attribute to get there:
@@ -1962,7 +1962,7 @@ mod tests {
     ///
     /// The built-in's caption placement is kept, which emits the
     /// caption's own converted content ahead of the header row rather than
-    /// dropping it (htmd-0.5.5/src/element_handler/table.rs:36-44).
+    /// dropping it (htmd's element_handler/table.rs `table_handler`).
     #[test]
     fn table_caption_precedes_the_header_row() {
         let article = article(
@@ -2228,7 +2228,7 @@ mod tests {
     /// [T-FC041] 段落の中の改行が空白 1 個へ畳まれる
     ///
     /// A raw `\n` makes a Text node fail htmd's `is_plain_text` check
-    /// (htmd-0.5.5/src/dom_walker.rs:157-165), which routes it through
+    /// (htmd's dom_walker.rs `is_plain_text`), which routes it through
     /// `compress_whitespace`. That folds any run of ASCII whitespace, a lone
     /// newline included, to a single space.
     #[test]
@@ -2251,7 +2251,7 @@ mod tests {
     /// [T-FC042] 段落の中の br が行末空白2個と改行として残る
     ///
     /// htmd's built-in `br_handler` converts a `<br>` to `"  \n"` under the
-    /// default `BrStyle::TwoSpaces` (htmd-0.5.5/src/element_handler/br.rs:8-14),
+    /// default `BrStyle::TwoSpaces` (htmd's element_handler/br.rs `br_handler`),
     /// the Markdown hard-break form. Scout registers no `br` handler, so the
     /// built-in is what every `<br>` reaches.
     #[test]
@@ -2294,7 +2294,7 @@ mod tests {
     ///
     /// A `<code>`'s children walk with `is_pre = true` from the tag name
     /// alone, so the whitespace compression that folds a paragraph never runs
-    /// on them (htmd-0.5.5/src/element_handler/mod.rs:343-344). The fold that
+    /// on them (htmd's element_handler/mod.rs `walk_children`). The fold that
     /// does run downstream touches `\n` only, leaving a run of spaces alone.
     #[test]
     fn consecutive_spaces_inside_inline_code_survive_unchanged() {
@@ -2340,7 +2340,7 @@ mod tests {
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
     /// `list_item_handler` indents every line after the first with
-    /// `trim_line_end: true` (htmd-0.5.5/src/element_handler/li.rs:29). The
+    /// `trim_line_end: true` (htmd's element_handler/li.rs `list_item_handler`). The
     /// trim takes the hard break's two trailing spaces, and the indent stands
     /// in their place.
     #[test]
@@ -2526,7 +2526,7 @@ mod tests {
     ///
     /// htmd's built-in anchor handler writes the `title` attribute straight
     /// into the link as `](url "title")`
-    /// (htmd-0.5.5/src/element_handler/anchor.rs:124-128). A link whose `<a>`
+    /// (htmd's element_handler/anchor.rs `build_inlined_anchor`). A link whose `<a>`
     /// carries non-empty content is exactly the case this unit targets, so
     /// the title must not survive delegation.
     #[test]
@@ -2552,7 +2552,7 @@ mod tests {
     /// [T-FC074] 二重引用符を含む title でも書き換えが外れない
     ///
     /// htmd's built-in backslash-escapes every `"` inside the title
-    /// (htmd-0.5.5/src/element_handler/anchor.rs:198-202,
+    /// (htmd's element_handler/anchor.rs `process_title`,
     /// `process_title`), so the delegated tail reads `\"hi\"")` rather than
     /// the raw attribute text. The position match against that tail must
     /// still land, so the rewrite is not knocked off by the extra
@@ -2581,7 +2581,7 @@ mod tests {
     /// [T-FC075] 改行を含む title でも書き換えが外れない
     ///
     /// htmd's built-in trims and rejoins each line of the title with `\n`
-    /// (htmd-0.5.5/src/element_handler/anchor.rs:186-207, `process_title`),
+    /// (htmd's element_handler/anchor.rs `process_title`, `process_title`),
     /// so the delegated tail carries the title's own line break. The
     /// position match must still land against that multi-line tail.
     #[test]
@@ -2608,7 +2608,7 @@ mod tests {
     /// [T-FC076] 空白だけの title は title 無しとして扱われる
     ///
     /// htmd's built-in `process_title` drops every whitespace-only line
-    /// (htmd-0.5.5/src/element_handler/anchor.rs:186-207), so a
+    /// (htmd's element_handler/anchor.rs `process_title`), so a
     /// whitespace-only `title` attribute still reaches the built-in's
     /// `Some(title)` branch with an empty string and renders as `("")`
     /// rather than omitting the title syntax outright. This unit must treat
@@ -2636,10 +2636,10 @@ mod tests {
     ///
     /// htmd's own `block_handler` registers `script` and `style` among its
     /// "other block elements"
-    /// (htmd-0.5.5/src/element_handler/mod.rs:178-231), but in `Pure`
+    /// (htmd's element_handler/mod.rs `new`), but in `Pure`
     /// translation mode `block_handler` walks the element's children and keeps
     /// their content, wrapped in blank lines
-    /// (htmd-0.5.5/src/element_handler/mod.rs:371-380). A `<script>`/`<style>`
+    /// (htmd's element_handler/mod.rs `block_handler`). A `<script>`/`<style>`
     /// element's sole child is the raw JS/CSS source as a single Text node, so
     /// that source text reaches the walked content and, today, the markdown
     /// body.
@@ -2677,12 +2677,12 @@ mod tests {
     /// handler registration at all, so `Pure`-mode's own "unregistered tag"
     /// fallback in `dom_walker::walk_node` walks their children and keeps the
     /// content the same way
-    /// (htmd-0.5.5/src/dom_walker.rs:111-119). `svg`'s `title` reaches the
+    /// (htmd's dom_walker.rs `walk_node`). `svg`'s `title` reaches the
     /// body via the same `block_handler` path as top-level `<title>`, since
     /// htmd's handler lookup is keyed by local tag name only, not namespace
-    /// (htmd-0.5.5/src/element_handler/mod.rs:230, "title" in the block list).
+    /// (htmd's element_handler/mod.rs `new`, "title" in the block list).
     /// `markdown_converter` builds with `scripting_enabled` left at its
-    /// default `true` (htmd-0.5.5/src/lib.rs:91), which makes `<noscript>` and
+    /// default `true` (htmd's lib.rs `new`), which makes `<noscript>` and
     /// `<iframe>` raw-text elements in html5ever's parse: the markup written
     /// inside them below is captured as one literal Text child rather than
     /// parsed into elements, so the fixture text still reaches the body as a
@@ -3157,7 +3157,7 @@ mod tests {
     fn readability_failure_path_still_drops_script_content() {
         // Marker without `_`: htmd's own text escaping (not this crate's
         // `escape_md_inline`) would rewrite it to `SCRIPT\_MARKER`
-        // (htmd-0.5.5/src/dom_walker.rs:401), and `contains` would miss the
+        // (htmd's dom_walker.rs `escape_if_needed`), and `contains` would miss the
         // leak it is meant to catch.
         let html = "<script>SCRIPTMARKER</script>";
         let article = extract_article(html, Some("https://example.com"));
