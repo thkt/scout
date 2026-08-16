@@ -1,6 +1,6 @@
 //! Loopback SOCKS5 proxy that re-validates connect addresses for the CDP
 //! (chromium) fetch path, closing the DNS-rebind SSRF gap that
-//! `check_browser_request`'s resolve-time pre-flight cannot reach (issue #201).
+//! `check_browser_request`'s resolve-time pre-flight cannot reach.
 //!
 //! chromium resolves DNS itself when it dials, so scout cannot inject a
 //! `Resolve` the way it does for the reqwest path (ADR-0012 method Y').

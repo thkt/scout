@@ -17,7 +17,7 @@ use crate::charset::is_reliable_detection;
 /// between passed `ssrf_check` — so it is the URL that later stages resolve
 /// relative links against. `decode_uncertain` travels with the text rather than
 /// beside it because a caller that reads one without the other reports a body it
-/// cannot vouch for as clean (issue #241).
+/// cannot vouch for as clean.
 #[derive(Debug)]
 pub(super) struct DownloadedPage {
     pub(super) url: ValidatedUrl,
@@ -106,7 +106,7 @@ pub(super) async fn download(
         });
     }
 
-    // CALIBRATION (issue #145 / #148 follow-up): structured fields below let
+    // CALIBRATION: structured fields below let
     // callers sample empirical retry-success rate via `RUST_LOG=scout=warn`.
     // Flip from DataError(65) to TempFailure(75) once rate > 10%.
     let chain_length = max_redirects + 1;
@@ -136,7 +136,7 @@ fn extract_charset(content_type: &str) -> Option<String> {
 /// Outcome of decoding a response body. `uncertain` is true when neither the
 /// server-labeled encoding nor reliability-gated detection produced a clean
 /// decode, so `text` is a best-effort lossy rendering the caller surfaces via
-/// `DegradedReason::DecodeUncertain` (issue #241). The body is still returned at
+/// `DegradedReason::DecodeUncertain`. The body is still returned at
 /// exit 0; the AI caller decides whether to trust it.
 struct DecodedBody {
     text: String,
@@ -144,7 +144,7 @@ struct DecodedBody {
 }
 
 /// Decode a response body label-first, recovering mislabeled multi-byte content
-/// via chardetng before giving up (issue #241). Detection-recovered text is
+/// via chardetng before giving up. Detection-recovered text is
 /// returned as trusted, not uncertain.
 fn decode_body(bytes: &[u8], charset: Option<&str>) -> DecodedBody {
     let label = charset.unwrap_or("utf-8");

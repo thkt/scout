@@ -22,8 +22,8 @@ use super::BrowserError;
 use crate::fetch::ssrf::{self, RedactedLogUrl};
 
 /// Discover the chromium/Chrome binary by probing `PATH` then known install
-/// locations. Called once per `--js` fetch (issue #227 removed the prior
-/// process-global `OnceLock` cache, which broke test isolation and pinned the
+/// locations. Called once per `--js` fetch rather than cached in a
+/// process-global `OnceLock`, which broke test isolation and pinned the
 /// first result for the process lifetime); the few `which` probes cost ~1-5 ms,
 /// negligible against the ~2 s chromium render that follows.
 #[cfg(feature = "js-rendering")]
@@ -57,7 +57,7 @@ pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
 /// See ADR-0021 (CDP Chromium Launch Egress Flags) for rationale.
 ///
 /// The proxy flags route every chromium TCP egress through scout's loopback
-/// SOCKS5 proxy so connect-time IPs are re-validated (issue #201):
+/// SOCKS5 proxy so connect-time IPs are re-validated:
 /// - `--proxy-server=socks5://127.0.0.1:{proxy_port}`: SOCKS5 (not v4) so the
 ///   target host is resolved by the proxy, not chromium, closing DNS rebinding.
 /// - `--proxy-bypass-list=<-loopback>`: subtracts chromium's implicit DIRECT
@@ -147,7 +147,7 @@ pub(super) fn spawn_chromium_pgroup(
     // chromium's `SingletonLock` failure when two scout processes run --js
     // concurrently) and deletes it on `Drop`. The caller must hold the returned
     // guard until after `reap_pgroup`, because chromium keeps writing profile
-    // state during graceful shutdown (issue #198).
+    // state during graceful shutdown.
     let user_data_dir = Builder::new()
         .prefix("scout-chromium-")
         .tempdir()
@@ -244,7 +244,7 @@ pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
     // `Ok(Err)` means waitpid itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
     // means the 2s budget elapsed before chromium exited, which is the zombie
     // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
-    // honest (issue #152).
+    // honest.
     match timeout(Duration::from_secs(2), child.wait()).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),

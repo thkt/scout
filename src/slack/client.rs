@@ -35,8 +35,7 @@ struct FetchedThread {
 
 /// Result of resolving a Slack permalink into rendered Markdown, carrying the
 /// cap-hit signals `fetch_slack` needs to wire into the ADR-0003 degradation
-/// channel. A bare `String` return hid these, so caps were invisible to callers
-/// (issue #222).
+/// channel. A bare `String` return hid these, so caps were invisible to callers.
 pub(crate) struct SlackFetchOutcome {
     pub(crate) markdown: String,
     /// `conversations.replies` hit the page cap; replies past it are omitted.
@@ -47,7 +46,7 @@ pub(crate) struct SlackFetchOutcome {
     /// The `conversations.info` call or at least one in-cap `users.info` call
     /// returned an error; that ID renders raw even though the cap did not drop
     /// it. Kept distinct from `users_capped` so a caller can tell "resolution
-    /// failed" apart from "capped by volume" (issue #346).
+    /// failed" apart from "capped by volume".
     ///
     /// A 200 carrying no name does not count: the lookup reached Slack, which
     /// had no name to give, so there is nothing for the caller to retry.
@@ -80,27 +79,26 @@ const API_BASE: &str = "https://slack.com/api";
 /// user token so the channels, threads, and users it resolves match the human's
 /// own workspace visibility (a bot token only sees channels its app was added
 /// to). `from_env_with` rejects any other prefix up front instead of letting it
-/// fail later with an opaque API error (issue #261). Verified against
+/// fail later with an opaque API error. Verified against
 /// <https://api.slack.com/concepts/token-types#user> (2026-06).
 const USER_TOKEN_PREFIX: &str = "xoxp-";
 
 /// Cap for `conversations.replies` page size. Slack's default is undocumented
 /// and threads can grow into the thousands on incident channels; making the
 /// limit explicit bounds the JSON payload that `api_get_once` buffers in
-/// memory (issue #155 / CHX-005).
+/// memory.
 const SLACK_REPLIES_LIMIT: &str = "200";
 
 /// Concurrent in-flight `users.info` requests during `prefetch_users`.
 /// Slack Tier-4 allows ~50 req/min; capping at 5 keeps the burst well below
 /// that even for threads with hundreds of unique participants, instead of
-/// firing every request simultaneously and tripping the per-minute cap
-/// (issue #155 / OPS-009 / CHX-001).
+/// firing every request simultaneously and tripping the per-minute cap.
 const SLACK_USERS_CONCURRENCY: usize = 5;
 
 /// Upper bound on `conversations.replies` pages fetched per thread. At
 /// `SLACK_REPLIES_LIMIT` (200) messages per page this covers threads up to
 /// ~10k replies; the cap stops an unbounded paging loop from re-introducing
-/// the rate-limit exhaustion that claim 3 bounds (issue #188 claim 2).
+/// the rate-limit exhaustion that claim 3 bounds.
 const SLACK_MAX_REPLY_PAGES: usize = 50;
 
 /// Upper bound on distinct user IDs resolved via `users.info` per message.
@@ -246,7 +244,7 @@ impl SlackClient {
         )
         .await?;
         // Schema fail → Decode (terminal); transport drop already mapped to
-        // Network by the closure above (issue #113).
+        // Network by the closure above.
         let body: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|e| SlackError::Decode(e.to_string()))?;
 
@@ -287,7 +285,7 @@ impl SlackClient {
     /// fallback, so a retry only re-fetches what this drops. A long
     /// `Retry-After` here additionally stalls the `tokio::join!` in
     /// `fetch_message` and can spend the caller's 60s budget on its own,
-    /// turning a raw channel label into an exit 124 (issue #346).
+    /// turning a raw channel label into an exit 124.
     async fn resolve_channel(&self, id: &str) -> (String, bool) {
         match self
             .api_get_once::<ChannelBody>("conversations.info", &[("channel", id)])
@@ -331,7 +329,7 @@ impl SlackClient {
     /// Calls `api_get_once` for the reason given on `resolve_channel`; what
     /// differs here is volume. `SLACK_MAX_USER_LOOKUPS` (50) failing lookups
     /// at `1 + DEFAULT_MAX_RETRIES` requests each spend 150 requests of the
-    /// per-minute budget instead of 50, all of them discarded (issue #346).
+    /// per-minute budget instead of 50, all of them discarded.
     async fn fetch_user_name(&self, id: &str) -> (String, bool) {
         match self
             .api_get_once::<UserBody>("users.info", &[("user", id)])
@@ -413,7 +411,7 @@ impl SlackClient {
     /// Fetch every reply in a thread, following `response_metadata.next_cursor`
     /// across pages up to `SLACK_MAX_REPLY_PAGES`. Without this loop a target
     /// message past the first `SLACK_REPLIES_LIMIT` page is silently dropped and
-    /// surfaces as "not found" (issue #188 claim 2).
+    /// surfaces as "not found".
     /// Returns the fetched replies paired with a `truncated` flag: `true` when
     /// the loop stopped at `SLACK_MAX_REPLY_PAGES` with another page still
     /// advertised, `false` when it ran out of pages naturally.
@@ -521,7 +519,7 @@ impl SlackClient {
         // lookup cap they take priority over mentions: an unresolved author
         // degrades visible output more than an unresolved mention. The keep set
         // is fixed to first-occurrence (thread chronological) order so which IDs
-        // resolve is reproducible across runs (issue #221). Two passes over the
+        // resolve is reproducible across runs. Two passes over the
         // messages — all authors first, then mentions — share one `seen` set, so
         // a dual-role ID is kept as an author and consumes one slot, not two.
         let mut authors: Vec<String> = Vec::new();

@@ -283,9 +283,9 @@ async fn get_json_403_with_ratelimit_reset_carries_delay() {
     );
 }
 
-/// [T-GH012] 2xx response with malformed JSON classifies as Decode (issue #101).
+/// [T-GH012] 2xx response with malformed JSON classifies as Decode.
 ///
-/// Before this fix, `Ok(response.json().await?)` routed schema failures through
+/// A bare `Ok(response.json().await?)` routes schema failures through
 /// `#[from] reqwest::Error` to `GitHubError::Network`, surfacing as TempFailure(75)
 /// retryable=true. Schema fail is a scout-side invariant violation that retry
 /// cannot resolve — must classify as Decode → Internal(70) retryable=false.
@@ -310,9 +310,9 @@ async fn get_json_2xx_malformed_body_returns_decode() {
 }
 
 /// [T-GH013] 2xx mid-stream body drop is treated as transient and the
-/// retry loop exhausts the configured max_retries attempts before failing
-/// (issue #113). The test uses the client default (3); issue #120 lets
-/// production callers override the budget via `SCOUT_MAX_RETRIES`.
+/// retry loop exhausts the configured max_retries attempts before failing.
+/// The test uses the client default (3); production callers override the
+/// budget via `SCOUT_MAX_RETRIES`.
 ///
 /// reqwest 0.13 surfaces a mid-stream drop as `is_decode() == true` with
 /// an io::Error in the source chain. Without `is_transient_decode`,
@@ -349,7 +349,7 @@ async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
 }
 
 /// [T-GH020] A 2xx response whose body exceeds `MAX_GITHUB_RESPONSE_BYTES`
-/// returns `ResponseTooLarge` instead of buffering the whole body (issue #186).
+/// returns `ResponseTooLarge` instead of buffering the whole body.
 /// The variant is non-retriable, so the mock is hit exactly once.
 #[tokio::test]
 async fn get_json_2xx_oversized_body_returns_too_large() {

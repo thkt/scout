@@ -126,8 +126,7 @@ impl Scout {
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
 
         // The preamble must survive the 100KB cut, so it is added after
-        // truncation rather than counted toward the limit (issue #222
-        // Finding A). The inline byte-count
+        // truncation rather than counted toward the limit. The inline byte-count
         // note from `truncate_with_note` lands at the body end and covers the
         // output-truncation case on the Markdown side, so only thread/users caps
         // go into the preamble to avoid double-reporting truncation.
@@ -249,7 +248,7 @@ impl Scout {
 /// Serialize a handler's scout-owned result into the envelope `data` value,
 /// mapping a `serde_json` failure to `ScoutError::internal_bug` (exit 70) so it
 /// flows through the JSON error envelope via `?` instead of `.expect()`
-/// panicking and bypassing it (issue #192). `what` names the value for the
+/// panicking and bypassing it. `what` names the value for the
 /// error message. The single serialize-to-`data` point shared by `fetch` and
 /// `research`.
 pub(super) fn to_data_value<T: serde::Serialize>(

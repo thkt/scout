@@ -96,7 +96,7 @@ pub(crate) enum FetchError {
 
     /// The payload names what did not respond and within what budget; the
     /// phrase itself belongs to this prefix alone. Carrying it in both read as
-    /// "fetch timed out: fetch timed out after 30s" (issue #313). `T-C027` pins
+    /// "fetch timed out: fetch timed out after 30s". `T-C027` pins
     /// the `fetch` call site, `T-SE015` the research one.
     #[error("fetch timed out: {0}")]
     Timeout(String),
@@ -198,7 +198,7 @@ pub(crate) async fn fetch_page(
     let validated = ssrf_check(url, resolver.as_ref(), egress).await?;
 
     // `decode_uncertain` flags a body neither the server charset label nor
-    // reliability-gated detection could decode cleanly (issue #241). It is
+    // reliability-gated detection could decode cleanly. It is
     // cleared whenever CDP output replaces the body below, because the headless
     // browser re-decodes the page from its own response handling.
     #[cfg(feature = "js-rendering")]

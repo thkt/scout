@@ -104,7 +104,7 @@ impl GitHubError {
             // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
             // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
-            // response that overran the byte cap (issue #186; peer to
+            // response that overran the byte cap (peer to
             // BraveError::ResponseTooLarge). Non-retriable: a retry would refetch
             // the same oversized body.
             Self::Decode(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),

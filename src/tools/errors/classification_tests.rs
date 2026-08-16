@@ -139,8 +139,8 @@ fn slack_other_api_error_classifies_as_usage_error() {
     assert_eq!(err.error_kind(), ErrorCode::UsageError);
 }
 
-/// [T-ER031] scout-internal "message not found" (space form) classifies as NotFound
-/// (issue #114 condition 4). scout returns this string from `fetch_message`
+/// [T-ER031] scout-internal "message not found" (space form) classifies as NotFound.
+/// scout returns this string from `fetch_message`
 /// when the resolved messages list is empty; it must classify as the same
 /// NotFound(66) class as Slack's native `message_not_found` (underscore form).
 #[test]
@@ -287,8 +287,7 @@ fn internal_bug_constructor_classifies_as_internal_exit_70() {
     assert!(!err.retryable(), "Internal must not be retryable");
 }
 
-/// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint
-/// (issue #101).
+/// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint.
 ///
 /// Prior to this fix, 401 fell through the generic `(400..500)` DataError arm
 /// (exit 65) because the GitHubClient surfaces every non-special 4xx as

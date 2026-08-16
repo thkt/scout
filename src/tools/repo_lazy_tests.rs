@@ -54,7 +54,7 @@ async fn run_repo_tree_times_out_on_slow_github() {
 /// [T-TS021] run() wraps repo-read in the outer github_timeout
 ///
 /// Companion to T-TS020: the guard is applied per dispatch arm in `run()`, so
-/// repo-read needs its own coverage of that arm (issue #185).
+/// repo-read needs its own coverage of that arm.
 #[tokio::test]
 async fn run_repo_read_times_out_on_slow_github() {
     let Some(server) = try_spawn_mock_server("tools::t_185_read").await else {
@@ -89,7 +89,7 @@ async fn run_repo_read_times_out_on_slow_github() {
 /// [T-TS022] run() wraps repo-overview in the outer github_timeout
 ///
 /// Companion to T-TS020: per-arm coverage of the repo-overview dispatch arm
-/// in `run()` (issue #185).
+/// in `run()`.
 #[tokio::test]
 async fn run_repo_overview_times_out_on_slow_github() {
     let Some(server) = try_spawn_mock_server("tools::t_185_overview").await else {
@@ -448,7 +448,7 @@ async fn github_lazy_init_from_empty_cell() {
 /// `SlackClient::from_env`, and a missing `SLACK_TOKEN` surfaces as a
 /// `ScoutError` without poisoning the `OnceCell` (`get_or_try_init` does not
 /// cache errors). This covers the lazy seam that `with_slack_endpoint` bypasses
-/// in T-SB005 (issue #191).
+/// in T-SB005.
 ///
 /// Guarded like `try_spawn_mock_server`: when the ambient environment provides a
 /// real `SLACK_TOKEN` (developer shell), `from_env` would succeed and this spec

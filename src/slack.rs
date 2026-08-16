@@ -33,8 +33,8 @@ pub(crate) enum SlackError {
 
     /// `SLACK_TOKEN` is set but is not a User OAuth token — it does not begin
     /// with the `xoxp-` prefix. A bot token (`xoxb-…`) or arbitrary string would
-    /// otherwise pass construction and fail later with an opaque API error
-    /// (issue #261). The contract the `TokenNotSet` hint promises is enforced
+    /// otherwise pass construction and fail later with an opaque API error.
+    /// The contract the `TokenNotSet` hint promises is enforced
     /// at construction by [`client::SlackClient::from_env_with`].
     #[error("SLACK_TOKEN must be a User OAuth token (xoxp-…)")]
     TokenWrongType,
@@ -138,7 +138,7 @@ impl SlackError {
                 // clause when paging stopped at the page cap. Neither of the
                 // latter two can be exact-matched — one interpolates `{ts}`, the
                 // other varies by cause — so the `starts_with`/`contains` guard
-                // catches the whole "message … not found …" family (issue #224).
+                // catches the whole "message … not found …" family.
                 // Slack-native
                 // codes are snake_case and never start with "message " (space),
                 // so they fall through to their own arms below.

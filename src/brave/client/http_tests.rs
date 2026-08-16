@@ -14,7 +14,7 @@ fn ok_body() -> serde_json::Value {
     })
 }
 
-/// [T-BC-LOG001] (issue #166 / OPS-003)
+/// [T-BC-LOG001]
 /// Setup: wiremock returns a 1-result Brave payload.
 /// Action: `client.search("foo", None)` is invoked under `traced_test`.
 /// Expected: an INFO-level `Brave search dispatching` event fires before
@@ -251,7 +251,7 @@ async fn search_503_persistent_returns_server_error() {
     );
 }
 
-/// [T-BC-CAP001] (issue #165 / CHX-008)
+/// [T-BC-CAP001]
 /// Setup: wiremock returns a 2xx whose body exceeds `MAX_API_RESPONSE_BYTES`
 /// (1 MiB), simulating an upstream Brave deployment returning unbounded
 /// JSON.
@@ -305,7 +305,7 @@ async fn search_malformed_json_returns_parse_error() {
     }
 }
 
-/// [T-BC-LOG002] (issue #189)
+/// [T-BC-LOG002]
 /// Setup: wiremock returns a 200 with a malformed JSON body.
 /// Action: `client.search("foobar", None)` is invoked under `traced_test`.
 /// Expected: a WARN-level `Brave search response parse failed` event fires,

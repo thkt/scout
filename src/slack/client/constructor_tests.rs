@@ -24,8 +24,8 @@ async fn t010_with_base_url_constructs_usable_client() {
 
 /// [T-SK033] from_env_with surfaces a closure `Err(VarError::NotPresent)` as
 /// `SlackError::TokenNotSet` — the token-unset path that `unsafe_code = "forbid"`
-/// blocks from being reached via `env::set_var` (ADR-0007, issue #191). Since #311
-/// that path runs through the backend-agnostic `Redacted::from_env_var`, which does
+/// blocks from being reached via `env::set_var` (ADR-0007). That path runs
+/// through the backend-agnostic `Redacted::from_env_var`, which does
 /// not know `SlackError`.
 #[test]
 fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
@@ -67,7 +67,7 @@ fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
 
 /// [T-SK065] The `SLACK_TOKEN must be a User OAuth token` contract is now
 /// enforced at construction, so a bot token can no longer pass through to fail
-/// later with an opaque API error (issue #261).
+/// later with an opaque API error.
 #[test]
 fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {

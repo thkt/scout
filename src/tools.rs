@@ -51,7 +51,7 @@ use params::{
 const MAX_STDIN_BYTES: u64 = 1_048_576;
 /// Upper bound for waiting on piped input. Without this, a stalled or
 /// half-closed pipe (upstream writer hung mid-stream) would block scout
-/// indefinitely with no log output (issue #155 / CHX-006).
+/// indefinitely with no log output.
 const STDIN_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
@@ -175,9 +175,9 @@ pub(crate) struct Scout {
     /// so the cancellation is delivered to fetches that start after the
     /// signal arrives (e.g. queued slots in `research --depth N` once an
     /// earlier slot finishes). `Notify` was tried first but loses wakeups
-    /// when no waiter is registered at signal time (issue #121).
+    /// when no waiter is registered at signal time.
     cancel: watch::Sender<bool>,
-    /// Tunables overridable via `SCOUT_*` env vars (issue #120).
+    /// Tunables overridable via `SCOUT_*` env vars.
     config: RuntimeConfig,
     /// Forwarded into `GitHubClient` on first `github()` call. Held on `Scout`
     /// rather than constructed inside `github()` so tests can inject before
@@ -258,7 +258,7 @@ impl Scout {
     /// 30s `HTTP_TIMEOUT`); a persistent 5xx makes those calls each run their
     /// full retry budget, so without this outer cap a single command could hang
     /// for minutes. Mirrors the `fetch`/`research`/`slack` timeout wrapping in
-    /// `query` (issue #185).
+    /// `query`.
     async fn with_github_timeout<F>(&self, label: &str, fut: F) -> Result<CommandOutput, ScoutError>
     where
         F: Future<Output = Result<CommandOutput, ScoutError>>,

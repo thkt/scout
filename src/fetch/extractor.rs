@@ -347,7 +347,7 @@ mod tests {
         }
     }
 
-    /// [T-FX011] (issue #189) readability fallback emits a WARN event whose `url`
+    /// [T-FX011] readability fallback emits a WARN event whose `url`
     /// field has credentials redacted, so the raw userinfo never reaches the log.
     #[tracing_test::traced_test]
     #[test]
@@ -371,7 +371,7 @@ mod tests {
         );
     }
 
-    /// [T-FX012] (issue #189) the fallback `url` field renders a placeholder when
+    /// [T-FX012] the fallback `url` field renders a placeholder when
     /// no source URL is available, instead of leaking a Rust `None` debug form.
     #[tracing_test::traced_test]
     #[test]

@@ -130,7 +130,7 @@ fn retry_after_or_backoff(retry_after: Option<u64>, attempt: u32, rng: &dyn Rng)
         // Cap the exponential backoff at the same ceiling as the server-supplied
         // `Retry-After`. Without this, a high `SCOUT_MAX_RETRIES` lets the
         // `2^attempt` growth produce a single multi-minute sleep (e.g. attempt 9
-        // → 512s) that overruns the surrounding tool timeout (issue #185).
+        // → 512s) that overruns the surrounding tool timeout.
         None => Duration::from_millis(jittered_backoff(attempt, rng))
             .min(Duration::from_secs(MAX_RETRY_AFTER_SECS)),
     }
