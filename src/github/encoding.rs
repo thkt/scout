@@ -36,9 +36,9 @@ pub(crate) struct DecodeResult {
 pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
     // GitHub wraps base64 at 60 chars, but base64 v0.22 has no whitespace-tolerant
     // decode (GeneralPurposeConfig exposes only padding/trailing-bit options), so the
-    // newlines must be stripped into a contiguous buffer first. This transient copy is
-    // accepted over a streaming DecoderReader: decode_base64 runs once per file fetch
-    // (network-bound, not a hot path) and `clean` is freed immediately after
+    // newlines must be stripped into a contiguous buffer first. This transient copy
+    // is accepted over a streaming DecoderReader: decode_base64 runs once per file
+    // fetch (network-bound, not a hot path) and `clean` is freed immediately after
     // decode.
     let clean: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
     STANDARD

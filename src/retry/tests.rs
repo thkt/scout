@@ -197,7 +197,7 @@ fn jittered_backoff_is_deterministic_with_seeded_rng() {
     );
 }
 
-/// [T-R014] the `None` arm of `retry_after_or_backoff` (exponential backoff)
+/// [T-R014] The `None` arm of `retry_after_or_backoff` (exponential backoff)
 /// needs a ceiling: without one a high `SCOUT_MAX_RETRIES` produces a
 /// single multi-minute sleep (attempt 9 → up to ~512s) that overruns the
 /// surrounding tool timeout. The cap must match the `Some` arm's

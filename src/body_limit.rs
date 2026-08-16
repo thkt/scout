@@ -12,11 +12,10 @@
 ///
 /// 1 MiB comfortably covers a `web/search` payload at Brave's `count=20`
 /// default and a Slack thread at `SLACK_REPLIES_LIMIT=200`; an oversized
-/// response cannot consume
-/// unbounded memory while the JSON parser allocates. `fetch.rs` keeps a
-/// separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the JSON cap is an
-/// order of magnitude smaller because API payloads are structured data,
-/// not human pages.
+/// response cannot consume unbounded memory while the JSON parser allocates.
+/// `fetch.rs` keeps a separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the
+/// JSON cap is an order of magnitude smaller because API payloads are
+/// structured data, not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// Upper bound on how much of a *failed* response's body is read to build a
