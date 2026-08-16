@@ -1011,6 +1011,7 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fetch::extractor::extract_article;
 
     /// Minimal `ExtractedArticle` fixture for tests that only vary the body
     /// HTML: no title/byline/published_time and no raw-fallback flag.
@@ -3055,6 +3056,32 @@ mod tests {
             markdown.contains("```\nfn main() {}\n```"),
             "a <pre><code> outside any table must still render as a fenced \
              block:\n{markdown}"
+        );
+    }
+    /// [T-FC097] Readability が失敗した経路でも `<script>` の中身は本文へ出ない
+    ///
+    /// `extract_article`'s dom_smoothie fallback (T-FX017) reaches this layer's
+    /// suppression the same way `--raw` does, and this test walks the real
+    /// seam rather than building an `ExtractedArticle` literal.
+    #[test]
+    fn readability_failure_path_still_drops_script_content() {
+        // Marker without `_`: htmd's own text escaping (not this crate's
+        // `escape_md_inline`) would rewrite it to `SCRIPT\_MARKER`
+        // (htmd-0.5.5/src/dom_walker.rs:401), and `contains` would miss the
+        // leak it is meant to catch.
+        let html = "<script>SCRIPTMARKER</script>";
+        let article = extract_article(html, Some("https://example.com"));
+        assert!(
+            article.used_raw_fallback,
+            "fixture must take the fallback for this test to cover that path"
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            !markdown.contains("SCRIPTMARKER"),
+            "a script body must not reach the output on the fallback path:\n{markdown}"
         );
     }
 }
