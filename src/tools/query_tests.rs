@@ -333,7 +333,7 @@ async fn research_json_zero_results_returns_empty_arrays() {
 }
 
 /// [T-F070] collect_research_degradations pushes DecodeUncertain for an uncertain
-/// page and omits it for a clean one (research-path machine-readable signal, #241)
+/// page and omits it for a clean one (research-path machine-readable signal)
 #[test]
 fn collect_research_degradations_pushes_decode_uncertain() {
     use super::query::collect_research_degradations;
@@ -587,7 +587,7 @@ async fn fetch_returns_ok_for_reachable_page() {
 }
 
 /// [T-F071] fetch end-to-end flags `DegradedReason::DecodeUncertain` (exit 0) when
-/// the page is an undecodable windows-1252 body mislabeled `charset=utf-8` (#241).
+/// the page is an undecodable windows-1252 body mislabeled `charset=utf-8`.
 /// Same guard-free `fetch_http` + public-IP `with_dns` seam as T-F017 keeps SSRF
 /// intact; the body reuses the smart-quote bytes pinned by T-F067.
 #[tokio::test]

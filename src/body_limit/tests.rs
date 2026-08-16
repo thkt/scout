@@ -7,7 +7,7 @@ use crate::test_support::{
 use wiremock::matchers::method;
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-R013] Issue #219: every existing `too_large` test drives wiremock's
+/// [T-R013] every existing `too_large` test drives wiremock's
 /// `set_body_bytes`, which always emits an honest Content-Length, so they
 /// exercise only `read_body_capped`'s Content-Length pre-check. Its chunk
 /// loop, the `body.len() > cap` arm, is the defense-in-depth guard for

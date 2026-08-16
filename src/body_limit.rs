@@ -11,8 +11,8 @@
 /// Upper bound on JSON response body bytes accepted from Brave and Slack.
 ///
 /// 1 MiB comfortably covers a `web/search` payload at Brave's `count=20`
-/// default and a Slack thread
-/// at `SLACK_REPLIES_LIMIT=200`; an oversized response cannot consume
+/// default and a Slack thread at `SLACK_REPLIES_LIMIT=200`; an oversized
+/// response cannot consume
 /// unbounded memory while the JSON parser allocates. `fetch.rs` keeps a
 /// separate `MAX_RESPONSE_BYTES = 10 MB` for HTML — the JSON cap is an
 /// order of magnitude smaller because API payloads are structured data,
@@ -31,8 +31,8 @@ pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 /// error here: the caller wants whatever prefix explains the failure, and the
 /// status it already has is the finding. What the two share is the reason for
 /// existing at all — `Response::text()` reads the whole body, so an error
-/// response can exhaust memory exactly as a successful one can, so the cap
-/// cannot be scoped to bodies expected to be useful.
+/// response can exhaust memory exactly as a successful one can. The cap
+/// therefore cannot be scoped to bodies expected to be useful.
 ///
 /// Stops after the first chunk that reaches `limit`, so the bytes read are
 /// bounded by `limit + one chunk` no matter how much the server sends. The

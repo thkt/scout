@@ -241,8 +241,8 @@ fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline
 ///
 /// `accept_count` must equal the number of connections the client will make;
 /// passing a larger value blocks the spawned thread on `listener.accept()`.
-/// `join_server_thread` no longer hangs on that: it panics naming
-/// `accept_count` once its deadline elapses (`join_server_thread_with_deadline`).
+/// `join_server_thread` does not hang on that: it panics naming `accept_count`
+/// once its deadline elapses (`join_server_thread_with_deadline`).
 pub(crate) fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
@@ -490,9 +490,9 @@ fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
 /// `contents`: one of those prefixes followed by exactly 3 digits, not run on
 /// into a longer token.
 ///
-/// Deliberately matches the bare form, because that is the shape #360 removed
-/// (`// FR-002, BR-003` sitting in a test body). Restricting the match to a
-/// backtick-wrapped spelling would let the historical shape back in.
+/// Deliberately matches the bare form (`// FR-002, BR-003` sitting in a test
+/// body). Restricting the match to a backtick-wrapped spelling would let that
+/// shape back in.
 fn extract_requirement_codes(contents: &str) -> Vec<String> {
     const PREFIXES: [&str; 3] = ["NFR-", "FR-", "BR-"];
     let mut codes = Vec::new();

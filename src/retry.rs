@@ -34,8 +34,8 @@ pub(crate) fn is_transient_network(e: &Error) -> bool {
 }
 
 /// True when a `Decode`-classified reqwest error originates in a transport
-/// IO failure (mid-stream body drop, connection reset). Issue #113: reqwest
-/// 0.13 surfaces an `UnexpectedEof` from hyper as `is_decode() == true`,
+/// IO failure (mid-stream body drop, connection reset). reqwest 0.13 surfaces
+/// an `UnexpectedEof` from hyper as `is_decode() == true`,
 /// indistinguishable from a serde schema mismatch by boolean alone. Walking
 /// the source chain for any `io::Error` separates transport (retryable) from
 /// schema (terminal).

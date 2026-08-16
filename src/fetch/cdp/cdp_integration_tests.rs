@@ -27,7 +27,7 @@ fn chromium_profile_dirs() -> HashSet<PathBuf> {
 /// `OnceLock` cache, so a test can drive the launch path
 /// without a real Chrome on the host. Injecting a path that is not an
 /// executable makes `spawn_chromium_pgroup` fail at spawn time, surfacing
-/// `BrowserError::ProcessFailed`. This exercises the seam (#191 DI pattern)
+/// `BrowserError::ProcessFailed`. This exercises the injection seam
 /// host-independently — no Chrome required, unlike the Chrome-gated test below.
 #[tokio::test]
 async fn t007_fetch_with_cdp_with_injects_browser_path() {
@@ -58,7 +58,7 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 /// Both Chrome-gated checks share one real ~2s fetch so they run sequentially in
 /// a single process. CI runs each `#[test]` in its own nextest process, so a
 /// process-internal lock cannot serialize two separate test fns; the temp-dir
-/// snapshot in the #198 check would otherwise capture a concurrent fetch's
+/// snapshot in the profile-dir check would otherwise capture a concurrent fetch's
 /// in-flight `scout-chromium-*` dir and trip a false residual. Merging the two
 /// removes the cross-test race entirely.
 ///

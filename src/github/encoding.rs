@@ -38,8 +38,8 @@ pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
     // decode (GeneralPurposeConfig exposes only padding/trailing-bit options), so the
     // newlines must be stripped into a contiguous buffer first. This transient copy is
     // accepted over a streaming DecoderReader: decode_base64 runs once per file fetch
-    // (network-bound, not a hot path despite the #190 lineage) and `clean` is freed
-    // immediately after decode. See #233.
+    // (network-bound, not a hot path) and `clean` is freed immediately after
+    // decode.
     let clean: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
     STANDARD
         .decode(&clean)
@@ -92,10 +92,10 @@ fn decode_explicit(bytes: &[u8], label: &str) -> Result<DecodeResult, GitHubErro
 ///
 /// Failing here matches `decode_explicit` and ADR-0013's split, where the GitHub
 /// path ends in a `NonUtf8` error with a retry hint while only the fetch path
-/// returns a lossy body. Until then this arm dropped `had_errors` on the floor
-/// and handed back replacement characters under `DetectionSource::Bom`, which
-/// reads to the caller as a settled encoding — and the GitHub path carries no
-/// equivalent of fetch's `decode_uncertain` to say otherwise.
+/// returns a lossy body. Dropping `had_errors` here would hand back replacement
+/// characters under `DetectionSource::Bom`, which reads to the caller as a
+/// settled encoding — and the GitHub path carries no equivalent of fetch's
+/// `decode_uncertain` to say otherwise.
 fn decode_bom(bytes: &[u8]) -> Option<Result<DecodeResult, GitHubError>> {
     let (encoding, bom_len) = Encoding::for_bom(bytes)?;
     let (decoded, had_errors) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
