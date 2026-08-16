@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 
 use crate::markdown::{track_fence, truncate_with_note};
+use crate::search::engine::MAX_PAGE_BYTES;
 
 /// Neutralize YAML document markers in untrusted body text appended after a
 /// `---`-delimited frontmatter block.
@@ -126,6 +127,33 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
     (token.is_empty() || token.starts_with([' ', '\t', '\r'])).then_some(token)
 }
 
+/// Per-field byte cap for a frontmatter string value, applied before escaping.
+///
+/// Derived from `search::engine::MAX_PAGE_BYTES` (4_500): one field capped at
+/// 1/10 of the whole-page budget keeps title+author+date together under 3/10
+/// of it, leaving the rest of the budget for the body.
+const MAX_FIELD_BYTES: usize = MAX_PAGE_BYTES / 10;
+
+/// Truncate `value` to [`MAX_FIELD_BYTES`] before it reaches [`escape_yaml`].
+///
+/// Mirrors `truncate_with_note`'s (`src/markdown.rs`) use of
+/// [`str::floor_char_boundary`] to land the cut on a char boundary, but
+/// truncates the raw value rather than an escaped one: cutting an
+/// already-escaped value can split a doubled `\\\\` in half, leaving a lone
+/// trailing `\` that escapes the closing quote and never lets the scalar
+/// close. A truncated value gets an ellipsis appended as the sole signal —
+/// not `truncate_with_note`'s byte-count note, which does not fit inside a
+/// single-line `key: "value"` scalar.
+fn truncate_field(value: &str) -> Cow<'_, str> {
+    if value.len() <= MAX_FIELD_BYTES {
+        return Cow::Borrowed(value);
+    }
+    let boundary = value.floor_char_boundary(MAX_FIELD_BYTES);
+    let mut out = value[..boundary].to_string();
+    out.push('…');
+    Cow::Owned(out)
+}
+
 /// Write one frontmatter key whose value is a string.
 ///
 /// The double quotes and [`escape_yaml`] are one contract, not two steps:
@@ -134,7 +162,7 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
 /// containing `"` or a newline breaks out of the block. Keeping them in one
 /// place means a call site cannot do half of it.
 pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
-    let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(value));
+    let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(&truncate_field(value)));
 }
 
 /// Escape a string for use inside a double-quoted YAML scalar.
@@ -282,5 +310,100 @@ mod tests {
             neutralize_yaml_markers_outside_fences("````\n```\n---\n````\n..."),
             "````\n```\n---\n````\n***"
         );
+    }
+
+    /// [T-FC100] 上限を超える title を持つ記事の出力に閉じ `---` と本文の先頭行が残る
+    #[test]
+    fn truncates_title_over_the_cap_and_keeps_the_frontmatter_closed() {
+        let long_title = "A".repeat(10_000);
+        let mut fields = String::new();
+        write_yaml_str(&mut fields, "title", &long_title);
+        let body = "first body line\nsecond body line";
+        let doc = format!("---\n{fields}---\n\n{body}");
+
+        let title_line = doc.lines().nth(1).expect("title line");
+        assert!(
+            title_line.starts_with("title: \"") && title_line.ends_with('"'),
+            "title line must open and close its quoted scalar: {title_line}"
+        );
+        assert!(
+            doc.contains("\n---\n\nfirst body line\n"),
+            "closing --- and the body's first line must survive truncation: {doc}"
+        );
+        assert!(
+            fields.len() < long_title.len(),
+            "a title over the cap must be truncated, not passed through whole"
+        );
+    }
+
+    /// [T-FC101] byline と published_time でも上限を超えた値が切り詰められる
+    ///
+    /// `write_yaml_str` carries no per-key logic, so proving truncation on one
+    /// key (title, T-FC100) does not prove it on the other two call sites in
+    /// `format_with_frontmatter` (`author` for byline, `date` for
+    /// published_time) — each is its own call.
+    #[test]
+    fn truncates_byline_and_published_time_over_the_cap() {
+        let long_byline = "b".repeat(10_000);
+        let mut byline_field = String::new();
+        write_yaml_str(&mut byline_field, "author", &long_byline);
+        assert!(
+            byline_field.len() < long_byline.len(),
+            "a byline over the cap must be truncated (author field)"
+        );
+
+        let long_published_time = format!("2026-08-16T{}", "0".repeat(10_000));
+        let mut date_field = String::new();
+        write_yaml_str(&mut date_field, "date", &long_published_time);
+        assert!(
+            date_field.len() < long_published_time.len(),
+            "a published_time over the cap must be truncated (date field)"
+        );
+    }
+
+    /// [T-FC102] escape 対象文字だけの上限超の値でも title 行が引用符で閉じ、末尾が単独のバックスラッシュにならない
+    ///
+    /// Guards the ordering the contract requires: truncate the raw value, then
+    /// escape it. Truncating an already-escaped value instead can cut a
+    /// doubled `\\\\` in half, leaving a lone trailing backslash that escapes
+    /// the closing quote and never lets the YAML scalar close.
+    #[test]
+    fn truncated_all_escapable_value_still_closes_the_quote() {
+        let long_backslashes = "\\".repeat(10_000);
+        let mut fields = String::new();
+        write_yaml_str(&mut fields, "title", &long_backslashes);
+        let title_line = fields.lines().next().expect("title line");
+
+        assert!(
+            title_line.starts_with("title: \""),
+            "title line must open its quoted scalar: {title_line}"
+        );
+        assert!(
+            title_line.ends_with('"'),
+            "title line must close its quoted scalar, not trail off unterminated: {title_line}"
+        );
+        let before_closing_quote = &title_line[..title_line.len() - 1];
+        let trailing_backslashes = before_closing_quote
+            .chars()
+            .rev()
+            .take_while(|&c| c == '\\')
+            .count();
+        assert!(
+            trailing_backslashes % 2 == 0,
+            "an odd run of backslashes right before the closing quote would escape it: {title_line}"
+        );
+        assert!(
+            fields.len() < long_backslashes.len(),
+            "an all-backslash title over the cap must be truncated"
+        );
+    }
+
+    /// [T-FC103] 上限以下の値は切り詰められず省略記号も付かない
+    #[test]
+    fn value_within_the_cap_is_not_truncated_and_carries_no_ellipsis() {
+        let title = "A plain title well under any byte cap";
+        let mut fields = String::new();
+        write_yaml_str(&mut fields, "title", title);
+        assert_eq!(fields, format!("title: \"{title}\"\n"));
     }
 }
