@@ -163,14 +163,16 @@ impl CommandOutput {
     }
 }
 
-/// JSON-serializable error classification per ADR-0010 (9-code policy).
+/// JSON-serializable error classification per ADR-0010.
 ///
 /// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
 /// API schema during deserialize). `Timeout` splits from `TempFailure` so
 /// callers can apply a longer retry backoff than for rate limits / 5xx.
 /// `Unknown` is the explicit escape hatch for inputs that no priority rule
 /// classified; a rising rate of `Unknown` signals the classification design
-/// needs revisiting.
+/// needs revisiting. The two `Interrupted*` variants carry a signal
+/// interruption (ADR-0017) into the same envelope, so `--json` has no stderr
+/// path that emits a bare line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
@@ -182,6 +184,8 @@ pub(crate) enum ErrorCode {
     TempFailure,
     Timeout,
     Unknown,
+    InterruptedSigint,
+    InterruptedSigterm,
 }
 
 impl ErrorCode {
@@ -200,6 +204,13 @@ impl ErrorCode {
             Self::TempFailure => 75, // EX_TEMPFAIL
             Self::Timeout => 124,    // GNU coreutils `timeout` convention
             Self::Unknown => 104,    // PJ extension per ADR-0002, retreat slot per ADR-0011
+            // POSIX 128 + signo per ADR-0017. `InterruptSignal` (src/signals.rs)
+            // holds the same two numbers for the process exit; the values are
+            // repeated rather than delegated because `InterruptSignal::Sigterm`
+            // is `#[cfg(unix)]` and `error.code` must enumerate the same set on
+            // every platform. T-W009 in src/lib.rs pins the two tables equal.
+            Self::InterruptedSigint => 130,
+            Self::InterruptedSigterm => 143,
         }
     }
 

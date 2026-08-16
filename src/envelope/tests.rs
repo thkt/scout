@@ -199,6 +199,8 @@ fn error_code_serializes_screaming_snake_case() {
         (ErrorCode::TempFailure, r#""TEMP_FAILURE""#),
         (ErrorCode::Timeout, r#""TIMEOUT""#),
         (ErrorCode::Unknown, r#""UNKNOWN""#),
+        (ErrorCode::InterruptedSigint, r#""INTERRUPTED_SIGINT""#),
+        (ErrorCode::InterruptedSigterm, r#""INTERRUPTED_SIGTERM""#),
     ];
     for (code, expected) in pairs {
         let actual = serde_json::to_string(&code).unwrap();
@@ -209,10 +211,11 @@ fn error_code_serializes_screaming_snake_case() {
     }
 }
 
-/// [T-EN014] ErrorCode → exit-code mapping per ADR-0002 (exit values) +
-/// ADR-0010 (9-code policy).
-/// Locks the full table so adding a new variant without an `exit_code()`
-/// arm fails compile, and drift on any existing variant fails this test.
+/// [T-EN014] ErrorCode → exit-code mapping per ADR-0002 (exit values),
+/// ADR-0010 (`error.code` value set), ADR-0017 (130 / 143).
+/// Drift on any listed variant fails this test. A new variant has to be added
+/// to the array by hand: omitting its `exit_code()` arm fails compile, but
+/// leaving it out of the array below does not.
 #[test]
 fn error_code_exit_code_table() {
     let pairs = [
@@ -224,6 +227,8 @@ fn error_code_exit_code_table() {
         (ErrorCode::TempFailure, 75),
         (ErrorCode::Unknown, 104),
         (ErrorCode::Timeout, 124),
+        (ErrorCode::InterruptedSigint, 130),
+        (ErrorCode::InterruptedSigterm, 143),
     ];
     for (code, expected) in pairs {
         assert_eq!(

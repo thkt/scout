@@ -94,3 +94,11 @@ drain 対象は主に CDP browser 操作 (`fetch_with_cdp`: cancel で navigate 
 - `src/lib.rs:128-152` (drain orchestration `drive`)、`:262-476` (テスト)
 - ADR-0002 (sysexits.h 終了コード規約。130/143 はその POSIX 拡張)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #9)
+
+## Addendum (2026-08-17): `--json` 下の中断は envelope で報告する
+
+`--json` を付けた実行で SIGINT / SIGTERM を受けたとき、stderr へ `error: interrupted (SIGINT)` という bare line を書いていた。`--json` は「stderr の error は全て JSON envelope」を約束するため、stderr を JSON 前提で parse する caller はこの 1 行を落とし、中断を検知できない。
+
+`src/lib.rs` の `interrupted_line` が `--json` の有無で出し分け、JSON 側は `error.code` に `INTERRUPTED_SIGINT` / `INTERRUPTED_SIGTERM` を載せた envelope を出す。exit code は本 ADR の 130 / 143 のまま変えない。`error.code` の値集合追加は ADR-0010 の Addendum (2026-08-17) が管轄する。
+
+`error.retryable` は両方 false にした。本 ADR の Decision Drivers が書く「130 で retry」は shell が exit code を見て決める戦略であり、scout が「再実行すれば成功する」と判定したという意味ではない。

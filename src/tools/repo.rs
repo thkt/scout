@@ -435,19 +435,11 @@ mod tests {
         assert_eq!(issues_json[0]["number"], 1);
     }
 
-    /// [T-TS037] A section that failed to load says so in the Markdown, with the
-    /// same `> Note: ` prefix the fetch and Slack paths use.
-    ///
-    /// Without `--json` the caller receives the Markdown alone (src/lib.rs), so
-    /// an overview missing its Recent Issues section is indistinguishable from a
-    /// repository that has none unless the note is in the body. The prefix is
-    /// asserted because a caller scanning for degradation reads one form, not
-    /// two.
-    #[tokio::test]
-    async fn repo_overview_states_a_failed_section_in_the_body() {
-        let Some(server) = try_spawn_mock_server("tools::repo::degraded_note").await else {
-            return;
-        };
+    /// Run `repo_overview` against a mock GitHub whose issues endpoint fails,
+    /// leaving every other section intact. Returns `None` when the mock server
+    /// cannot be spawned, matching the skip the callers already perform.
+    async fn overview_with_failed_issues(label: &str) -> Option<CommandOutput> {
+        let server = try_spawn_mock_server(label).await?;
 
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo"))
@@ -489,12 +481,28 @@ mod tests {
             .await;
 
         let s = scout_with_github(&server.uri(), &server.uri());
-        let result = s
-            .repo_overview(RepoOverviewParams {
+        Some(
+            s.repo_overview(RepoOverviewParams {
                 repository: Some("owner/repo".into()),
             })
             .await
-            .expect("a failed section degrades the overview rather than failing it");
+            .expect("a failed section degrades the overview rather than failing it"),
+        )
+    }
+
+    /// [T-TS037] A section that failed to load says so in the Markdown, with the
+    /// same `> Note: ` prefix the fetch and Slack paths use.
+    ///
+    /// Without `--json` the caller receives the Markdown alone (src/lib.rs), so
+    /// an overview missing its Recent Issues section is indistinguishable from a
+    /// repository that has none unless the note is in the body. The prefix is
+    /// asserted because a caller scanning for degradation reads one form, not
+    /// two.
+    #[tokio::test]
+    async fn repo_overview_states_a_failed_section_in_the_body() {
+        let Some(result) = overview_with_failed_issues("tools::repo::degraded_note").await else {
+            return;
+        };
 
         assert!(
             result.markdown().contains("> Note: Could not fetch issues"),
@@ -507,6 +515,36 @@ mod tests {
                 .contains(&DegradedReason::IssuesFetchFailed),
             "the envelope must carry the typed reason, got: {:?}",
             result.degraded_reasons()
+        );
+    }
+
+    /// [T-TS038] A partial failure in `repo_overview` reaches the `--json`
+    /// output as `degraded: true` plus the typed reason.
+    ///
+    /// ADR-0003's Confirmation asks for the two halves in one test. Splitting
+    /// them lets both pass while the wire format drifts: T-TS037 reads the
+    /// test-only `degraded_reasons()` accessor and never serializes, and
+    /// T-EN013 asserts the serialized shape on a hand-built envelope that
+    /// `repo_overview` never produced. This drives the real partial-failure
+    /// path through the same `into_envelope` call `--json` uses.
+    #[tokio::test]
+    async fn a_partial_failure_reaches_the_json_output_as_degraded() {
+        let Some(result) = overview_with_failed_issues("tools::repo::degraded_json").await else {
+            return;
+        };
+
+        let json = serde_json::to_value(result.into_envelope())
+            .expect("the success envelope must serialize");
+
+        assert_eq!(
+            json["degraded"],
+            serde_json::json!(true),
+            "a partial failure must set the degraded flag, got: {json}"
+        );
+        assert_eq!(
+            json["degraded_reasons"],
+            serde_json::json!(["ISSUES_FETCH_FAILED"]),
+            "the typed reason must reach the wire format, got: {json}"
         );
     }
 }

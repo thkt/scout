@@ -12,8 +12,24 @@ pub(crate) struct RepoInfo {
     pub(super) stargazers_count: u64,
     pub(super) forks_count: u64,
     pub(super) open_issues_count: u64,
-    pub(super) topics: Option<Vec<String>>,
+    /// GitHub omits this key, or sends `null`, for a repository with no topics.
+    /// `RepoInfo` is embedded under the envelope's `data.repository`, so ADR-0010
+    /// Rule 4 forbids letting either shape reach the JSON output as `null`.
+    /// `default` alone covers the omitted key only; a present `null` needs the
+    /// deserializer below.
+    #[serde(default, deserialize_with = "null_as_empty_vec")]
+    pub(super) topics: Vec<String>,
     pub(super) license: Option<LicenseInfo>,
+}
+
+/// Read a JSON array that the API may send as `null` into an empty `Vec`.
+/// Paired with `#[serde(default)]`, which covers an omitted key but not a
+/// present `null`: serde rejects `null` for a `Vec` before the default applies.
+fn null_as_empty_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -163,6 +179,31 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].number, 1);
+    }
+
+    /// [T-GHT004] a null `topics` from GitHub reaches the envelope as `[]`
+    ///
+    /// `RepoInfo` is embedded verbatim under the envelope's `data.repository`
+    /// key, so ADR-0010 Rule 4 (`[]`-never-`null` for every array below `data`)
+    /// applies to this field. GitHub omits the value or sends `null` for a
+    /// repository with no topics, and a parser written against Rule 4 indexes
+    /// `data.repository.topics.length` without a null guard.
+    #[test]
+    fn a_null_topics_field_serializes_as_an_empty_array() {
+        let absent = r#"{"full_name":"o/r","description":null,"html_url":"https://github.com/o/r","default_branch":"main","language":null,"stargazers_count":0,"forks_count":0,"open_issues_count":0,"license":null}"#;
+        let explicit_null = r#"{"full_name":"o/r","description":null,"html_url":"https://github.com/o/r","default_branch":"main","language":null,"stargazers_count":0,"forks_count":0,"open_issues_count":0,"topics":null,"license":null}"#;
+
+        for body in [absent, explicit_null] {
+            let info: RepoInfo = serde_json::from_str(body)
+                .expect("a missing or null topics field must deserialize");
+            let json = serde_json::to_value(&info).expect("RepoInfo must serialize");
+            assert_eq!(
+                json["topics"],
+                serde_json::json!([]),
+                "topics must serialize as [] per ADR-0010 Rule 4, got {} for {body}",
+                json["topics"]
+            );
+        }
     }
 
     /// [T-GHT002] only a listing array reads as a directory
