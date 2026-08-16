@@ -48,6 +48,8 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 - Good, because fetch はフェンスが本文末尾まで閉じない場合、開いたと判定したフェンス自体を信用せず本文全体を書き換える fail-closed に倒すため、フェンス構文の偽装による中和回避を許さない
 - Bad, because Slack はフェンス追跡を持たないため、Slack 上のコードブロックであっても `---`/`...` を含む行は `***` に書き換わり、fetch と異なり原文と一致しない。message 本文がほぼ生で共有 leaf に渡る Slack でフェンス追跡を緩めると、攻撃者が閉じないフェンスを打つだけで以降が無中和になるため、意図して見送る
 - Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch と GitHub README の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
+- Bad, because GitHub の `repo-tree` は中和を通さない。`format_tree` (src/github/format.rs) はパスをフェンスで包むだけなので、`---` という名前のファイルを持つリポジトリではフェンスの内側に column 0 のマーカーが出る。フェンスは Markdown parser には効くが、想定 consumer には効かない。中和すると agent がそのパスを `repo-read` へ渡せなくなるため、escape を見送った判断 (同関数の doc コメント) と同じ理由で受け入れる
+- Bad, because GitHub の `repo-read` に穴が無いのは行番号の副作用である。`format_file_content` (src/github/format.rs) は中身をそのままフェンスへ入れるが、`src/github/helpers.rs` が最小幅 5 の行番号を無条件に前置するため、column 0 のマーカーが構造上できない。この幅はファイルの行数から取る gutter 整列のためのもので、マーカー対策ではない。行番号を外す変更や raw 出力を足す変更は、この経路に穴を開ける
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
 - Bad, because HTML 層の script 除去が dom_smoothie 単独への依存のままなら、ライブラリが退行したとき script の中身が本文へ漏れる。`--raw` は Readability 自体を通らないため、この経路では現に漏れていた。変換層の `suppressed_handler` (`src/fetch/converter.rs`) が script/style/noscript/textarea/iframe/title と SVG 名前空間の desc を Readability の成否と独立に除去する二重化により、dom_smoothie が退行しても変換層側の除去が残る。`--raw` の `content_html` も同じ変換層を経由するため、この経路でも漏れない (#403)
@@ -100,6 +102,8 @@ scout は素通しし parser 側の安全性に依存する。
 | `neutralize_yaml_markers`                | src/yaml.rs          | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch と GitHub README はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
 | `neutralize_yaml_markers_outside_fences` | src/yaml.rs          | fetch と GitHub README 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
 | `format_readme_section`                  | src/github/format.rs | GitHub repo-overview の README を `shift_headings` で見出しシフトし `neutralize_yaml_markers_outside_fences` へ通す。フェンス追跡は fetch と共有する                                          |
+| `format_tree`                            | src/github/format.rs | GitHub repo-tree のパスをフェンスで包むだけで中和しない。escape も中和もパスを壊すため、フェンス内のマーカーは既知の限界として残す                                                            |
+| `format_file_content`                    | src/github/format.rs | GitHub repo-read の中身をフェンスで包む。中和はしないが、`src/github/helpers.rs` の行番号が column 0 のマーカーを構造上作らせない                                                             |
 
 ### HTML 層の分担
 
