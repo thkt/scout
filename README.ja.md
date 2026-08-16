@@ -66,7 +66,7 @@ brew install thkt/tap/scout
 cargo install --path .
 ```
 
-ビルド済みバイナリは[Releases](https://github.com/thkt/scout/releases)から入手できます（macOS Apple Silicon / Intel、Linux x86_64 / ARM64）。
+ビルド済みバイナリは[Releases](https://github.com/thkt/scout/releases)から入手できます（macOS Apple Silicon/Intel、Linux x86_64/ARM64）。
 
 ### 環境変数
 
@@ -76,7 +76,7 @@ export GITHUB_TOKEN="..."           # 任意: 5,000回/時 vs 未設定60回/時
 export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch` するときに必要（User OAuthトークン、xoxp-…）
 ```
 
-`GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` の順で認証されます。
+`GITHUB_TOKEN`/`GH_TOKEN`/`gh auth token` の順で認証されます。
 
 ### チューニング
 
@@ -121,7 +121,7 @@ cargo install --path . --features js-rendering
 
 任意のコマンドに `--json` を付けると、Markdown の代わりに 1 行 JSON エンベロープが返ります。`jq` パイプラインや AI エージェントへの構造化データ受け渡しに便利です。成功時の出力は stdout、エラー時の JSON エンベロープは stderr へ出力されます。
 
-バージョン確認は `scout --version`（または `-V`）、ヘルプは `scout --help` / `scout <command> --help` で表示できます。
+バージョン確認は `scout --version`（または `-V`）、ヘルプは `scout --help`/`scout <command> --help` で表示できます。
 
 ### `scout search` — ソースURLを返すWeb検索
 
@@ -242,7 +242,7 @@ scout repo-overview denoland/deno
 URL検証 → DNS事前チェック → ダウンロード → リダイレクト後再チェック → Readability → Markdown
 ```
 
-リテラルなプライベート/ループバック IP は URL 検証時と各リダイレクトホップで、全モード共通に拒否します。既定の直接接続モードでは、scout 自身がホストを解決・接続し、接続時の IP を再検証することで、事前チェックと実接続の間の DNS リバインディングの穴を塞ぎます。標準のプロキシ環境変数（`HTTPS_PROXY` / `HTTP_PROXY`）が設定されている場合は、そのプロキシ経由で fetch します。この場合もリテラルなプライベート/ループバック宛先は各ホップで拒否し続けますが、scout 自身の DNS 解決は行わず、名前解決に基づく防御（DNS リバインディングを含む）はプロキシの egress control へ委譲します。エラーメッセージ中のクレデンシャルは除去します。サイズ上限は Limitations を参照してください。
+リテラルなプライベート/ループバック IP は URL 検証時と各リダイレクトホップで、全モード共通に拒否します。既定の直接接続モードでは、scout 自身がホストを解決・接続し、接続時の IP を再検証することで、事前チェックと実接続の間の DNS リバインディングの穴を塞ぎます。標準のプロキシ環境変数（`HTTPS_PROXY`/`HTTP_PROXY`）が設定されている場合は、そのプロキシ経由で fetch します。この場合もリテラルなプライベート/ループバック宛先は各ホップで拒否し続けますが、scout 自身の DNS 解決は行わず、名前解決に基づく防御（DNS リバインディングを含む）はプロキシの egress control へ委譲します。エラーメッセージ中のクレデンシャルは除去します。サイズ上限は Limitations を参照してください。
 
 ## アーキテクチャ
 
@@ -270,7 +270,7 @@ src/
 
 ## 終了コード
 
-[`sysexits.h`](https://man.openbsd.org/sysexits) に GNU coreutils の `timeout` コード（124）、分類不能用の拡張コード（104）、POSIX シグナル規約（128 + シグナル番号）による中断コードを加えた体系です。
+[`sysexits.h`](https://man.openbsd.org/sysexits)に GNU coreutils の `timeout` コード（124）、分類不能用の拡張コード（104）、POSIX シグナル規約（128 + シグナル番号）による中断コードを加えた体系です。
 
 | コード | 意味                                                                        |
 | ------ | --------------------------------------------------------------------------- |
@@ -316,7 +316,7 @@ Sources は実際の到達先 URL（Google のリダイレクト経由ではな�
 
 **`scout research` の出力**
 
-`## Search Result` セクション（Gemini が生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）と `## Sources`（URL リスト）は維持されます。
+`## Search Result` セクション（Gemini が生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）、`## Sources`（URL リスト）、および `## Failed URLs`（取得に失敗した source があるときだけ出ます）は維持されます。
 
 `research` は Brave Search 自体が retry 後も失敗した場合に hard-fail しなくなりました。代わりに degraded report（`data.sources: []`、fetched pages なし）を返し、`degraded_reasons` に `BraveSearchFailed` を追加するため、呼び出し側はエラーメッセージを parse せずに検索段階の失敗を検知できます。
 
@@ -328,7 +328,7 @@ Sources は実際の到達先 URL（Google のリダイレクト経由ではな�
 
 **削除**
 
-- `Lang::apply_to_query`: クエリ末尾に `(日本語で回答)` / `(answer in English)` を追記する動作は廃止。`--lang ja/en` は Brave の `search_lang` パラメータにマップされ、クエリ文字列自体は変更されません
+- `Lang::apply_to_query`: クエリ末尾に `(日本語で回答)`/`(answer in English)` を追記する動作は廃止。`--lang ja/en` は Brave の `search_lang` パラメータにマップされ、クエリ文字列自体は変更されません
 - `--lang auto` のバイリンガル展開: 日本語入力に対する英語クエリの追加発行は廃止。両方必要な場合は呼び出し側で 2 回 `scout` を実行してください
 
 ## 制限事項

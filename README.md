@@ -327,7 +327,7 @@ Sources are now the actual destination URLs (not Google redirect URLs).
 
 **`scout research` output**
 
-The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content) and `## Sources` (URL list).
+The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content), `## Sources` (URL list), and `## Failed URLs` (shown only when a source could not be fetched).
 
 `research` no longer hard-fails when Brave Search itself errors after retry. Instead it returns a degraded report (`data.sources: []`, no fetched pages) and adds `BraveSearchFailed` to `degraded_reasons` so callers can detect the search-tier failure without parsing error messages.
 

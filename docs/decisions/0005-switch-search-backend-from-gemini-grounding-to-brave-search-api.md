@@ -93,7 +93,7 @@ critic-design レビュー (2026-05-15) で以下の追加判断を確定。
     "query": "...",
     "sources": [...],
     "fetched_pages": [
-      {"url": "...", "markdown": "...", "used_raw_fallback": false}
+      {"url": "...", "markdown": "..."}
     ],
     "failed_urls": [
       {"url": "...", "reason": "..."}
@@ -107,7 +107,7 @@ critic-design レビュー (2026-05-15) で以下の追加判断を確定。
 #### Default 出力フォーマット (非 JSON)
 
 * `scout search "query"`: **URL のみ plain text** (1 行 1 URL、markdown なし、title/description は省略)。`xargs` / `wget` 等にそのまま流せる
-* `scout research "query"`: markdown 維持。`Search Result` セクションは削除、`Sources` と `Fetched Pages` のみ
+* `scout research "query"`: markdown 維持。`Search Result` セクションは削除。残るのは `Sources` と `Fetched Pages`、および fetch に失敗した source があるときだけ出る `Failed URLs`
 
 #### 0 件結果の UX
 
@@ -230,3 +230,13 @@ git revert + v1.1.2 タグからの patch release。Brave サービス停止等�
 * Brave Web Search documentation (getting started): https://api-dashboard.search.brave.com/app/documentation/web-search/get-started
 * Brave Web Search query parameters (一次ソース): https://api-dashboard.search.brave.com/app/documentation/web-search/query
 * Google Custom Search 廃止: https://developers.google.com/custom-search/v1/overview?hl=ja
+
+## Addendum (2026-08-17): `used_raw_fallback` は data ではなく degradation channel で出す
+
+Decision Outcome の JSON schema block が `data.fetched_pages[]` の各要素に `used_raw_fallback` を書いていたが、実際には出ない。`FetchResult` の `used_raw_fallback` と `decode_uncertain` は `#[serde(skip_serializing)]` で、`data.fetched_pages[i]` は `{url, markdown}` だけになる。フラグは `collect_research_degradations` (`src/tools/query.rs`) が `degraded_reasons` と `notes` へ載せる。
+
+この設計は本 ADR より後 (issue #241) に決めたもので、事故ではない。取得の質に関する情報を data ではなく degradation channel へ集めると、consumer は `degraded` 1 つを見るだけで「本文をそのまま信用してよいか」を判断できる。ADR の schema block だけが元の形のまま残っていた。
+
+`jq '.data.fetched_pages[].used_raw_fallback'` と書いた consumer は `null` を受け取る。`degraded_reasons` に `READABILITY_FALLBACK` があるかで判定する。schema block を実装へ揃えたが、`data.fetched_pages[i]` の要素形を assert するテストは無い。`[T-TS028]` は `fetched_pages` が配列であることまでしか見ないため、この drift はテストでは検出できなかった。
+
+Design Refinements の research 出力セクション一覧に `Failed URLs` を足した。`format_report` は `format_failed_urls` を無条件に呼び、失敗した source があれば `## Failed URLs` を出す (`[T-SE014]`)。このセクションは Gemini から Brave への切り替えより前からあり、本 ADR の「2 セクションのみ」という書き方が引き写しの取りこぼしだった。
