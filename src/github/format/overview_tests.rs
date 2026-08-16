@@ -12,7 +12,7 @@ fn sample_repo() -> RepoInfo {
         stargazers_count: 42,
         forks_count: 5,
         open_issues_count: 3,
-        topics: Some(vec!["rust".into(), "cli".into()]),
+        topics: vec!["rust".into(), "cli".into()],
         license: Some(LicenseInfo {
             spdx_id: Some("MIT".into()),
             name: "MIT License".into(),
@@ -32,7 +32,7 @@ fn format_overview_minimal() {
         stargazers_count: 0,
         forks_count: 0,
         open_issues_count: 0,
-        topics: None,
+        topics: vec![],
         license: None,
     };
     let output = format_overview(&repo, None, &[], &[], &[]);

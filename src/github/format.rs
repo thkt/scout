@@ -150,9 +150,12 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
         "| Default Branch | {} |",
         escape_md_inline(&repo.default_branch)
     );
-    let topics = repo.topics.as_deref().unwrap_or(&[]);
-    if !topics.is_empty() {
-        let _ = writeln!(out, "| Topics | {} |", escape_md_inline(&topics.join(", ")));
+    if !repo.topics.is_empty() {
+        let _ = writeln!(
+            out,
+            "| Topics | {} |",
+            escape_md_inline(&repo.topics.join(", "))
+        );
     }
     let _ = writeln!(out, "| URL | {} |\n", escape_md_inline(&repo.html_url));
 }
