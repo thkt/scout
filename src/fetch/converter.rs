@@ -111,7 +111,10 @@ fn markdown_converter() -> HtmlToMarkdown {
 // covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
 // (htmd's element_handler/mod.rs `handle`), so a `&Element` signature
 // would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "htmd's ElementHandler blanket impl takes Element by value"
+)]
 fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     // Called for its side effect as much as its value: the walk runs htmd's
     // adjacent-sibling merge on `element.node.children` before either branch
@@ -171,7 +174,6 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 /// default (htmd's element_handler/mod.rs `handle`).
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
-#[allow(clippy::needless_pass_by_value)]
 fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if !is_suppressed_element(element.node) {
         return handlers.fallback(element);
@@ -428,7 +430,6 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// T-FC054 pins what a `<span>` in inline `<code>` gets as a result.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
-#[allow(clippy::needless_pass_by_value)]
 fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if has_pre_ancestor(element.node) {
         return Some(handlers.walk_children(element.node));
@@ -558,7 +559,6 @@ fn inline_code_span(content: &str) -> String {
 /// title, and only a *fragment* href with empty content is suppressed.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
-#[allow(clippy::needless_pass_by_value)]
 fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     let result = handlers.walk_children(element.node);
     let has_link_text = !result.content.trim().is_empty();
@@ -696,7 +696,6 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// in the test.
 // `Element` must stay by-value for the same `add_handler` signature reason as
 // `pre_handler` above.
-#[allow(clippy::needless_pass_by_value)]
 fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if handlers.options().translation_mode != TranslationMode::Pure {
         return handlers.fallback(element);
