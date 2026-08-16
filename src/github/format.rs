@@ -160,20 +160,22 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
-    if content.len() > MAX_README_BYTES {
-        // Not reusing truncate_with_note because shift_headings must run
-        // between truncation and note addition.
+    // Not reusing truncate_with_note because shift_headings must run
+    // between truncation and note addition.
+    let truncated = content.len() > MAX_README_BYTES;
+    let end = if truncated {
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
-        let end = content[..boundary]
+        content[..boundary]
             .rfind('\n')
             .map(|p| p + 1)
-            .unwrap_or(boundary);
-        let shifted = shift_headings(&content[..end], 2);
-        out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
-        out.push_str(&truncation_note(end, content.len()));
+            .unwrap_or(boundary)
     } else {
-        let shifted = shift_headings(content, 2);
-        out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
+        content.len()
+    };
+    let shifted = shift_headings(&content[..end], 2);
+    out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
+    if truncated {
+        out.push_str(&truncation_note(end, content.len()));
     }
     out.push_str("\n\n");
 }
