@@ -160,8 +160,9 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
-    // Not reusing truncate_with_note because shift_headings must run
-    // between truncation and note addition.
+    // Not reusing truncate_with_note: shift_headings and the neutralization
+    // both run between the cut and the note. Neutralizing after the cut is
+    // what lets the fail-closed branch see a fence the cut left open.
     let truncated = content.len() > MAX_README_BYTES;
     let end = if truncated {
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
