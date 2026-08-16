@@ -19,12 +19,12 @@ scout の `ScoutError` → `ErrorCode` 分類は `src/tools/errors.rs` の `matc
 
 残るのが **Classification Priority portion** で、code-side ref 11 箇所 (`src/envelope.rs:197`, `src/tools/errors.rs:84, 165, 256, 277, 577, 580, 602, 624, 648, 667, 713`) が依然 `per ADR-0065` を指している。dotclaude meta への external dep が code レベルで残っている状態。
 
-scout repo を clone した contributor は `~/.claude/docs/decisions/0065-...` を読めず、`// per ADR-0065 priority 2` の参照先が解決できない。ADR-0002 / ADR-0010 と同パターンで Classification Priority portion を scout-local 化する。
+scout repo を clone した contributor は `~/.claude/docs/decisions/0065-...` を読めず、`// per ADR-0065 priority 2` の参照先が解決できない。ADR-0002/ADR-0010 と同パターンで Classification Priority portion を scout-local 化する。
 
 ## Decision Drivers
 
-- ADR-0002 (sysexits) / ADR-0010 (JSON schema) の supersede と並ぶ「meta ADR の scout-local 化」series の完結。
-- 分類 priority は `match` arm 順序として code-level invariant。order が崩れると 4xx classification が priority 4 (TempFailure) に流れる等の silent regression を起こす。型 / lint で機械 enforce できず、ADR + inline comment が source of truth。
+- ADR-0002 (sysexits)/ADR-0010 (JSON schema) の supersede と並ぶ「meta ADR の scout-local 化」series の完結。
+- 分類 priority は `match` arm 順序として code-level invariant。order が崩れると 4xx classification が priority 4 (TempFailure) に流れる等の silent regression を起こす。型/lint で機械 enforce できず、ADR + inline comment が source of truth。
 - AI agent contributor が match arm 順序の rationale を問うとき、参照先が scout repo 外 (dotclaude meta) だと clone-only な user に解決できない。
 - `Unknown` rate の上昇は classification 設計 audit の signal として機能する。この設計意図を scout-local ADR で pin する。
 
@@ -43,16 +43,16 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 `ScoutError` → `ErrorCode` mapping は以下の優先順位で評価する。上から順、最初にマッチした priority で確定。
 
-| 優先 | 条件                                                                       | `ErrorCode`                    | sysexits (per ADR-0002) |
-| ---- | -------------------------------------------------------------------------- | ------------------------------ | ----------------------- |
-| 1    | env var missing / 設定起因 / 引数誤り / auth misconfig (401/403)           | `UsageError`                   | 64 EX_USAGE             |
-| 2    | URL / owner / repo / encoding の形式不正、API 4xx (other than 401/403/404) | `DataError`                    | 65 EX_DATAERR           |
-| 3    | リソース不在 (404, search 0 件)                                            | `NotFound`                     | 66 EX_NOINPUT           |
-| 4    | retry で回復見込みあり (rate limit, 5xx, transport timeout)                | `TempFailure` または `Timeout` | 75 EX_TEMPFAIL / 124    |
-| 5    | scout 内部不変条件違反 (schema mismatch, invalid state)                    | `Internal`                     | 70 EX_SOFTWARE          |
-| 退避 | priority 1-5 のどれにも fall through しなかった                            | `Unknown`                      | 104 (PJ extension)      |
+| 優先 | 条件                                                                                 | `ErrorCode`                    | sysexits (per ADR-0002) |
+| ---- | ------------------------------------------------------------------------------------ | ------------------------------ | ----------------------- |
+| 1    | env var missing / 設定起因 / 引数誤り / auth misconfig (401/403)                     | `UsageError`                   | 64 EX_USAGE             |
+| 2    | URL / owner / repo / encoding の形式不正、API 4xx (401/403/404/408/429 を除く)       | `DataError`                    | 65 EX_DATAERR           |
+| 3    | リソース不在 (404)                                                                   | `NotFound`                     | 66 EX_NOINPUT           |
+| 4    | retry で回復見込みあり (rate limit 429, request timeout 408, 5xx, transport timeout) | `TempFailure` または `Timeout` | 75 EX_TEMPFAIL / 124    |
+| 5    | scout 内部不変条件違反 (schema mismatch, invalid state)                              | `Internal`                     | 70 EX_SOFTWARE          |
+| 退避 | priority 1-5 のどれにも fall through しなかった                                      | `Unknown`                      | 104 (PJ extension)      |
 
-`IoError` (74 EX_IOERR) は priority slot を占めない: external tool / IO failure (例: headless browser CDP error) は priority 5 (scout-side bug) でも priority 4 (retry 見込み) でもない別 axis のため、`io_error()` constructor で直接 `ErrorCode::IoError` に分類する (ADR-0003 §Decision Outcome 参照)。
+`IoError` (74 EX_IOERR) は priority slot を占めない: external tool/IO failure (例: headless browser CDP error) は priority 5 (scout-side bug) でも priority 4 (retry 見込み) でもない別 axis のため、`io_error()` constructor で直接 `ErrorCode::IoError` に分類する (ADR-0003 §Decision Outcome 参照)。
 
 ### Application Rule
 
@@ -71,21 +71,21 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 ### Consequences
 
 - Good, because Classification Priority portion が scout-local 化、dotclaude meta への code-level dep が解消される。
-- Good, because ADR-0002 (sysexits) / ADR-0010 (JSON schema) / ADR-0011 (Classification Priority) の 3 つで ADR-0065 (meta) 全 portion を scout-local 化、code から ADR-0065 を ref する必要が無くなる。
+- Good, because ADR-0002 (sysexits)/ADR-0010 (JSON schema)/ADR-0011 (Classification Priority) の 3 つで ADR-0065 (meta) 全 portion を scout-local 化、code から ADR-0065 を ref する必要が無くなる。
 - Good, because `match` arm 順序の rationale が ADR table で確認可能。AI agent contributor が new ErrorCode variant 追加時に priority slot を決定できる。
 - Bad, because supersede 後の code-side ref 移行 PR が follow-up として必要 (本 PR に同梱)。
 
 ### Confirmation
 
 - 各 backend の `classify()` (`src/fetch.rs`, `src/github/errors.rs`, `src/slack.rs`, `src/brave/client.rs`) が本 ADR table の priority 順で `match` arm を並べていることを inline comment (`// Priority N:`) で確認可能。`src/tools/errors.rs` の `From<*Error>` 実装は各 backend の `classify()` へ委譲するため、priority 判定はバリアント定義の隣で exhaustiveness-checked に保たれる。
-- 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx) / `T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
+- 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx)/`T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
 - `ugrep "ADR-0065" src/ tests/` で hit 0 (本 PR で移行完了)。
 
 ## Pros and Cons of the Options
 
 ### Option A: 新規 ADR-0011 + ADR-0065 §Classification Priority supersede (採用)
 
-- Good, because ADR-0002 / ADR-0010 と同じ shape で meta ADR の portion 切り出しを完結。
+- Good, because ADR-0002/ADR-0010 と同じ shape で meta ADR の portion 切り出しを完結。
 - Good, because Classification Priority の rationale が単独 ADR として閲覧可能、ADR-0010 の field-level rule とは別軸で読める。
 - Bad, because ADR 件数が増える (number 消費)。
 
@@ -99,7 +99,7 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 
 - Good, because ADR-0003 が既に HTTP status → ErrorCode mapping を扱う。Classification Priority も近接 concern。
 - Bad, because ADR-0003 は HTTP-axis (status code → ErrorCode) の mapping、本 ADR は ScoutError variant-axis (どの priority に振るか) で軸が違う。混入で ADR-0003 の責務が unclear に。
-- Bad, because ADR-0065 supersede の line (sysexits / JSON schema / Classification Priority の 3 portion 切り出し) に対し、ADR-0003 は ADR-0065 supersede chain の外にある。Pattern を壊す。
+- Bad, because ADR-0065 supersede の line (sysexits/JSON schema/Classification Priority の 3 portion 切り出し) に対し、ADR-0003 は ADR-0065 supersede chain の外にある。Pattern を壊す。
 
 ### Option D: inline comment + table のみ (ADR 化なし)
 
@@ -119,7 +119,7 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 - JSON schema portion: ADR-0010 (scout-local, 2026-05-19 supersede)
 - Classification Priority portion: **本 ADR-0011** (2026-05-19 supersede)
 
-これで ADR-0065 全 portion が scout-local 化、code-side の `per ADR-0065` ref を本 PR で `per ADR-0002` / `per ADR-0010` / `per ADR-0011` に migrate する。
+これで ADR-0065 全 portion が scout-local 化、code-side の `per ADR-0065` ref を本 PR で `per ADR-0002`/`per ADR-0010`/`per ADR-0011` に migrate する。
 
 ### Reassessment Triggers
 
@@ -149,3 +149,17 @@ ADR-0065 の他 portion は以下で scout-local 化済:
 > `docs/audit/2026-05-19-undocumented-decisions.md` TE-01 (transient allowlist の spec citation 欠如、`pending_spec_check`) は上記 research がその citation を与えたことで閉じる。TE-02 (`Api` 未認識 string の `UsageError` 既定が HTTP-based `Unknown(104)` 退避と非対称) は本変更で解消する。
 >
 > transient arm (`internal_error`/`service_unavailable`/`fatal_error`/`team_added_to_org`/`org_login_required`/`invalid_cursor`) を再試行してよい前提は、scout が 4 メソッドいずれも `api_get_once` の `.get()` (read-only GET) しか発行しないこと。Slack は `fatal_error`/`internal_error` の説明で「操作の一部が成功済みの可能性がある」再実行 hazard を警告しており、write method (POST 系の状態変更 API) を scout に追加する場合はこの transient arm の再試行安全性を再検討する。
+
+## Addendum (2026-08-17): priority 3 の「search 0 件」を外し、応答サイズ超過の写像を記録する
+
+Priority 3 の条件が「リソース不在 (404, search 0 件)」と書いていたが、`search` は Brave が 0 件を返しても成功 envelope に空の `sources` を載せて exit 0 で返す。`[T-TS027]` (`search_zero_results_returns_empty`、`src/tools/query_tests.rs`) がその挙動を pin し、`research` の 0 件も同様。`ScoutError::not_found` は `#[cfg(test)]` で、この経路から呼ばれる本番コードは無い。0 件は「探して無かった」という正常な結果であって不在エラーではないので、表から外して 404 のみを残した。
+
+応答サイズ超過は同じ意味の失敗が backend ごとに違う `ErrorCode` へ落ちている。`FetchError::TooLarge` は `DataError` (65) で、`GitHubError::ResponseTooLarge` と `BraveError::ResponseTooLarge` は `Internal` (70)。本 ADR の表がこの条件をどの priority にも置いていないため、各 backend が別々の類推を選んだ結果になっている。
+
+| 発生元 | 現行の写像 | 類推 |
+| --- | --- | --- |
+| `FetchError::TooLarge` | `DataError` (65) | 呼び出し側が URL を選び直せる。priority 2 |
+| `GitHubError::ResponseTooLarge` | `Internal` (70) | 上限つき API が上限を超えた。priority 5 の schema mismatch と同類 |
+| `BraveError::ResponseTooLarge` | `Internal` (70) | 同上 |
+
+どちらも retryable は false なので `error.retryable` は割れない。割れるのは exit code (65 と 70) だけで、caller から見ると同じ「応答が大きすぎる」に 2 つの code が返る。統一するかどうかは、user 入力の URL を扱う fetch と上限が既知の API を分けたままにするかの判断で、現状は分けたままにしている。この非対称を変えるときは 3 つの `From` 実装と `[T-GHC010]` を同じ変更単位で扱う。

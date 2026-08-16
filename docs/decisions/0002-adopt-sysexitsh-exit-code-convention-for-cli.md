@@ -35,7 +35,7 @@ Chosen option: Option A (sysexits.h), because POSIX 慣習として浸透して�
 | 65   | EX_DATAERR    | 入力データが invalid (URL invalid 等)                         |
 | 66   | EX_NOINPUT    | 入力ファイルやリソースが見つからない                          |
 | 70   | EX_SOFTWARE   | scout-side invariant violation (deserialize 想定外 schema 等) |
-| 74   | EX_IOERR      | I/O エラー (network, disk, external tool failure)             |
+| 74   | EX_IOERR      | 外部ツールの失敗 (headless browser の CDP、HTTP client 構築)  |
 | 75   | EX_TEMPFAIL   | 一時的失敗 (rate limit, transient API error)                  |
 | 104  | PJ extension  | 分類不能 (priority 1-5 のどれにも該当しない退避)              |
 | 124  | GNU coreutils | Timeout (request-level / transport-level)                     |
@@ -49,7 +49,7 @@ Chosen option: Option A (sysexits.h), because POSIX 慣習として浸透して�
 
 ### Confirmation
 
-`src/lib.rs:395-451` の T-H000 test が以下を check:
+`src/lib.rs` の `[T-H000]` (`root_help_contains_exit_codes_and_environment`) が以下を check:
 
 - `--help` 出力に "Exit codes" section が存在
 - "sysexits.h" の文字列を含む
@@ -96,16 +96,16 @@ The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mod
 
 ### 採用 code 詳細
 
-| Code | 利用箇所 (例)                                                  |
-| ---- | -------------------------------------------------------------- |
-| 64   | clap parse 失敗、auth misconfig (401/403)                      |
-| 65   | URL parse 失敗、JSON parse 失敗、API 4xx (other)               |
-| 66   | repo not found、page 404                                       |
-| 70   | API schema mismatch (deserialize bug)、scout 内部不変条件違反  |
-| 74   | network error、TLS error、headless browser CDP error           |
-| 75   | rate limit (429)、5xx (500-599)                                |
-| 104  | priority 1-5 のどれにも fall through しなかった unclassifiable |
-| 124  | reqwest request timeout、transport-level timeout               |
+| Code | 利用箇所 (例)                                                 |
+| ---- | ------------------------------------------------------------- |
+| 64   | clap parse 失敗、auth misconfig (401/403)                     |
+| 65   | URL parse 失敗、JSON parse 失敗、API 4xx (other)              |
+| 66   | repo not found、page 404                                      |
+| 70   | API schema mismatch (deserialize bug)、scout 内部不変条件違反 |
+| 74   | headless browser の CDP error、HTTP client / proxy の構築失敗 |
+| 75   | rate limit (429)、5xx (500-599)、transient な network error   |
+| 104  | 分類できなかった transport error を含む、priority 1-5 の退避  |
+| 124  | reqwest request timeout、transport-level timeout              |
 
 ### Reassessment Triggers
 
@@ -118,9 +118,17 @@ The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mod
 ### 参照
 
 - `<sysexits.h>` man page: https://man.openbsd.org/sysexits
-- `src/lib.rs:395-451` (T-H000 enforcement test)
-- `README.ja.md:232` ("sysexits.h 規約に準拠")
+- `src/lib.rs` の `[T-H000]` `root_help_contains_exit_codes_and_environment` (enforcement test)
+- `README.ja.md` の "sysexits.h 規約に準拠" の節
 - `docs/audit/2026-05-13-undocumented-decisions.md` (本 ADR の根拠 audit)
 - `docs/audit/2026-05-14-adr-drift.md` (PR #94 後の追従 audit)
 
-> **Note (2026-05-14, post-implementation update)**: PR #94 で 5 non-zero codes (64/65/66/74/75) → 8 non-zero codes に拡張。`70 EX_SOFTWARE` (scout-side schema bug、`ScoutError::internal_bug`)、`104 PJ extension` (unclassifiable 退避、`ScoutError::unknown`)、`124 GNU coreutils` (timeout 専用 retry path、`ScoutError::timeout`) を追加。`~/.claude/docs/decisions/0065-...` の 9-code policy 採用に合わせ、本 ADR の Decision table と "採用 code 詳細" を同期し、T-H000 ref line range を最新化。実装側 (`src/tools/errors.rs:57-89`, `src/lib.rs:224-270`, `tests/cli_integration.rs`) は本更新前から ADR-0065 と整合済みで、本更新は ADR-0002 文言のみの追従。
+> **Note (2026-05-14, post-implementation update)**: PR #94 で 5 non-zero codes (64/65/66/74/75) → 8 non-zero codes に拡張。`70 EX_SOFTWARE` (scout-side schema bug、`ScoutError::internal_bug`)、`104 PJ extension` (unclassifiable 退避、`ScoutError::unknown`)、`124 GNU coreutils` (timeout 専用 retry path、`ScoutError::timeout`) を追加。`~/.claude/docs/decisions/0065-...` の 9-code policy 採用に合わせ、本 ADR の Decision table と "採用 code 詳細" を同期し、T-H000 ref line range を最新化。実装側 (`src/tools/errors.rs`, `src/lib.rs`, `tests/cli_integration.rs`) は本更新前から ADR-0065 と整合済みで、本更新は ADR-0002 文言のみの追従。
+
+## Addendum (2026-08-17): network error は 74 ではなく 75 / 124 / 104 へ写像する
+
+Decision table の 74 行と「採用 code 詳細」の 74 行が、network error と TLS error を EX_IOERR (74) と書いていた。実装はそう振る舞わない。`Classification::from_reqwest` (`src/classify.rs`) は `reqwest::Error` を、`is_timeout()` なら `Timeout` (124)、`is_transient_network()` なら `TempFailure` (75)、どちらでもなければ `Unknown` (104) へ写像する。`ErrorCode::IoError` を作るのは headless browser の CDP 失敗 (`FetchError::BrowserFailed`) と HTTP client / proxy の構築失敗 (`src/tools/builder.rs`) だけで、network 層の `reqwest::Error` からは作られない。
+
+この食い違いは公開契約の retry 意味を反転させる。DR を文字どおり読んだ script は network 失敗を retry 不可の 74 と扱い、本 ADR の Consequences が約束する `[ $? -eq 75 ] && retry` を飛ばす。`--help` (T-H000 が pin) と README は実装側と一致しており、ずれていたのは本 ADR の 2 つの表だけだった。両方を実装へ揃えた。
+
+`is_transient_network` の判定順は load-bearing で、`src/classify.rs` のコメントが、認識できない transport 失敗を IoError へ丸めてはならない理由を書いている。`[T-ER003]` (`src/tools/errors/exit_code_tests.rs`) が connection refused の `reqwest::Error` を組み立てて exit 75 を assert する。
