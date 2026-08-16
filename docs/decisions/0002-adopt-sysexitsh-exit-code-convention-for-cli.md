@@ -8,11 +8,11 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-scout は CLI で他 tool / shell script から呼ばれる前提があり、exit code は公開 API の一部となる。エラー時に 0/1 だけだと CLI script が「retry すべき」「設定が間違ってる」「アクセス不能」を区別できず、運用判断ができない。業界には複数の exit code 規約があり、どれを採用するかで CLI script の互換性と将来の変更可能性が決まる。
+scout は CLI で他 tool/shell script から呼ばれる前提があり、exit code は公開 API の一部となる。エラー時に 0/1 だけだと CLI script が「retry すべき」「設定が間違ってる」「アクセス不能」を区別できず、運用判断ができない。業界には複数の exit code 規約があり、どれを採用するかで CLI script の互換性と将来の変更可能性が決まる。
 
 ## Decision Drivers
 
-- CLI script からの利用で retry / fail-fast の判断 path が必要
+- CLI script からの利用で retry/fail-fast の判断 path が必要
 - exit code は公開 API であり、互換性破壊は downstream 全体に伝播する
 - 個人 OSS 規模で覚えやすく、調査コストの低い規約が望ましい
 
@@ -45,7 +45,7 @@ Chosen option: Option A (sysexits.h), because POSIX 慣習として浸透して�
 - Good, because retry 判断 (EX_TEMPFAIL) が CLI script で `[ $? -eq 75 ] && retry` のように書ける
 - Good, because `sysexits.h` という公開ドキュメントで規約意図が共有される
 - Good, because lib.rs T-H000 test が --help に exit code 一覧と sysexits.h ref を含めることを enforce
-- Bad, because Windows / 非 POSIX 環境では命名が馴染まない
+- Bad, because Windows/非 POSIX 環境では命名が馴染まない
 
 ### Confirmation
 
@@ -67,7 +67,7 @@ OpenBSD/FreeBSD の `<sysexits.h>` で定義されている標準 code。
 - Good, because POSIX 系で標準的、`man sysexits` で意図が読める
 - Good, because retry 判断 (EX_TEMPFAIL) が確立されている
 - Good, because Rust の `process::exit(75)` で簡潔に書ける
-- Bad, because Windows / 非 POSIX で命名が馴染まない
+- Bad, because Windows/非 POSIX で命名が馴染まない
 - Bad, because sysexits.h は POSIX 標準ではなく BSD-derived (Linux glibc は同等の `<sysexits.h>` を提供するが標準準拠ではない)
 
 ### Option B: 独自スキーマ
@@ -83,16 +83,16 @@ scout 独自の意味づけ (例: 10 = network, 20 = parse, 30 = auth)。
 成功 = 0、失敗 = 1。
 
 - Good, because 最小コスト、覚えることなし
-- Bad, because retry / fail-fast 判断ができない
+- Bad, because retry/fail-fast 判断ができない
 - Bad, because diagnostic 価値が低い
 
 ## More Information
 
 ### Supersedes (sysexits portion)
 
-This ADR supersedes the **sysexits portion** of `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta ADR). The exit-code mapping table (64/65/66/74/75) was originally defined there as part of the agent-friendly CLI policy (ADR-0060 → ADR-0065 chain). It is now scout-local under this ADR. PR #94 で ADR-0065 9-code policy 採用に伴って追加された `70 EX_SOFTWARE` / `104 PJ extension` / `124 GNU coreutils` も本 ADR の scout-local 管理対象に含まれる (詳細は本 ADR 末尾の Note 2026-05-14 を参照)。
+This ADR supersedes the **sysexits portion** of `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (dotclaude meta ADR). The exit-code mapping table (64/65/66/74/75) was originally defined there as part of the agent-friendly CLI policy (ADR-0060 → ADR-0065 chain). It is now scout-local under this ADR. PR #94 で ADR-0065 9-code policy 採用に伴って追加された `70 EX_SOFTWARE`/`104 PJ extension`/`124 GNU coreutils` も本 ADR の scout-local 管理対象に含まれる (詳細は本 ADR 末尾の Note 2026-05-14 を参照)。
 
-The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mode, error envelope structure) is **not** included in this ADR. As of 2026-05-19, the JSON schema portion is captured by **ADR-0010 (scout-local)** which supersedes ADR-0065 for the `error.code` JSON tag, `ErrorEnvelope` / `SuccessEnvelope` / `ErrorPayload` structure, field omit policy, and `data` array `[]`-never-`null` invariant. The **Classification Priority portion** of ADR-0065 (the priority 1–5 + Unknown 退避 ranking for `ScoutError` → `ErrorCode` mapping) is captured by **ADR-0011 (scout-local)** as of 2026-05-19. Code that maps `ErrorCode` → exit code is governed by this ADR; code that maps domain errors → `ErrorCode` JSON tags and the envelope serialization rules are governed by ADR-0010; the `match` arm priority order is governed by ADR-0011. 中断由来の signal exit code (SIGINT→130 / SIGTERM→143, POSIX 128+signo) は本 ADR の sysexits 軸とは別軸であり、**ADR-0017 (scout-local)** が統治する。`--help` (T-H000) は両軸 (sysexits codes + 130/143) を併記する。
+The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mode, error envelope structure) is **not** included in this ADR. As of 2026-05-19, the JSON schema portion is captured by **ADR-0010 (scout-local)** which supersedes ADR-0065 for the `error.code` JSON tag, `ErrorEnvelope`/`SuccessEnvelope`/`ErrorPayload` structure, field omit policy, and `data` array `[]`-never-`null` invariant. The **Classification Priority portion** of ADR-0065 (the priority 1–5 + Unknown 退避 ranking for `ScoutError` → `ErrorCode` mapping) is captured by **ADR-0011 (scout-local)** as of 2026-05-19. Code that maps `ErrorCode` → exit code is governed by this ADR; code that maps domain errors → `ErrorCode` JSON tags and the envelope serialization rules are governed by ADR-0010; the `match` arm priority order is governed by ADR-0011. 中断由来の signal exit code (SIGINT→130/SIGTERM→143, POSIX 128+signo) は本 ADR の sysexits 軸とは別軸であり、**ADR-0017 (scout-local)** が統治する。`--help` (T-H000) は両軸 (sysexits codes + 130/143) を併記する。
 
 ### 採用 code 詳細
 
@@ -103,7 +103,7 @@ The **JSON output schema portion** of ADR-0065 (`error.code` field, `--json` mod
 | 66   | repo not found、page 404                                       |
 | 70   | API schema mismatch (deserialize bug)、scout 内部不変条件違反  |
 | 74   | network error、TLS error、headless browser CDP error           |
-| 75   | rate limit (429)、Gemini API 503、5xx (500-599)                |
+| 75   | rate limit (429)、5xx (500-599)                                |
 | 104  | priority 1-5 のどれにも fall through しなかった unclassifiable |
 | 124  | reqwest request timeout、transport-level timeout               |
 

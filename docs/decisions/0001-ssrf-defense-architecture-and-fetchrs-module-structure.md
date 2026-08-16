@@ -75,7 +75,7 @@ field コメントに contract を追記、ADR は作らない。
 
 | Client              | 用途                                             | Redirect Policy                                       |
 | ------------------- | ------------------------------------------------ | ----------------------------------------------------- |
-| `Scout::http`       | Gemini API / GitHub API / 信頼済みエンドポイント | `limited(5)` (reqwest 既定)                           |
+| `Scout::http`       | Brave Search API / GitHub API / Slack API        | `limited(5)` (reqwest 既定)                           |
 | `Scout::fetch_http` | user 入力 URL を扱う全 fetch 経路                | `Policy::none()` + 手動 redirect + per-hop SSRF check |
 
 新規 command 追加時のルール:
@@ -94,20 +94,20 @@ field コメントに contract を追記、ADR は作らない。
 
 ### 参照ファイル
 
-ADR 制定時の行参照は `fetch.rs` 分割 (commit `a7a7a4f`、後述 Addendum (2026-06-24): Decision Outcome ドリフト 参照) で移動したため、現行位置に更新済み。
+ADR 制定時の行参照は `fetch.rs` 分割 (commit `a7a7a4f`、後述 Addendum (2026-06-24): Decision Outcome ドリフト参照) で移動したため、現行位置に更新済み。
 
-- `src/tools.rs:160-163` (dual HTTP client `http` / `fetch_http` の field 定義)、`src/tools/builder.rs:57-76` (`build_default_clients`、`fetch_http` に `Policy::none()`)
+- `src/tools.rs:160-163` (dual HTTP client `http`/`fetch_http` の field 定義)、`src/tools/builder.rs:57-76` (`build_default_clients`、`fetch_http` に `Policy::none()`)
 - `src/fetch/download.rs:22` (`download` function、per-hop SSRF check を伴う manual redirect 経路)
 - `src/fetch/cdp.rs:264` (CDP `EventRequestPaused` listener、protocol 上は `Fetch.RequestPaused`)、`src/fetch/cdp/launch.rs:85-113` (`check_browser_request` subrequest 判定)
 - `docs/audit/2026-05-13-undocumented-decisions.md` (本 ADR の根拠 audit)
 
 ## Addendum (2026-06-24): blocklist 構成と CDP subrequest scheme の列挙
 
-ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 20 / 21) で、本 ADR の SSRF 境界を構成する 2 つの具体テーブル (blocked-host の合成と browser subrequest の scheme 判定) が docstring とテストにのみ pin され ADR 化されていないと判定された。ADR-0012 の Addendum 方針に倣い、決定本文は変えず以下を一次ソースの列挙として追記する。判定ロジックは `src/fetch/ssrf.rs` と `src/fetch/cdp/launch.rs` が真実源で、本節はその転記である。
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 20/21) で、本 ADR の SSRF 境界を構成する 2 つの具体テーブル (blocked-host の合成と browser subrequest の scheme 判定) が docstring とテストにのみ pin され ADR 化されていないと判定された。ADR-0012 の Addendum 方針に倣い、決定本文は変えず以下を一次ソースの列挙として追記する。判定ロジックは `src/fetch/ssrf.rs` と `src/fetch/cdp/launch.rs` が真実源で、本節はその転記である。
 
 ### blocked-host 合成 (downgrade 21、一次ソース `src/fetch/ssrf.rs:155-202`)
 
-`validate_url_sync` は scheme を `http` / `https` に限定し (それ以外は `InvalidScheme`)、`is_blocked_host` で host を判定する。`is_blocked_host` は host 種別ごとに分岐し、IP は `is_private_ip` へ委譲する。host が無い URL は `None` 分岐で fail closed (block)。
+`validate_url_sync` は scheme を `http`/`https` に限定し (それ以外は `InvalidScheme`)、`is_blocked_host` で host を判定する。`is_blocked_host` は host 種別ごとに分岐し、IP は `is_private_ip` へ委譲する。host が無い URL は `None` 分岐で fail closed (block)。
 
 | host 種別       | block 条件                                                                                                           |
 | --------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -129,7 +129,7 @@ IPv6 の IPv4 埋め込みは `to_ipv4` (`to_ipv4_mapped` ではない) で unwr
 | `data:` / `about:` / `chrome:` / `blob:`     | 外部 egress の無い合成 scheme として SSRF check 無しで許可    |
 | 上記以外 (`file:` / `ftp:` / `gopher:` ほか) | 分類不能として warn + block (catch-all で fail closed)        |
 
-`ws` / `wss` を http(s) へ写してから検査するのは、WebSocket が内部サービスへ到達しうるため SSRF allowlist を同じ blocklist で適用するため。テストは `[T-F047]` が scheme ごとの allow/block を pin する。
+`ws`/`wss` を http(s) へ写してから検査するのは、WebSocket が内部サービスへ到達しうるため SSRF allowlist を同じ blocklist で適用するため。テストは `[T-F047]` が scheme ごとの allow/block を pin する。
 
 ## Addendum (2026-06-24): Decision Outcome ドリフト (module split 実施済み + URL 軸型強制の追加)
 
@@ -141,7 +141,7 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、DRIFT 側�
 
 ### URL 軸の型強制 (`ValidatedUrl`) が追加済み
 
-commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL logs (issue #100)`) で `ValidatedUrl` newtype (`src/fetch/ssrf.rs:88-102`) が導入された。これは async な `ssrf_check` (前述 Addendum の sync 段 `validate_url_sync` を内包し、続けて connect-time の IP guard を適用する gate) のみが構築でき、downstream (`download` / `reqwest::Client::get`) が `&ValidatedUrl` を受け取ることで「全 fetch path が SSRF check を通過した URL のみを扱う」ことを型で強制する。
+commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL logs (issue #100)`) で `ValidatedUrl` newtype (`src/fetch/ssrf.rs:88-102`) が導入された。これは async な `ssrf_check` (前述 Addendum の sync 段 `validate_url_sync` を内包し、続けて connect-time の IP guard を適用する gate) のみが構築でき、downstream (`download`/`reqwest::Client::get`) が `&ValidatedUrl` を受け取ることで「全 fetch path が SSRF check を通過した URL のみを扱う」ことを型で強制する。
 
 この型強制は Option A が想定した `SsrfSafeClient` とは別軸である。Option A の newtype は client 選択 (`http` か `fetch_http` か) を型で縛る client 単位の抽象で、これは現状も未導入である。`ValidatedUrl` は URL 単位の検証済みマーカーで、enforcement の軸が異なる。
 
@@ -152,4 +152,4 @@ commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL log
 | user URL が SSRF check を通過したか                  | `ValidatedUrl` 型で強制 (`ssrf_check` 以外で構築不能)        |
 | user URL 経路で `fetch_http` (`Policy::none()`) 選択 | 型では未強制、Implementation Guidelines + code review に依存 |
 
-監査 finding #13 はこの `ValidatedUrl` を Option B 違反 (DRIFT) として /adrift へ流したが、上記のとおり Option A の client 軸 newtype 採用ではなく別軸の URL 軸型強制であるため、status は accepted を維持する。本節はその「なぜ Option A 採用ではないか」を pin し、後続の /adrift・/census が同じ判定を再フラグするのを防ぐ。
+監査 finding #13 はこの `ValidatedUrl` を Option B 違反 (DRIFT) として/adrift へ流したが、上記のとおり Option A の client 軸 newtype 採用ではなく別軸の URL 軸型強制であるため、status は accepted を維持する。本節はその「なぜ Option A 採用ではないか」を pin し、後続の/adrift・/census が同じ判定を再フラグするのを防ぐ。

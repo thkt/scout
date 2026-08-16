@@ -81,7 +81,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 
 ### Confirmation
 
-- 各 error source (Slack/GitHub/Fetch/Gemini) で HTTP status → ErrorCode mapping unit test
+- 各 error source (Slack/GitHub/Fetch/Brave) で HTTP status → ErrorCode mapping unit test。`[T-ER034]` (`src/tools/errors/classification_tests.rs`) と `src/slack/classify_tests.rs` が現行の 4 source を覆う
 - `repo_overview` partial failure path で `--json` 出力に `degraded` フィールドが含まれることの test。`[T-TS038]` (`src/tools/repo.rs`) が mock GitHub の issues 失敗を通した `repo_overview` の戻り値を `into_envelope` で直列化し、`degraded` と `degraded_reasons` を assert する
 - T-ER001a/b/c, T-ER002, T-ER003 は ADR-0002 (exit code values) と本 ADR (mapping rule) の両方で binding。両 ADR ref を doc コメントに記載
 
@@ -117,11 +117,11 @@ Chosen option: Option A, because public CLI contract として一貫した class
 
 ### Reassessment Triggers
 
-| Trigger                                              | アクション                                     |
-| ---------------------------------------------------- | ---------------------------------------------- |
-| 5xx の中で 501/505 等 permanent な status が一般化   | mapping table の 5xx 全 retryable 規則を再評価 |
-| GitHub / Slack / Gemini が新規 4xx status を導入     | mapping table に row 追加                      |
-| `degraded` flag が caller 側で無視される傾向が広まる | flag 設計の usability 再評価                   |
+| Trigger                                                 | アクション                                     |
+| ------------------------------------------------------- | ---------------------------------------------- |
+| 5xx の中で 501/505 等 permanent な status が一般化      | mapping table の 5xx 全 retryable 規則を再評価 |
+| GitHub / Slack / Fetch / Brave が新規 4xx status を導入 | mapping table に row 追加                      |
+| `degraded` flag が caller 側で無視される傾向が広まる    | flag 設計の usability 再評価                   |
 
 ### 参照
 
@@ -132,3 +132,11 @@ Chosen option: Option A, because public CLI contract として一貫した class
 - `docs/audit/2026-05-13-undocumented-decisions-part2.md` (本 ADR の根拠 audit、Candidate #7 + #8)
 - `src/tools/errors.rs` (`From<SlackError>` priority-2 集約 + `unwrap_or_degraded` 実装), `src/envelope.rs` (`Degradation`/`DegradedReason` typed enum) — implementation sites (audit 時点の違反は resolved 済み、historical record は `docs/audit/2026-05-13-undocumented-decisions-part2.md` を参照)
 - `docs/audit/2026-05-14-adr-drift.md` (PR #94 後の追従 audit)
+
+## Addendum (2026-08-17): 現行の error source は Slack / GitHub / Fetch / Brave
+
+本 ADR の Context 節は制定時 (2026-05-13) の error source として `GeminiError` を挙げている。ADR-0005 (2026-05-15) が検索バックエンドを Brave Search API へ切り替え、`GeminiError` は削除された。Context 節は当時の判断根拠なのでそのまま残し、現行の対応をここに記す。
+
+`Classification::from_http_status` (`src/classify.rs`) を呼ぶのは `SlackError`、`GitHubError`、`FetchError::Status` (`src/fetch/download.rs`)、`BraveError::Api` / `BraveError::Server` (`src/brave/client.rs`) の 4 source。Confirmation と Reassessment Triggers はこの 4 source を指すよう更新済み。
+
+Reassessment Triggers が `Gemini` を挙げていた間、Brave または Fetch の 4xx 分岐が増えても trigger が発火しなかった。source 名を trigger に直書きする形はこの取りこぼしを生むので、backend を追加または削除する変更では本 ADR の Confirmation と Reassessment Triggers を同じ変更単位で見直す。
