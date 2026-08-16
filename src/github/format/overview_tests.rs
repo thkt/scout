@@ -366,3 +366,65 @@ fn readme_truncation_note_not_heading_shifted() {
     assert!(!output.contains("### (truncated"));
     assert!(!output.contains("## (truncated"));
 }
+
+/// [T-GF044] フェンス外の行頭 `---` を持つ README が repo-overview 出力で `***` になる
+#[test]
+fn readme_outside_fence_dashes_become_asterisks() {
+    let repo = sample_repo();
+    let readme = "Line one.\n\n---\n\nLine two.\n";
+    let output = format_overview(&repo, Some(readme), &[], &[], &[]);
+    assert!(
+        output.contains("\n***\n"),
+        "column-0 --- outside a fence should be neutralized to ***"
+    );
+    assert!(
+        !output.contains("\n---\n"),
+        "raw --- marker should not survive unmodified in the output"
+    );
+}
+
+/// [T-GF045] 24,000 バイトを超えて打ち切られた README でもフェンス外のマーカーが `***` になる
+#[test]
+fn readme_truncated_outside_fence_dashes_become_asterisks() {
+    let repo = sample_repo();
+    let padding = make_readme_bytes(super::MAX_README_BYTES + 1_000);
+    let readme = format!("---\n\n{padding}");
+    let output = format_overview(&repo, Some(&readme), &[], &[], &[]);
+    assert!(output.contains("(truncated: showing"));
+    assert!(
+        output.contains("\n***\n"),
+        "column-0 --- should be neutralized to *** even when the README is truncated"
+    );
+    assert!(
+        !output.contains("\n---\n"),
+        "raw --- marker should not survive unmodified in truncated output"
+    );
+}
+
+/// [T-GF046] 閉じないフェンスを含む README ではフェンス以降のマーカーも `***` になる
+#[test]
+fn readme_unclosed_fence_marker_becomes_asterisks() {
+    let repo = sample_repo();
+    let readme = "```\nfence opens here\n---\n";
+    let output = format_overview(&repo, Some(readme), &[], &[], &[]);
+    assert!(
+        output.contains("\n***\n"),
+        "a marker after an unclosed fence should still be neutralized to ***"
+    );
+    assert!(
+        !output.contains("\n---\n"),
+        "raw --- marker should not survive unmodified when its fence never closes"
+    );
+}
+
+/// [T-GF047] 閉じたフェンスの内側にある行頭 `---` は原文のまま残る
+#[test]
+fn readme_closed_fence_dashes_stay_verbatim() {
+    let repo = sample_repo();
+    let readme = "```\n---\n```\n";
+    let output = format_overview(&repo, Some(readme), &[], &[], &[]);
+    assert!(
+        output.contains("```\n---\n```"),
+        "a --- inside a closed fence is source code, not a YAML marker, and should not be rewritten"
+    );
+}

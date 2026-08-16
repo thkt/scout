@@ -33,7 +33,7 @@ scout はこれらの中和を出力境界に実装しているが、方針 (ど
 
 Chosen option: Option A。出力境界の中和を `src/markdown.rs` と `src/fetch/converter.rs` の少数の `pub(crate)` 関数に集約し、全 backend がそれを経由する。URL は http/https のみ clickable link にし、他 scheme は不活性な `text (url)` へ流す。markdown メタ文字は escape し改行は空白へ畳む。YAML 値は backslash escape する。
 
-本文行頭の `---`/`...` の書き換えは、fetch と Slack で経路を分ける。fetch は `neutralize_yaml_markers_outside_fences` (src/yaml.rs) を経由し、`fence_marker` (src/markdown.rs) でフェンスの開始・継続・終了を追跡する。閉じたフェンスの内側にあるマーカー行は取得元ページのコードブロックの一部として原文のまま返す。フェンスが本文の終わりまで閉じない場合は、開いたと判定したフェンス自体を信用せず、本文全体を fence 非対応の `neutralize_yaml_markers` に通した結果へ fail-closed で切り替え、フェンス以降を無中和のまま残さない。Slack は `neutralize_yaml_markers` を直接経由し、フェンスの内外を区別せず全行を書き換える。Slack の message 本文はほぼ生のまま leaf に渡るため、fetch と同じフェンス追跡を持ち込むと、攻撃者が閉じないフェンスを 1 行打つだけで以降の本文が無中和になる経路を開く。fetch 側の忠実性向上のためだけに Slack 側の注入防御を緩める変更はしない。
+本文行頭の `---`/`...` の書き換えは、fetch と Slack で経路を分ける。GitHub の README は fetch と同じフェンス追跡側に付く。fetch は `neutralize_yaml_markers_outside_fences` (src/yaml.rs) を経由し、`fence_marker` (src/markdown.rs) でフェンスの開始・継続・終了を追跡する。閉じたフェンスの内側にあるマーカー行は取得元ページのコードブロックの一部として原文のまま返す。フェンスが本文の終わりまで閉じない場合は、開いたと判定したフェンス自体を信用せず、本文全体を fence 非対応の `neutralize_yaml_markers` に通した結果へ fail-closed で切り替え、フェンス以降を無中和のまま残さない。Slack は `neutralize_yaml_markers` を直接経由し、フェンスの内外を区別せず全行を書き換える。Slack の message 本文はほぼ生のまま leaf に渡るため、fetch と同じフェンス追跡を持ち込むと、攻撃者が閉じないフェンスを 1 行打つだけで以降の本文が無中和になる経路を開く。fetch 側の忠実性向上のためだけに Slack 側の注入防御を緩める変更はしない。
 
 `<script>`/`<style>` 等 active HTML は Readability (dom_smoothie) と変換層の 2 箇所で除去する。変換層の除去は Readability を迂回する `--raw` にも及ぶ (#403)。未知 scheme・難読化 (大小文字、先頭空白)・制御文字は素通しせず fail-closed で中和する。
 
@@ -42,19 +42,19 @@ Option B は policy 管理コストが高く per-site ルールが脆いため�
 ### Consequences
 
 - Good, because 未知 scheme・難読化 URL・制御文字を素通しせず fail-closed で中和し、`javascript:` URL が clickable link になることを防ぐ
-- Good, because fetch/search/Slack/GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する。フェンス追跡のように経路が分かれる箇所は、分ける理由 (fetch は取得ページの忠実な再現、Slack は生に近い攻撃者制御入力) を関数選択の差として明示する
+- Good, because fetch/search/Slack/GitHub が同じ中和関数を経由し、新 backend も同じ防御を継承する。GitHub は repo-overview の README を `format_readme_section` (src/github/format.rs) 経由で `neutralize_yaml_markers_outside_fences` に通し、fetch と同じフェンス追跡型の経路を辿る。フェンス追跡のように経路が分かれる箇所は、分ける理由 (フェンス追跡型の fetch・GitHub README は取得元の忠実な再現、直接型の Slack は生に近い攻撃者制御入力) を関数選択の差として明示する
 - Good, because HTML 層の script 除去は変換ライブラリに委譲し、scout は markdown/YAML 層の保証に集中する
 - Good, because escape 系関数は clean input で借用を返し common path でゼロアロケーション
 - Good, because fetch はフェンスが本文末尾まで閉じない場合、開いたと判定したフェンス自体を信用せず本文全体を書き換える fail-closed に倒すため、フェンス構文の偽装による中和回避を許さない
 - Bad, because Slack はフェンス追跡を持たないため、Slack 上のコードブロックであっても `---`/`...` を含む行は `***` に書き換わり、fetch と異なり原文と一致しない。message 本文がほぼ生で共有 leaf に渡る Slack でフェンス追跡を緩めると、攻撃者が閉じないフェンスを打つだけで以降が無中和になるため、意図して見送る
-- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
+- Bad, because フェンス追跡を入れても、想定する consumer (フェンスを解さない naive な multi-document YAML reader) に対する穴自体は残る。フェンス対応は fetch と GitHub README の忠実性回帰を防ぐ追加中和であって、想定 consumer への根本対策ではない。scout 自身が出す区切りのうち research 出力は `***` へ替えて閉じたが (#405)、Slack の reply 区切りは `---` のまま残る。`***` は CommonMark 上は `---` と同じ thematic break で、YAML の document marker ではない
 - Bad, because `\0\n\r\t` 以外の制御文字 (ESC, BEL) は素通しし、人間が端末で読む場合に terminal 描画へ影響しうる (主 consumer はエージェントのため受容)
 - Bad, because 本文 markdown は意図的に rendered のまま渡すため、markdown を命令として naive に読むエージェント実装は見出し本文を誤解しうる (見出しレベル shift と JSON envelope 構造で緩和)
 - Bad, because HTML 層の script 除去が dom_smoothie 単独への依存のままなら、ライブラリが退行したとき script の中身が本文へ漏れる。`--raw` は Readability 自体を通らないため、この経路では現に漏れていた。変換層の `suppressed_handler` (`src/fetch/converter.rs`) が script/style/noscript/textarea/iframe/title と SVG 名前空間の desc を Readability の成否と独立に除去する二重化により、dom_smoothie が退行しても変換層側の除去が残る。`--raw` の `content_html` も同じ変換層を経由するため、この経路でも漏れない (#403)
 
 ### Confirmation
 
-中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C032, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。HTML 層は `src/fetch/converter.rs` の `[T-FC084, T-FC085]` が `suppressed_handler` の 7 タグの中身が本文へ出ないことを、`[T-FC086]` が `--raw` の経路で同じことを pin する。除去が本文を巻き添えにしないことは、`[T-FC089, T-FC090]` が自己終了した raw-text タグの後続本文が残ることを、`[T-FC091]` が SVG 名前空間の外の `<desc>` のテキストが残ることを pin する。書き換えの側が新しい漏れを作らないことは、`[T-FC092]` が JS ソースの中に書かれた `<script … />` を書き換えないことで pin する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
+中和点ごとに専用テストが存在する。markdown 層は `src/markdown.rs` の `[T-MD001..T-MD035]` が escape/改行畳み/scheme allowlist/難読化 fail-closed/見出し shift/フェンス判定 (`fence_marker`) を網羅する。YAML 層は `src/yaml.rs` の `[T-FC003..T-FC007]` が値 escape と document marker 書き換えを、`src/fetch/converter.rs` の `[T-FC008]` が frontmatter 注入防止を網羅する。fetch と Slack のフェンス扱いの分岐は、`src/yaml.rs` の `[T-FC030..T-FC033]` がフェンス内保存と閉じないフェンスの fail-closed 切り替えを leaf 単体で、`tests/output_injection.rs` の `[T-C032, T-C041]` が fetch 出力での同じ挙動を実際の変換経路越しに、`src/slack/format/format_tests.rs` の `[T-SK088]` が Slack 出力ではフェンスの内側も書き換えることをそれぞれ pin する。search 層は `src/search/engine/tests.rs` の `[T-SE010]` が source URL の `javascript:` scheme を不活性 text として出すことを assert する。HTML 層は `src/fetch/converter.rs` の `[T-FC084, T-FC085]` が `suppressed_handler` の 7 タグの中身が本文へ出ないことを、`[T-FC086]` が `--raw` の経路で同じことを pin する。除去が本文を巻き添えにしないことは、`[T-FC089, T-FC090]` が自己終了した raw-text タグの後続本文が残ることを、`[T-FC091]` が SVG 名前空間の外の `<desc>` のテキストが残ることを pin する。書き換えの側が新しい漏れを作らないことは、`[T-FC092]` が JS ソースの中に書かれた `<script … />` を書き換えないことで pin する。GitHub の README 経路は `src/github/format/overview_tests.rs` の `[T-GF044, T-GF045]` がフェンス外のマーカーの書き換えを打ち切りの有無の両方で、`[T-GF046]` が閉じないフェンスでの fail-closed を、`[T-GF047]` が閉じたフェンス内側のマーカーが原文のまま残ることをそれぞれ pin する。新しい出力経路を足す際は、これらの境界関数を経由しているかをテストで確認する。
 
 ## Pros and Cons of the Options
 
@@ -88,17 +88,18 @@ scout は素通しし parser 側の安全性に依存する。
 
 場所はファイルまでとし、行番号は書かない。行番号はこの表の外の変更で古くなり、古いことが誰にも見えない。関数名は `ugrep -F 'fn <name>'` で一意に引ける。
 
-| 関数                                     | 場所            | 中和内容                                                                                                                                                                     |
-| ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `md_link`                                | src/markdown.rs | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                 |
-| `escape_md_inline`                       | src/markdown.rs | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                         |
-| `escape_md_link`                         | src/markdown.rs | link target の `[]()` escape、改行畳み                                                                                                                                       |
-| `sanitize_heading`                       | src/markdown.rs | 見出し内改行を空白へ                                                                                                                                                         |
-| `shift_headings`                         | src/markdown.rs | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                     |
-| `fence_marker`                           | src/markdown.rs | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                              |
-| `escape_yaml`                            | src/yaml.rs     | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                      |
-| `neutralize_yaml_markers`                | src/yaml.rs     | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
-| `neutralize_yaml_markers_outside_fences` | src/yaml.rs     | fetch 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
+| 関数                                     | 場所                 | 中和内容                                                                                                                                                                                      |
+| ---------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `md_link`                                | src/markdown.rs      | http/https のみ clickable、他 scheme は不活性 text、空白/制御文字 URL を拒否                                                                                                                  |
+| `escape_md_inline`                       | src/markdown.rs      | `\|` `[]()` escape、改行を空白へ畳む                                                                                                                                                          |
+| `escape_md_link`                         | src/markdown.rs      | link target の `[]()` escape、改行畳み                                                                                                                                                        |
+| `sanitize_heading`                       | src/markdown.rs      | 見出し内改行を空白へ                                                                                                                                                                          |
+| `shift_headings`                         | src/markdown.rs      | ページ見出しを深い level へ下げ scout 構造との衝突を防ぐ (code fence 内・非 ATX は skip)                                                                                                      |
+| `fence_marker`                           | src/markdown.rs      | フェンスの開始/継続/終了判定 (CommonMark §4.5、run 長比較)。`shift_headings` と `neutralize_yaml_markers_outside_fences` が共有                                                               |
+| `escape_yaml`                            | src/yaml.rs          | `\` `"` `\n\r\t` を escape、`\0` を除去                                                                                                                                                       |
+| `neutralize_yaml_markers`                | src/yaml.rs          | 行頭 `---`/`...` を `***` へ書き換え、indent/inline は不変。Slack が直接経由し、fetch と GitHub README はフェンスが閉じないときの fail-closed 経路としてのみ経由する                          |
+| `neutralize_yaml_markers_outside_fences` | src/yaml.rs          | fetch と GitHub README 専用。`fence_marker` でフェンスを追跡し、閉じたフェンス内側のマーカーは原文のまま保持。本文末尾までフェンスが閉じない場合は `neutralize_yaml_markers` へ丸ごと委譲する |
+| `format_readme_section`                  | src/github/format.rs | GitHub repo-overview の README を `shift_headings` で見出しシフトし `neutralize_yaml_markers_outside_fences` へ通す。フェンス追跡は fetch と共有する                                          |
 
 ### HTML 層の分担
 
