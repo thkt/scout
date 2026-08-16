@@ -316,10 +316,9 @@ mod tests {
 
     /// [T-FC100] 上限を超える title は切り詰められる
     ///
-    /// The frontmatter-closes-and-body-survives property this test used to
-    /// assert on a hand-built `doc` string never depended on the cap (nothing
-    /// here truncates `doc` itself); T-FC104 now owns that property end to
-    /// end through `to_fetch_result`.
+    /// Scoped to `write_yaml_str` alone. Whether the frontmatter still closes
+    /// once a caller's byte cap cuts the result belongs to T-FC104, which runs
+    /// the whole path through `to_fetch_result`.
     #[test]
     fn truncates_title_over_the_cap() {
         let long_title = "A".repeat(10_000);
@@ -334,10 +333,9 @@ mod tests {
 
     /// [T-FC101] byline と published_time でも上限を超えた値が切り詰められる
     ///
-    /// `write_yaml_str` carries no per-key logic, so proving truncation on one
-    /// key (title, T-FC100) does not prove it on the other two call sites in
-    /// `format_with_frontmatter` (`author` for byline, `date` for
-    /// published_time) — each is its own call.
+    /// `format_with_frontmatter` reaches this function from three call sites,
+    /// and the cap has to hold at each. A field that later formats its value
+    /// inline instead of calling `write_yaml_str` would slip past T-FC100.
     #[test]
     fn truncates_byline_and_published_time_over_the_cap() {
         let long_byline = "b".repeat(10_000);

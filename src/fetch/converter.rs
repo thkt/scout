@@ -3069,10 +3069,9 @@ mod tests {
 
     /// [T-FC104] 上限を超える title を持つ記事の出力で frontmatter が閉じ本文が残る
     ///
-    /// T-FC100 pins `write_yaml_str` on its own. This one walks the seam the
-    /// issue reproduced: `to_fetch_result` builds the frontmatter, then the
-    /// caller's byte cap cuts the result. Without the field cap the cut lands
-    /// inside the block and the output is an unclosed `---` with no body.
+    /// `to_fetch_result` builds the frontmatter, then the caller's byte cap
+    /// cuts the result. Without the field cap the cut lands inside the block,
+    /// leaving an unclosed `---` and no body.
     #[test]
     fn a_title_over_the_cap_still_yields_a_closed_frontmatter_and_a_body() {
         let article = ExtractedArticle {
