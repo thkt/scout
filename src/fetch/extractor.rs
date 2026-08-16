@@ -392,12 +392,13 @@ mod tests {
     /// [T-FX017] parse が失敗した非空 HTML は中身ごと raw fallback へ渡る
     ///
     /// dom_smoothie returns `GrabFailed` when it finds no article to grab, and
-    /// a document holding only a `<script>` is such a case. The fallback hands
-    /// the whole input downstream, so the default path carries the same
-    /// content as `--raw` from here on.
+    /// a document holding only a `<script>` is such a case. From here the
+    /// default path carries what `--raw` carries.
     #[test]
     fn parse_failure_on_non_empty_html_falls_back_with_the_content_intact() {
-        let html = "<script>SCRIPT_MARKER</script>";
+        // Marker matches T-FC097's, which needs one free of `_` to survive
+        // htmd's escaping. Nothing here converts, but the two read together.
+        let html = "<script>SCRIPTMARKER</script>";
 
         let result = extract_article(html, Some("https://example.com"));
 
@@ -413,10 +414,10 @@ mod tests {
 
     /// [T-FX018] 絶対でない URL は init の時点で raw fallback へ落ちる
     ///
+    /// The other of the two fallback entries in `extract_article`:
     /// `Readability::new` rejects a relative `document_url` with
-    /// `BadDocumentURL`, which is the other of the two fallback entries in
-    /// `extract_article`. Production always passes the final absolute URL, so
-    /// only a test reaches this one.
+    /// `BadDocumentURL`. Production passes the final absolute URL, so only a
+    /// test reaches this one.
     #[test]
     fn relative_document_url_falls_back_at_init() {
         let html = "<article><p>body</p></article>";
