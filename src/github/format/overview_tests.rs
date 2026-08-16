@@ -416,3 +416,15 @@ fn readme_unclosed_fence_marker_becomes_asterisks() {
         "raw --- marker should not survive unmodified when its fence never closes"
     );
 }
+
+/// [T-GF047] 閉じたフェンスの内側にある行頭 `---` は原文のまま残る
+#[test]
+fn readme_closed_fence_dashes_stay_verbatim() {
+    let repo = sample_repo();
+    let readme = "```\n---\n```\n";
+    let output = format_overview(&repo, Some(readme), &[], &[], &[]);
+    assert!(
+        output.contains("```\n---\n```"),
+        "a --- inside a closed fence is source code, not a YAML marker, and should not be rewritten"
+    );
+}
