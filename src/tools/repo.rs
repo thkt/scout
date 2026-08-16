@@ -232,7 +232,7 @@ impl Scout {
 /// Maximum time spent on best-effort candidate generation in the NotFound
 /// error path. The user is already waiting on a failure; we'd rather skip
 /// candidates than block them on a slow tree fetch. `pub(crate)` so the config
-/// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
+/// invariant test can assert the outer `github_timeout` exceeds it.
 pub(super) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CANDIDATE_MAX_DISTANCE: usize = 3;
@@ -436,8 +436,8 @@ mod tests {
     }
 
     /// Run `repo_overview` against a mock GitHub whose issues endpoint fails,
-    /// leaving every other section intact. Returns `None` when the mock server
-    /// cannot be spawned, matching the skip the callers already perform.
+    /// leaving every other section intact. `None` when the mock server cannot
+    /// be spawned, so callers skip rather than fail.
     async fn overview_with_failed_issues(label: &str) -> Option<CommandOutput> {
         let server = try_spawn_mock_server(label).await?;
 
@@ -521,12 +521,10 @@ mod tests {
     /// [T-TS038] A partial failure in `repo_overview` reaches the `--json`
     /// output as `degraded: true` plus the typed reason.
     ///
-    /// ADR-0003's Confirmation asks for the two halves in one test. Splitting
-    /// them lets both pass while the wire format drifts: T-TS037 reads the
-    /// test-only `degraded_reasons()` accessor and never serializes, and
-    /// T-EN013 asserts the serialized shape on a hand-built envelope that
-    /// `repo_overview` never produced. This drives the real partial-failure
-    /// path through the same `into_envelope` call `--json` uses.
+    /// Not covered by T-TS037 plus T-EN013: the first reads the test-only
+    /// `degraded_reasons()` accessor and never serializes, the second asserts
+    /// the serialized shape on a hand-built envelope `repo_overview` never
+    /// produced. Both pass while the wire format drifts.
     #[tokio::test]
     async fn a_partial_failure_reaches_the_json_output_as_degraded() {
         let Some(result) = overview_with_failed_issues("tools::repo::degraded_json").await else {

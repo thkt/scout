@@ -36,7 +36,7 @@ use tools::{Command, Scout, ScoutError};
 /// Maximum time the runtime waits for the in-flight command to wind down
 /// after a SIGINT/SIGTERM. Long enough for CDP `browser.close()` (5s) plus
 /// chromium's own subprocess cleanup margin; short enough not to feel like
-/// a hang to the caller. Issue #121.
+/// a hang to the caller.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7);
 
 enum Outcome<T> {
@@ -111,10 +111,9 @@ fn init_tracing() {
         .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                // A literal in `target=level` form; `expect` so a future edit
-                // that breaks the syntax fails loudly. The former fallback
-                // dropped the target, widening the filter from scout to every
-                // crate at INFO.
+                // `expect`, not a fallback: a fallback that drops the target
+                // widens the filter from scout to every crate at INFO, and a
+                // future edit breaking the syntax would do so silently.
                 "scout=info".parse().expect("static directive is valid"),
             ),
         )
@@ -123,12 +122,12 @@ fn init_tracing() {
 
 /// Race the in-flight command against signal arrival, returning the resulting
 /// `Outcome`. On interrupt, notify the cancel handle so `fetch_with_cdp` can run
-/// `browser.close()` (issue #121), then await the command for a bounded window
+/// `browser.close()`, then await the command for a bounded window
 /// before returning the interrupt outcome.
 ///
 /// Extracted from `run` with the signal source injected so the
 /// signal-vs-command wiring (select → cancel notify → drain → `Interrupted`) is
-/// unit-testable without spawning the real OS signal handlers (issue #228).
+/// unit-testable without spawning the real OS signal handlers.
 async fn drive<C, S>(
     cmd_fut: C,
     signal_fut: S,
@@ -257,15 +256,11 @@ fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
     }
 }
 
-/// Render a signal interruption for stderr. Under `--json` it has to be an
-/// envelope for the same reason [`write_failure_line`] does: the flag tells
-/// callers every error on stderr is parseable.
+/// Render a signal interruption for stderr.
 ///
-/// `retryable` stays false. ADR-0017 has the shell retry on exit 130, but that
-/// is the caller's strategy keyed off the exit code, not a statement that
-/// rerunning scout would succeed — the operator interrupted it deliberately.
-/// Keeping it false also leaves ADR-0010 Rule 1 (`TempFailure | Timeout`)
-/// intact.
+/// `retryable` is false even though ADR-0017 has the shell retry on exit 130:
+/// that is the caller's strategy keyed off the exit code, not a claim that
+/// rerunning scout would succeed.
 fn interrupted_line(sig: InterruptSignal, json_mode: bool) -> String {
     let message = format!("interrupted ({sig})");
     if json_mode {
@@ -339,8 +334,8 @@ mod tests {
 
     /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
     /// signal maps to its POSIX exit code, when the signal future resolves before
-    /// the command. This is the issue #228 acceptance criterion: the
-    /// signal → exit code wiring is exercised without the real OS signal handler.
+    /// the command. The signal → exit code wiring is exercised without the real
+    /// OS signal handler.
     /// `start_paused` auto-advances the 7s drain timer so the pending command does
     /// not block for wall-clock time.
     #[tokio::test(start_paused = true)]
@@ -360,7 +355,7 @@ mod tests {
     }
 
     /// [T-DRV002] On interrupt, drive notifies the cancel handle so `fetch_with_cdp`
-    /// can run `browser.close()` for graceful shutdown (issue #121).
+    /// can run `browser.close()` for graceful shutdown.
     #[tokio::test(start_paused = true)]
     async fn drive_interrupt_notifies_cancel_handle() {
         let (cancel, rx) = watch::channel(false);
@@ -415,7 +410,7 @@ mod tests {
         );
     }
 
-    /// [T-INIT001] init_tracing tolerates a second invocation (issue #103).
+    /// [T-INIT001] init_tracing tolerates a second invocation.
     /// `.init()` would panic on the duplicate; `.try_init()` returns Err which
     /// init_tracing silently ignores so callers (integration tests reusing
     /// `lib::run`) survive.
@@ -485,9 +480,8 @@ mod tests {
 
     /// [T-W007] under `--json` a signal interruption is reported as an envelope
     ///
-    /// The flag promises every error on stderr is a JSON envelope, and this was
-    /// the one path that emitted a bare line instead, so a caller parsing stderr
-    /// silently dropped the interruption.
+    /// A caller parsing stderr as JSON drops a bare line silently, so this path
+    /// cannot be the one exception to that promise.
     #[test]
     fn interruption_is_an_envelope_under_json() {
         for (sig, code) in interrupt_signal_codes() {
@@ -516,10 +510,9 @@ mod tests {
 
     /// [T-W009] the interruption `ErrorCode` exits with the signal's own code
     ///
-    /// `run()` exits via `InterruptSignal::exit_code()` while the envelope
-    /// carries an `ErrorCode`, and ADR-0010 maps `error.code` to the exit code
-    /// 1:1. The two hold 130/143 separately because `ErrorCode` must stay
-    /// platform-independent, so this pins them equal.
+    /// 130/143 live in two places that the compiler cannot tie together, and
+    /// ADR-0010 maps `error.code` to the exit code 1:1. Nothing but this holds
+    /// the copies equal.
     #[test]
     fn the_interruption_code_matches_the_signal_exit_code() {
         for (sig, code) in interrupt_signal_codes() {
@@ -532,7 +525,6 @@ mod tests {
     }
 
     /// Every `InterruptSignal` paired with the `ErrorCode` its envelope carries.
-    /// `Sigterm` is `#[cfg(unix)]` on the signal side only.
     fn interrupt_signal_codes() -> Vec<(InterruptSignal, ErrorCode)> {
         vec![
             (InterruptSignal::Sigint, ErrorCode::InterruptedSigint),
@@ -621,7 +613,7 @@ mod tests {
         );
     }
 
-    /// [T-H010] root --help exposes SCOUT_* tuning env vars (issue #120).
+    /// [T-H010] root --help exposes SCOUT_* tuning env vars.
     /// AI agents discover override knobs by reading --help; missing entries
     /// would force agents to read the source.
     #[test]
