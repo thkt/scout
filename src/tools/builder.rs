@@ -17,13 +17,15 @@ use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
 #[cfg(test)]
 use crate::slack::SlackClient;
+#[cfg(test)]
+use crate::token_source::StaticTokenSource;
 use crate::token_source::{GhCliSource, TokenSource};
 
 use super::{RuntimeConfig, Scout, ScoutError};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Per-request timeout for a single HTTP call. `pub(crate)` so the config
-/// invariant test can assert the outer `github_timeout` exceeds it (issue #185).
+/// invariant test can assert the outer `github_timeout` exceeds it.
 pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
@@ -31,8 +33,7 @@ const MAX_REDIRECTS: usize = 5;
 /// `ScoutBuilder::from_env()?.build()`); tests use the `with_*` setters to
 /// inject `Clock` / `Rng` / `TokenSource` doubles or to point `Brave` /
 /// `GitHub` at wiremock endpoints without reaching into private fields.
-/// `build` is sync + infallible so fallibility stays in `from_env`
-/// (issue #103).
+/// `build` is sync + infallible so fallibility stays in `from_env`.
 pub(super) struct ScoutBuilder {
     http: Client,
     fetch_http: Client,
@@ -144,6 +145,11 @@ impl ScoutBuilder {
     /// environment cannot panic unrelated tests. `Client::builder().build()`
     /// only fails on TLS init, which would be a real bug — `.expect` is
     /// appropriate.
+    ///
+    /// `token_source` is not the production `GhCliSource`: a test reaching
+    /// `Scout::github()` would spawn the real `gh auth token`, making the
+    /// branch taken depend on the machine running the suite (ADR-0018). A test
+    /// that wants a token calls `with_token_source`.
     #[cfg(test)]
     pub(super) fn for_test() -> Self {
         let (http, fetch_http) =
@@ -154,7 +160,7 @@ impl ScoutBuilder {
             brave: None,
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
-            token_source: Arc::new(GhCliSource),
+            token_source: Arc::new(StaticTokenSource(None)),
             dns: Arc::new(TokioDnsResolver),
             egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
@@ -216,8 +222,8 @@ impl ScoutBuilder {
 
     /// Inject a short outer GitHub-command timeout so a test can force the
     /// `run()`-level guard to trip against a delayed wiremock response without
-    /// waiting the production 120s (issue #185). `RuntimeConfig` is `Copy`, so
-    /// the field assignment leaves the rest of the config untouched.
+    /// waiting the production default. `RuntimeConfig` is `Copy`, so the field
+    /// assignment leaves the rest of the config untouched.
     #[cfg(test)]
     pub(super) fn with_github_timeout(mut self, timeout: Duration) -> Self {
         self.config.github_timeout = timeout;

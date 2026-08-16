@@ -132,3 +132,13 @@ Leave `DnsResolver` production-only; test SSRF paths against `TokioDnsResolver` 
 - `async fn in dyn Trait` becomes idiomatic in stable Rust without the `Send` auto-bound dance. At that point, simplify `DnsResolver::lookup` from `DnsLookupFuture<'_>` to a native `async fn` (same trigger ADR-0008 records for `TokenSource`).
 - A second SSRF strategy is added (e.g., per-request resolver override for proxy-aware fetches). Re-evaluate whether the single-`Arc<dyn DnsResolver>` slot is still enough or whether resolution should become per-request configuration.
 - `Scout` accumulates a fifth `Arc<dyn Trait>` field beyond `clock` / `rng` / `token_source` / `dns`. Reassess whether default-derived `ScoutBuilder` pays for itself (same trigger as ADR-0008).
+
+## Addendum (2026-08-17): `with_dns` は connect 時の resolver には届かない
+
+Consequences の「plugs the double into every fetch path without touching `tools.rs` internals」は、本 ADR を書いた 2026-05-19 時点では正しかった。ADR-0012 (2026-05-30) が connect 時の IP 検証を足し、注入できない 2 つ目の解決点ができた。
+
+`build_default_clients` (`src/tools/builder.rs`) が `EgressMode::Direct` の `fetch_http` に `Arc::new(SsrfResolver::new(TokioDnsResolver))` を直書きで渡す。この関数は `from_env` と `for_test` の両方から、`with_dns` が適用される前に呼ばれる。`Scout.dns` は `fetch_page` の事前 SSRF check にしか届かず、reqwest の `ClientBuilder::dns_resolver` には届かない。`StaticDnsResolver` や `FailingDnsResolver` を注入しても、connect 時は常に実際の `TokioDnsResolver` を引く。
+
+ADR-0012 の `[T-F072]` はこの分離を前提にしていて、connect 時 resolver を差し替えるテストは `with_dns` ではなく `ScoutBuilder::with_fetch_http` の `.resolve()` 経由という別の入口を使う。
+
+つまり seam は 2 つある。事前 check 側は `with_dns`、connect 時側は `with_fetch_http`。この 2 つを 1 つにまとめるかどうかは未決で、まとめる場合は `build_default_clients` の呼び出し順を変えて `with_dns` の値を待つ形にする必要がある。

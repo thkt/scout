@@ -204,11 +204,10 @@ impl ErrorCode {
             Self::TempFailure => 75, // EX_TEMPFAIL
             Self::Timeout => 124,    // GNU coreutils `timeout` convention
             Self::Unknown => 104,    // PJ extension per ADR-0002, retreat slot per ADR-0011
-            // POSIX 128 + signo per ADR-0017. `InterruptSignal` (src/signals.rs)
-            // holds the same two numbers for the process exit; the values are
-            // repeated rather than delegated because `InterruptSignal::Sigterm`
-            // is `#[cfg(unix)]` and `error.code` must enumerate the same set on
-            // every platform. T-W009 in src/lib.rs pins the two tables equal.
+            // POSIX 128 + signo per ADR-0017. Not delegated to
+            // `InterruptSignal::exit_code`: `Sigterm` there is `#[cfg(unix)]`,
+            // and `error.code` must enumerate the same set on every platform.
+            // T-W009 pins the two copies equal.
             Self::InterruptedSigint => 130,
             Self::InterruptedSigterm => 143,
         }
@@ -221,8 +220,8 @@ impl ErrorCode {
     }
 }
 
-/// Success envelope wrapping command output per ADR-0010. ADR-0003 added
-/// `degraded_reasons` as an additive field (omitted from JSON when empty).
+/// Success envelope wrapping command output per ADR-0010. `degraded_reasons`
+/// (ADR-0003) is additive, so it is omitted from JSON when empty.
 #[derive(Debug, Serialize)]
 pub(crate) struct SuccessEnvelope {
     data: serde_json::Value,
@@ -232,8 +231,7 @@ pub(crate) struct SuccessEnvelope {
     degraded_reasons: Vec<DegradedReason>,
 }
 
-/// Error envelope per ADR-0010. Wraps the payload under an `error` key so
-/// JSON output matches `{"error": { "code": ..., "message": ..., ... }}`.
+/// Error envelope per ADR-0010.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorEnvelope {
     pub(crate) error: ErrorPayload,
