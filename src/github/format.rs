@@ -4,6 +4,7 @@ use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserIn
 use crate::markdown::{
     escape_md_inline, fence_delimiter, md_link, shift_headings, truncation_note,
 };
+use crate::yaml::neutralize_yaml_markers_outside_fences;
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -167,10 +168,12 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
             .rfind('\n')
             .map(|p| p + 1)
             .unwrap_or(boundary);
-        out.push_str(&shift_headings(&content[..end], 2));
+        let shifted = shift_headings(&content[..end], 2);
+        out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
         out.push_str(&truncation_note(end, content.len()));
     } else {
-        out.push_str(&shift_headings(content, 2));
+        let shifted = shift_headings(content, 2);
+        out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
     }
     out.push_str("\n\n");
 }
