@@ -3060,15 +3060,15 @@ mod tests {
     }
     /// [T-FC097] Readability が失敗した経路でも `<script>` の中身は本文へ出ない
     ///
-    /// `extract_article` hands the whole input downstream when dom_smoothie
-    /// cannot grab an article (T-FX017), so that path carries the same
-    /// content `--raw` does. The suppression sits in this layer, which both
-    /// paths pass through, and this test walks the real seam rather than
-    /// building an `ExtractedArticle` literal.
+    /// `extract_article`'s dom_smoothie fallback (T-FX017) reaches this layer's
+    /// suppression the same way `--raw` does, and this test walks the real
+    /// seam rather than building an `ExtractedArticle` literal.
     #[test]
     fn readability_failure_path_still_drops_script_content() {
-        // Marker without `_`: escape_md_inline would rewrite it to `SCRIPT\_MARKER`
-        // and `contains` would miss the leak it is meant to catch.
+        // Marker without `_`: htmd's own text escaping (not this crate's
+        // `escape_md_inline`) would rewrite it to `SCRIPT\_MARKER`
+        // (htmd-0.5.5/src/dom_walker.rs:401), and `contains` would miss the
+        // leak it is meant to catch.
         let html = "<script>SCRIPTMARKER</script>";
         let article = extract_article(html, Some("https://example.com"));
         assert!(
