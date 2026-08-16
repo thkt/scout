@@ -195,7 +195,7 @@ pub async fn run() -> ExitCode {
         }
         Outcome::Completed(Err(e)) => emit_error(&e, json_mode),
         Outcome::Interrupted(sig) => {
-            eprintln!("error: interrupted ({sig})");
+            eprintln!("{}", interrupted_line(sig, json_mode));
             ExitCode::from(sig.exit_code())
         }
     }
@@ -257,6 +257,35 @@ fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
     }
 }
 
+/// Render a signal interruption for stderr. Under `--json` it has to be an
+/// envelope for the same reason [`write_failure_line`] does: the flag tells
+/// callers every error on stderr is parseable.
+///
+/// `retryable` stays false. ADR-0017 has the shell retry on exit 130, but that
+/// is the caller's strategy keyed off the exit code, not a statement that
+/// rerunning scout would succeed — the operator interrupted it deliberately.
+/// Keeping it false also leaves ADR-0010 Rule 1 (`TempFailure | Timeout`)
+/// intact.
+fn interrupted_line(sig: InterruptSignal, json_mode: bool) -> String {
+    let message = format!("interrupted ({sig})");
+    if json_mode {
+        bare_error_line(interrupt_code(sig), message)
+    } else {
+        format!("error: {message}")
+    }
+}
+
+/// Map a signal to the `error.code` its envelope carries. Separate from
+/// [`InterruptSignal::exit_code`] because `error.code` enumerates the same set
+/// on every platform while `Sigterm` is `#[cfg(unix)]`.
+fn interrupt_code(sig: InterruptSignal) -> ErrorCode {
+    match sig {
+        InterruptSignal::Sigint => ErrorCode::InterruptedSigint,
+        #[cfg(unix)]
+        InterruptSignal::Sigterm => ErrorCode::InterruptedSigterm,
+    }
+}
+
 /// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
 /// stay on stdout per clap convention; usage errors route through the JSON
 /// envelope when `--json` was passed in argv.
@@ -305,7 +334,7 @@ mod tests {
 
     use super::{
         CommandOutput, ErrorCode, InterruptSignal, Outcome, ScoutError, bare_error_line, drive,
-        init_tracing, render_json_success, write_failure_line, write_output,
+        init_tracing, interrupted_line, render_json_success, write_failure_line, write_output,
     };
 
     /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
@@ -452,6 +481,64 @@ mod tests {
             line.starts_with("error: "),
             "plain mode keeps the human-readable prefix, got: {line}"
         );
+    }
+
+    /// [T-W007] under `--json` a signal interruption is reported as an envelope
+    ///
+    /// The flag promises every error on stderr is a JSON envelope, and this was
+    /// the one path that emitted a bare line instead, so a caller parsing stderr
+    /// silently dropped the interruption.
+    #[test]
+    fn interruption_is_an_envelope_under_json() {
+        for (sig, code) in interrupt_signal_codes() {
+            let line = interrupted_line(sig, true);
+            let parsed: serde_json::Value = serde_json::from_str(&line)
+                .unwrap_or_else(|e| panic!("interruption must be valid JSON under --json: {e}"));
+            assert_eq!(parsed["error"]["code"], serde_json::to_value(code).unwrap());
+            assert_eq!(parsed["error"]["retryable"], false);
+            assert!(
+                parsed["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains(&sig.to_string())),
+                "the message names the signal, got: {line}"
+            );
+        }
+    }
+
+    /// [T-W008] without `--json` a signal interruption stays a plain line
+    #[test]
+    fn interruption_is_a_plain_line_without_json() {
+        for (sig, _) in interrupt_signal_codes() {
+            let line = interrupted_line(sig, false);
+            assert_eq!(line, format!("error: interrupted ({sig})"));
+        }
+    }
+
+    /// [T-W009] the interruption `ErrorCode` exits with the signal's own code
+    ///
+    /// `run()` exits via `InterruptSignal::exit_code()` while the envelope
+    /// carries an `ErrorCode`, and ADR-0010 maps `error.code` to the exit code
+    /// 1:1. The two hold 130/143 separately because `ErrorCode` must stay
+    /// platform-independent, so this pins them equal.
+    #[test]
+    fn the_interruption_code_matches_the_signal_exit_code() {
+        for (sig, code) in interrupt_signal_codes() {
+            assert_eq!(
+                code.exit_code(),
+                sig.exit_code(),
+                "{code:?} and {sig} must agree on the exit code"
+            );
+        }
+    }
+
+    /// Every `InterruptSignal` paired with the `ErrorCode` its envelope carries.
+    /// `Sigterm` is `#[cfg(unix)]` on the signal side only.
+    fn interrupt_signal_codes() -> Vec<(InterruptSignal, ErrorCode)> {
+        vec![
+            (InterruptSignal::Sigint, ErrorCode::InterruptedSigint),
+            #[cfg(unix)]
+            (InterruptSignal::Sigterm, ErrorCode::InterruptedSigterm),
+        ]
     }
 
     /// [T-W006] the bare-error envelope derives `retryable` from the code
