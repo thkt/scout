@@ -155,7 +155,7 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 /// the same way `pre_handler` shadows the built-in `pre` handler.
 ///
 /// The removal stays in this conversion layer and never touches the freshly
-/// downloaded `html`. `is_js_dependent` (src/fetch.rs:371) scans that raw byte
+/// downloaded `html`. `is_js_dependent` (`src/fetch.rs`) scans that raw byte
 /// string for `b"<script"` to detect an SPA shell before the `need_js` branch.
 ///
 /// htmd looks tags up by local name, not namespace, so the two tags SVG shares
@@ -615,7 +615,7 @@ fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
 /// so an unrecognized shape is never rewritten blind.
 ///
 /// `title_attr` is the raw `title` attribute text. htmd escapes and
-/// reflows it first (`process_title`, anchor.rs:186-207) before writing it
+/// reflows it first (htmd's element_handler/anchor.rs `process_title`) before writing it
 /// into the delegated result, so `process_title_like_htmd` below must
 /// reproduce that same transform for the tail match to line up, including a
 /// whitespace-only attribute: htmd renders that as an empty-but-present `("")`
@@ -678,7 +678,7 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// htmd's element_handler/table.rs `extract_row_cells`): a row is scanned once
 /// per cell tag, so a `<tr>` mixing `<th>` and `<td>` — a label/value row with
 /// no `<thead>` — loses whichever tag that row's extraction call did not ask
-/// for (the branching that drops it is at table.rs:83-100). This handler reads
+/// for (the branching that drops it lives in `table_handler`). This handler reads
 /// each row's cells positionally in one pass, so a label and its value from
 /// the same source row land in the same output row, in separate cells.
 ///
@@ -690,7 +690,7 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// estimation follow the built-in's shape.
 ///
 /// Any non-`Pure` translation mode falls straight to `Handlers::fallback` and
-/// the built-in's own `serialize_if_faithful!` gate (table.rs:19-24).
+/// the built-in's own `serialize_if_faithful!` gate.
 /// `markdown_converter` always builds `Pure`, so scout's runtime never takes
 /// that branch; T-FC068 exercises it through a `Faithful`-mode converter built
 /// in the test.
@@ -1033,7 +1033,7 @@ mod tests {
     /// The gap is load-bearing for `class`. `extract_article` runs dom_smoothie
     /// with `keep_classes: false`, which strips every element's `class` before
     /// conversion sees the DOM
-    /// (dom_smoothie-0.18.0/src/readability.rs:884-891). A test here asserting
+    /// (dom_smoothie's `Readability::post_process_content` / `clean_classes`). A test here asserting
     /// on class-driven behavior pins it for HTML that never passed that strip.
     fn article(html: &str) -> ExtractedArticle {
         ExtractedArticle {
@@ -1049,8 +1049,7 @@ mod tests {
     ///
     /// This file's own `table_handler` pushes the header row
     /// (`format_table_row`) immediately followed by the separator row
-    /// (`format_separator_row`) with no blank line between them
-    /// (converter.rs:372-373).
+    /// (`format_separator_row`) with no blank line between them.
     #[test]
     fn table_output_includes_a_separator_row_following_the_header_row() {
         let article = article(
@@ -1127,8 +1126,7 @@ mod tests {
     ///
     /// `extract_row_cells` above passes each cell's content through this
     /// file's own `normalize_cell_content`, which replaces every `\n` with a
-    /// single space before the cell is written into the pipe-delimited row
-    /// (converter.rs:427, 440-446).
+    /// single space before the cell is written into the pipe-delimited row.
     #[test]
     fn td_pre_does_not_split_the_table_row() {
         let article = article(
@@ -1541,7 +1539,7 @@ mod tests {
 
     /// [T-FC052] pre の中の span の末尾にある改行が出力に残る
     ///
-    /// htmd's built-in `span` fast path (dom_walker.rs:87-110, active while
+    /// htmd's built-in `span` fast path (`walk_node`, active while
     /// exactly one handler is registered for `span`) trims every leading and
     /// trailing `\n` off a span's own walked content regardless of a `<pre>`
     /// ancestor. The sibling text after the span is where the surviving
@@ -2043,13 +2041,11 @@ mod tests {
 
     /// [T-FC034] pre 直下の 2 番目のテキストが先頭にバッククォートを持つとき原文のまま出る
     ///
-    /// `opens_with_escaped_fence_char` only inspects the *first* Text child of
-    /// `<pre>` (converter.rs, `find_map` over `NodeData::Text`), and
-    /// `pre_handler` only strips a backslash sitting at the very front of the
-    /// joined `content` string. A second direct-child text node starting with
-    /// `` ` `` gets htmd's escape too (its parent is still `<pre>`), but that
-    /// escape lands mid-string, past the first (non-backtick-leading) text
-    /// node's own output, so today's front-anchored strip never reaches it.
+    /// `raw_pre_content` reads each Text child's `contents` off the DOM, so no
+    /// escape is introduced and none has to be removed. Reverse-escaping the
+    /// walked text instead — stripping a leading backslash off the joined
+    /// `content` — reaches only the front of the string, and this backtick sits
+    /// past the first text node's output.
     #[test]
     fn second_pre_child_text_starting_with_backtick_survives_unstripped() {
         let article = article("<pre>abc<span>X</span>`def</pre>");
@@ -2071,11 +2067,9 @@ mod tests {
 
     /// [T-FC035] 先頭のテキストより前に要素がある pre でもバッククォートが原文のまま出る
     ///
-    /// `opens_with_escaped_fence_char` finds the first *Text* child regardless
-    /// of a preceding element sibling, so it still reports a leading escape
-    /// here. But the escaped backslash sits past that element's own converted
-    /// output in the joined `content` string, not at its front, so
-    /// `content.strip_prefix('\\')` fails silently and the backslash stays put.
+    /// Same DOM read as T-FC034, with an element sibling ahead of the text.
+    /// A front-anchored strip over the joined `content` would miss the escape
+    /// here too: it sits past that element's own converted output.
     #[test]
     fn backtick_after_a_preceding_element_child_survives_unstripped() {
         let article = article("<pre><span>abc</span>`def</pre>");
@@ -2097,12 +2091,10 @@ mod tests {
 
     /// [T-FC036] 入れ子の pre でも内側のバッククォートが原文のまま出る
     ///
-    /// Same root cause as T-FC034 (a `<pre>` direct-child text node's leading
-    /// backtick is not the pre's first Text child, so the front-anchored strip
-    /// misses it), reached one level deeper: the outer `<pre>` delegates its
+    /// T-FC034's shape one level deeper: the outer `<pre>` delegates its
     /// `<pre>` child to `Handlers::handle`, which re-enters this crate's own
-    /// `pre_handler` for the inner element. The bug must not disappear once
-    /// recursion is involved.
+    /// `pre_handler`. The DOM read has to hold through that recursion, not just
+    /// at the top level.
     #[test]
     fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
         let article = article("<pre><pre>abc<span>X</span>`def</pre></pre>");
@@ -2146,14 +2138,11 @@ mod tests {
 
     /// [T-FC038] 隣接するブロック子の境界に残る改行が2個までに収まる
     ///
-    /// `raw_pre_content` appends each Element child's own converted content
-    /// directly (`content.push_str(&res.content)`) with no separator logic
-    /// of its own. A block-level child's own content already opens and
-    /// closes with a blank line, so two such children in a row stack both
-    /// sides' blank lines instead of collapsing to one. Scout's own rule for
-    /// the rebuilt `<pre>` content is that the run of newlines at such a
-    /// boundary caps at 2 (a single blank line), regardless of how many the
-    /// two sides' individual wrapping happens to add up to.
+    /// A block-level child's converted content already opens and closes with a
+    /// blank line, so two such children in a row would stack both sides' blank
+    /// lines. `raw_pre_content` routes each Element child through
+    /// `push_element_content`, which caps the newline run at the junction at 2
+    /// (a single blank line) regardless of what the two sides add up to.
     #[test]
     fn adjacent_block_children_boundary_keeps_newlines_capped_at_two() {
         let article = article("<pre><div>ALPHA</div><div>BETA</div></pre>");
@@ -2641,8 +2630,8 @@ mod tests {
     /// their content, wrapped in blank lines
     /// (htmd's element_handler/mod.rs `block_handler`). A `<script>`/`<style>`
     /// element's sole child is the raw JS/CSS source as a single Text node, so
-    /// that source text reaches the walked content and, today, the markdown
-    /// body.
+    /// without `suppressed_handler` shadowing that path the source text would
+    /// reach the markdown body.
     #[test]
     fn script_and_style_content_left_in_content_html_does_not_reach_the_body() {
         let article = article(
@@ -3123,8 +3112,8 @@ mod tests {
 
     /// [T-FC099] `\` で終わるセルの中身と閉じパイプの間に空白が入る
     ///
-    /// With `&#124;` the cell string held no `|` at all, so a cell could not
-    /// reach the row delimiter. `\|` moves that guarantee onto
+    /// Writing the pipe as `&#124;` leaves no `|` in the cell string at all, so
+    /// a cell cannot reach the row delimiter. `\|` moves that guarantee onto
     /// `format_table_row`'s one space before the closing pipe: a bare trailing
     /// `\` right before `|` would read as an escaped delimiter and swallow the
     /// next cell.
