@@ -17,7 +17,9 @@ use crate::markdown::{escape_md_inline, md_link, sanitize_heading, shift_heading
 use crate::search::Lang;
 use crate::yaml::truncate_and_reneutralize;
 
-const MAX_PAGE_BYTES: usize = 4_500;
+/// `pub(crate)` because `yaml::MAX_FIELD_BYTES` derives the per-field
+/// frontmatter cap from this same page budget.
+pub(crate) const MAX_PAGE_BYTES: usize = 4_500;
 /// Per-source cap inside one research run. `pub(crate)` for the same config
 /// invariant test that reads `brave::client::REQUEST_TIMEOUT`.
 pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
