@@ -1018,6 +1018,7 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 mod tests {
     use super::*;
     use crate::fetch::extractor::extract_article;
+    use crate::yaml::truncate_and_reneutralize;
 
     /// Minimal `ExtractedArticle` fixture for tests that only vary the body
     /// HTML: no title/byline/published_time and no raw-fallback flag.
@@ -3062,6 +3063,36 @@ mod tests {
             markdown.contains("```\nfn main() {}\n```"),
             "a <pre><code> outside any table must still render as a fenced \
              block:\n{markdown}"
+        );
+    }
+
+    /// [T-FC104] 上限を超える title を持つ記事の出力で frontmatter が閉じ本文が残る
+    ///
+    /// T-FC100 pins `write_yaml_str` on its own. This one walks the seam the
+    /// issue reproduced: `to_fetch_result` builds the frontmatter, then the
+    /// caller's byte cap cuts the result. Without the field cap the cut lands
+    /// inside the block and the output is an unclosed `---` with no body.
+    #[test]
+    fn a_title_over_the_cap_still_yields_a_closed_frontmatter_and_a_body() {
+        let article = ExtractedArticle {
+            title: Some("T".repeat(120_000)),
+            byline: None,
+            published_time: None,
+            content_html: "<p>body text</p>".to_owned(),
+            used_raw_fallback: false,
+        };
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let cut = truncate_and_reneutralize(result.markdown(), 4_500);
+        let delimiters = cut.lines().filter(|l| *l == "---").count();
+
+        assert_eq!(
+            delimiters, 2,
+            "the frontmatter must open and close within the cap:\n{cut}"
+        );
+        assert!(
+            cut.contains("body text"),
+            "the body must survive a title that would otherwise fill the cap:\n{cut}"
         );
     }
 

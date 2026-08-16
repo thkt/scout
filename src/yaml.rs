@@ -129,9 +129,11 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
 
 /// Per-field byte cap for a frontmatter string value, applied before escaping.
 ///
-/// Derived from `search::engine::MAX_PAGE_BYTES` (4_500): one field capped at
-/// 1/10 of the whole-page budget keeps title+author+date together under 3/10
-/// of it, leaving the rest of the budget for the body.
+/// Derived from `search::engine::MAX_PAGE_BYTES` (4_500), the tightest budget a
+/// frontmatter block competes with. One field at 1/10 of it holds title, author
+/// and date to 3/10 before escaping. [`escape_yaml`] can double a value, so the
+/// worst case — every byte a backslash — reaches 6/10 and still leaves the body
+/// room inside the page budget.
 const MAX_FIELD_BYTES: usize = MAX_PAGE_BYTES / 10;
 
 /// Truncate `value` to [`MAX_FIELD_BYTES`] before it reaches [`escape_yaml`].
