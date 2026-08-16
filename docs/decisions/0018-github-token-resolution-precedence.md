@@ -47,6 +47,8 @@ Option B は `gh` 慣習 (`GITHUB_TOKEN` 最優先) に反し CI の明示 env �
 
 この注入を入れるまで `[T-TOK001]`/`[T-TOK002]` は env 経路しか通らず、`gh` の出力契約が変わっても検出できなかった。そもそもどの分岐を走るかが、テストを回すマシンに `gh` が入っているかに依存していた。
 
+`spawn_gh` の注入が届くのは `src/token_source.rs` 自身のテストだけで、`ScoutBuilder::for_test()` を土台にするテストは別経路だった。`for_test()` が `token_source` を production の `GhCliSource` のまま既定にしていたため、`Scout::github()` へ至るテスト (`[T-TS016]` など) は実 `gh auth token` を起動していた。2026-08-17 に `for_test()` の既定を空の `StaticTokenSource` へ変え、この経路も実マシンから切り離した。token を要るテストは `with_token_source` で明示的に渡す。
+
 ## Pros and Cons of the Options
 
 ### Option A: 固定優先順 + stderr 不採用 + timeout + Redacted (採用)

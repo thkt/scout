@@ -17,6 +17,8 @@ use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
 #[cfg(test)]
 use crate::slack::SlackClient;
+#[cfg(test)]
+use crate::token_source::StaticTokenSource;
 use crate::token_source::{GhCliSource, TokenSource};
 
 use super::{RuntimeConfig, Scout, ScoutError};
@@ -144,6 +146,13 @@ impl ScoutBuilder {
     /// environment cannot panic unrelated tests. `Client::builder().build()`
     /// only fails on TLS init, which would be a real bug — `.expect` is
     /// appropriate.
+    ///
+    /// `token_source` defaults to an empty `StaticTokenSource` rather than the
+    /// production `GhCliSource`: a test reaching `Scout::github()` would
+    /// otherwise spawn the real `gh auth token`, so which branch it took
+    /// depended on whether the machine running the suite had `gh` installed and
+    /// authenticated (ADR-0018). A test that wants a token calls
+    /// `with_token_source`.
     #[cfg(test)]
     pub(super) fn for_test() -> Self {
         let (http, fetch_http) =
@@ -154,7 +163,7 @@ impl ScoutBuilder {
             brave: None,
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
-            token_source: Arc::new(GhCliSource),
+            token_source: Arc::new(StaticTokenSource(None)),
             dns: Arc::new(TokioDnsResolver),
             egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
