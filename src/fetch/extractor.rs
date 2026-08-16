@@ -277,8 +277,8 @@ mod tests {
     /// [T-FX013] the raw-fallback title decodes character references
     ///
     /// dom_smoothie decodes the title it returns, and `htmd` decodes the
-    /// body on the way to Markdown — so without this the frontmatter was the one
-    /// place a page read differently depending on whether Readability succeeded.
+    /// body on the way to Markdown — so without this the frontmatter is the one
+    /// place a page reads differently depending on whether Readability succeeded.
     #[test]
     fn raw_title_decodes_character_references() {
         let cases = [

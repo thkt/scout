@@ -167,7 +167,7 @@ impl Scout {
 
         let github = self.github().await;
 
-        // Verify repo exists first: a 404 here avoids 4 wasted parallel API calls (#18).
+        // Verify repo exists first: a 404 here avoids 4 wasted parallel API calls.
         let repo_info = github.get_repo(owner, repo).await?;
 
         let (readme, issues, pulls, releases) = tokio::join!(

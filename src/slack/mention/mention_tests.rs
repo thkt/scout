@@ -166,10 +166,10 @@ fn t028_cache_hit_takes_priority_over_label() {
 /// [T-SK084] `<@…>` holding something that cannot be a user id is left alone
 ///
 /// Slack ids carry no whitespace and no `<`, so these are some other use of the
-/// sequence. Substituting them rewrote text the author did not write as a
-/// mention (`<@U1 hi>` became `@U1 hi`, losing the brackets) and put the
-/// non-id into the lookup queue, where it consumed one of the 50
-/// `SLACK_MAX_USER_LOOKUPS` slots and could cap out the real mentions behind it.
+/// sequence. Substituting them rewrites text the author did not write as a
+/// mention (`<@U1 hi>` becoming `@U1 hi`, losing the brackets) and puts the
+/// non-id into the lookup queue, where it consumes one of the 50
+/// `SLACK_MAX_USER_LOOKUPS` slots and can cap out the real mentions behind it.
 #[test]
 fn malformed_mention_tokens_are_left_verbatim() {
     let cache = HashMap::new();

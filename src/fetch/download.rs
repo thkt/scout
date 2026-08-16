@@ -106,9 +106,11 @@ pub(super) async fn download(
         });
     }
 
-    // CALIBRATION: structured fields below let
-    // callers sample empirical retry-success rate via `RUST_LOG=scout=warn`.
-    // Flip from DataError(65) to TempFailure(75) once rate > 10%.
+    // DataError(65) rather than TempFailure(75): a redirect cap breach is
+    // dominantly a loop or a caller URL mistake, neither of which a retry
+    // clears. The structured fields below let an operator measure the actual
+    // retry-success rate (`RUST_LOG=scout=warn`); past 10% the classification
+    // is wrong and should flip.
     let chain_length = max_redirects + 1;
     warn!(
         redirect_chain_length = chain_length,

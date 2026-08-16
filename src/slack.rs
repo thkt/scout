@@ -139,9 +139,9 @@ impl SlackError {
                 // latter two can be exact-matched — one interpolates `{ts}`, the
                 // other varies by cause — so the `starts_with`/`contains` guard
                 // catches the whole "message … not found …" family.
-                // Slack-native
-                // codes are snake_case and never start with "message " (space),
-                // so they fall through to their own arms below.
+                // Slack-native codes are snake_case and never start with
+                // "message " (space), so they fall through to their own arms
+                // below.
                 "channel_not_found" | "message_not_found" | "thread_not_found" => {
                     Classification::new(ErrorCode::NotFound)
                 }

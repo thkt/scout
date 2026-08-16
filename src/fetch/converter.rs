@@ -2411,11 +2411,10 @@ mod tests {
 
     /// [T-FC049] 絶対 URL を指す中身が空のアンカーは行き先と title を保つ
     ///
-    /// Paired with a fragment-only empty anchor (`#top`) in the same
-    /// paragraph so the assertion cannot pass by coincidence: it fails today
-    /// because the fragment-only sibling is not yet suppressed, and only
-    /// holds once suppression targets the fragment-only case specifically,
-    /// leaving the absolute-URL anchor untouched.
+    /// Paired with a fragment-only empty anchor (`#top`) in the same paragraph
+    /// so the assertion cannot pass by coincidence: suppression that reached
+    /// every empty anchor rather than the fragment-only case would take this
+    /// one too.
     #[test]
     fn empty_anchor_to_absolute_url_keeps_destination_and_title() {
         let article = article(
@@ -2463,12 +2462,10 @@ mod tests {
 
     /// [T-FC051] href 属性を持たない a は組み込みへ委譲される
     ///
-    /// Paired with a fragment-only empty anchor (`#nav`) in the same
-    /// paragraph so the assertion cannot pass by coincidence: it fails today
-    /// because the fragment-only sibling is not yet suppressed, and only
-    /// holds once suppression is scoped to anchors carrying `href`, leaving
-    /// an `<a>` with no `href` at all to fall through to htmd's own handler
-    /// unchanged.
+    /// Paired with a fragment-only empty anchor (`#nav`) in the same paragraph
+    /// so the assertion cannot pass by coincidence: suppression is scoped to
+    /// anchors carrying `href`, leaving an `<a>` with none to fall through to
+    /// htmd's own handler unchanged.
     #[test]
     fn anchor_without_href_delegates_to_the_builtin_handler() {
         let article = article("<p><a>plain text</a> and <a href=\"#nav\"></a></p>");

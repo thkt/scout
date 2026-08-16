@@ -50,9 +50,9 @@ fn parse_rejects_short_timestamp() {
 
 /// [T-SK082] an empty channel segment is rejected
 ///
-/// `workspace` was checked for emptiness and `channel` was not, though
-/// `/archives//p…` splits into three segments with an empty middle one and
-/// reached the Slack API only to come back a 400.
+/// Checking `workspace` for emptiness but not `channel` lets `/archives//p…`
+/// split into three segments with an empty middle one and reach the Slack API
+/// only to come back a 400.
 #[test]
 fn parse_rejects_empty_channel() {
     assert!(parse_slack_url("https://team.slack.com/archives//p1234567890123456").is_none());
@@ -60,7 +60,7 @@ fn parse_rejects_empty_channel() {
 
 /// [T-SK083] a non-numeric timestamp is rejected
 ///
-/// The length check alone let `pabcdefgh` split into `ab.cdefgh` and travel on
+/// The length check alone lets `pabcdefgh` split into `ab.cdefgh` and travel on
 /// as a timestamp, which is a shape the struct's doc promises it does not carry.
 /// `None` is the right answer rather than an error: a `p` segment that is not a
 /// Slack timestamp means this is not a permalink, so the caller falls back to an

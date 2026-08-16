@@ -166,7 +166,7 @@ fn extract_target_matches_ts_for_non_thread() {
 ///
 /// `conversations.history` is probed with `latest` as an upper bound, so a
 /// deleted or absent ts yields the *previous* message rather than an empty list.
-/// Taking index 0 unconditionally rendered that neighbour's author and body under
+/// Taking index 0 unconditionally renders that neighbour's author and body under
 /// the requested ts, which the frontmatter then asserts as fact.
 #[test]
 fn extract_target_rejects_a_neighbour_returned_for_a_missing_ts() {
