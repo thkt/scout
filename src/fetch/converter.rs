@@ -1018,6 +1018,7 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 mod tests {
     use super::*;
     use crate::fetch::extractor::extract_article;
+    use crate::search::engine::MAX_PAGE_BYTES;
     use crate::yaml::truncate_and_reneutralize;
 
     /// Minimal `ExtractedArticle` fixture for tests that only vary the body
@@ -3083,7 +3084,7 @@ mod tests {
         };
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
-        let cut = truncate_and_reneutralize(result.markdown(), 4_500);
+        let cut = truncate_and_reneutralize(result.markdown(), MAX_PAGE_BYTES);
         let delimiters = cut.lines().filter(|l| *l == "---").count();
 
         assert_eq!(

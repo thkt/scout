@@ -314,24 +314,18 @@ mod tests {
         );
     }
 
-    /// [T-FC100] 上限を超える title を持つ記事の出力に閉じ `---` と本文の先頭行が残る
+    /// [T-FC100] 上限を超える title は切り詰められる
+    ///
+    /// The frontmatter-closes-and-body-survives property this test used to
+    /// assert on a hand-built `doc` string never depended on the cap (nothing
+    /// here truncates `doc` itself); T-FC104 now owns that property end to
+    /// end through `to_fetch_result`.
     #[test]
-    fn truncates_title_over_the_cap_and_keeps_the_frontmatter_closed() {
+    fn truncates_title_over_the_cap() {
         let long_title = "A".repeat(10_000);
         let mut fields = String::new();
         write_yaml_str(&mut fields, "title", &long_title);
-        let body = "first body line\nsecond body line";
-        let doc = format!("---\n{fields}---\n\n{body}");
 
-        let title_line = doc.lines().nth(1).expect("title line");
-        assert!(
-            title_line.starts_with("title: \"") && title_line.ends_with('"'),
-            "title line must open and close its quoted scalar: {title_line}"
-        );
-        assert!(
-            doc.contains("\n---\n\nfirst body line\n"),
-            "closing --- and the body's first line must survive truncation: {doc}"
-        );
         assert!(
             fields.len() < long_title.len(),
             "a title over the cap must be truncated, not passed through whole"
