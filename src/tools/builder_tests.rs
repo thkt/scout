@@ -52,6 +52,22 @@ fn scout_builder_with_rng_routes_arc_into_scout() {
     );
 }
 
+/// [T-SB007] `for_test()` resolves no token, so no test spawns `gh auth token`
+///
+/// ADR-0018's whole point is that token resolution is deterministic. With
+/// `GhCliSource` as the `for_test()` default, any test reaching
+/// `Scout::github()` ran the real subprocess, so which branch it took depended
+/// on whether the machine running the suite had `gh` authenticated. Nothing but
+/// this test stops the default from being put back.
+#[tokio::test]
+async fn for_test_resolves_no_token_without_touching_gh() {
+    let scout = ScoutBuilder::for_test().build();
+    assert!(
+        scout.token_source.fetch().await.is_none(),
+        "for_test() must resolve no token so the suite does not depend on a local gh"
+    );
+}
+
 /// [T-SB003] Minimal proof that the `Arc` handed to
 /// `ScoutBuilder::with_token_source` reaches `Scout.token_source`.
 #[test]
