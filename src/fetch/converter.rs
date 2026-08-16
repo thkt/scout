@@ -901,23 +901,19 @@ fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<Strin
     (cells, markdown_translated)
 }
 
-/// Folds `\n` to a space and drops `\r` so multi-line cell content cannot split
-/// the pipe-delimited row, escapes `|` so cell content cannot introduce a
-/// spurious column, then trims tab/newline/CR/space from both ends. Unlike a
-/// general whitespace collapse, this does not touch other whitespace-like
-/// characters (e.g. NBSP U+00A0), which must survive unchanged inside the cell.
+/// Folds newlines to a space, escapes `|`, and trims tab, newline, CR and
+/// space from both ends, so cell content can neither split the row nor add a
+/// column. Other whitespace-like characters survive unchanged, NBSP U+00A0
+/// among them; a general whitespace collapse would eat those too.
 ///
-/// The pipe escape is `\|`, where htmd's own version writes `&#124;`
+/// The pipe escape is `\|`, where htmd writes `&#124;`
 /// (htmd-0.5.5/src/element_handler/table.rs:250-256). GFM unescapes `\|` while
-/// splitting the row into cells, before inline parsing, so it resolves wherever
-/// it lands; an entity reference does not resolve inside a code span and shows
-/// as six literal characters there. htmd needs the entity because its
-/// `format_row_padded` counts chars for column alignment, and this crate's
-/// `format_table_row` writes no alignment padding at all.
-///
-/// This also converges with the rest of the crate: `escape_md_inline`
-/// (`src/markdown.rs`) already writes `\|`, and `src/github/format.rs` feeds
-/// its output straight into table cells.
+/// splitting the row into cells, ahead of inline parsing, so it resolves
+/// wherever it lands; an entity reference stays six literal characters inside a
+/// code span. htmd needs the entity because its `format_row_padded` counts
+/// chars for column alignment, and `format_table_row` here writes none.
+/// `escape_md_inline` (`src/markdown.rs`) already writes `\|`, and
+/// `src/github/format.rs` feeds its output into table cells.
 fn normalize_cell_content(content: &str) -> String {
     let content = content
         .replace('\n', " ")
@@ -3098,19 +3094,16 @@ mod tests {
     ///
     /// With `&#124;` the cell string held no `|` at all, so a cell could not
     /// reach the row delimiter. `\|` moves that guarantee onto
-    /// `format_table_row`'s one space before the closing pipe: a bare
-    /// trailing `\` right before `|` would read as an escaped delimiter and
-    /// swallow the next cell. `inline_code_span` always closes a table
-    /// cell's `<pre>` with a backtick, so no path reaches that shape today;
-    /// this pins the space as the guarantee that would still hold if one did.
-    /// This asserts the row, not `normalize_cell_content`, because the space
-    /// is what holds.
+    /// `format_table_row`'s one space before the closing pipe: a bare trailing
+    /// `\` right before `|` would read as an escaped delimiter and swallow the
+    /// next cell.
+    ///
+    /// No path reaches that shape today, since `inline_code_span` always closes
+    /// a cell's `<pre>` with a backtick. The assertion is on the row rather
+    /// than `normalize_cell_content`, because the space is what would hold.
     #[test]
     fn table_row_keeps_a_space_between_a_trailing_backslash_and_the_closing_pipe() {
-        // Inside a code span htmd does not escape the backslash (T-FC015), but
-        // `inline_code_span`'s closing backtick still lands between it and the
-        // pipe here, so this exercises the row's fixed space, not an escape
-        // collision.
+        // htmd leaves a backslash inside a code span unescaped (T-FC015).
         let article = article(
             "<table><tbody><tr><td><pre><code>a\\</code></pre></td><td>second</td></tr></tbody></table>",
         );
