@@ -9,10 +9,10 @@ use wiremock::{Mock, ResponseTemplate};
 
 /// [T-TS020] run() wraps GitHub commands in the outer github_timeout
 ///
-/// Issue #185: `repo-tree` / `repo-read` / `repo-overview` reach GitHub through
+/// `repo-tree` / `repo-read` / `repo-overview` reach GitHub through
 /// bare async handlers; a persistent slow/5xx upstream would hang the command
 /// for minutes (each inner HTTP call has its own 30s timeout plus retries).
-/// `run()` now caps the whole command. A GitHub endpoint that delays 30s past
+/// `run()` caps the whole command. A GitHub endpoint that delays 30s past
 /// the 200ms `github_timeout` must surface a timeout error AND emit the
 /// `"github command timed out"` warn — the log assertion is non-tautological:
 /// a real connect failure would also yield `is_err()` but emit no such warn.

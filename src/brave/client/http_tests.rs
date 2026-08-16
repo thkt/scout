@@ -342,7 +342,7 @@ async fn search_logs_warn_on_parse_failure() {
 
 /// [T-RC001] closure returning `Err(VarError::NotPresent)` must surface
 /// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
-/// env path that `from_env` delegates to. Since #311 that path runs through the
+/// env path that `from_env` delegates to. That path runs through the
 /// backend-agnostic `Redacted::from_env_var`, which does not know `BraveError`.
 #[test]
 fn from_env_with_returns_api_key_not_set_when_closure_errs() {

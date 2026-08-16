@@ -293,11 +293,11 @@ fn decode_base64_invalid_input_returns_decode_error() {
 /// The three decode paths can disagree about `had_errors`: `decode_explicit`
 /// fails on it, `decode_detect` falls through to the next strategy, and
 /// `decode_bom` returns the replacement characters under
-/// `DetectionSource::Bom`. That made the weakest declaration (a BOM in the file)
-/// the most permissive, and left the caller reading a settled encoding off a
-/// mojibake body — the GitHub path has no counterpart to fetch's
+/// `DetectionSource::Bom`. Left to disagree, the weakest declaration (a BOM in
+/// the file) becomes the most permissive, and the caller reads a settled
+/// encoding off a mojibake body — the GitHub path has no counterpart to fetch's
 /// `decode_uncertain` to signal otherwise. ADR-0013 ends this path in a
-/// `NonUtf8` error with a retry hint, and now it does.
+/// `NonUtf8` error with a retry hint.
 #[tracing_test::traced_test]
 #[test]
 fn decode_bom_that_does_not_decode_is_an_error() {

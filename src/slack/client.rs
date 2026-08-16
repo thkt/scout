@@ -104,8 +104,7 @@ const SLACK_MAX_REPLY_PAGES: usize = 50;
 /// Upper bound on distinct user IDs resolved via `users.info` per message.
 /// A single message can mention an unbounded number of users; without a cap a
 /// mass-mention burst can exhaust Slack's Tier-4 per-minute budget. IDs beyond
-/// the cap are not looked up and degrade to their raw `<@UID>` form (issue
-/// #188 claim 3).
+/// the cap are not looked up and degrade to their raw `<@UID>` form.
 const SLACK_MAX_USER_LOOKUPS: usize = 50;
 
 impl SlackClient {

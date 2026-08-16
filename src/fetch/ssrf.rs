@@ -42,8 +42,8 @@ pub(crate) enum EgressMode {
 /// lowercase, first match wins; absence yields [`EgressMode::Direct`]. The case
 /// order (upper before lower) is a chosen convention: reqwest 0.13's env-var
 /// precedence is undocumented on
-/// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> (verified
-/// unreachable this session) and no test pins the case order — unverified.
+/// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> and no test pins
+/// the case order — unverified.
 /// A present-but-empty value counts as unset, matching reqwest: `Proxy::all("")`
 /// is a relative-URL parse error, so treating it as `Proxied("")` would fail
 /// client construction and take down every command, not just proxied fetches.

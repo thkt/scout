@@ -150,7 +150,7 @@ async fn does_not_retry_when_retry_after_exceeds_cap() {
     );
 }
 
-/// [T-R006] Issue #120: `SCOUT_MAX_RETRIES=0` must disable retries entirely.
+/// [T-R006] `SCOUT_MAX_RETRIES=0` must disable retries entirely.
 /// The contract is "N retries on top of the original attempt", so 0
 /// means a single attempt with no sleep — the user-visible inverse of
 /// the default (=2 → 3 attempts).
@@ -197,8 +197,8 @@ fn jittered_backoff_is_deterministic_with_seeded_rng() {
     );
 }
 
-/// [T-R014] Issue #185: the `None` arm of `retry_after_or_backoff` (exponential
-/// backoff) had no ceiling, so a high `SCOUT_MAX_RETRIES` could produce a
+/// [T-R014] The `None` arm of `retry_after_or_backoff` (exponential backoff)
+/// needs a ceiling: without one a high `SCOUT_MAX_RETRIES` produces a
 /// single multi-minute sleep (attempt 9 → up to ~512s) that overruns the
 /// surrounding tool timeout. The cap must match the `Some` arm's
 /// `MAX_RETRY_AFTER_SECS`. attempt=10 has `half = 512s >= 300s`, so the
@@ -225,7 +225,7 @@ fn backoff_is_capped_at_max_retry_after() {
     );
 }
 
-/// [T-R004] Issue #113: reqwest 0.13 surfaces a mid-stream body drop as
+/// [T-R004] reqwest 0.13 surfaces a mid-stream body drop as
 /// `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
 /// source chain. is_transient_network must classify this as transient
 /// so the retry loop attempts recovery; left untreated it falls into
