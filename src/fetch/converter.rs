@@ -901,18 +901,24 @@ fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<Strin
     (cells, markdown_translated)
 }
 
-/// Mirrors htmd's built-in `normalize_cell_content`
-/// (htmd-0.5.5/src/element_handler/table.rs:250-256): folds `\n` to a space
-/// and drops `\r` so multi-line cell content cannot split the pipe-delimited
-/// row, escapes `|` so cell content cannot introduce a spurious column, then
-/// trims tab/newline/CR/space from both ends. Unlike a general whitespace
-/// collapse, this does not touch other whitespace-like characters (e.g. NBSP
-/// U+00A0), which must survive unchanged inside the cell.
+/// Folds newlines to a space, escapes `|`, and trims tab, newline, CR and
+/// space from both ends, so cell content can neither split the row nor add a
+/// column. Other whitespace-like characters survive unchanged, NBSP U+00A0
+/// among them; a general whitespace collapse would eat those too.
+///
+/// The pipe escape is `\|`, where htmd writes `&#124;`
+/// (htmd-0.5.5/src/element_handler/table.rs:250-256). GFM unescapes `\|` while
+/// splitting the row into cells, ahead of inline parsing, so it resolves
+/// wherever it lands; an entity reference stays six literal characters inside a
+/// code span. htmd needs the entity because its `format_row_padded` counts
+/// chars for column alignment, and `format_table_row` here writes none.
+/// `escape_md_inline` (`src/markdown.rs`) already writes `\|`, and
+/// `src/github/format.rs` feeds its output into table cells.
 fn normalize_cell_content(content: &str) -> String {
     let content = content
         .replace('\n', " ")
         .replace('\r', "")
-        .replace('|', "&#124;");
+        .replace('|', "\\|");
     trim_document_whitespace(&content).to_owned()
 }
 
@@ -3058,6 +3064,59 @@ mod tests {
              block:\n{markdown}"
         );
     }
+
+    /// [T-FC098] 表セルの code span のパイプが `\|` で出る
+    ///
+    /// GFM unescapes `\|` while splitting the row, before inline parsing, so it
+    /// resolves inside a code span too. An entity reference does not: both
+    /// pulldown-cmark 0.13.4 and comrak 0.54.0 render `&#124;` there as six
+    /// literal characters.
+    #[test]
+    fn table_cell_code_span_escapes_a_pipe_with_a_backslash() {
+        let article = article(
+            "<table><tbody><tr><td><pre><code>a | b</code></pre></td><td>x</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains(r"`a \| b`"),
+            "a pipe inside a cell's code span must be backslash-escaped:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("&#124;"),
+            "an entity reference would show as literal text inside the code span:\n{markdown}"
+        );
+    }
+
+    /// [T-FC099] `\` で終わるセルの中身と閉じパイプの間に空白が入る
+    ///
+    /// With `&#124;` the cell string held no `|` at all, so a cell could not
+    /// reach the row delimiter. `\|` moves that guarantee onto
+    /// `format_table_row`'s one space before the closing pipe: a bare trailing
+    /// `\` right before `|` would read as an escaped delimiter and swallow the
+    /// next cell.
+    ///
+    /// No path reaches that shape today, since `inline_code_span` always closes
+    /// a cell's `<pre>` with a backtick. The assertion is on the row rather
+    /// than `normalize_cell_content`, because the space is what would hold.
+    #[test]
+    fn table_row_keeps_a_space_between_a_trailing_backslash_and_the_closing_pipe() {
+        // htmd leaves a backslash inside a code span unescaped (T-FC015).
+        let article = article(
+            "<table><tbody><tr><td><pre><code>a\\</code></pre></td><td>second</td></tr></tbody></table>",
+        );
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let markdown = result.markdown();
+
+        assert!(
+            markdown.contains("`a\\` | second |"),
+            "a trailing backslash must not run into the closing pipe:\n{markdown}"
+        );
+    }
+
     /// [T-FC097] Readability が失敗した経路でも `<script>` の中身は本文へ出ない
     ///
     /// `extract_article`'s dom_smoothie fallback (T-FX017) reaches this layer's
