@@ -13,8 +13,7 @@ use wiremock::{Mock, ResponseTemplate};
 /// Serves `conversations.info` so `resolve_channel` succeeds. Every test that
 /// asserts on `degraded_reasons` or on the preamble needs it: without the
 /// mount wiremock answers 404, the channel renders raw, and
-/// `SLACK_LOOKUP_FAILED` adds a reason and a note the test is not about
-/// (issue #346).
+/// `SLACK_LOOKUP_FAILED` adds a reason and a note the test is not about.
 async fn mount_channel_info(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
         .and(path("/conversations.info"))
@@ -54,11 +53,9 @@ fn scout_builder_with_rng_routes_arc_into_scout() {
 
 /// [T-SB007] `for_test()` resolves no token, so no test spawns `gh auth token`
 ///
-/// ADR-0018's whole point is that token resolution is deterministic. With
-/// `GhCliSource` as the `for_test()` default, any test reaching
-/// `Scout::github()` ran the real subprocess, so which branch it took depended
-/// on whether the machine running the suite had `gh` authenticated. Nothing but
-/// this test stops the default from being put back.
+/// The default is a plain field initializer, so nothing but this test stops
+/// `GhCliSource` from going back in and making the suite depend on a local `gh`
+/// (ADR-0018).
 #[tokio::test]
 async fn for_test_resolves_no_token_without_touching_gh() {
     let scout = ScoutBuilder::for_test().build();
@@ -187,7 +184,7 @@ async fn scout_builder_clock_reaches_github_client_via_seam() {
 /// pre-sets `slack()`'s `OnceCell`, the injected client is used even with
 /// `SLACK_TOKEN` unset, so the call reaches `conversations.history` and returns
 /// the body. When the injection is not wired, `from_env` answers `TokenNotSet`
-/// and the test fails (issue #191).
+/// and the test fails.
 #[tokio::test]
 async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
     let Some(server) = try_spawn_mock_server("tools::scout_builder_slack_seam").await else {
@@ -225,10 +222,9 @@ async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
 /// [T-SK050] A thread whose reply pages never stop hits the page cap, so
 /// `fetch_slack` wires the truncation into the ADR-0003 channel: `degraded` is
 /// set, `degraded_reasons` carries `SLACK_THREAD_TRUNCATED`, and the Markdown
-/// body gains a cap note in the frontmatter preamble (issue #222). Before this,
-/// a truncated Slack thread returned `degraded: false` and the omission was
-/// invisible to callers. The target ts is on page 1 so the message resolves;
-/// only the reply tail past the cap is lost.
+/// body gains a cap note in the frontmatter preamble. Without all three, a
+/// truncated thread is indistinguishable from a complete one. The target ts is
+/// on page 1 so the message resolves; only the reply tail past the cap is lost.
 #[tokio::test]
 async fn fetch_slack_thread_page_cap_sets_degraded_reason_and_preamble() {
     let Some(server) = try_spawn_mock_server("tools::slack_thread_cap").await else {
@@ -281,8 +277,7 @@ async fn fetch_slack_thread_page_cap_sets_degraded_reason_and_preamble() {
 
 /// [T-SK051] A message mentioning more distinct users than the lookup cap (50)
 /// surfaces `SLACK_USERS_CAPPED` in `degraded_reasons` and a preamble note, so a
-/// caller can tell that some `<@UID>` mentions render raw rather than resolved
-/// (issue #222).
+/// caller can tell that some `<@UID>` mentions render raw rather than resolved.
 #[tokio::test]
 async fn fetch_slack_users_cap_sets_degraded_reason_and_preamble() {
     let Some(server) = try_spawn_mock_server("tools::slack_users_cap").await else {
@@ -432,8 +427,8 @@ async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
 
 /// [T-SK052] A message body over `MAX_FETCH_OUTPUT_BYTES` (100KB) is truncated,
 /// and `fetch_slack` reports it via `SLACK_OUTPUT_TRUNCATED` plus the inline
-/// byte-count note that `truncate_with_note` appends at the body end (issue
-/// #222). The non-Slack `fetch` path already cut output silently for Slack.
+/// byte-count note that `truncate_with_note` appends at the body end. A cut
+/// without the note is a silent one.
 #[tokio::test]
 async fn fetch_slack_output_truncation_sets_degraded_reason() {
     let Some(server) = try_spawn_mock_server("tools::slack_output_trunc").await else {
@@ -476,7 +471,7 @@ async fn fetch_slack_output_truncation_sets_degraded_reason() {
 
 /// [T-SK053] When a thread is page-capped AND its body exceeds the output cap,
 /// the thread note must still reach the agent. The preamble is inserted after
-/// truncation, so the 100KB cut cannot drop it (issue #222 Finding A). Both
+/// truncation, so the 100KB cut cannot drop it. Both
 /// `SLACK_THREAD_TRUNCATED` and `SLACK_OUTPUT_TRUNCATED` are reported, and the
 /// thread note survives in the Markdown alongside the inline truncation note.
 #[tokio::test]
@@ -533,7 +528,7 @@ async fn fetch_slack_thread_cap_note_survives_output_truncation() {
 
 /// [T-SK054] A normal thread with no caps keeps `degraded: false`: no reason is
 /// emitted and no `> Note:` preamble is injected, so the wiring does not flag
-/// healthy fetches (issue #222 negative case).
+/// healthy fetches.
 #[tokio::test]
 async fn fetch_slack_without_caps_stays_undegraded() {
     let Some(server) = try_spawn_mock_server("tools::slack_no_cap").await else {
@@ -573,7 +568,7 @@ async fn fetch_slack_without_caps_stays_undegraded() {
 
 /// [T-SK055] Distinct user IDs exactly equal to the lookup cap (50) do NOT
 /// trigger `SLACK_USERS_CAPPED`: the condition is `> SLACK_MAX_USER_LOOKUPS`, so
-/// the boundary value resolves fully and stays undegraded (issue #222 boundary).
+/// the boundary value resolves fully and stays undegraded.
 #[tokio::test]
 async fn fetch_slack_users_at_cap_boundary_stays_undegraded() {
     let Some(server) = try_spawn_mock_server("tools::slack_users_boundary").await else {
@@ -629,7 +624,7 @@ async fn fetch_slack_users_at_cap_boundary_stays_undegraded() {
 /// reply separator ever appears and that placement rule goes unverified. Here a
 /// distinct reply survives, so the note must sit after the frontmatter and
 /// before the first reply separator, and the join must carry both the thread and
-/// users notes (the only path that produces a 2-note preamble) (issue #222).
+/// users notes (the only path that produces a 2-note preamble).
 #[tokio::test]
 async fn fetch_slack_thread_and_users_caps_place_joined_preamble_after_frontmatter() {
     let Some(server) = try_spawn_mock_server("tools::slack_thread_users_cap").await else {
@@ -760,9 +755,9 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
 }
 
 /// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`
-/// (src/slack.rs) for the `fetch_slack` call site, which read "Slack fetch
-/// timed out: slack fetch timed out after 30s" until issue #313. The `fetch`
-/// side is pinned by `T-C027` (tests/exit_code_contract.rs).
+/// (src/slack.rs) for the `fetch_slack` call site, where the wrapper can double
+/// the payload. The `fetch` side is pinned by `T-C027`
+/// (tests/exit_code_contract.rs).
 ///
 /// Driving a real timed-out call is what makes the assertion non-tautological:
 /// a `SlackError::Timeout` built in-process would assert on a payload this test
