@@ -239,8 +239,8 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
 // T-C027: fetch_timeout_message_states_the_timeout_once
 //
 // Pins the payload rule stated on `FetchError::Timeout` (src/fetch.rs) for the
-// `Scout::fetch` call site, which read "fetch timed out: fetch timed out after
-// 1s" until issue #313.
+// `Scout::fetch` call site, where the wrapper can double the payload into
+// "fetch timed out: fetch timed out after 1s".
 //
 // Repeating `T-C024`'s scenario rather than asserting on that run keeps each ID
 // pinning one contract. Driving a real timeout is what makes the assertion
