@@ -3068,6 +3068,7 @@ mod tests {
              block:\n{markdown}"
         );
     }
+
     /// [T-FC098] 表セルの code span のパイプが `\|` で出る
     ///
     /// GFM unescapes `\|` while splitting the row, before inline parsing, so it
@@ -3097,14 +3098,19 @@ mod tests {
     ///
     /// With `&#124;` the cell string held no `|` at all, so a cell could not
     /// reach the row delimiter. `\|` moves that guarantee onto
-    /// `format_table_row`'s one space before the closing pipe: without it, a
-    /// trailing `\` would escape the delimiter and swallow the next cell. This
-    /// asserts the row, not `normalize_cell_content`, because the space is what
-    /// holds.
+    /// `format_table_row`'s one space before the closing pipe: a bare
+    /// trailing `\` right before `|` would read as an escaped delimiter and
+    /// swallow the next cell. `inline_code_span` always closes a table
+    /// cell's `<pre>` with a backtick, so no path reaches that shape today;
+    /// this pins the space as the guarantee that would still hold if one did.
+    /// This asserts the row, not `normalize_cell_content`, because the space
+    /// is what holds.
     #[test]
     fn table_row_keeps_a_space_between_a_trailing_backslash_and_the_closing_pipe() {
-        // Inside a code span htmd does not escape the backslash (T-FC015), so
-        // this is the shape where a trailing `\` reaches the row verbatim.
+        // Inside a code span htmd does not escape the backslash (T-FC015), but
+        // `inline_code_span`'s closing backtick still lands between it and the
+        // pipe here, so this exercises the row's fixed space, not an escape
+        // collision.
         let article = article(
             "<table><tbody><tr><td><pre><code>a\\</code></pre></td><td>second</td></tr></tbody></table>",
         );
