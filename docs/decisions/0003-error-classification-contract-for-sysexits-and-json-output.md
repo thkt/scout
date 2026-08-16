@@ -82,7 +82,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 ### Confirmation
 
 - 各 error source (Slack/GitHub/Fetch/Gemini) で HTTP status → ErrorCode mapping unit test
-- `repo_overview` partial failure path で `--json` 出力に `degraded` フィールドが含まれることの integration test
+- `repo_overview` partial failure path で `--json` 出力に `degraded` フィールドが含まれることの test。`[T-TS038]` (`src/tools/repo.rs`) が mock GitHub の issues 失敗を通した `repo_overview` の戻り値を `into_envelope` で直列化し、`degraded` と `degraded_reasons` を assert する
 - T-ER001a/b/c, T-ER002, T-ER003 は ADR-0002 (exit code values) と本 ADR (mapping rule) の両方で binding。両 ADR ref を doc コメントに記載
 
 ## Pros and Cons of the Options
