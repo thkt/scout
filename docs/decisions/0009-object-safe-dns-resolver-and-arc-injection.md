@@ -14,7 +14,7 @@ Today the picture in `src/fetch/ssrf.rs` is:
 
 - `pub(crate) trait DnsResolver: Clone + Send + Sync + 'static { fn lookup(&self, ...) -> impl Future<Output = ...> + Send; }` — generic-style with a `Clone` bound, not object-safe.
 - `src/tools.rs::Scout::fetch` and `Scout::research` reach for `&TokioDnsResolver` literals; no `Scout.dns` slot exists.
-- `src/fetch.rs::fetch_with_cdp(..., resolver: impl ssrf::DnsResolver, ...)` consumes the resolver and re-clones it across a `tokio::spawn` boundary via `Clone::clone(resolver)` (`fetch.rs:146`), depending on the trait's `Clone` bound for the CDP intercept task.
+- `src/fetch.rs::fetch_with_cdp(..., resolver: impl ssrf::DnsResolver, ...)` consumes the resolver and re-clones it across a `tokio::spawn` boundary via `Clone::clone(resolver)`, depending on the trait's `Clone` bound for the CDP intercept task.
 - `src/search/engine.rs` carries `&TokioDnsResolver` references into `engine::research` tests.
 
 Issue #134 asks for parity with ADR-0008 — object-safe trait, `Scout.dns: Arc<dyn DnsResolver>`, `ScoutBuilder::with_dns`, and a test double for resolution-strategy injection (private-IP fail-fast, NXDOMAIN, mixed results). Without injection, every SSRF-path test must either talk to a real DNS resolver or live with `TokioDnsResolver` and lose the ability to script outcomes.
@@ -49,9 +49,9 @@ pub(crate) trait DnsResolver: Send + Sync {
 }
 ```
 
-`TokioDnsResolver` keeps the same async body but wraps it with `Box::pin(async move { ... })`. The test doubles `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` move into `#[cfg(test)]` inside `fetch/ssrf.rs` and replace the ad-hoc `AllowDns` / `FailDns` types in the same module; `FailingDnsResolver::lookup` wraps its stored `String` message into `FetchError::DnsResolution` (`src/fetch/ssrf.rs:279-287`).
+`TokioDnsResolver` keeps the same async body but wraps it with `Box::pin(async move { ... })`. The test doubles `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` move into `#[cfg(test)]` inside `fetch/ssrf.rs` and replace the ad-hoc `AllowDns` / `FailDns` types in the same module; `FailingDnsResolver::lookup` wraps its stored `String` message into `FetchError::DnsResolution`.
 
-`Scout` gains `dns: Arc<dyn DnsResolver>`. `ScoutBuilder::for_test()` and `ScoutBuilder::from_env()` both default it to `Arc::new(TokioDnsResolver)` — production has only one implementation, so no env knob is added. `ScoutBuilder` exposes `#[cfg(test)] pub(crate) fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self`, matching the `#[cfg(test)] pub(crate)` visibility of `with_clock` / `with_rng` / `with_token_source` (`src/tools/builder.rs:130-151`, `with_dns` at `:148`). The cfg gate prevents the injection surface from leaking into the production crate API.
+`Scout` gains `dns: Arc<dyn DnsResolver>`. `ScoutBuilder::for_test()` and `ScoutBuilder::from_env()` both default it to `Arc::new(TokioDnsResolver)` — production has only one implementation, so no env knob is added. `ScoutBuilder` exposes `#[cfg(test)] pub(crate) fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self`, matching the `#[cfg(test)] pub(crate)` visibility of `with_clock` / `with_rng` / `with_token_source` (`src/tools/builder.rs`), and `with_dns` alongside them. The cfg gate prevents the injection surface from leaking into the production crate API.
 
 Internal helper signatures split by need:
 
@@ -121,9 +121,9 @@ Leave `DnsResolver` production-only; test SSRF paths against `TokioDnsResolver` 
 1. Rewrite `DnsResolver` to be object-safe; convert `TokioDnsResolver` and test doubles. Existing `ssrf::tests` and `dns_tests` modules compile against the new shape.
 2. Update internal helper signatures in `src/fetch.rs` and `src/search/engine.rs` per the table above. `fetch_with_cdp` switches from `Clone::clone(resolver)` to `Arc::clone(&resolver)`.
 3. Add `dns: Arc<dyn DnsResolver>` field to `Scout`; thread `Arc::new(TokioDnsResolver)` through `ScoutBuilder::{from_env, for_test, build_default_clients}`.
-4. Add `#[cfg(test)] fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self` to `ScoutBuilder` (`src/tools/builder.rs:148`).
+4. Add `#[cfg(test)] fn with_dns(self, dns: Arc<dyn DnsResolver>) -> Self` to `ScoutBuilder` (`src/tools/builder.rs`).
 5. Replace the two `&TokioDnsResolver` literals in `tools.rs::Scout::fetch` and `Scout::research` with `self.dns.clone()`.
-6. Add `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` under `#[cfg(test)]` in `fetch/ssrf.rs` (`src/fetch/ssrf.rs:279-287`), where `FailingDnsResolver::lookup` wraps the stored `String` into `FetchError::DnsResolution`; remove the now-redundant `AllowDns` / `FailDns` ad-hoc types and re-point existing T-FS004..T-FS007 tests.
+6. Add `StaticDnsResolver(Vec<IpAddr>)` and `FailingDnsResolver(pub String)` under `#[cfg(test)]` in `fetch/ssrf.rs`, where `FailingDnsResolver::lookup` wraps the stored `String` into `FetchError::DnsResolution`; remove the now-redundant `AllowDns` / `FailDns` ad-hoc types and re-point existing T-FS004..T-FS007 tests.
 7. Add `T-DNS001` end-to-end test: `with_dns` + `Scout::fetch` → assert `FetchError::InternalHost` when the injected resolver returns a private IP.
 8. Update ADR-0008 _Deferred concerns_ to link to ADR-0009.
 

@@ -33,7 +33,7 @@ Option 2 は false な契約を消すだけで、誤ったトークン種別が�
 ### Consequences
 
 - Good, because 誤ったトークン種別が構築時に変数名つき exit 64 で失敗し、エージェントが API エラーを待たず即自己修正できる (T-SK065/066)
-- Good, because エラー文の契約 (xoxp-) と実装の受理範囲が一致し、ヒント・`--help`・実装が同じ真実源を指す (src/lib.rs:79)
+- Good, because エラー文の契約 (xoxp-) と実装の受理範囲が一致し、ヒント・`--help`・実装が同じ真実源を指す (`src/lib.rs` の `after_help`)
 - Good, because 新 variant は `classify()` 経由で exit code に自動 route し、手動の exit-code 配線が不要 (ADR-0011, T-SLC011, T-ER001a)
 - Good, because 検証は `from_env_with` の注入接ぎ目で `env::set_var` なしにテストでき、`unsafe_code = "forbid"` を保つ (ADR-0007/0008)
 - Bad, because 将来 bot scope に対応した場合、正当な `xoxb-` 構成も拒否され、許可 prefix のリスト化にコード修正が要る
@@ -62,7 +62,7 @@ Option 2 は false な契約を消すだけで、誤ったトークン種別が�
 
 ## More Information
 
-### 検証経路 (一次ソース src/slack/client.rs:135-139)
+### 検証経路 (一次ソース `src/slack/client.rs` の `from_env_with`)
 
 ```
 raw   = get_var("SLACK_TOKEN")          // 未設定/NotUnicode → TokenNotSet
@@ -70,7 +70,7 @@ token = Redacted::new(&raw)             // 空・空白のみ      → TokenNotS
 if !token.expose().starts_with("xoxp-") // 非 user token     → TokenWrongType (本 ADR)
 ```
 
-`TokenNotSet` (未設定・空) と `TokenWrongType` (種別違い) は別 variant だが、`classify()` で同じ UsageError + 同一ヒントに畳まれる (src/slack.rs:59) — どちらも「人間が修正すべき誤設定」で caller-facing の扱いが同じため。
+`TokenNotSet` (未設定・空) と `TokenWrongType` (種別違い) は別 variant だが、`classify()` で同じ UsageError + 同一ヒントに畳まれる (`src/slack.rs` の `classify`) — どちらも「人間が修正すべき誤設定」で caller-facing の扱いが同じため。
 
 ### Slack token taxonomy (api.slack.com/concepts/token-types, 2026-06)
 
@@ -89,9 +89,9 @@ service/config token は長命の user token として `xoxp-` を共有する�
 
 ### 参照
 
-- `src/slack/client.rs:68-77` (`USER_TOKEN_PREFIX` 定数と根拠コメント)、`:127-140` (`from_env_with` 検証)
-- `src/slack.rs:19-27` (`TokenNotSet` / `TokenWrongType` variant)、`:56-61` (`classify`)
-- `src/lib.rs:79` (`--help` の `SLACK_TOKEN` レンジ表記)
+- `src/slack/client.rs` の `USER_TOKEN_PREFIX` 定数と根拠コメント、および `from_env_with` の検証
+- `src/slack.rs` の `TokenNotSet` / `TokenWrongType` variant と `classify`
+- `src/lib.rs` の `after_help` (`--help` の `SLACK_TOKEN` 表記)
 - ADR-0002 (sysexits。UsageError = exit 64)
 - ADR-0003 / ADR-0011 (classification 契約と優先度。新 variant の自動 route)
 - ADR-0007 (`from_env_with` 注入 factory。Brave と同型)
