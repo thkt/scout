@@ -76,7 +76,7 @@ subprocess を先に試し env を fallback にする。
 
 ## More Information
 
-### 解決順 (一次ソース src/token_source.rs:26-93)
+### 解決順 (一次ソース `src/token_source.rs` の `GhCliSource` / `resolve_from_env_or_gh`)
 
 | 優先 | source                               | 採用条件                                      |
 | ---- | ------------------------------------ | --------------------------------------------- |
@@ -85,11 +85,11 @@ subprocess を先に試し env を fallback にする。
 | 3    | `gh auth token` subprocess の stdout | 終了 0 且つ非空、`TOKEN_RESOLVE_TIMEOUT` 以内 |
 | —    | いずれも無し                         | unauthenticated (60 req/h) として継続         |
 
-`const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5)` (src/token_source.rs:15)。subprocess は `kill_on_drop(true)`、stdout のみ `Redacted::new` へ。非ゼロ終了時の warn は exit code のみ報告し stderr を withhold する (SEC, :80-90)。
+`const TOKEN_RESOLVE_TIMEOUT: Duration = Duration::from_secs(5)` (`src/token_source.rs`)。subprocess は `kill_on_drop(true)`、stdout のみ `Redacted::new` へ。非ゼロ終了時の warn は exit code のみ報告し stderr を withhold する (SEC)。
 
 ### 参照
 
-- `src/token_source.rs:15` (`TOKEN_RESOLVE_TIMEOUT`)、`:26-93` (`GhCliSource`/`resolve_from_env_or_gh`)
+- `src/token_source.rs` の `TOKEN_RESOLVE_TIMEOUT`、`GhCliSource`、`resolve_from_env_or_gh`
 - `src/github.rs` (`Auth resolution order` コメント、未認証時の rate limit ヒント)
 - ADR-0015 (Redacted。解決トークンの carrier)
 - ADR-0019 (env-var fail-fast/timeout 規約と整合)
