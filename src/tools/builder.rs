@@ -247,15 +247,16 @@ impl ScoutBuilder {
         self
     }
 
-    /// `build()` pre-inits the `OnceCell` with whatever `clock` / `rng` are set
-    /// at that moment, so `with_clock` / `with_rng` have to come first.
+    /// `build()` pre-inits `Scout.github`'s `OnceCell` with a client pointed
+    /// here, so `Scout::github()` never runs `from_env_with_source`.
     #[cfg(test)]
     pub(super) fn with_github_endpoint(mut self, endpoint: &str) -> Self {
         self.github_endpoint = Some(endpoint.to_owned());
         self
     }
 
-    /// Same ordering constraint as `with_github_endpoint`.
+    /// Mirrors `with_github_endpoint` for `Scout.slack`, so `Scout::slack()`
+    /// never reads `SLACK_TOKEN`.
     #[cfg(test)]
     pub(super) fn with_slack_endpoint(mut self, endpoint: &str) -> Self {
         self.slack_endpoint = Some(endpoint.to_owned());
