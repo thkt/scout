@@ -262,9 +262,6 @@ mod tests {
 
     /// [T-H012] repo-tree --help states that --pattern matches the whole
     /// repo-relative path
-    ///
-    /// A reader who takes the pattern for a filename-only match never writes
-    /// `src/*.rs`, and the path-scoped form is the one worth reaching for.
     #[test]
     fn repo_tree_help_states_pattern_matches_the_repo_relative_path() {
         let help = help_text::<super::RepoTreeParams>();
@@ -280,22 +277,20 @@ mod tests {
 
     /// [T-H013] repo-overview --help states the per-section item caps and the
     /// absence of pagination
-    ///
-    /// The output prints a total next to each heading, so a reader can infer a
-    /// cut from a mismatch. `--help` alone gives them nothing to infer from.
     #[test]
     fn repo_overview_help_states_item_caps_and_no_pagination() {
         let help = help_text::<super::RepoOverviewParams>();
-        for expected in ["5 open issues", "5 open pull requests", "3 most recent"] {
+        for expected in [
+            "5 open issues",
+            "5 open pull requests",
+            "3 most recent",
+            "Not paginated",
+        ] {
             assert!(
                 help.contains(expected),
-                "repo-overview help must state the cap {expected:?}:\n{help}"
+                "repo-overview help must state {expected:?}:\n{help}"
             );
         }
-        assert!(
-            help.contains("Not paginated"),
-            "repo-overview help must state that the lists are not paginated:\n{help}"
-        );
     }
 
     /// [T-H009] stdin-supporting subcommand help contains stdin usage examples
