@@ -497,8 +497,9 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 // through `Handlers::handle` -> `span_handler` -> `Handlers::walk_children`,
 // whose own Text nodes carry `parent_tag == "span"`, a shape
 // `escape_pre_text_if_needed` never escapes either (it only escapes a Text
-// node whose immediate parent is literally `<pre>`, htmd-0.5.5/src/dom_walker.rs:34-41,
-// 423-436). If Readability's cleanup unwrapped the line spans, the same
+// node whose immediate parent is literally `<pre>`, htmd's dom_walker.rs
+// `walk_node` / `escape_pre_text_if_needed`). If Readability's cleanup
+// unwrapped the line spans, the same
 // leading `~`/`` ` `` bytes below would land as direct `<pre>` text instead
 // and take the escape-prone path this file's `T-C032` fixtures also cover.
 //
