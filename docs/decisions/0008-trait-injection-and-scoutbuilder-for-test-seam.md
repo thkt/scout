@@ -58,7 +58,7 @@ Three of the four proposed traits live in dedicated modules: `clock::Clock` (`Sy
 - PRs #127 (tracing `try_init`), #128 (`Clock` trait), #129 (`Rng` trait), #130 (`TokenSource` trait), #131 (`ScoutBuilder`), #132 (test helper migration) are all merged.
 - `cargo test --offline` reports 392 lib + 11 integration tests passing.
 - `SCOUT_MAX_RETRIES=abc cargo test --lib --offline scout_lazy_github_initially_none` passes, confirming `for_test()` env isolation.
-- `grep -n 'Scout {' src/tools/builder.rs | grep -v 'pub struct\|impl Scout\|-> Scout'` returns the single private struct literal at `src/tools/builder.rs:225` inside `ScoutBuilder::build` (extracted from `tools.rs`); the previous `scout_with_github` reach-in literal is gone.
+- `grep -n 'Scout {' src/tools/builder.rs | grep -v 'pub struct\|impl Scout\|-> Scout'` returns the single private struct literal inside `ScoutBuilder::build` (`src/tools/builder.rs`); no reach-in literal remains elsewhere.
 - `T-SB001`/`T-SB002`/`T-SB003` assert `Arc::ptr_eq` between the injected `Arc<dyn Trait>` and `Scout.{clock,rng,token_source}`. `T-SB004` exercises the full seam end-to-end (`ScoutBuilder::for_test().with_clock(FixedClock(1000)).with_github_endpoint(wiremock_uri).build()` → `Scout::github().get_repo("owner","repo")` → asserts `RateLimited { retry_after: Some(600) }` derived from `x-ratelimit-reset=1600 − clock=1000`).
 
 ## Pros and Cons of the Options
@@ -109,7 +109,7 @@ Skip `ScoutBuilder` entirely; add `#[cfg(test)] fn for_test()` and `#[cfg(test)]
 
 ## Addendum (2026-06-24): arg-vs-stdin 解決順と stdin の単一消費
 
-ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 12) で、CLI positional の値解決 (引数優先・stdin fallback・stdin の単一消費) が `resolve_input` / `StdinResolver` の docstring とテストにのみ pin され ADR 化されていないと判定された。本 ADR が扱う Scout 構築層の入力 seam に隣接するため、ADR-0012 の Addendum 方針に倣い決定本文は変えずここに転記する。実装は `src/tools/params.rs:8-29` (`resolve_input`) と `src/tools.rs:98-144` (`StdinResolver`) が真実源。
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 12) で、CLI positional の値解決 (引数優先・stdin fallback・stdin の単一消費) が `resolve_input` / `StdinResolver` の docstring とテストにのみ pin され ADR 化されていないと判定された。本 ADR が扱う Scout 構築層の入力 seam に隣接するため、ADR-0012 の Addendum 方針に倣い決定本文は変えずここに転記する。実装は `src/tools/params.rs` の `resolve_input` と `src/tools.rs` の `StdinResolver` が真実源。
 
 ### per-arg 解決順 (`resolve_input`)
 

@@ -17,9 +17,9 @@ ADR-0002 §"More Information" は "until a scout-local ADR is promoted to captur
 
 2026-05-19 audit (`docs/audit/2026-05-19-undocumented-decisions.md` Candidate A) で `src/envelope.rs` + README L158/L314 に **scout-local の field-level rule** が 4 つ存在することが判明した:
 
-1. `ErrorCode::is_retryable()` mapping (`envelope.rs:201-206`): `TempFailure | Timeout` のみ true、`Internal`/`Unknown` は false 固定。
-2. `ErrorPayload` field omit policy (`envelope.rs:228-236`): `code`/`message`/`retryable` は常時出力、`next_step`/`candidates` は `skip_serializing_if`。
-3. `SuccessEnvelope` array field 出力 asymmetry (`envelope.rs:211-218`): `notes: Vec<String>` は常時 `[]`、`degraded_reasons` は `skip_serializing_if`。
+1. `ErrorCode::is_retryable()` mapping (`ErrorCode::is_retryable` (`src/envelope.rs`)): `TempFailure | Timeout` のみ true、`Internal`/`Unknown` は false 固定。
+2. `ErrorPayload` field omit policy (`ErrorPayload` (`src/envelope.rs`)): `code`/`message`/`retryable` は常時出力、`next_step`/`candidates` は `skip_serializing_if`。
+3. `SuccessEnvelope` array field 出力 asymmetry (`SuccessEnvelope` (`src/envelope.rs`)): `notes: Vec<String>` は常時 `[]`、`degraded_reasons` は `skip_serializing_if`。
 4. `data` 配下 array field の `[]`-never-`null` invariant: README L158 と L314 で公開契約として宣言済。
 
 これらは ADR-0065 で governed されない (schema structure 自体は ADR-0065、field-level の omit policy/retryable mapping/`[]`-vs-`null` commitment は scout 判断)。型/lint/serde derive で機械 enforce できず、test は個別 case を pin できても **新規 field 追加時の rule** を未来の reviewer に伝える媒体が無い。
@@ -43,7 +43,7 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 ### Rule 1: `ErrorCode::is_retryable()` = `TempFailure | Timeout` 固定
 
-`src/envelope.rs:201-206` の `is_retryable` は `matches!(self, TempFailure | Timeout)` のみ true を返す。各 variant の retryable 判定:
+`src/envelope.rs` の `is_retryable` は `matches!(self, TempFailure | Timeout)` のみ true を返す。各 variant の retryable 判定:
 
 | ErrorCode                  | Retryable | Rationale                                                                                                                          |
 | -------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 ### Rule 2: `ErrorPayload` field omit policy
 
-`src/envelope.rs:228-236` の serialization 規約:
+`src/envelope.rs` の `ErrorPayload` serialization 規約:
 
 | Field        | Serialization                             | Why                                                                    |
 | ------------ | ----------------------------------------- | ---------------------------------------------------------------------- |
@@ -81,7 +81,7 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 ### Rule 3: `SuccessEnvelope` array field omit asymmetry
 
-`src/envelope.rs:211-218` の `notes: Vec<String>` は常時 `[]` 出力 (`skip_serializing_if` なし)、`degraded_reasons: Vec<DegradedReason>` は `skip_serializing_if = "Vec::is_empty"`。
+`src/envelope.rs` の `SuccessEnvelope` の `notes: Vec<String>` は常時 `[]` 出力 (`skip_serializing_if` なし)、`degraded_reasons: Vec<DegradedReason>` は `skip_serializing_if = "Vec::is_empty"`。
 
 | Field              | Serialization            | Rule basis                                                                                                     |
 | ------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------- |
@@ -120,9 +120,9 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 ### Confirmation
 
-- `src/envelope.rs:201-206` の `is_retryable` 実装は Rule 1 と機械的に一致 (`matches!(self, TempFailure | Timeout)`)。
-- `src/envelope.rs:228-236` の `ErrorPayload` derive は Rule 2 と機械的に一致 (`code`/`message`/`retryable` 無修飾、`next_step` に `Option::is_none`、`candidates` に `Vec::is_empty`)。
-- `src/envelope.rs:211-218` の `SuccessEnvelope` derive は Rule 3 と機械的に一致 (`notes` 無修飾、`degraded_reasons` に `Vec::is_empty`)。
+- `src/envelope.rs` の `is_retryable` 実装は Rule 1 と機械的に一致 (`matches!(self, TempFailure | Timeout)`)。
+- `src/envelope.rs` の `ErrorPayload` derive は Rule 2 と機械的に一致 (`code`/`message`/`retryable` 無修飾、`next_step` に `Option::is_none`、`candidates` に `Vec::is_empty`)。
+- `src/envelope.rs` の `SuccessEnvelope` derive は Rule 3 と機械的に一致 (`notes` 無修飾、`degraded_reasons` に `Vec::is_empty`)。
 - 既存 unit test (T-EN001..T-EN015) が omit/always-emit を個別 case で pin。
 - `tests/cli_integration.rs` の `--json` end-to-end が `data.failed_urls = []` 等の `[]` 出力を検証。
 
@@ -178,12 +178,12 @@ code-side migration (`per ADR-0065` → 各 scout-local ADR ref 更新) は foll
 - `docs/decisions/0011-scout-local-classification-priority-policy.md` (本 ADR と並ぶ ADR-0065 supersede portion: Classification Priority)
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (本 ADR が JSON schema portion を supersede する meta ADR)
 - `docs/audit/2026-05-19-undocumented-decisions.md` (本 ADR の根拠 audit、Candidate A = envelope E-03/E-04/E-05 + README P-A/P-D)
-- `src/envelope.rs:201-236` (実装 site)
+- `src/envelope.rs` (`ErrorCode` / `ErrorPayload` / `SuccessEnvelope` の実装 site)
 - `README.md` L158, L314 (公開契約の declared form)
 
 ## Addendum (2026-06-24): research の `sources` と `fetched_pages` の cardinality 非対称
 
-ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 16) で、research の `data` 配下 array 間の cardinality 関係がコードにのみ pin され、Rule 4 (`[]`-never-`null`) では語られていないと判定された。Rule 4 を補う転記として追記する。実装は `src/search/engine.rs:55-122` (`fetch_sources`) と `:169-177` (`format_sources`) が真実源。
+ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 16) で、research の `data` 配下 array 間の cardinality 関係がコードにのみ pin され、Rule 4 (`[]`-never-`null`) では語られていないと判定された。Rule 4 を補う転記として追記する。実装は `src/search/engine.rs` の `fetch_sources` と `format_sources` が真実源。
 
 `research` の envelope は同じ `data` に 3 つの array を載せるが、要素数は同数ではない。
 

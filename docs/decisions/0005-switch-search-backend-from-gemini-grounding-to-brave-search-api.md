@@ -14,8 +14,8 @@ decision-makers: thkt (project owner)
 
 しかし現在の実装は Gemini API の Google Search grounding を使用しており、OUTCOME と以下の点で矛盾する:
 
-1. `src/gemini/grounding.rs:27` が抽出する URL は Google の redirect URL (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) でラップされ、真のソース URL が AI エージェントに届かない
-2. `src/search/engine.rs:185` の `format_search_results` は Gemini が生成した grounded answer (中間 LLM 要約) を `Search Result` セクションとして出力する
+1. `src/gemini/grounding.rs` が抽出する URL は Google の redirect URL (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) でラップされ、真のソース URL が AI エージェントに届かない
+2. `src/search/engine.rs` の `format_search_results` は Gemini が生成した grounded answer (中間 LLM 要約) を `Search Result` セクションとして出力する
 
 どの検索バックエンドに切替えれば OUTCOME に整合するか。
 
@@ -120,7 +120,7 @@ Gemini 由来の "No answer returned — the query may have been filtered by saf
 
 #### SearchClient trait の再定義
 
-ADR 旧文では「trait を維持」と書いたが、戻り値型 `GroundedResult { answer, sources }` が `Vec<SearchResult>` に変わる時点で実質的に **trait 再定義**。`MockSearch` (`src/search/engine.rs:255-296`) と wiremock ベースの全 http_tests (`src/gemini/client.rs:317-468`) は書き換え必須。
+ADR 旧文では「trait を維持」と書いたが、戻り値型 `GroundedResult { answer, sources }` が `Vec<SearchResult>` に変わる時点で実質的に **trait 再定義**。`MockSearch` (`src/search/engine.rs`) と wiremock ベースの全 http_tests (`src/gemini/client.rs`) は書き換え必須。
 
 ### Confirmation
 
@@ -221,11 +221,11 @@ git revert + v1.1.2 タグからの patch release。Brave サービス停止等�
 
 * `.claude/OUTCOME.md` (OUTCOME 整合根拠)
 * `src/gemini/client.rs`, `src/gemini/grounding.rs` (廃止対象の現実装)
-* `src/search/engine.rs:50`, `src/search/engine.rs:185` (orchestration および削除対象)
-* `src/search/lang.rs:13-19` (`apply_to_query` 廃止対象)
+* `src/search/engine.rs` の `ResearchRequest` と `format_search_results` (orchestration および削除対象)
+* `src/search/lang.rs` の `apply_to_query` (廃止対象)
 * `src/search/bilingual.rs` (廃止対象、bilingual expansion)
-* `src/tools.rs:214` (`SuccessEnvelope.data` payload 起点)
-* `src/envelope.rs:170-177` (`SuccessEnvelope::data` 型定義)
+* `src/tools.rs` (`SuccessEnvelope.data` payload 起点)
+* `src/envelope.rs` の `SuccessEnvelope` (`data` 型定義)
 * Brave Search API: https://brave.com/search/api/
 * Brave Web Search documentation (getting started): https://api-dashboard.search.brave.com/app/documentation/web-search/get-started
 * Brave Web Search query parameters (一次ソース): https://api-dashboard.search.brave.com/app/documentation/web-search/query

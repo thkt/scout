@@ -27,7 +27,7 @@ scout は `search` の markdown 出力を 1 行 1 URL のプレーン text に�
 
 ## Decision Outcome
 
-Chosen option: Option A。`Scout::search` (src/tools/query.rs:20-44) は Brave の結果 `sources` を `sources.iter().map(|s| s.url.as_str()).join("\n")` で 1 行 1 URL の markdown にし、`CommandOutput::ok(markdown, data)` で返す。`data` には `{ "query", "sources" }` として全 source (タイトル等を含む構造化) を常に同梱する。markdown を読む consumer は後処理ゼロで `scout fetch` へ URL を渡せ、`--json` で envelope を読む consumer は `data.sources` から構造化メタを得る。出力モードを分けるフラグは持たず、二面性は envelope の markdown / data フィールドが担う。結果 0 件のとき markdown は空文字列で、`run` の出力層 (src/lib.rs:44-54) が phantom な空行を出さないよう真の空出力を保つ。
+Chosen option: Option A。`Scout::search` (`src/tools/query.rs`) は Brave の結果 `sources` を `sources.iter().map(|s| s.url.as_str()).join("\n")` で 1 行 1 URL の markdown にし、`CommandOutput::ok(markdown, data)` で返す。`data` には `{ "query", "sources" }` として全 source (タイトル等を含む構造化) を常に同梱する。markdown を読む consumer は後処理ゼロで `scout fetch` へ URL を渡せ、`--json` で envelope を読む consumer は `data.sources` から構造化メタを得る。出力モードを分けるフラグは持たず、二面性は envelope の markdown / data フィールドが担う。結果 0 件のとき markdown は空文字列で、`run` の出力層 (`src/lib.rs` の `write_output`) が phantom な空行を出さないよう真の空出力を保つ。
 
 Option B は最頻ユースケース (URL を次へ渡す) に後処理を強い token を食うため markdown 既定にしない。Option C は人間直読と行指向ツールに冗長で相性が悪いため markdown 既定にしない。どちらの構造化情報も `data` に既に載るため、markdown 側をリッチにする必要が無い。
 
@@ -70,19 +70,19 @@ markdown 自体を構造化配列にする。
 
 ## More Information
 
-### 出力契約 (一次ソース src/tools/query.rs:20-44)
+### 出力契約 (一次ソース `src/tools/query.rs` の `search`)
 
 | フィールド | 内容                                                 | 用途                           |
 | ---------- | ---------------------------------------------------- | ------------------------------ |
 | markdown   | `sources` の url を `\n` 連結 (1 行 1 URL、装飾なし) | 次の fetch 入力、shell パイプ  |
 | data       | `{ "query", "sources" }` (sources は構造化全体)      | メタが要る consumer (`--json`) |
 
-コメント (query.rs:31-32): "Default output: one URL per line, no markdown decoration. OUTCOME.md: AI agents receive raw source URLs without intermediate summary."
+`search` の冒頭コメント: "Default output: one URL per line, no markdown decoration. OUTCOME.md: AI agents receive raw source URLs without intermediate summary."
 
 ### 参照
 
-- `src/tools/query.rs:20-44` (`search` ハンドラ)
+- `src/tools/query.rs` の `search` ハンドラ
 - `src/tools/query_tests.rs` (`search_returns_plain_url_list` ほか)
-- `src/lib.rs:44-54` (空出力の保持)
+- `src/lib.rs` の `write_output` (空出力の保持)
 - ADR-0010 (JSON envelope。markdown / data の二面性契約)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 keep #8 / #15)

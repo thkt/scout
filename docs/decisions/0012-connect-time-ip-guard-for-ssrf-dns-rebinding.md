@@ -8,9 +8,9 @@ decision-makers: thkt (project owner)
 
 ## Context and Problem Statement
 
-`ssrf_check` (src/fetch/ssrf.rs:108-138) は DNS 解決で private IP を弾いてから `ValidatedUrl` を返すが、`ValidatedUrl(url::Url)` はドメイン名を保持し IP を捨てる。reqwest は connect 時に OS resolver で独自に再解決するため、TTL=0 の DNS rebind で `public→169.254.169.254` (cloud metadata) に到達しうる。critic-evidence で verified。
+`ssrf_check` (`src/fetch/ssrf.rs`) は DNS 解決で private IP を弾いてから `ValidatedUrl` を返すが、`ValidatedUrl(url::Url)` はドメイン名を保持し IP を捨てる。reqwest は connect 時に OS resolver で独自に再解決するため、TTL=0 の DNS rebind で `public→169.254.169.254` (cloud metadata) に到達しうる。critic-evidence で verified。
 
-これは ADR-0001 が定めた SSRF contract「全 fetch 経路で private IP 帯への到達を遮断」に対する実証された穴であり、ADR-0001 の Reassessment Trigger「SSRF contract 違反 incident」に該当する。fetch.rs:170-172 の "Local CLI only. TOCTOU gap ... acceptable" コメントは、scout の主 consumer が AI エージェント (クラウドで検索結果やユーザー指示由来の信頼できない URL を fetch する) である以上、threat model として成立しない。
+これは ADR-0001 が定めた SSRF contract「全 fetch 経路で private IP 帯への到達を遮断」に対する実証された穴であり、ADR-0001 の Reassessment Trigger「SSRF contract 違反 incident」に該当する。`fetch_page` (`src/fetch.rs`) にあった "Local CLI only. TOCTOU gap ... acceptable" コメントは、scout の主 consumer が AI エージェント (クラウドで検索結果やユーザー指示由来の信頼できない URL を fetch する) である以上、threat model として成立しない。
 
 ## Decision Drivers
 
@@ -28,7 +28,7 @@ decision-makers: thkt (project owner)
 
 ## Decision Outcome
 
-Chosen option: 方式 Y'。`SsrfResolver` (reqwest `Resolve` 実装) を共有 HTTP client 構築箇所の reqwest `ClientBuilder::dns_resolver` で `fetch_http` client に注入し (src/tools/builder.rs:73)、connect 時に解決→`is_private_ip` 検証→private なら reject する。`ssrf_check` pre-flight は維持し `ValidatedUrl` 型契約と `InternalHost` (sysexits 65) UX を保つ。
+Chosen option: 方式 Y'。`SsrfResolver` (reqwest `Resolve` 実装) を共有 HTTP client 構築箇所の reqwest `ClientBuilder::dns_resolver` で `fetch_http` client に注入し (`build_default_clients`、`src/tools/builder.rs`)、connect 時に解決→`is_private_ip` 検証→private なら reject する。`ssrf_check` pre-flight は維持し `ValidatedUrl` 型契約と `InternalHost` (sysexits 65) UX を保つ。
 
 この方式 Y' の connect 時 guard は、scout 自身が host を解決し dial する Direct 経路の防御である。scout を forward proxy 配下で動かす Proxied 経路 (proxy env 設定時) では、scout が解決も dial もせず guard が dial 先の proxy address を private と判定してしまうため、この guard を外し名前解決由来の防御を proxy の egress control へ委譲する。この reqwest 経路の carve-out は ADR-0023 で決定し、本 ADR には後述の Addendum で記録する。literal private/loopback 検査は両経路とも scout 側で維持する。
 
@@ -89,9 +89,9 @@ reqwest `Resolve` 実装を `fetch_http` に注入 + `ssrf_check` pre-flight 維
 
 ### reqwest 0.13.3 一次ソース確認
 
-- `reqwest::dns::Resolve` trait (resolve.rs:21-34): `fn resolve(&self, name: Name) -> Resolving`、`Name::as_str()` で host 取得
-- `HttpConnector<DynResolver>` (connect.rs:34): (a) 新規接続毎に resolver を consult、(b) IP リテラルは resolver を bypass、(c) connector は返却アドレスのみ dial し OS 再解決しない (HappyEyeballs も検証セット内に束縛)
-- `ClientBuilder::dns_resolver<R: IntoResolve>` (client.rs:2287): `Arc::new(resolver)` で注入可
+- reqwest の `dns::Resolve` trait: `fn resolve(&self, name: Name) -> Resolving`、`Name::as_str()` で host 取得
+- reqwest の `HttpConnector<DynResolver>`: (a) 新規接続毎に resolver を consult、(b) IP リテラルは resolver を bypass、(c) connector は返却アドレスのみ dial し OS 再解決しない (HappyEyeballs も検証セット内に束縛)
+- reqwest の `ClientBuilder::dns_resolver<R: IntoResolve>`: `Arc::new(resolver)` で注入可
 
 ### 参照
 
