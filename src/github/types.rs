@@ -107,13 +107,13 @@ pub(crate) struct IssueInfo {
     pub(super) labels: Vec<LabelInfo>,
     pub(super) user: Option<UserInfo>,
     /// Internal: present when GitHub's issues endpoint returns a PR.
-    /// Not part of scout's public JSON output (#67/ADR-0010).
+    /// Not part of scout's public JSON output (ADR-0010).
     #[serde(skip_serializing)]
     pub(super) pull_request: Option<serde_json::Value>,
 }
 
 /// GitHub's `GET /repos/{owner}/{repo}/issues` endpoint returns PRs alongside
-/// issues; callers that only want issues must apply this filter (#67/ADR-0010).
+/// issues; callers that only want issues must apply this filter (ADR-0010).
 pub(crate) fn real_issues(issues: &[IssueInfo]) -> Vec<&IssueInfo> {
     issues.iter().filter(|i| i.pull_request.is_none()).collect()
 }

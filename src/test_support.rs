@@ -737,7 +737,7 @@ mod tests {
 
         assert!(
             violations.is_empty(),
-            "T-201-8 is allow-listed per #356 and should not be reported, got: {violations:?}"
+            "T-201-8 is allow-listed and should not be reported, got: {violations:?}"
         );
     }
 

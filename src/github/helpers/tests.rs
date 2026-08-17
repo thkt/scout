@@ -172,7 +172,7 @@ fn decode_content_handles_base64() {
 /// [T-GHH015]
 #[test]
 fn decode_content_decodes_shift_jis_without_hint() {
-    // "テスト" in Shift_JIS — would fail with old UTF-8-only decode_content
+    // "テスト" in Shift_JIS — not valid UTF-8, so a UTF-8-only decode fails here
     let shift_jis_bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
     let result = decode_content(&STANDARD.encode(shift_jis_bytes), None).unwrap();
     assert_eq!(result.text, "テスト");

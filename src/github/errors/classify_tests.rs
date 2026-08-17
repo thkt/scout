@@ -45,8 +45,8 @@ fn data_error_variants_classify_as_data_error() {
         GitHubError::InvalidLineRange("bad".into()),
         GitHubError::InvalidPattern("bad".into()),
         GitHubError::NonUtf8("bad".into()),
-        // Was the one DataError variant no test named, so its arm could have
-        // been moved or its code changed without a failure.
+        // The one DataError variant no other test names, so without this its
+        // arm could be moved or recoded without a failure.
         GitHubError::PathIsDirectory("src/".into()),
         GitHubError::InsecureUrl,
         GitHubError::Api {

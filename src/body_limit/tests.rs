@@ -50,7 +50,7 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
 /// [T-BL001] A header-only response whose Content-Length exceeds the cap becomes
 /// too_large without the body being read
 ///
-/// (TC-006 gap) The server writes only a `Content-Length: cap+1` header,
+/// The server writes only a `Content-Length: cap+1` header,
 /// then closes without a single body byte. If `read_body_capped` reached the
 /// chunk loop before rejecting, the premature close would surface as a
 /// `network` error (declared length vs. zero actual bytes mismatch), not

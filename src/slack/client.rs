@@ -35,7 +35,7 @@ struct FetchedThread {
 
 /// Result of resolving a Slack permalink into rendered Markdown, carrying the
 /// cap-hit signals `fetch_slack` needs to wire into the ADR-0003 degradation
-/// channel. A bare `String` return hid these, so caps were invisible to callers.
+/// channel. A bare `String` return hides them, leaving caps invisible to callers.
 pub(crate) struct SlackFetchOutcome {
     pub(crate) markdown: String,
     /// `conversations.replies` hit the page cap; replies past it are omitted.
@@ -223,7 +223,7 @@ impl SlackClient {
 
         // Slack reports its own failures as `error` strings inside a 200 body, so
         // any other non-2xx came from something between scout and Slack. Its body
-        // is not an API envelope, and letting it reach the JSON parse turned a
+        // is not an API envelope, and letting it reach the JSON parse turns a
         // gateway hiccup into Decode -> Internal(70), which never retries.
         if !resp.status().is_success() {
             let status = resp.status().as_u16();

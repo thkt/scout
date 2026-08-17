@@ -45,8 +45,8 @@ async fn api_get_once_429_returns_rate_limited() {
 
 /// [T-SK068] a 5xx gateway page is a transient server error, not a decode fault
 ///
-/// Only 429 was branched on, so an HTML error page from a proxy or gateway
-/// reached the JSON parse and surfaced as `Decode` — Internal (70), never
+/// Branching on 429 alone lets an HTML error page from a proxy or gateway
+/// reach the JSON parse and surface as `Decode` — Internal (70), never
 /// retried. The peer backends both retry the same condition.
 #[tokio::test]
 async fn api_get_once_502_returns_a_retriable_server_error() {
@@ -278,9 +278,8 @@ async fn fetch_user_name_null_user_warns_then_falls_back() {
 
 /// [T-SK042] conversations.replies pagination: a thread whose target message
 /// lands on the second page (page 1 returns has_more:true + next_cursor) is
-/// still found. Before the pagination loop, serde dropped has_more/next_cursor
-/// and only page 1 was fetched, so a >200-reply thread lost the target and
-/// fetch_message returned "not found".
+/// still found. Without the pagination loop only page 1 is fetched, so a
+/// >200-reply thread loses the target and fetch_message reports "not found".
 #[tokio::test]
 async fn fetch_replies_paginates_to_find_target_on_page_two() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
@@ -382,8 +381,8 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
 /// [T-SK044] When distinct IDs exceed SLACK_MAX_USER_LOOKUPS, message authors
 /// are kept in the lookup set ahead of mentions. Authors render on every
 /// message, so dropping one degrades visible output more than dropping a
-/// mention. The earlier cap took an arbitrary HashSet slice, so authors could
-/// be evicted nondeterministically. Here three
+/// mention. Taking an arbitrary HashSet slice would evict authors
+/// nondeterministically. Here three
 /// distinct authors compete with thousands of mentions for a 50-slot cap; with
 /// author-first priority every author resolves to a name, so no raw "UAUTHOR"
 /// ID leaks into the rendered output.
@@ -444,7 +443,7 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
 
 /// [T-SK045] conversations.replies repeats the thread parent as messages[0] on
 /// every page. The pagination loop flat-extends pages, so a parent that recurs
-/// across pages was counted once per page: extract_target removes only the
+/// across pages arrives once per page: extract_target removes only the
 /// first copy, leaving the rest as duplicate replies that inflate
 /// context_messages and re-render the parent body. Dedup by ts so the parent
 /// appears once regardless of page count.
@@ -962,7 +961,7 @@ async fn mid_stream_body_drop_classifies_as_temp_failure() {
 /// The seam from a real HTTP timeout through to the process exit code:
 /// a `SlackClient::api_get_once` call whose request timeout fires must reach
 /// `ScoutError` as exit 124 (GNU coreutils `timeout` convention, ADR-0002),
-/// not the pre-fix TempFailure(75).
+/// not TempFailure(75).
 #[tokio::test]
 async fn slack_client_read_timeout_reaches_exit_code_124_via_scout_error() {
     let Some(server) = try_spawn_mock_server("slack::http::read_timeout").await else {

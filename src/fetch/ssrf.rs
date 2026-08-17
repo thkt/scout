@@ -82,7 +82,7 @@ impl DnsResolver for TokioDnsResolver {
     }
 }
 
-/// SEC-003: strip userinfo before logging.
+/// A URL's userinfo is a credential, so it must not reach a log line.
 fn redact_url_credentials(raw: &str) -> Cow<'_, str> {
     if !raw.contains('@') {
         return Cow::Borrowed(raw);

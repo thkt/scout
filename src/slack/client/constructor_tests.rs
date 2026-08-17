@@ -65,9 +65,9 @@ fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
     assert_eq!(client.base_url, API_BASE);
 }
 
-/// [T-SK065] The `SLACK_TOKEN must be a User OAuth token` contract is now
-/// enforced at construction, so a bot token can no longer pass through to fail
-/// later with an opaque API error.
+/// [T-SK065] The `SLACK_TOKEN must be a User OAuth token` contract is enforced
+/// at construction, so a bot token cannot pass through to fail later with an
+/// opaque API error.
 #[test]
 fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {

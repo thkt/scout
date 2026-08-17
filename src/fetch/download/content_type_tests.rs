@@ -18,9 +18,9 @@ fn accepts_textual_content_types() {
 /// generic one.
 ///
 /// The same document reaches scout labelled `application/xml`, `text/xml`, or
-/// `application/rss+xml` depending on the server; the first two were accepted
-/// and the third rejected, so the server's choice of label decided whether the
-/// fetch worked.
+/// `application/rss+xml` depending on the server. A list of names accepts the
+/// first two and rejects the third, letting the server's choice of label decide
+/// whether the fetch works.
 #[test]
 fn accepts_the_xml_structured_syntax_suffix() {
     for ct in [

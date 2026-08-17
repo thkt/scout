@@ -259,7 +259,7 @@ fn decode_error_is_distinct_from_non_utf8() {
 /// [T-GE012]
 #[test]
 fn decode_base64_valid_input_returns_bytes() {
-    // Validates the base64 → bytes path that was split from decode_content
+    // The base64 → bytes path on its own, apart from decode_content
     let encoded = base64_encode(b"hello world");
     let bytes = decode_base64(&encoded).unwrap();
     assert_eq!(bytes, b"hello world");
