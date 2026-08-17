@@ -152,7 +152,7 @@ fn format_report_neutralizes_javascript_source_url() {
     );
 }
 
-/// [T-SE016] AC-3.1: format_report does not emit "## Search Result" header
+/// [T-SE016] format_report does not emit a "## Search Result" header
 #[test]
 fn format_report_omits_search_result_header() {
     let report = ResearchReport {
@@ -293,7 +293,7 @@ async fn research_with_mock_returns_report() {
     );
 }
 
-/// [T-SE017] AC-3: bilingual expansion is gone; Lang::Auto issues exactly one Brave call
+/// [T-SE017] Lang::Auto issues exactly one Brave call, with no bilingual expansion
 #[tokio::test]
 async fn research_auto_lang_issues_single_call() {
     let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);

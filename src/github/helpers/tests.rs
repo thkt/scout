@@ -238,7 +238,7 @@ fn filter_by_path_exact_file() {
     assert_eq!(filtered[0].path, "README.md");
 }
 
-/// [T-GHH020] filter_tree_entries applies glob patterns against entry filenames
+/// [T-GHH020] filter_tree_entries keeps only entries the glob matches
 #[test]
 fn filter_by_glob_pattern() {
     let entries = vec![blob("src/main.rs"), blob("src/lib.ts"), blob("README.md")];

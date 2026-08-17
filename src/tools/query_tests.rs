@@ -124,7 +124,7 @@ async fn search_zero_results_returns_empty() {
     assert_eq!(result.data()["sources"].as_array().unwrap().len(), 0);
 }
 
-/// [T-TS002] research returns report with Brave sources and no obsolete Search Result header
+/// [T-TS002] research returns a report with Brave sources and no Search Result header
 #[tokio::test]
 async fn research_success_returns_report() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -158,17 +158,17 @@ async fn research_success_returns_report() {
     );
     assert!(
         !result.markdown().contains("## Search Result"),
-        "AC-3.1: report must not contain the obsolete Search Result header"
+        "report must not contain a Search Result header"
     );
     assert!(
         !result
             .markdown()
             .contains("vertexaisearch.cloud.google.com"),
-        "AC-3.2: Sources must not contain Google redirect URLs"
+        "Sources must not contain Google redirect URLs"
     );
 }
 
-/// [T-TS028] AC-4.2: --json research data schema (query, sources, fetched_pages, failed_urls)
+/// [T-TS028] --json research data schema (query, sources, fetched_pages, failed_urls)
 #[tokio::test]
 async fn research_json_schema_includes_required_keys() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -210,7 +210,7 @@ async fn research_json_schema_includes_required_keys() {
     );
     assert!(
         data.get("answer").is_none(),
-        "data.answer must be absent (AC-4.1: no LLM-generated answer)"
+        "data.answer must be absent: scout emits no LLM-generated answer"
     );
     assert!(
         data.get("all_sources").is_none(),
@@ -292,7 +292,7 @@ async fn research_unauthorized_propagates_as_error() {
     );
 }
 
-/// [T-TS031] AC-4.3: zero results yield empty arrays, not null
+/// [T-TS031] zero results yield empty arrays, not null
 #[tokio::test]
 async fn research_json_zero_results_returns_empty_arrays() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
