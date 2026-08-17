@@ -73,7 +73,7 @@ cancel 通知後、command を無制限に await。
 
 ## More Information
 
-### signal → exit code (一次ソース src/signals.rs:3-23)
+### signal → exit code (一次ソース `src/signals.rs` の `InterruptSignal` と `InterruptSignal::exit_code`)
 
 | signal  | signo | exit code | 算出                      |
 | ------- | ----- | --------- | ------------------------- |
@@ -82,7 +82,7 @@ cancel 通知後、command を無制限に await。
 
 `wait_for_signal` は Unix で `ctrl_c()` (SIGINT) と `signal(SignalKind::terminate())` (SIGTERM) を race し、SIGTERM install 失敗時は warn して SIGINT のみで継続する。
 
-### drain (src/lib.rs:128-152)
+### drain (`src/lib.rs` の `drive`)
 
 `const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7)` (issue #121)。`drive` が `tokio::select!` で command と signal を race し、signal 側に倒れたら `cancel.send(true)` で通知 → `timeout(7s, &mut cmd_fut)` で drain → `Outcome::Interrupted(sig)` を返す。drain timeout 時は warn を出し command future を drop する。
 
@@ -90,8 +90,8 @@ drain 対象は主に CDP browser 操作 (`fetch_with_cdp`: cancel で navigate 
 
 ### 参照
 
-- `src/signals.rs:3-101` (signal 写像 + テスト)
-- `src/lib.rs:128-152` (drain orchestration `drive`)、`:262-476` (テスト)
+- `src/signals.rs` の `InterruptSignal` / `wait_for_signal` と `mod tests` (signal 写像 + テスト)
+- `src/lib.rs` の `drive` (drain orchestration) と `mod tests` (テスト)
 - ADR-0002 (sysexits.h 終了コード規約。130/143 はその POSIX 拡張)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #9)
 

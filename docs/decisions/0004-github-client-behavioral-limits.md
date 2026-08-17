@@ -10,9 +10,9 @@ decision-makers: thkt (project owner)
 
 GitHub API クライアント (`src/github.rs`, `src/github/helpers.rs`) には 3 つの silent な behavioral limit が code に埋め込まれており、CLI 利用者 / agent が programmatic に依存している:
 
-1. `src/github.rs:153-165`: HTTP 403 を `RateLimited` と `Forbidden` に分岐する際、`x-ratelimit-remaining` ヘッダが不在の場合は `Forbidden` (retry 抑止) と判定される。secondary rate limit や header 配信失敗時に retry path が silently 失われる
-2. `src/github.rs:239,252,265`: `per_page` パラメータが `u8` (max 255) で受け取られ、`.min(100)` で silent clamp される。caller が 200 を渡しても 100 件しか返らず、log / error / warning 無し
-3. `src/github/helpers.rs:161-177`: `filter_tree_entries` の glob pattern は filename component (`rsplit('/').next()`) のみに match。`src/*.rs` のような path glob は silent に no-match
+1. `src/github.rs` の `get_json_once` の 403 arm: HTTP 403 を `RateLimited` と `Forbidden` に分岐する際、`x-ratelimit-remaining` ヘッダが不在の場合は `Forbidden` (retry 抑止) と判定される。secondary rate limit や header 配信失敗時に retry path が silently 失われる
+2. `src/github.rs` の `get_issues` / `get_pulls` / `get_releases`: `per_page` パラメータが `u8` (max 255) で受け取られ、`.min(100)` で silent clamp される。caller が 200 を渡しても 100 件しか返らず、log / error / warning 無し
+3. `src/github/helpers.rs` の `filter_tree_entries`: glob pattern は filename component (`rsplit('/').next()`) のみに match。`src/*.rs` のような path glob は silent に no-match
 
 これらはいずれも GitHub API 仕様外の behavior decision (拡張) であり、ADR で明文化する必要がある。
 
@@ -64,7 +64,7 @@ GitHub docs は 403 で header を必ず付けるとは保証していないた�
 
 ### Rule 4: List endpoints surface only the first page (no pagination)
 
-`get_issues` / `get_pulls` / `get_releases` (`src/github.rs:316,328,340`):
+`get_issues` / `get_pulls` / `get_releases` (`src/github.rs`):
 
 - `?page=` を送らず、`Link` header (`rel="next"` / `rel="last"`) を parse しない
 - `per_page` (1..=100、Rule 2 で type-enforced) で 1 call = 最大 100 件
@@ -96,10 +96,10 @@ GitHub docs は 403 で header を必ず付けるとは保証していないた�
 
 ### Confirmation
 
-- `src/github.rs:153` 周辺で 403 + header 不在の unit test (mock response)、`RateLimited` に分類されることを確認
+- `src/github.rs` の `get_json_once` の 403 arm で 403 + header 不在の unit test (mock response)、`RateLimited` に分類されることを確認
 - `src/github.rs` の `PerPage::new` boundary test: `per_page=1` / `per_page=100` accept (T-GH011a)、`per_page=0` / `per_page=101` で panic 検証 (T-GH011b/c、`#[should_panic]`)
-- `src/github/helpers.rs:161` で `filter_tree_entries(entries, None, Some("src/*.rs"))` が `src/foo.rs` を含むことの test
-- `src/github.rs:316,328,340` の list endpoint URL に `?page=` が含まれないこと、固定 query string (`state=open&sort=updated&direction=desc`) が caller の引数で変更されないことの compile-time enforcement (関数 signature が `per_page: PerPage` のみ受け取る)
+- `src/github/helpers.rs` の `filter_tree_entries` で `filter_tree_entries(entries, None, Some("src/*.rs"))` が `src/foo.rs` を含むことの test
+- `src/github.rs` の `get_issues` / `get_pulls` / `get_releases` の list endpoint URL に `?page=` が含まれないこと、固定 query string (`state=open&sort=updated&direction=desc`) が caller の引数で変更されないことの compile-time enforcement (関数 signature が `per_page: PerPage` のみ受け取る)
 - `scout repo-overview --help` で list endpoint が "first N items" の semantics であることを README / `--help` で文書化
 
 ## Pros and Cons of the Options
@@ -139,9 +139,9 @@ GitHub docs は 403 で header を必ず付けるとは保証していないた�
 
 - `docs/audit/2026-05-13-undocumented-decisions-part2.md` (Rule 1-3 の根拠 audit、Candidate #14, #15, #16)
 - `docs/audit/2026-05-19-undocumented-decisions.md` (Rule 4-5 の根拠 audit、Candidate GH-04, GH-05)
-- `src/github.rs:187-214` (403 header fallback の現実装、Rule 1)
-- `src/github.rs:322-336` (`PerPage` struct + `PerPage::new` validation、Rule 2)
-- `src/github/helpers.rs:153-184` (filter_tree_entries glob scope の現実装、Rule 3)
-- `src/github.rs:281,293,305` (list endpoint の pagination 不在 + 固定 filter/sort、Rule 4-5)
+- `src/github.rs` の `get_json_once` の 403 arm (403 header fallback の現実装、Rule 1)
+- `src/github.rs` の `PerPage` と `PerPage::new` (validation、Rule 2)
+- `src/github/helpers.rs` の `filter_tree_entries` (glob scope の現実装、Rule 3)
+- `src/github.rs` の `get_issues` / `get_pulls` / `get_releases` (list endpoint の pagination 不在 + 固定 filter/sort、Rule 4-5)
 - GitHub Rate Limit docs: https://docs.github.com/en/rest/rate-limit
 - GitHub Pagination docs: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
