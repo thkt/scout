@@ -194,11 +194,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 scout repo-tree denoland/deno --ref v2.0.0 --path cli/
 ```
 
-| フラグ       | 説明                              |
-| ------------ | --------------------------------- |
-| `--ref`      | ブランチ、タグ、またはコミットSHA |
-| `-p, --path` | パスプレフィックスでフィルタ      |
-| `--pattern`  | ファイル名のglobパターン          |
+| フラグ       | 説明                                              |
+| ------------ | ------------------------------------------------- |
+| `--ref`      | ブランチ、タグ、またはコミットSHA                 |
+| `-p, --path` | パスプレフィックスでフィルタ                      |
+| `--pattern`  | リポジトリ相対パス全体に当てる glob（`src/*.rs`） |
 
 ### `scout repo-read` — リモートファイル読み取り
 
@@ -223,7 +223,9 @@ scout repo-read owner/repo legacy.txt --encoding shift_jis
 scout repo-overview denoland/deno
 ```
 
-リポジトリのメタデータ、README、オープンな Issue/PR、最近のリリース。リポジトリの存在確認後、残りを並列取得します。
+リポジトリのメタデータ、README、GitHub が先頭に返すオープンな Issue 5 件と PR 5 件、最新のリリース 3 件。リポジトリの存在確認後、残りを並列取得します。
+
+各リストはページングしません。取得するのは 1 ページ目だけで、Issue 5 件、PR 5 件、リリース 3 件が上限です。件数の多いリポジトリでは、概要に出ない分が残ります。
 
 全 GitHub コマンドは `owner/repo`、フル URL（`https://github.com/denoland/deno`）、`.git`付き URL を受け付けます。
 

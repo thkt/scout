@@ -140,7 +140,8 @@ pub(crate) struct RepoTreeParams {
     /// Filter to files under this path prefix (e.g., "src/components/")
     #[arg(short, long)]
     pub(super) path: Option<String>,
-    /// Glob pattern to filter filenames (e.g., "*.rs", "*.{ts,tsx}")
+    /// Glob pattern matched against the whole repo-relative path
+    /// (e.g., "*.rs", "src/*.rs", "*.{ts,tsx}")
     #[arg(long)]
     pub(super) pattern: Option<String>,
 }
@@ -183,6 +184,11 @@ Examples:
   scout repo-overview rust-lang/rust
   echo \"facebook/react\" | scout repo-overview
   scout repo-overview -
+
+Output:
+  Metadata, README, the 5 open issues and 5 open pull requests GitHub returns
+  first, and the 3 most recent releases. Not paginated: each list is one page,
+  so a busier repository holds more than this shows.
 
 Environment:
   GITHUB_TOKEN  Optional. Increases rate limit and enables private repos.")]
@@ -252,6 +258,44 @@ mod tests {
     #[test]
     fn repo_overview_help_contains_examples_and_environment() {
         assert_help_sections::<super::RepoOverviewParams>(Some("GITHUB_TOKEN"));
+    }
+
+    /// [T-H012] repo-tree --help states that --pattern matches the whole
+    /// repo-relative path
+    ///
+    /// A reader who takes the pattern for a filename-only match never writes
+    /// `src/*.rs`, and the path-scoped form is the one worth reaching for.
+    #[test]
+    fn repo_tree_help_states_pattern_matches_the_repo_relative_path() {
+        let help = help_text::<super::RepoTreeParams>();
+        assert!(
+            help.contains("repo-relative path"),
+            "--pattern help must say the glob matches the repo-relative path:\n{help}"
+        );
+        assert!(
+            help.contains("src/*.rs"),
+            "--pattern help must show a path-scoped example:\n{help}"
+        );
+    }
+
+    /// [T-H013] repo-overview --help states the per-section item caps and the
+    /// absence of pagination
+    ///
+    /// The output prints a total next to each heading, so a reader can infer a
+    /// cut from a mismatch. `--help` alone gives them nothing to infer from.
+    #[test]
+    fn repo_overview_help_states_item_caps_and_no_pagination() {
+        let help = help_text::<super::RepoOverviewParams>();
+        for expected in ["5 open issues", "5 open pull requests", "3 most recent"] {
+            assert!(
+                help.contains(expected),
+                "repo-overview help must state the cap {expected:?}:\n{help}"
+            );
+        }
+        assert!(
+            help.contains("Not paginated"),
+            "repo-overview help must state that the lists are not paginated:\n{help}"
+        );
     }
 
     /// [T-H009] stdin-supporting subcommand help contains stdin usage examples

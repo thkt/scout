@@ -206,11 +206,11 @@ scout repo-tree denoland/deno --path cli/ --pattern "*.rs"
 scout repo-tree denoland/deno --ref v2.0.0 --path cli/
 ```
 
-| Flag         | Description                |
-| ------------ | -------------------------- |
-| `--ref`      | Branch, tag, or commit SHA |
-| `-p, --path` | Filter by path prefix      |
-| `--pattern`  | Glob pattern for filenames |
+| Flag         | Description                                                    |
+| ------------ | -------------------------------------------------------------- |
+| `--ref`      | Branch, tag, or commit SHA                                     |
+| `-p, --path` | Filter by path prefix                                          |
+| `--pattern`  | Glob matched against the whole repo-relative path (`src/*.rs`) |
 
 ### `scout repo-read` — Read remote files
 
@@ -235,7 +235,9 @@ scout repo-read owner/repo legacy.txt --encoding shift_jis
 scout repo-overview denoland/deno
 ```
 
-Repo metadata, README, open issues, PRs, and recent releases. Verifies the repo exists first, then fetches the rest in parallel.
+Repo metadata, README, the 5 open issues and 5 open pull requests GitHub returns first, and the 3 most recent releases. Verifies the repo exists first, then fetches the rest in parallel.
+
+The lists are not paginated. Each shows one page — at most 5 issues, 5 pull requests, and 3 releases — so a busier repository holds more than the overview shows.
 
 All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland/deno`), and `.git`-suffixed URLs.
 
