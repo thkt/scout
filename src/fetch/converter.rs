@@ -107,10 +107,6 @@ fn markdown_converter() -> HtmlToMarkdown {
 /// through unchanged. Telling the two shapes apart reads the DOM, not the
 /// walked text: a bare `<pre>` holding syntax-highlighter `<span>`s emits its
 /// own leading backtick raw and reads as already fenced.
-// `Element` must stay by-value: htmd's blanket `ElementHandler` impl only
-// covers `Fn(&dyn Handlers, Element) -> Option<HandlerResult>`
-// (htmd's element_handler/mod.rs `handle`), so a `&Element` signature
-// would not satisfy `add_handler`'s `Handler: ElementHandler` bound.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "htmd's ElementHandler blanket impl takes Element by value"
@@ -172,8 +168,6 @@ fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handle
 /// A non-SVG `<desc>` hands back to [`Handlers::fallback`], which finds no
 /// further handler for the tag and lands on `Pure` mode's walk-children
 /// default (htmd's element_handler/mod.rs `handle`).
-// `Element` must stay by-value for the same `add_handler` signature reason as
-// `pre_handler` above.
 fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if !is_suppressed_element(element.node) {
         return handlers.fallback(element);
@@ -184,14 +178,13 @@ fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option
     })
 }
 
-/// The tags [`suppressed_handler`] is registered for.
 const SUPPRESSED_TAGS: [&str; 7] = [
     "script", "style", "noscript", "textarea", "iframe", "desc", "title",
 ];
 
-/// Whether [`suppressed_handler`] drops this element's content.
+/// Every reader of the DOM outside the handler dispatch has to agree with
+/// [`suppressed_handler`].
 ///
-/// Every reader of the DOM outside the handler dispatch has to agree with it.
 /// `push_text_content` walks a `<pre>`'s subtree directly and would otherwise
 /// resurrect the bodies the handler removes.
 fn is_suppressed_element(node: &Rc<Node>) -> bool {
@@ -207,7 +200,6 @@ fn is_suppressed_element(node: &Rc<Node>) -> bool {
 /// still carries this namespace (measured; pinned by T-FC091).
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
-/// The element's namespace URI, or `None` when the node is not an element.
 fn element_namespace(node: &Rc<Node>) -> Option<&str> {
     match &node.data {
         NodeData::Element { name, .. } => Some(name.ns.as_ref()),
@@ -336,7 +328,6 @@ fn start_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-/// The element's tag name, or `None` when the node is not an element.
 fn element_tag(node: &Rc<Node>) -> Option<&str> {
     match &node.data {
         NodeData::Element { name, .. } => Some(name.local.as_ref()),
@@ -428,8 +419,6 @@ fn push_element_content(content: &mut String, addition: &str) {
 /// (htmd's element_handler/mod.rs `is_inside_pre`), which counts a `<code>`
 /// ancestor as inside pre too. DR-0025 records why the narrower check stays;
 /// T-FC054 pins what a `<span>` in inline `<code>` gets as a result.
-// `Element` must stay by-value for the same `add_handler` signature reason as
-// `pre_handler` above.
 fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if has_pre_ancestor(element.node) {
         return Some(handlers.walk_children(element.node));
@@ -437,17 +426,14 @@ fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Handl
     handlers.fallback(element)
 }
 
-/// Whether any ancestor of `node` is a `<pre>` element.
 fn has_pre_ancestor(node: &Rc<Node>) -> bool {
     has_ancestor_matching(node, |tag| tag == "pre")
 }
 
-/// Whether any ancestor of `node` is a `<td>` or `<th>` element.
 fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
     has_ancestor_matching(node, |tag| matches!(tag, "td" | "th"))
 }
 
-/// Whether any ancestor of `node` is an element whose tag satisfies `predicate`.
 fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> bool {
     let mut current = get_parent(node);
     while let Some(parent) = current {
@@ -557,8 +543,6 @@ fn inline_code_span(content: &str) -> String {
 /// `strip_link_title` drops that suffix only where `content` is non-empty:
 /// T-FC049 pins that an absolute-URL anchor with empty content keeps its
 /// title, and only a *fragment* href with empty content is suppressed.
-// `Element` must stay by-value for the same `add_handler` signature reason as
-// `pre_handler` above.
 fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     let result = handlers.walk_children(element.node);
     let has_link_text = !result.content.trim().is_empty();
@@ -590,13 +574,10 @@ fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerR
     })
 }
 
-/// The `<a>` element's `href` attribute value, or `None` when absent.
 fn anchor_href(element: &htmd::Element) -> Option<String> {
     anchor_attr(element, "href")
 }
 
-/// The value of the `<a>` element's attribute named `name`, or `None` when
-/// the element carries no such attribute.
 fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
     element
         .attrs
@@ -694,8 +675,6 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// `markdown_converter` always builds `Pure`, so scout's runtime never takes
 /// that branch; T-FC068 exercises it through a `Faithful`-mode converter built
 /// in the test.
-// `Element` must stay by-value for the same `add_handler` signature reason as
-// `pre_handler` above.
 fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
     if handlers.options().translation_mode != TranslationMode::Pure {
         return handlers.fallback(element);
@@ -704,13 +683,8 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
-    // Whether the header search has already been resolved: by a `thead`'s
-    // first row, which always resolves it, or by the table's first row outside
-    // a `thead`, which resolves it whether or not `row_is_all_header_cells`
-    // promotes that row. Once true, every remaining row is a data row, a later
-    // all-`<th>` row and a `thead`'s second-and-later rows included. The search
-    // never re-opens past the first candidate, so no row order can rearrange
-    // the body.
+    // The search never re-opens past the first candidate row, so no row order
+    // can rearrange the body.
     let mut header_decided = false;
     let mut markdown_translated = true;
 
@@ -727,17 +701,14 @@ fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<Hand
             }
             "thead" => {
                 let mut thead_rows = row_children(child).into_iter();
-                // The thead's first row unconditionally becomes the header,
-                // regardless of whether its cells are `<th>` or `<td>` — the
-                // header search never falls through past a `thead`.
+                // A thead's first row becomes the header whether its cells are
+                // `<th>` or `<td>`, unlike a body row.
                 if let Some(row_node) = thead_rows.next() {
                     let (cells, translated) = extract_row_cells(handlers, &row_node);
                     headers = cells;
                     markdown_translated &= translated;
                     header_decided = true;
                 }
-                // A multi-row thead's remaining rows carry no further header
-                // candidacy; they surface as ordinary data rows.
                 for row_node in thead_rows {
                     let (cells, translated) = extract_row_cells(handlers, &row_node);
                     markdown_translated &= translated;
@@ -823,8 +794,6 @@ fn is_row(node: &Rc<Node>) -> bool {
     element_tag(node) == Some("tr")
 }
 
-/// Whether every cell in `row_node` is a `<th>`, and there is at least one.
-///
 /// The built-in promotes any row holding a single `<th>`
 /// (htmd's element_handler/table.rs `table_handler`). That rule turns a
 /// `<tr><th>label</th><td>value</td></tr>` row-heading row into a column
