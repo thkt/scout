@@ -27,7 +27,7 @@ scout は `src/fetch/cdp/launch.rs` の `build_launch_args` で固定フラグ�
 
 ## Decision Outcome
 
-Chosen option: Option A。`build_launch_args(proxy_port)` (src/fetch/cdp/launch.rs:67-83) が固定フラグ集合を組み立てる。hardening 群は `--headless=new` で headless 化し、`--disable-webrtc` / `--disable-background-networking` / `--disable-features=DnsOverHttps` / `--disable-domain-reliability` / `--no-pings` / `--disable-extensions` / `--no-first-run` / `--disable-default-apps` で background egress と副作用を止める。proxy 群は `--proxy-server=socks5://127.0.0.1:{proxy_port}` で全 TCP egress を scout の loopback SOCKS5 proxy へ流し (SOCKS5 なので host 解決を proxy 側が行い DNS rebinding を塞ぐ)、`--proxy-bypass-list=<-loopback>` で chromium の暗黙の loopback / link-local (169.254/16 = IMDS) DIRECT bypass を打ち消してそれらも proxy 経由にし、`--disable-quic` で TCP SOCKS5 が傍受できない QUIC/UDP egress を止める。proxy を通った egress は connect-time に再検証され (ADR-0012)、scout HTTP 経路と同じ SSRF 境界が chromium にも及ぶ。各フラグの根拠は本 ADR とコード近傍コメントに置き、`spec.md` への dangling 参照を本 ADR で置き換える。
+Chosen option: Option A。`build_launch_args(proxy_port)` (`src/fetch/cdp/launch.rs`) が固定フラグ集合を組み立てる。hardening 群は `--headless=new` で headless 化し、`--disable-webrtc` / `--disable-background-networking` / `--disable-features=DnsOverHttps` / `--disable-domain-reliability` / `--no-pings` / `--disable-extensions` / `--no-first-run` / `--disable-default-apps` で background egress と副作用を止める。proxy 群は `--proxy-server=socks5://127.0.0.1:{proxy_port}` で全 TCP egress を scout の loopback SOCKS5 proxy へ流し (SOCKS5 なので host 解決を proxy 側が行い DNS rebinding を塞ぐ)、`--proxy-bypass-list=<-loopback>` で chromium の暗黙の loopback / link-local (169.254/16 = IMDS) DIRECT bypass を打ち消してそれらも proxy 経由にし、`--disable-quic` で TCP SOCKS5 が傍受できない QUIC/UDP egress を止める。proxy を通った egress は connect-time に再検証され (ADR-0012)、scout HTTP 経路と同じ SSRF 境界が chromium にも及ぶ。各フラグの根拠は本 ADR とコード近傍コメントに置き、`spec.md` への dangling 参照を本 ADR で置き換える。
 
 Option B は telemetry / prefetch / WebRTC を放置し scout の egress 制御方針に反するため却下。Option C は chromium の egress が scout の SSRF guard を迂回し、ページ JS が内部サービスへ到達しうるため却下。
 
@@ -71,7 +71,7 @@ background egress は止めるが proxy 強制をしない。
 
 ## More Information
 
-### フラグ (一次ソース src/fetch/cdp/launch.rs:67-83)
+### フラグ (一次ソース `src/fetch/cdp/launch.rs` の `build_launch_args`)
 
 | 群        | フラグ                                                               | 目的                                                               |
 | --------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -88,15 +88,15 @@ background egress は止めるが proxy 強制をしない。
 
 ### SSRF 境界との関係
 
-ADR-0001 / ADR-0012 は scout HTTP 経路の SSRF を connect-time IP guard で守る。chromium は別プロセスのため、proxy フラグで全 egress を scout の loopback SOCKS5 proxy へ寄せ、proxy が connect-time に同じ guard を適用する (`src/fetch/cdp/launch.rs:85-90` の subrequest scheme 判定も併用)。本 ADR はこの launch フラグ層を扱う。
+ADR-0001 / ADR-0012 は scout HTTP 経路の SSRF を connect-time IP guard で守る。chromium は別プロセスのため、proxy フラグで全 egress を scout の loopback SOCKS5 proxy へ寄せ、proxy が connect-time に同じ guard を適用する (`src/fetch/cdp/launch.rs` の `check_browser_request` の subrequest scheme 判定も併用)。本 ADR はこの launch フラグ層を扱う。
 
 ### 参照切れの解消
 
-`src/fetch/cdp/launch.rs:56` のコメントは存在しない `spec.md` の "Chrome Launch Flags table" を参照していた。その表はリポジトリに無く、launch フラグの決定根拠は本 ADR が単一の真実源として置き換える。source コメントの参照差し替えは横流しタスクで追跡する。
+`src/fetch/cdp/launch.rs` の `build_launch_args` の doc comment は、存在しない `spec.md` の "Chrome Launch Flags table" を参照していた。その表はリポジトリに無く、launch フラグの決定根拠は本 ADR が単一の真実源として置き換える。source コメントの参照差し替えは横流しタスクで追跡する。
 
 ### 参照
 
-- `src/fetch/cdp/launch.rs:56-83` (`build_launch_args`)、`:85-90` (subrequest scheme 判定)
+- `src/fetch/cdp/launch.rs` の `build_launch_args`、`check_browser_request` (subrequest scheme 判定)
 - `src/fetch/cdp/proxy.rs` (loopback SOCKS5 proxy 実装)
 - ADR-0001 / ADR-0012 (scout HTTP 経路の SSRF 境界。chromium は proxy 経由で同じ guard を継承)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 keep #9 / #18)
