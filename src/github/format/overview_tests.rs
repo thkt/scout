@@ -367,7 +367,7 @@ fn readme_truncation_note_not_heading_shifted() {
     assert!(!output.contains("## (truncated"));
 }
 
-/// [T-GF044] フェンス外の行頭 `---` を持つ README が repo-overview 出力で `***` になる
+/// [T-GF044] Readme outside fence dashes become asterisks
 #[test]
 fn readme_outside_fence_dashes_become_asterisks() {
     let repo = sample_repo();
@@ -383,7 +383,7 @@ fn readme_outside_fence_dashes_become_asterisks() {
     );
 }
 
-/// [T-GF045] 24,000 バイトを超えて打ち切られた README でもフェンス外のマーカーが `***` になる
+/// [T-GF045] Readme truncated outside fence dashes become asterisks
 #[test]
 fn readme_truncated_outside_fence_dashes_become_asterisks() {
     let repo = sample_repo();
@@ -401,7 +401,7 @@ fn readme_truncated_outside_fence_dashes_become_asterisks() {
     );
 }
 
-/// [T-GF046] 閉じないフェンスを含む README ではフェンス以降のマーカーも `***` になる
+/// [T-GF046] Readme unclosed fence marker becomes asterisks
 #[test]
 fn readme_unclosed_fence_marker_becomes_asterisks() {
     let repo = sample_repo();
@@ -417,7 +417,7 @@ fn readme_unclosed_fence_marker_becomes_asterisks() {
     );
 }
 
-/// [T-GF047] 閉じたフェンスの内側にある行頭 `---` は原文のまま残る
+/// [T-GF047] Readme closed fence dashes stay verbatim
 #[test]
 fn readme_closed_fence_dashes_stay_verbatim() {
     let repo = sample_repo();

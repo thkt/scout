@@ -283,7 +283,7 @@ async fn fetch_article_via_proxy(
     Some((result, handle))
 }
 
-/// [T-F081] 既定経路では pre の class 由来の言語指定が失われ nav が消え raw fallback にも落ちない
+/// [T-F081] Default path loses pre class language and nav without raw fallback
 ///
 /// The default path runs Readability before conversion, and its
 /// `keep_classes: false` strips every `class` attribute, so the
@@ -325,7 +325,7 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     join_server_thread(handle);
 }
 
-/// [T-F082] raw 経路では pre の class 由来の言語指定がフェンスに残る
+/// [T-F082] Raw path keeps pre class language in the fence
 ///
 /// With `raw: true`, `extract_raw` skips Readability entirely and carries the
 /// source HTML's `class` attribute through unchanged, so `language-rust` still
@@ -356,7 +356,7 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
     join_server_thread(handle);
 }
 
-/// [T-F083] thead と th を持つ 2 行 2 列の表が既定経路で区切り行つきに残る
+/// [T-F083] Default path keeps two by two theaded table with separator row
 ///
 /// Table structure survives where a `class` attribute does not: Readability's
 /// cleanup drops attributes, not elements, so a `<thead>` header table reaches
@@ -429,7 +429,8 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
     );
 }
 
-/// [T-F084] 本文が薄いページを fetch_page へ通すと抽出量が閾値を下回った警告が出る
+/// [T-F084] A thin page driven through `fetch_page` warns that the extract fell
+/// below the threshold
 ///
 /// `is_thin_extract` gates the CDP fallback at `fetch.rs`'s two call sites, and
 /// its own unit tests (T-F033..T-F040) build `ExtractedArticle` literals, so no

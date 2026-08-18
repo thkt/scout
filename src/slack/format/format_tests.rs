@@ -97,8 +97,7 @@ fn reply_author_cannot_inject_yaml_document_marker() {
     );
 }
 
-/// [T-SK088] フェンスの内側に YAML マーカーを含む message でも Slack 出力は
-/// `***` へ書き換える
+/// [T-SK088] Fenced body marker is rewritten to `***` even inside a closed fence
 ///
 /// `format_slack_output` neutralizes the body through
 /// [`crate::yaml::neutralize_yaml_markers`], not the fence-aware
