@@ -1,6 +1,6 @@
 [package]
 name = "scout"
-version = "2.5.0"
+version = "2.6.0"
 edition = "2024"
 rust-version = "1.97.1"
 description = "CLI tool for web search (Brave Search), page fetching, and GitHub repository exploration"
