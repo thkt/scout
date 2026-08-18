@@ -35,7 +35,8 @@ Option B は silent clamp でエージェントの観測と実挙動を乖離さ
 
 - Good, because 不正な env は実行前に変数名つき exit 64 で失敗し、エージェントが即自己修正できる (T-CFG010..015)
 - Good, because 範囲上限が極端な値を弾き、外側 > 内側の timeout 階層 (T-CFG021) を守る
-- Good, because 境界定数とデフォルトが単一箇所に集約され、help・テスト・実装が乖離しない
+- Good, because 境界定数とデフォルトが `src/tools/config.rs` の 1 箇所に集約され、実装とテストはそこを読む
+- Bad, because `src/lib.rs` の `Cli` の `after_help` は範囲と既定を文字列に手で書いており、定数を参照しない。`TIMEOUT_MIN_SECS` などを変えても help は黙って古くなる。`[T-H010]` は `SCOUT_*` の名前が出ることだけを assert し、値は見ない
 - Good, because 非 UTF-8 を「設定されたが無効」として失敗させ、既定への意図せぬ素通しを防ぐ
 - Good, because override の `info!` surface で active な tuning が既定ログレベルで見える (T-CFG-LOG001/003)
 - Bad, because 正当だが範囲外の極端な値 (例: 意図的な 1200s) も拒否され、上限変更にはコード修正が要る
@@ -72,7 +73,7 @@ Option B は silent clamp でエージェントの観測と実挙動を乖離さ
 
 ## More Information
 
-### env と境界 (一次ソース src/tools/config.rs:10-39)
+### env と境界 (一次ソース `src/tools/config.rs` の `RuntimeConfig` と module 冒頭の既定値・env 名・範囲の定数群)
 
 | env                           | 既定                      | 範囲    | 範囲外時 |
 | ----------------------------- | ------------------------- | ------- | -------- |
@@ -86,7 +87,7 @@ Option B は silent clamp でエージェントの観測と実挙動を乖離さ
 
 ### timeout 階層 (T-CFG021, issue #185)
 
-外側 `github_timeout` (180s) は GitHub コマンド全体 (`repo-tree` / `repo-read` / `repo-overview`) を縛り、内側の per-request `HTTP_TIMEOUT` (src/tools/builder.rs) と `CANDIDATE_FETCH_TIMEOUT` (src/tools/repo.rs) を上回る。180s は最複雑コマンド `repo-overview` の happy path を通し、全リクエストが retry を尽くす all-timeouts budget (~279s) は下回る fail-fast 寄りの値 (config.rs:13-24 のコメントに算出根拠)。
+外側 `github_timeout` (180s) は GitHub コマンド全体 (`repo-tree` / `repo-read` / `repo-overview`) を縛り、内側の per-request `HTTP_TIMEOUT` (src/tools/builder.rs) と `CANDIDATE_FETCH_TIMEOUT` (src/tools/repo.rs) を上回る。180s は最複雑コマンド `repo-overview` の happy path を通し、全リクエストが retry を尽くす all-timeouts budget (~279s) は下回る fail-fast 寄りの値 (`src/tools/config.rs` の `DEFAULT_GITHUB_TIMEOUT_SECS` の doc comment に算出根拠)。
 
 ### downgrade #14 の吸収
 
@@ -94,8 +95,8 @@ audit の downgrade 候補 (env 検証の散在) は本 ADR に統合した。�
 
 ### 参照
 
-- `src/tools/config.rs:10-189` (定数・parse・範囲検証)、`:216-426` (テスト)
-- `src/lib.rs:62-91` (after_help のレンジ表記)
+- `src/tools/config.rs` の module 冒頭の定数群と `RuntimeConfig::from_env_with` / `parse_timeout` / `parse_max_retries` (定数・parse・範囲検証)、同ファイルの `mod tests`
+- `src/lib.rs` の `Cli` の `after_help` の Tuning 節 (レンジ表記)
 - ADR-0002 (sysexits。範囲外は `EX_USAGE` = 64)
 - ADR-0017 (drain timeout。中断時の別系統の上限)
 - ADR-0018 (token resolve timeout)

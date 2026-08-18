@@ -29,7 +29,7 @@ scout は外部バイト列を 2 つの経路で Unicode テキストへ復号�
 
 ## Decision Outcome
 
-Chosen option: Option A。両経路とも宣言エンコーディング (fetch は HTTP `Content-Type` charset、GitHub は `--encoding` hint または BOM) を起点に復号し、失敗時のみ信頼ゲート付き chardetng 検出へ落とす。検出ゲートは `src/charset.rs:is_reliable_detection` に共有し、多バイト 8 種 (UTF-8, Shift_JIS, EUC-JP, ISO-2022-JP, Big5, GBK, GB18030, EUC-KR) のみ信頼する。最終手段は経路で分岐する。fetch は lossy UTF-8 + `uncertain = true` を返し exit 0、GitHub は `NonUtf8` error + 再試行ヒントで fail する。
+Chosen option: Option A。両経路とも宣言エンコーディング (fetch は HTTP `Content-Type` charset、GitHub は `--encoding` hint または BOM) を起点に復号する。宣言が無いときは信頼ゲート付き chardetng 検出へ落とす。宣言があって復号に失敗したときの扱いは経路で分かれ、fetch は検出へ落とすが、GitHub は落とさずエラーを返す (`src/github/encoding.rs` の `decode_explicit` と `decode_bom`)。利用者が `--encoding` を指定した、あるいは BOM が宣言している以上、別の候補を推測するより指定の誤りを伝える方が短く済む。検出ゲートは `src/charset.rs:is_reliable_detection` に共有し、多バイト 8 種 (UTF-8, Shift_JIS, EUC-JP, ISO-2022-JP, Big5, GBK, GB18030, EUC-KR) のみ信頼する。最終手段は経路で分岐する。fetch は lossy UTF-8 + `uncertain = true` を返し exit 0、GitHub は `NonUtf8` error + 再試行ヒントで fail する。
 
 Option B は server/user の宣言意図を捨て、正しい label を無視するため却下。Option C は誤ラベルされた多バイト本文 (例: Shift_JIS を UTF-8 と宣言) を常に失敗させ、fetch のリカバリを潰すため却下。単バイト誤ラベルで偶然 valid UTF-8 になるバイト列は検出不能であり、これは既知の non-goal として受容する。
 
@@ -50,7 +50,7 @@ fetch 経路は `src/fetch/download/charset_tests.rs` が label 尊重・多バ�
 
 ### Option A: label/hint 起点 + 信頼ゲート付き検出 fallback + 経路別の最終手段 (採用)
 
-宣言エンコーディングを起点に復号し、失敗時のみ多バイト限定検出へ落とし、最終手段を fetch (lossy+uncertain) と GitHub (hard error) で分岐する。
+宣言エンコーディングを起点に復号し、宣言が無いときは多バイト限定検出へ落とし、最終手段を fetch (lossy+uncertain) と GitHub (hard error) で分岐する。
 
 - Good, because 宣言意図を尊重しつつ誤ラベルの多バイトをリカバリする
 - Good, because 経路ごとの失敗許容度 (継続 vs 表面化) に最適化する
@@ -76,7 +76,7 @@ label を無視し検出結果を優先する。
 
 ### 復号フロー (一次ソース)
 
-fetch 経路 `decode_body` (src/fetch/download.rs:137-174):
+fetch 経路 `decode_body` (`src/fetch/download.rs`):
 
 | ステップ | 処理                                                       | 結果                                                     |
 | -------- | ---------------------------------------------------------- | -------------------------------------------------------- |
@@ -84,7 +84,7 @@ fetch 経路 `decode_body` (src/fetch/download.rs:137-174):
 | 2        | lossy または unknown label なら `detect_decode`            | 多バイト且つ clean decode なら `uncertain: false` で返す |
 | 3        | どちらも失敗                                               | `String::from_utf8_lossy` + `uncertain: true`、exit 0    |
 
-GitHub 経路 `decode_bytes` (src/github/encoding.rs:60-161):
+GitHub 経路 `decode_bytes` (`src/github/encoding.rs`):
 
 | 優先 | 処理                                                                 | source      |
 | ---- | -------------------------------------------------------------------- | ----------- |
@@ -95,7 +95,7 @@ GitHub 経路 `decode_bytes` (src/github/encoding.rs:60-161):
 | 5    | strict UTF-8 検証 (実質到達不能の defensive backstop)                | AssumedUtf8 |
 | 6    | 全失敗で `NonUtf8` error + best-guess 再試行ヒント                   | —           |
 
-共有ゲート `is_reliable_detection` (src/charset.rs:8-20): UTF-8, Shift_JIS, EUC-JP, ISO-2022-JP, Big5, GBK, GB18030, EUC-KR の 8 種のみ `true`。
+共有ゲート `is_reliable_detection` (`src/charset.rs`): UTF-8, Shift_JIS, EUC-JP, ISO-2022-JP, Big5, GBK, GB18030, EUC-KR の 8 種のみ `true`。
 
 ### 使用 crate
 
@@ -108,8 +108,8 @@ GitHub 経路 `decode_bytes` (src/github/encoding.rs:60-161):
 
 ### 参照
 
-- `src/charset.rs:8-20` (共有検出ゲート)
-- `src/fetch/download.rs:103-193` (fetch 経路 `extract_charset` / `decode_body` / `detect_decode`)
-- `src/github/encoding.rs:52-161` (GitHub 経路 `decode_bytes` 一式)
+- `src/charset.rs` の `is_reliable_detection` (共有検出ゲート)
+- `src/fetch/download.rs` の `extract_charset` / `decode_body` / `detect_decode` (fetch 経路)
+- `src/github/encoding.rs` の `decode_bytes` 一式 (GitHub 経路)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #1)
 - GitHub 経路コメントの `BR-001/002/003`・`FR-007/008` コードは本 ADR が決定根拠を提供する。source コメントの参照差し替えは別タスクで追跡する

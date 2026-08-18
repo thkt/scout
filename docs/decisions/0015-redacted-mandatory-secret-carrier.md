@@ -26,14 +26,14 @@ scout は `Redacted` newtype を導入し、全 secret をこの型で運ぶこ�
 
 ## Decision Outcome
 
-Chosen option: Option A。`Redacted` は内部 `String` を隠す newtype で、`Debug` impl は内容を出さず `[REDACTED]` のみを書く。構築は `Redacted::new(&str) -> Option<Self>` のみで、trim 後 empty/whitespace を `None` で弾く。平文取得は明示的な `expose(&self) -> &str` だけが許す。`Display`・`Deref`・`Serialize` は実装せず、暗黙の文字列化・serialize を型で禁じる。env var 読み取り (token_source / slack client / brave client) の境界で必ず `Redacted::new` を通す。
+Chosen option: Option A。`Redacted` は内部 `String` を隠す newtype で、`Debug` impl は内容を出さず `[REDACTED]` のみを書く。構築は `Redacted::new(&str) -> Option<Self>` と `Redacted::from_env_var` の 2 つで、どちらも trim 後 empty/whitespace を弾く。前者は `None`、後者は caller の error 型を返す。平文取得は明示的な `expose(&self) -> &str` だけが許す。`Display`・`Deref`・`Serialize` は実装せず、暗黙の文字列化・serialize を型で禁じる。env var 読み取り (token_source / slack client / brave client) の境界で必ず `Redacted::new` を通す。
 
 Option B は人間の規律に依存し、1 箇所の忘れが漏洩に直結するため却下。Option C は依存追加に対し scout の要件 (Debug マスク + 構築時 non-empty 検証) が自前 newtype で十分満たせるため YAGNI で却下。`zeroize` の drop-time 消去は脅威モデル (log 漏洩) に対する追加価値が薄い。
 
 ### Consequences
 
 - Good, because env var 境界で `Option` を返すため「secret 未設定」を明示的に扱わせる
-- Good, because `Redacted` を含む構造体の derive Debug が `[REDACTED]` を出し、偶発的な log 漏洩を塞ぐ
+- Good, because `Redacted` を含む構造体の derive Debug が `[REDACTED]` を出し、偶発的な log 漏洩を塞ぐ。ただし `Debug` を手書きする構造体には及ばない。`src/brave/client.rs` の `BraveClient` は `api_key` に `"<redacted>"` の literal を書いており、`Redacted` の `Debug` を呼ばない。この構造体へ秘密の field を足す人は、同じ手当てを自分で書く必要がある
 - Good, because newtype はゼロコストで、`expose()` 明示呼び出しがないと平文へ到達できない
 - Bad, because `Serialize` は未実装だが、誤って `.expose()` した値を serde に渡せば保護は効かない
 - Bad, because `Clone` は secret をメモリに複製し、drop 時の消去 (zeroize) は無い
@@ -70,7 +70,7 @@ secret を境界で newtype に包み、Debug マスク + 構築時検証 + expo
 
 ## More Information
 
-### 型定義 (一次ソース src/redacted.rs:6-30)
+### 型定義 (一次ソース `src/redacted.rs` の `Redacted`)
 
 - `pub(crate) struct Redacted(String)` — `derive(Clone)` のみ
 - `pub fn new(s: &str) -> Option<Self>` — trim 後 empty なら `None`、非空なら `Some(trim 済み)`
@@ -88,6 +88,6 @@ secret を境界で newtype に包み、Debug マスク + 構築時検証 + expo
 
 ### 参照
 
-- `src/redacted.rs:6-74` (型定義 + テスト)
+- `src/redacted.rs` の `Redacted` と `mod tests` (型定義 + テスト)
 - GitHub token 解決の詳細は別 ADR (token precedence + stderr drop)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #3。`xoxp-` prefix の error 文言不一致は横流し BUG 事項)
