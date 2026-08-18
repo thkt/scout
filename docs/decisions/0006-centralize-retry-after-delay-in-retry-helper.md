@@ -31,7 +31,7 @@ Chosen option: "Helper function in `retry.rs` + per-backend extractor closure", 
 ### Consequences
 
 - Good, because delay formula lives in one place (`retry.rs`); a tuning change touches one file.
-- Good, because each backend keeps full control over `is_retriable`, where the semantics genuinely differ (brave matches `Server(_)`, github matches `Api { code: 500..=599, .. }`, slack matches `Network(_) | Timeout(_)`).
+- Good, because each backend keeps full control over `is_retriable`: three private fns, no shared trait, so a backend can diverge without touching the others.
 - Good, because no new trait is exposed; `retry.rs` API stays narrow.
 - Bad, because the per-backend extractor closure (~3 lines) is the residual duplication: each backend must say "RateLimited → retry_after, else None".
 
@@ -82,3 +82,13 @@ Two adjacent audit findings are intentionally not addressed here.
 
 - A second HTTP backend is added (ADR-0005 currently forbids this for search). At that point, re-evaluate whether the trait abstraction's cost has dropped below its benefit.
 - `retry.rs` API needs to expose more retry policies (e.g., circuit breaker). The helper approach may scale less well than a trait.
+
+## Addendum (2026-08-18): 3 backend の `is_retriable` は同一実装になった
+
+Decision Outcome が Retryable trait 案を退けた根拠として「semantics が実際に違う」を挙げ、brave が `Server(_)`、github が `Api { code: 500..=599, .. }`、slack が `Network(_) | Timeout(_)` を見ると書いていた。issue #317 (2026-08-06) が 3 backend とも `ErrorCode::is_retryable` への委譲へ揃えたので、この列挙は事実と逆になった。現在の 3 実装は `RateLimited { retry_after }` を `retry_after_within_cap` に通し、残りを `e.classify().kind.is_retryable()` に委ねる同一の body を持つ (`src/brave/client.rs`、`src/github.rs`、`src/slack/client.rs` の `is_retriable`)。
+
+決定そのものは維持する。3 つの private fn という構造は変わっておらず、backend ごとに分岐を戻せる。ただし棄却の根拠は「今の semantics が違う」ではなく「分岐を戻す余地を型で塞がない」に変わった。
+
+### Reassessment Triggers への追加
+
+- 3 backend の `is_retriable` が同一のまま 4 つ目の backend が加わったとき、共通化の可否を再評価する。

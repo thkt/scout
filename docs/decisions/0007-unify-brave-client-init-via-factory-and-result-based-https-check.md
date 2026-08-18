@@ -46,7 +46,7 @@ Chosen option: "Hybrid B+", because it closes both findings with a small, locali
 
 ### Hybrid B+ (chosen)
 
-`from_env_with<F>(http, get_var: F)` adopts the LANG.md factory-parameter pattern; production `from_env` delegates to it with `std::env::var`. `assert_https` becomes the generic `validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E>` (`src/redacted.rs:37`), so each caller injects its own error variant; `BraveClient` supplies `|| BraveError::InsecureBaseUrl` (`src/brave/client.rs:227`). `send_request` gates the call through the per-client `should_check_https()` helper (`src/brave/client.rs:210-219`), which returns `false` only when `skip_https_check` is set, and only `with_base_url` (cfg(test)) sets it.
+`from_env_with<F>(http, get_var: F)` adopts the LANG.md factory-parameter pattern; production `from_env` delegates to it with `std::env::var`. `assert_https` becomes the generic `validate_https<E>(url: &str, err: impl FnOnce() -> E) -> Result<(), E>` (`src/redacted.rs`), so each caller injects its own error variant; `BraveClient` supplies `|| BraveError::InsecureBaseUrl` (`src/brave/client.rs` の `send_request`). `send_request` gates the call through the per-client `should_check_https()` helper (`src/brave/client.rs` の `should_check_https`), which returns `false` only when `skip_https_check` is set, and only `with_base_url` (cfg(test)) sets it.
 
 - Good, because both findings are closed with one cohesive change.
 - Good, because wiremock churn is zero; the new flag isolates the bypass to a single constructor.
@@ -84,4 +84,5 @@ rustls + self-signed cert across `brave/client.rs` (~8), `slack.rs` (~4), `githu
 ### Reassessment Triggers
 
 - `BraveError::InsecureBaseUrl` proves to be dead code over six months. Re-evaluate whether the validation belongs at construction time instead of request time.
-- A second HTTP backend is added (currently forbidden by ADR-0005). The `skip_https_check` flag would need to generalize, at which point a `BraveConfig`-style struct becomes worth its weight.
+- The generalization the original trigger anticipated already happened on the check side, not the flag side: `validate_https<E>` (`src/redacted.rs`) is generic over the caller's error type and all three clients call it. What remains per client is a `#[cfg(test)]` bool.
+- The `#[cfg(test)]` bool that each of the three clients carries grows past a single flag, or a fourth client needs the same shape. Approach A was rejected because `for_wiremock` renames the bypass and `InsecureBaseUrl` stays dead in production; neither reason moves with the client count, so the count alone is not the trigger.

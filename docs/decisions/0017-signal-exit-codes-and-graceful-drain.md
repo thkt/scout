@@ -29,7 +29,7 @@ scout は SIGINT→130/SIGTERM→143 (POSIX 128+signo) を返し、`SHUTDOWN_DRA
 
 ## Decision Outcome
 
-Chosen option: Option A。SIGINT は 130、SIGTERM は 143 (128+signo の POSIX 規約) へ写像する。中断を受けると cancel handle を通知し、in-flight command を `SHUTDOWN_DRAIN_TIMEOUT = 7s` まで await してから signal 写像の終了コードを返す。7s は CDP `browser.close()` の内部 timeout (5s) に chromium subprocess cleanup の余白を足した値で、graceful path には十分かつ呼び出し側が hang と感じない範囲に収める。signal-vs-command の配線は signal source を注入する `drive` 関数に切り出し、実 OS signal を起動せずユニットテスト可能にする (issue #228)。
+Chosen option: Option A。SIGINT は 130、SIGTERM は 143 (128+signo の POSIX 規約) へ写像する。中断を受けると cancel handle を通知し、in-flight command を `SHUTDOWN_DRAIN_TIMEOUT = 7s` まで await してから signal 写像の終了コードを返す。7s は scout 自身が `browser.close()` に掛ける 5s の timeout (`src/fetch/cdp.rs` の `fetch_with_cdp_with`) に chromium subprocess cleanup の余白を足した値で、graceful path には十分かつ呼び出し側が hang と感じない範囲に収める。最悪経路はこの 5s に `PGROUP_SIGTERM_GRACE` の 50ms と `child.wait()` の 2s を足した 7.05s で、7s をわずかに超える。超えた場合の扱いは下の Consequences が受容している。signal-vs-command の配線は signal source を注入する `drive` 関数に切り出し、実 OS signal を起動せずユニットテスト可能にする (issue #228)。
 
 Option B は chromium subprocess を ppid=1 へ orphan させ OS reaper に cleanup を委ねるため却下。Option C は subtask が stuck した場合に無限 hang するため却下。
 
