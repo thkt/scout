@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(neutralize_yaml_markers("... bar"), "*** bar");
     }
 
-    /// [T-FC030] 閉じないフェンスの後ろにある YAML マーカー行も *** に書き換わる
+    /// [T-FC030]
     #[test]
     fn yaml_marker_after_unclosed_fence_is_still_rewritten() {
         assert_eq!(
@@ -287,7 +287,7 @@ mod tests {
         );
     }
 
-    /// [T-FC031] 閉じたフェンスの内側にある YAML マーカー行は原文のまま残る
+    /// [T-FC031]
     #[test]
     fn yaml_marker_inside_closed_fence_is_preserved() {
         assert_eq!(
@@ -296,7 +296,7 @@ mod tests {
         );
     }
 
-    /// [T-FC032] フェンスの外側にある YAML マーカー行は *** に書き換わる
+    /// [T-FC032]
     #[test]
     fn yaml_marker_outside_fence_is_rewritten() {
         assert_eq!(
@@ -305,7 +305,7 @@ mod tests {
         );
     }
 
-    /// [T-FC033] 4 個のフェンスの内側にある 3 個のバッククォート行は閉じと見なされない
+    /// [T-FC033]
     #[test]
     fn three_backtick_line_inside_four_backtick_fence_does_not_close_it() {
         assert_eq!(
@@ -314,7 +314,7 @@ mod tests {
         );
     }
 
-    /// [T-FC100] 上限を超える title は切り詰められる
+    /// [T-FC100]
     ///
     /// Scoped to `write_yaml_str` alone. Whether the frontmatter still closes
     /// once a caller's byte cap cuts the result belongs to T-FC104, which runs
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    /// [T-FC101] byline と published_time でも上限を超えた値が切り詰められる
+    /// [T-FC101]
     ///
     /// `format_with_frontmatter` reaches this function from three call sites,
     /// and the cap has to hold at each. A field that later formats its value
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    /// [T-FC102] escape 対象文字だけの上限超の値でも title 行が引用符で閉じ、末尾が単独のバックスラッシュにならない
+    /// [T-FC102]
     ///
     /// Guards the ordering the contract requires: truncate the raw value, then
     /// escape it. Truncating an already-escaped value instead can cut a
@@ -392,7 +392,7 @@ mod tests {
         );
     }
 
-    /// [T-FC103] 上限以下の値は切り詰められず省略記号も付かない
+    /// [T-FC103]
     #[test]
     fn value_within_the_cap_is_not_truncated_and_carries_no_ellipsis() {
         let title = "A plain title well under any byte cap";

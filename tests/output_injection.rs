@@ -479,7 +479,7 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
     );
 }
 
-// T-C043: 行ごとに_span_を並べた_pre_を含むページで_fetch_出力の各行がバックスラッシュを含まない
+// T-C043: on a page whose pre holds one span per line, no fetch output line carries a backslash
 //
 // Exercises the same syntax-highlighter shape `pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line`
 // (T-FC053, src/fetch/converter.rs) pins by calling `to_fetch_result`
@@ -599,7 +599,7 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
     );
 }
 
-// T-C044: 段落と表とリストを同時に含むページで畳みと hard break と反例が 1 つの出力に揃う
+// T-C044: a page mixing paragraphs, a table and a list shows folding, hard breaks and the counter-examples in one output
 //
 // DR-0027 splits fetch's line-break handling into a 3-form contract (a
 // paragraph's own wrapped newline folds to one space; a paragraph's `<br>`
@@ -682,7 +682,7 @@ fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one
     );
 }
 
-// T-C046: 空アンカーと title 付きリンクを同時に含むページで抑止と削除が1つの出力に揃う
+// T-C046: a page holding both an empty anchor and a titled link shows the suppression and the removal in one output
 //
 // Both fixtures below are proven individually at the `to_fetch_result` level
 // by `src/fetch/converter.rs`'s own unit tests

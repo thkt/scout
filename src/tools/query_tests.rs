@@ -461,7 +461,7 @@ fn fetch_output_truncates_long_content() {
     );
 }
 
-/// [T-FC087] 閉じたフェンスの内側で切れた出力に column 0 の --- が残らない
+/// [T-FC087]
 ///
 /// `neutralize_yaml_markers_outside_fences` (src/yaml.rs) runs once, during
 /// fetch conversion, over the whole body: a marker inside a fence that closes

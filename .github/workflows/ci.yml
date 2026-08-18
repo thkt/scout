@@ -65,6 +65,18 @@ jobs:
 
       - name: Format check
         run: cargo fmt -- --check
+
+      - name: Comment language check
+        run: |
+          hits=$(grep -rnE '//' src tests --include='*.rs' \
+            | sed -E 's/"[^"]*"//g; s/'"'"'.'"'"'//g' \
+            | grep -E '//.*[ぁ-ゖァ-ヺー々〜、。「」一-鿿]' || true)
+          if [ -n "$hits" ]; then
+            echo "Comments must be written in English (.claude/rules/CONVENTIONS.md)."
+            echo "Only a quoted original-language fragment may remain, as in: // \"テスト\" in Shift_JIS"
+            echo "$hits"
+            exit 1
+          fi
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 20

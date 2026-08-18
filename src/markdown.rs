@@ -552,11 +552,11 @@ mod tests {
         );
     }
 
-    /// [T-MD036] 改行を含む入力の打ち切りが行境界で切れ、部分行を残さない
+    /// [T-MD036]
     ///
-    /// 6 バイトの行を 20 本並べた 120 バイト入力を max_bytes=100 で切ると、
-    /// 100 バイト目は 17 本目の行の途中 (先頭から 4 バイト目) に落ちる。行境界へ
-    /// 寄せる実装は直前の改行 (95 バイト目) まで戻り、96 バイトで 16 行分を残す。
+    /// Byte 100 of a 120-byte input built from 20 six-byte lines falls inside the
+    /// 17th line. Backing up to the preceding newline at byte 95 keeps 96 bytes,
+    /// which is 16 whole lines.
     #[test]
     fn truncate_with_note_with_newlines_cuts_at_line_boundary_leaving_no_partial_line() {
         let line = "01234\n"; // 6 bytes per line
@@ -574,13 +574,12 @@ mod tests {
         );
     }
 
-    /// [T-MD037] "-------" を含む入力を行の途中で切っても出力の末尾行が --- にならない
+    /// [T-MD037]
     ///
-    /// 6 バイトの行を 15 本 (90 バイト) 並べたあとに 7 個のダッシュの行を続け、
-    /// max_bytes=93 で切る。素朴な floor_char_boundary(93) はダッシュ行の 3 バイト
-    /// 目 (`---`) で止まり、その 3 文字だけの行が Markdown の thematic break として
-    /// 独立して解釈されてしまう。行境界へ寄せる実装は 90 バイト目 (15 行分) まで戻り、
-    /// ダッシュ行自体を丸ごと落とす。
+    /// A 7-dash line follows 15 six-byte lines, and the cut lands at byte 93.
+    /// A plain `floor_char_boundary(93)` stops three bytes into the dash line,
+    /// leaving `---` alone on its own line, which Markdown reads as a thematic
+    /// break the source never had. Backing up to byte 90 drops the dash line whole.
     #[test]
     fn truncate_with_note_cutting_mid_dash_run_does_not_leave_a_lone_thematic_break() {
         let lines = "01234\n".repeat(15); // 90 bytes, 15 complete lines
@@ -594,7 +593,7 @@ mod tests {
         assert_eq!(content, &input[..90]);
     }
 
-    /// [T-MD028] 最長 4 個のバッククォート列を含む内容に対して区切りは 5 個になる
+    /// [T-MD028]
     #[test]
     fn fence_delimiter_returns_five_backticks_for_content_with_longest_run_of_four() {
         let content = "some ```` text";
@@ -602,13 +601,13 @@ mod tests {
         assert_eq!(delim, "`".repeat(5));
     }
 
-    /// [T-MD029] バッククォートを含まない内容に対して区切りは 3 個になる
+    /// [T-MD029]
     #[test]
     fn fence_delimiter_returns_three_backticks_for_content_without_backticks() {
         assert_eq!(fence_delimiter("plain content, no backticks here"), "```");
     }
 
-    /// [T-MD030] 4 個のフェンスで囲まれた中の 3 個のバッククォート行が閉じ扱いされない
+    /// [T-MD030]
     #[test]
     fn shift_headings_does_not_close_four_backtick_fence_on_shorter_backtick_run() {
         let input = "````\n```\ncontent\n````\n## After";
@@ -620,7 +619,7 @@ mod tests {
         );
     }
 
-    /// [T-MD031] 4 個のフェンスの中にある見出し記法の行が見出しとして繰り下げられない
+    /// [T-MD031]
     #[test]
     fn shift_headings_leaves_heading_syntax_line_inside_four_backtick_fence_unshifted() {
         let input = "````\n```\n## Not a heading\n````";
@@ -632,25 +631,25 @@ mod tests {
         );
     }
 
-    /// [T-MD032] バッククォート 3 個の行がフェンス開始として認識される
+    /// [T-MD032]
     #[test]
     fn fence_marker_recognizes_three_backticks_as_fence_start() {
         assert_eq!(fence_marker("```"), Some(('`', 3)));
     }
 
-    /// [T-MD033] バッククォート 2 個の行はフェンス開始として認識されない
+    /// [T-MD033]
     #[test]
     fn fence_marker_does_not_recognize_two_backticks_as_fence_start() {
         assert_eq!(fence_marker("``"), None);
     }
 
-    /// [T-MD034] チルダ 3 個の行がフェンス開始として認識される
+    /// [T-MD034]
     #[test]
     fn fence_marker_recognizes_three_tildes_as_fence_start() {
         assert_eq!(fence_marker("~~~"), Some(('~', 3)));
     }
 
-    /// [T-MD035] 4 スペースでインデントされたフェンス行もフェンス開始として認識される
+    /// [T-MD035]
     ///
     /// `fence_marker` takes an already-trimmed line, so asserting on it
     /// directly would only restate T-MD032. `track_fence` owns the trim, so

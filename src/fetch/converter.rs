@@ -1013,7 +1013,7 @@ mod tests {
         }
     }
 
-    /// [T-FC023] table の出力がヘッダ行に続く区切り行を含む
+    /// [T-FC023]
     ///
     /// This file's own `table_handler` pushes the header row
     /// (`format_table_row`) immediately followed by the separator row
@@ -1047,7 +1047,7 @@ mod tests {
         );
     }
 
-    /// [T-FC024] li の中の pre がリストのマーカーと同じ項目に留まる
+    /// [T-FC024] A pre inside li stays in the same item as the list marker
     ///
     /// `list_item_handler` walks the `<li>`'s children into one string and
     /// indents every line but the first by the marker's width before
@@ -1090,7 +1090,7 @@ mod tests {
         }
     }
 
-    /// [T-FC025] td の中の pre が表の行を分断しない
+    /// [T-FC025] A pre inside td does not split the table row
     ///
     /// `extract_row_cells` above passes each cell's content through this
     /// file's own `normalize_cell_content`, which replaces every `\n` with a
@@ -1125,7 +1125,7 @@ mod tests {
         );
     }
 
-    /// [T-FC026] 括弧を含む URL のリンク先が括弧の手前で切れない
+    /// [T-FC026]
     ///
     /// `AnchorElementHandler::escape_link_destination` backslash-escapes
     /// every `(` and `)` in the href before writing it as the link
@@ -1237,7 +1237,7 @@ mod tests {
         );
     }
 
-    /// [T-FC015] pre の中の code が含むエスケープ対象 6 文字にバックスラッシュが付かない
+    /// [T-FC015] Escape-target chars in a pre's code are not backslash escaped
     ///
     /// htmd 0.5.5's `escape_if_needed` backslash-escapes six ASCII bytes in
     /// ordinary text — `\ * _ \` [ ]` (htmd's dom_walker.rs `escape_if_needed`) —
@@ -1257,7 +1257,7 @@ mod tests {
         );
     }
 
-    /// [T-FC016] 3 個のバッククォートを含むコードに対してフェンスが 4 個に広がる
+    /// [T-FC016]
     ///
     /// htmd's `get_code_fence_marker` sets the fence width to
     /// `3.max(longest_backtick_run_in_content + 1)`
@@ -1277,7 +1277,7 @@ mod tests {
         );
     }
 
-    /// [T-FC017] class="language-rust" を持つ code のフェンスに情報文字列 rust が付く
+    /// [T-FC017]
     ///
     /// htmd's `find_language_from_attrs` reads the `code` element's `class`
     /// attribute for a `language-*` token and appends the suffix as the
@@ -1301,7 +1301,7 @@ mod tests {
         );
     }
 
-    /// [T-FC019] code 子を持たない pre がフェンスで囲まれて出る
+    /// [T-FC019]
     ///
     /// htmd's built-in `pre_handler` wraps a `<pre>` with no `<code>` child in
     /// blank lines only, with no fence markers at all
@@ -1321,8 +1321,7 @@ mod tests {
         );
     }
 
-    /// [T-FC083] code 子を持たない pre の中身が 3 連バッククォートを含むとき
-    /// フェンスが 4 連で出る
+    /// [T-FC083]
     ///
     /// `fence_delimiter` widens the fence past the longest backtick run in the
     /// content. Pins the wiring, not the width rule: `markdown.rs` unit-tests
@@ -1341,7 +1340,7 @@ mod tests {
         );
     }
 
-    /// [T-FC082] 表の caption がヘッダ行の直前に空行なしで出る
+    /// [T-FC082]
     ///
     /// T-FC070 pins the order, this one the adjacency: no blank line separates
     /// the two. Both pulldown-cmark 0.13.4 and comrak 0.54.0 render this input
@@ -1365,7 +1364,7 @@ mod tests {
         );
     }
 
-    /// [T-FC020] htmd が既にフェンスした pre の中の code を二重のフェンスで囲まない
+    /// [T-FC020]
     ///
     /// A `<pre><code>` pair is already turned into a single fenced block by
     /// htmd's built-in `code_handler`
@@ -1391,7 +1390,7 @@ mod tests {
         );
     }
 
-    /// [T-FC021] htmd が pre 直下のテキスト先頭に付けるバックスラッシュはフェンス内に残らない
+    /// [T-FC021]
     ///
     /// `dom_walker::escape_pre_text_if_needed` prepends a backslash to a
     /// `<pre>` direct text node whose first character is a fence character
@@ -1417,7 +1416,7 @@ mod tests {
         );
     }
 
-    /// [T-FC022] 原文の行頭にあるバックスラッシュとバッククォートの並びがそのまま残る
+    /// [T-FC022]
     ///
     /// `escape_pre_text_if_needed` only ever escapes a text node's very first
     /// character (htmd's dom_walker.rs `escape_pre_text_if_needed`), so a `` \` `` sequence
@@ -1440,7 +1439,7 @@ mod tests {
         );
     }
 
-    /// [T-FC027] 原文の先頭にあるバックスラッシュとバッククォートの並びがそのまま残る
+    /// [T-FC027]
     ///
     /// `escape_pre_text_if_needed` prepends its own backslash only when the
     /// text node's first character is `` ` `` or `~`
@@ -1463,7 +1462,7 @@ mod tests {
         );
     }
 
-    /// [T-FC029] コメントノードが先行しても htmd のエスケープはフェンス内に残らない
+    /// [T-FC029]
     ///
     /// A `<!-- comment -->` direct child matches neither `NodeData::Text` nor
     /// `NodeData::Element` in `raw_pre_content`'s loop, so it falls through the
@@ -1485,7 +1484,7 @@ mod tests {
         );
     }
 
-    /// [T-FC028] インライン要素を子に持つ code 無しの pre がフェンスで囲まれて出る
+    /// [T-FC028]
     ///
     /// Syntax highlighters wrap code lines in `<span>` without a `<code>`
     /// child. htmd escapes only text nodes whose direct parent is `<pre>`
@@ -1505,7 +1504,7 @@ mod tests {
         );
     }
 
-    /// [T-FC052] pre の中の span の末尾にある改行が出力に残る
+    /// [T-FC052]
     ///
     /// htmd's built-in `span` fast path (`walk_node`, active while
     /// exactly one handler is registered for `span`) trims every leading and
@@ -1525,7 +1524,7 @@ mod tests {
         );
     }
 
-    /// [T-FC053] 行ごとに span を並べた pre で各行が別の行として出る
+    /// [T-FC053]
     ///
     /// The shape a syntax highlighter emits: one `<span>` per source line, each
     /// carrying its own trailing `\n`, which the built-in fast path trims off
@@ -1552,7 +1551,7 @@ mod tests {
         );
     }
 
-    /// [T-FC054] pre の外の inline code の中の span では改行が剥がれ空白も残らない
+    /// [T-FC054]
     ///
     /// The passthrough branch checks for a `<pre>` ancestor only, so this span
     /// falls to htmd's built-in span handler, whose `content.trim_matches('\n')`
@@ -1583,7 +1582,7 @@ mod tests {
         );
     }
 
-    /// [T-FC060] th と td が混ざる行でラベルと値が同じ行の別セルに出る
+    /// [T-FC060]
     ///
     /// The row shape the whole handler exists for. Under the built-in's
     /// per-tag extraction, described on `table_handler` above, this row keeps
@@ -1620,7 +1619,7 @@ mod tests {
         );
     }
 
-    /// [T-FC061] パイプで囲まれた行の中に空白 2 個以上の連続が現れない
+    /// [T-FC061]
     ///
     /// htmd's built-in row formatter pads every cell out to the column's max
     /// width across the whole table (`compute_column_widths` /
@@ -1650,7 +1649,7 @@ mod tests {
         );
     }
 
-    /// [T-FC062] 区切り行がセルごとにダッシュ 3 本で出る
+    /// [T-FC062]
     ///
     /// htmd's built-in `format_separator_padded` widens each column's dash run
     /// to that column's computed width (htmd's element_handler/table.rs
@@ -1680,7 +1679,7 @@ mod tests {
         );
     }
 
-    /// [T-FC063] セルの中の NBSP が空白へ落ちずに残る
+    /// [T-FC063]
     ///
     /// The contract requires cell-content newline normalization to follow the
     /// built-in form (`normalize_cell_content` replaces `\n`/`\r` only,
@@ -1704,7 +1703,7 @@ mod tests {
         );
     }
 
-    /// [T-FC055] 隣の span が要素の子を持つ形でも pre の中の改行が残る
+    /// [T-FC055]
     ///
     /// The neighboring span's child is an element rather than a bare text
     /// node, which a passthrough reading raw text would leave unconverted.
@@ -1723,7 +1722,7 @@ mod tests {
         );
     }
 
-    /// [T-FC064] ヘッダへ昇格した行の td が失われない
+    /// [T-FC064] A row promoted to header keeps its td cells
     ///
     /// A `<thead>`'s first row becomes the header whatever its cells are, so
     /// the all-`<th>` rule never runs on it. A mixed row there must reach the
@@ -1749,7 +1748,7 @@ mod tests {
         );
     }
 
-    /// [T-FC065] 本文の途中にある th だけの行がデータ行として出る
+    /// [T-FC065]
     ///
     /// The header search reaches only `thead`'s first row or the table's first
     /// row. An all-`<th>` row anywhere else stays a data row
@@ -1786,7 +1785,7 @@ mod tests {
         );
     }
 
-    /// [T-FC066] 複数行 thead の 2 行目以降がデータ行として出る
+    /// [T-FC066]
     ///
     /// Only a `thead`'s first row carries header candidacy.
     /// Its second and later rows must still reach the output, as data rows, so
@@ -1811,7 +1810,7 @@ mod tests {
             );
     }
 
-    /// [T-FC068] Faithful モードで属性を持つ表が組み込みへ委譲され HTML のまま出る
+    /// [T-FC068]
     ///
     /// `markdown_converter` is Pure-only, so the test builds its own converter
     /// in `Faithful` mode with the same handlers registered.
@@ -1853,7 +1852,7 @@ mod tests {
         );
     }
 
-    /// [T-FC067] 全セルが th の行が無い表で空のヘッダ行と区切り行が出る
+    /// [T-FC067]
     ///
     /// A table with no qualifying header row still opens with an empty header
     /// row and its separator, not with its data rows. The fixture is a
@@ -1891,7 +1890,7 @@ mod tests {
         );
     }
 
-    /// [T-FC069] thead を持たない表で全セルが th の最初の行がヘッダ行になる
+    /// [T-FC069]
     ///
     /// The affirmative half of the all-`<th>` rule. T-FC067 pins the rejection
     /// side (a mixed row stays in the body) and T-FC064 promotes through
@@ -1924,7 +1923,7 @@ mod tests {
         );
     }
 
-    /// [T-FC070] caption を持つ表で caption がヘッダ行の前に出る
+    /// [T-FC070]
     ///
     /// The built-in's caption placement is kept, which emits the
     /// caption's own converted content ahead of the header row rather than
@@ -1955,7 +1954,7 @@ mod tests {
         );
     }
 
-    /// [T-FC071] 行を持たない table が表として組み立てられずに退避する
+    /// [T-FC071]
     ///
     /// With no rows there is no column count to build a pipe table from, so the
     /// handler walks the children and returns their content instead of emitting
@@ -1977,7 +1976,7 @@ mod tests {
         );
     }
 
-    /// [T-FC072] セルの間に改行がある tr でもセルが取り出される
+    /// [T-FC072]
     ///
     /// A `<tr>` written across source lines carries whitespace text nodes
     /// between its cells. Both the cell walk and the all-`<th>` rule count
@@ -2007,7 +2006,7 @@ mod tests {
         );
     }
 
-    /// [T-FC034] pre 直下の 2 番目のテキストが先頭にバッククォートを持つとき原文のまま出る
+    /// [T-FC034]
     ///
     /// `raw_pre_content` reads each Text child's `contents` off the DOM, so no
     /// escape is introduced and none has to be removed. Reverse-escaping the
@@ -2033,7 +2032,7 @@ mod tests {
         );
     }
 
-    /// [T-FC035] 先頭のテキストより前に要素がある pre でもバッククォートが原文のまま出る
+    /// [T-FC035]
     ///
     /// Same DOM read as T-FC034, with an element sibling ahead of the text.
     /// A front-anchored strip over the joined `content` would miss the escape
@@ -2057,7 +2056,7 @@ mod tests {
         );
     }
 
-    /// [T-FC036] 入れ子の pre でも内側のバッククォートが原文のまま出る
+    /// [T-FC036]
     ///
     /// T-FC034's shape one level deeper: the outer `<pre>` delegates its
     /// `<pre>` child to `Handlers::handle`, which re-enters this crate's own
@@ -2081,7 +2080,7 @@ mod tests {
         );
     }
 
-    /// [T-FC037] 同じタグと属性の span が連なる pre で各行の改行が保たれる
+    /// [T-FC037]
     ///
     /// Unlike T-FC052/053 (spans with distinct attrs, or attrs that block
     /// htmd's adjacent-element merge), three `<span>` siblings sharing the same
@@ -2104,7 +2103,7 @@ mod tests {
         );
     }
 
-    /// [T-FC038] 隣接するブロック子の境界に残る改行が2個までに収まる
+    /// [T-FC038]
     ///
     /// A block-level child's converted content already opens and closes with a
     /// blank line, so two such children in a row would stack both sides' blank
@@ -2135,7 +2134,7 @@ mod tests {
         );
     }
 
-    /// [T-FC039] pre 直下の br が行末空白2個と改行として残る
+    /// [T-FC039]
     ///
     /// A `<br>` that is a direct child of `<pre>` reaches `raw_pre_content`'s
     /// `NodeData::Element` branch, which hands it to `Handlers::handle` and
@@ -2158,7 +2157,7 @@ mod tests {
         );
     }
 
-    /// [T-FC040] pre の中の未登録タグの子のテキストがエスケープされずに出る
+    /// [T-FC040]
     ///
     /// The fixture's inner tag has no handler registered for it by this
     /// crate or by htmd itself, so the `NodeData::Element` branch in
@@ -2182,7 +2181,7 @@ mod tests {
         );
     }
 
-    /// [T-FC041] 段落の中の改行が空白 1 個へ畳まれる
+    /// [T-FC041]
     ///
     /// A raw `\n` makes a Text node fail htmd's `is_plain_text` check
     /// (htmd's dom_walker.rs `is_plain_text`), which routes it through
@@ -2205,7 +2204,7 @@ mod tests {
         );
     }
 
-    /// [T-FC042] 段落の中の br が行末空白2個と改行として残る
+    /// [T-FC042]
     ///
     /// htmd's built-in `br_handler` converts a `<br>` to `"  \n"` under the
     /// default `BrStyle::TwoSpaces` (htmd's element_handler/br.rs `br_handler`),
@@ -2225,7 +2224,7 @@ mod tests {
         );
     }
 
-    /// [T-FC043] pre の中身は畳まれずに改行が残る
+    /// [T-FC043]
     ///
     /// A `<pre>` with no `<code>` child is rebuilt by this crate's own
     /// `pre_handler` via `raw_pre_content`, which reads a Text child's
@@ -2247,7 +2246,7 @@ mod tests {
         );
     }
 
-    /// [T-FC044] inline code の中の連続する空白がそのまま残る
+    /// [T-FC044]
     ///
     /// A `<code>`'s children walk with `is_pre = true` from the tag name
     /// alone, so the whitespace compression that folds a paragraph never runs
@@ -2267,7 +2266,7 @@ mod tests {
         );
     }
 
-    /// [T-FC045] 表セルの中の br は改行を失い空白へ畳まれる
+    /// [T-FC045]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
     /// this crate's own `normalize_cell_content` then replaces every `\n` with
@@ -2293,7 +2292,7 @@ mod tests {
         );
     }
 
-    /// [T-FC046] リスト項目の中の br は行末空白 2 個を失いインデントされた改行になる
+    /// [T-FC046]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
     /// `list_item_handler` indents every line after the first with
@@ -2320,7 +2319,7 @@ mod tests {
         );
     }
 
-    /// [T-FC047] 見出しの中の br 以降は見出しの外へ出る
+    /// [T-FC047]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, and
     /// the heading handler writes its `#` marker once, ahead of the whole
@@ -2348,7 +2347,7 @@ mod tests {
         );
     }
 
-    /// [T-FC048] pre の中の空アンカーが消えて原文の行とインデントが残る
+    /// [T-FC048]
     ///
     /// Fixture mirrors a syntax-highlighted code block's per-line
     /// `#__codelineno-…` anchor: a bare `<pre>` (no `<code>` child) with an
@@ -2377,7 +2376,7 @@ mod tests {
         );
     }
 
-    /// [T-FC049] 絶対 URL を指す中身が空のアンカーは行き先と title を保つ
+    /// [T-FC049]
     ///
     /// Paired with a fragment-only empty anchor (`#top`) in the same paragraph
     /// so the assertion cannot pass by coincidence: suppression that reached
@@ -2403,7 +2402,7 @@ mod tests {
         );
     }
 
-    /// [T-FC050] title 付きで中身が空の headerlink が消える
+    /// [T-FC050]
     #[test]
     fn titled_headerlink_with_empty_content_is_removed() {
         let article = article(
@@ -2428,7 +2427,7 @@ mod tests {
         );
     }
 
-    /// [T-FC051] href 属性を持たない a は組み込みへ委譲される
+    /// [T-FC051]
     ///
     /// Paired with a fragment-only empty anchor (`#nav`) in the same paragraph
     /// so the assertion cannot pass by coincidence: suppression is scoped to
@@ -2452,7 +2451,7 @@ mod tests {
         );
     }
 
-    /// [T-FC077] href が空文字列で中身も空のアンカーが消える
+    /// [T-FC077]
     ///
     /// `href=""` resolves to the current page, so it points at the same
     /// nothing a bare `#` does. Left to the builtin handler it emits
@@ -2476,7 +2475,7 @@ mod tests {
         );
     }
 
-    /// [T-FC073] リンクテキストを持つリンクの出力から title が消える
+    /// [T-FC073]
     ///
     /// htmd's built-in anchor handler writes the `title` attribute straight
     /// into the link as `](url "title")`
@@ -2503,7 +2502,7 @@ mod tests {
         );
     }
 
-    /// [T-FC074] 二重引用符を含む title でも書き換えが外れない
+    /// [T-FC074]
     ///
     /// htmd's built-in backslash-escapes every `"` inside the title
     /// (htmd's element_handler/anchor.rs `process_title`,
@@ -2532,7 +2531,7 @@ mod tests {
         );
     }
 
-    /// [T-FC075] 改行を含む title でも書き換えが外れない
+    /// [T-FC075]
     ///
     /// htmd's built-in trims and rejoins each line of the title with `\n`
     /// (htmd's element_handler/anchor.rs `process_title`, `process_title`),
@@ -2559,7 +2558,7 @@ mod tests {
         );
     }
 
-    /// [T-FC076] 空白だけの title は title 無しとして扱われる
+    /// [T-FC076]
     ///
     /// htmd's built-in `process_title` drops every whitespace-only line
     /// (htmd's element_handler/anchor.rs `process_title`), so a
@@ -2586,7 +2585,7 @@ mod tests {
         );
     }
 
-    /// [T-FC084] `content_html` に残った `<script>` と `<style>` の中身が本文へ出ない
+    /// [T-FC084]
     ///
     /// htmd's own `block_handler` registers `script` and `style` among its
     /// "other block elements"
@@ -2622,7 +2621,8 @@ mod tests {
         );
     }
 
-    /// [T-FC085] `noscript`, `textarea`, `iframe` の子, `svg` の `desc`, `title` の中身が本文へ出ない
+    /// [T-FC085] The bodies of `noscript`, `textarea`, `iframe`, `svg`'s `desc` and
+    /// `title` do not reach the body
     ///
     /// None of these five tags is `script`/`style`, so T-FC084's block_handler
     /// path does not even apply uniformly: `textarea` and `iframe` do sit in
@@ -2681,7 +2681,7 @@ mod tests {
         );
     }
 
-    /// [T-FC086] `--raw` の end-to-end で `<script>` の中身が本文へ出ない
+    /// [T-FC086]
     ///
     /// Seam test: runs the real `--raw` path's own extraction
     /// (`extractor::extract_raw`, the function `fetch_page` calls when
@@ -2714,7 +2714,7 @@ mod tests {
         );
     }
 
-    /// [T-FC089] XHTML 式に自己終了した `<script />` の後ろの本文が消えない
+    /// [T-FC089]
     ///
     /// `check_content_type` (src/fetch/download.rs) accepts
     /// `application/xhtml+xml`, but htmd parses every accepted body as HTML.
@@ -2754,7 +2754,7 @@ mod tests {
         );
     }
 
-    /// [T-FC092] JS ソースの中の `<script … />` は書き換えず本文へ漏らさない
+    /// [T-FC092]
     ///
     /// The rewrite scans the byte string, so it has to track raw-text state
     /// itself or it will rewrite a `<script … />` that a JS string literal
@@ -2784,7 +2784,7 @@ mod tests {
         );
     }
 
-    /// [T-FC090] 自己終了タグの書き換えがタグ名境界と引用符つき属性値を守る
+    /// [T-FC090]
     ///
     /// Two ways the scan can overreach: matching a longer tag name that merely
     /// starts with a target name, and reading the `>` inside a quoted
@@ -2810,7 +2810,7 @@ mod tests {
         );
     }
 
-    /// [T-FC091] SVG 名前空間の外の `<desc>` の中身は本文に残る
+    /// [T-FC091]
     ///
     /// htmd dispatches handlers by local tag name only, so registering `desc`
     /// for suppression reaches every element with that name. Outside `<svg>`,
@@ -2838,7 +2838,7 @@ mod tests {
         );
     }
 
-    /// [T-FC078] 表セルの中のコードブロックがバッククォート 1 個で挟んだインラインコードで出る
+    /// [T-FC078] A table cell's code block renders as inline code with one backtick delimiter
     ///
     /// A `<pre><code>` written inside a `<td>`/`<th>` must render as inline
     /// code delimited by a single backtick, not as the 3-line fenced block a
@@ -2864,7 +2864,7 @@ mod tests {
         );
     }
 
-    /// [T-FC093] `<code>` 子を持たない表セルの `<pre>` もインラインコードで出る
+    /// [T-FC093] A table cell's pre without a code child renders as inline code
     ///
     /// The cell branch sits ahead of the `<code>`-child split, so a bare
     /// `<pre>` fences the same way outside a cell and would leave its own
@@ -2888,7 +2888,7 @@ mod tests {
         );
     }
 
-    /// [T-FC094] 表セルの `<pre>` で `<code>` の外側にある兄弟テキストが残る
+    /// [T-FC094] A table cell's pre keeps text outside its code child
     ///
     /// Reading only a `<code>` child would drop text the author wrote beside
     /// it, which the non-cell path keeps.
@@ -2909,7 +2909,7 @@ mod tests {
         );
     }
 
-    /// [T-FC095] 表セルの `<pre>` でも `<script>` の中身は落ちる
+    /// [T-FC095] A table cell's pre drops the body of a suppressed element
     ///
     /// `suppressed_handler` drops a `<script>` body everywhere else, the raw
     /// fallback path included. A cell's `<pre>` reads its own subtree instead
@@ -2935,7 +2935,7 @@ mod tests {
         );
     }
 
-    /// [T-FC096] 表セルの `<pre>` の `<br>` が空白 1 個の区切りとして残る
+    /// [T-FC096] A table cell's pre keeps a br as a visible separator
     ///
     /// A `<br>` carries no Text child, so concatenating text alone would run
     /// the two lines together into one word. The cell folds the line break to
@@ -2957,7 +2957,7 @@ mod tests {
         );
     }
 
-    /// [T-FC079] セルの中身が 3 連バッククォートを含むとき区切りが 4 連へ伸びる
+    /// [T-FC079] A table cell's code delimiter widens to four backticks when content has a three-backtick run
     ///
     /// The delimiter width is the content's longest backtick run plus 1
     /// (CommonMark 0.31.2 §6.3), the same rule `fence_delimiter` applies for a
@@ -2980,7 +2980,7 @@ mod tests {
         );
     }
 
-    /// [T-FC080] セルの中身の先頭と末尾がバッククォートのとき区切りの内側に空白 1 個が入る
+    /// [T-FC080] A table cell's code delimiter gets inner space when content starts and ends with backtick
     ///
     /// CommonMark 0.31.2 §6.3: when the code span's contents start or end
     /// with a backtick, a single space inside each delimiter keeps the
@@ -3002,7 +3002,7 @@ mod tests {
         );
     }
 
-    /// [T-FC081] 表の外の `<pre>` は従来どおりフェンスで出る
+    /// [T-FC081]
     ///
     /// Regression guard alongside T-FC078-080: only a `<pre>` with a
     /// `<td>`/`<th>` ancestor switches to inline code. A `<pre><code>` with no
@@ -3021,7 +3021,7 @@ mod tests {
         );
     }
 
-    /// [T-FC104] 上限を超える title を持つ記事の出力で frontmatter が閉じ本文が残る
+    /// [T-FC104]
     ///
     /// `to_fetch_result` builds the frontmatter, then the caller's byte cap
     /// cuts the result. Without the field cap the cut lands inside the block,
@@ -3050,7 +3050,7 @@ mod tests {
         );
     }
 
-    /// [T-FC098] 表セルの code span のパイプが `\|` で出る
+    /// [T-FC098] A table cell's code span escapes a pipe with a backslash
     ///
     /// GFM unescapes `\|` while splitting the row, before inline parsing, so it
     /// resolves inside a code span too. An entity reference does not: both
@@ -3075,7 +3075,7 @@ mod tests {
         );
     }
 
-    /// [T-FC099] `\` で終わるセルの中身と閉じパイプの間に空白が入る
+    /// [T-FC099]
     ///
     /// Writing the pipe as `&#124;` leaves no `|` in the cell string at all, so
     /// a cell cannot reach the row delimiter. `\|` moves that guarantee onto
@@ -3102,7 +3102,7 @@ mod tests {
         );
     }
 
-    /// [T-FC097] Readability が失敗した経路でも `<script>` の中身は本文へ出ない
+    /// [T-FC097]
     ///
     /// `extract_article`'s dom_smoothie fallback (T-FX017) reaches this layer's
     /// suppression the same way `--raw` does, and this test walks the real
