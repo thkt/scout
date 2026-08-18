@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(neutralize_yaml_markers("... bar"), "*** bar");
     }
 
-    /// [T-FC030] YAML marker after unclosed fence is still rewritten
+    /// [T-FC030]
     #[test]
     fn yaml_marker_after_unclosed_fence_is_still_rewritten() {
         assert_eq!(
@@ -287,7 +287,7 @@ mod tests {
         );
     }
 
-    /// [T-FC031] YAML marker inside closed fence is preserved
+    /// [T-FC031]
     #[test]
     fn yaml_marker_inside_closed_fence_is_preserved() {
         assert_eq!(
@@ -296,7 +296,7 @@ mod tests {
         );
     }
 
-    /// [T-FC032] YAML marker outside fence is rewritten
+    /// [T-FC032]
     #[test]
     fn yaml_marker_outside_fence_is_rewritten() {
         assert_eq!(
@@ -305,7 +305,7 @@ mod tests {
         );
     }
 
-    /// [T-FC033] Three backtick line inside four backtick fence does not close it
+    /// [T-FC033]
     #[test]
     fn three_backtick_line_inside_four_backtick_fence_does_not_close_it() {
         assert_eq!(
@@ -314,7 +314,7 @@ mod tests {
         );
     }
 
-    /// [T-FC100] Truncates title over the cap
+    /// [T-FC100]
     ///
     /// Scoped to `write_yaml_str` alone. Whether the frontmatter still closes
     /// once a caller's byte cap cuts the result belongs to T-FC104, which runs
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    /// [T-FC101] Truncates byline and published time over the cap
+    /// [T-FC101]
     ///
     /// `format_with_frontmatter` reaches this function from three call sites,
     /// and the cap has to hold at each. A field that later formats its value
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    /// [T-FC102] Truncated all escapable value still closes the quote
+    /// [T-FC102]
     ///
     /// Guards the ordering the contract requires: truncate the raw value, then
     /// escape it. Truncating an already-escaped value instead can cut a
@@ -392,7 +392,7 @@ mod tests {
         );
     }
 
-    /// [T-FC103] Value within the cap is not truncated and carries no ellipsis
+    /// [T-FC103]
     #[test]
     fn value_within_the_cap_is_not_truncated_and_carries_no_ellipsis() {
         let title = "A plain title well under any byte cap";

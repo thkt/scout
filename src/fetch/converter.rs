@@ -1013,7 +1013,7 @@ mod tests {
         }
     }
 
-    /// [T-FC023] Table output includes a separator row following the header row
+    /// [T-FC023]
     ///
     /// This file's own `table_handler` pushes the header row
     /// (`format_table_row`) immediately followed by the separator row
@@ -1125,7 +1125,7 @@ mod tests {
         );
     }
 
-    /// [T-FC026] Link target with parens is not cut off before the parenthesis
+    /// [T-FC026]
     ///
     /// `AnchorElementHandler::escape_link_destination` backslash-escapes
     /// every `(` and `)` in the href before writing it as the link
@@ -1257,7 +1257,7 @@ mod tests {
         );
     }
 
-    /// [T-FC016] Code block with three backticks widens fence to four
+    /// [T-FC016]
     ///
     /// htmd's `get_code_fence_marker` sets the fence width to
     /// `3.max(longest_backtick_run_in_content + 1)`
@@ -1277,7 +1277,7 @@ mod tests {
         );
     }
 
-    /// [T-FC017] Code block with language class gets language info string
+    /// [T-FC017]
     ///
     /// htmd's `find_language_from_attrs` reads the `code` element's `class`
     /// attribute for a `language-*` token and appends the suffix as the
@@ -1301,7 +1301,7 @@ mod tests {
         );
     }
 
-    /// [T-FC019] Pre without code child is wrapped in a fence
+    /// [T-FC019]
     ///
     /// htmd's built-in `pre_handler` wraps a `<pre>` with no `<code>` child in
     /// blank lines only, with no fence markers at all
@@ -1321,7 +1321,7 @@ mod tests {
         );
     }
 
-    /// [T-FC083] Pre without code child widens its fence past a backtick run in the content
+    /// [T-FC083]
     ///
     /// `fence_delimiter` widens the fence past the longest backtick run in the
     /// content. Pins the wiring, not the width rule: `markdown.rs` unit-tests
@@ -1340,7 +1340,7 @@ mod tests {
         );
     }
 
-    /// [T-FC082] Table caption precedes the header row without a blank line
+    /// [T-FC082]
     ///
     /// T-FC070 pins the order, this one the adjacency: no blank line separates
     /// the two. Both pulldown-cmark 0.13.4 and comrak 0.54.0 render this input
@@ -1364,7 +1364,7 @@ mod tests {
         );
     }
 
-    /// [T-FC020] Pre code already fenced by htmd is not double fenced
+    /// [T-FC020]
     ///
     /// A `<pre><code>` pair is already turned into a single fenced block by
     /// htmd's built-in `code_handler`
@@ -1390,7 +1390,7 @@ mod tests {
         );
     }
 
-    /// [T-FC021] htmd leading backslash before pre text does not survive inside the fence
+    /// [T-FC021]
     ///
     /// `dom_walker::escape_pre_text_if_needed` prepends a backslash to a
     /// `<pre>` direct text node whose first character is a fence character
@@ -1416,7 +1416,7 @@ mod tests {
         );
     }
 
-    /// [T-FC022] Literal backslash backtick pair mid content survives unstripped
+    /// [T-FC022]
     ///
     /// `escape_pre_text_if_needed` only ever escapes a text node's very first
     /// character (htmd's dom_walker.rs `escape_pre_text_if_needed`), so a `` \` `` sequence
@@ -1439,7 +1439,7 @@ mod tests {
         );
     }
 
-    /// [T-FC027] Source leading backslash backtick pair survives unstripped
+    /// [T-FC027]
     ///
     /// `escape_pre_text_if_needed` prepends its own backslash only when the
     /// text node's first character is `` ` `` or `~`
@@ -1462,7 +1462,7 @@ mod tests {
         );
     }
 
-    /// [T-FC029] htmd leading backslash is stripped when a comment precedes the text
+    /// [T-FC029]
     ///
     /// A `<!-- comment -->` direct child matches neither `NodeData::Text` nor
     /// `NodeData::Element` in `raw_pre_content`'s loop, so it falls through the
@@ -1484,7 +1484,7 @@ mod tests {
         );
     }
 
-    /// [T-FC028] Pre with nested inline element is wrapped in a fence
+    /// [T-FC028]
     ///
     /// Syntax highlighters wrap code lines in `<span>` without a `<code>`
     /// child. htmd escapes only text nodes whose direct parent is `<pre>`
@@ -1504,7 +1504,7 @@ mod tests {
         );
     }
 
-    /// [T-FC052] Trailing newline at the end of a span inside pre survives in the output
+    /// [T-FC052]
     ///
     /// htmd's built-in `span` fast path (`walk_node`, active while
     /// exactly one handler is registered for `span`) trims every leading and
@@ -1524,7 +1524,7 @@ mod tests {
         );
     }
 
-    /// [T-FC053] Pre with one span per line keeps each line on its own output line
+    /// [T-FC053]
     ///
     /// The shape a syntax highlighter emits: one `<span>` per source line, each
     /// carrying its own trailing `\n`, which the built-in fast path trims off
@@ -1551,7 +1551,7 @@ mod tests {
         );
     }
 
-    /// [T-FC054] Span inside inline code outside pre loses the newline entirely
+    /// [T-FC054]
     ///
     /// The passthrough branch checks for a `<pre>` ancestor only, so this span
     /// falls to htmd's built-in span handler, whose `content.trim_matches('\n')`
@@ -1582,7 +1582,7 @@ mod tests {
         );
     }
 
-    /// [T-FC060] Label and value from a mixed th td row land in the same row in separate cells
+    /// [T-FC060]
     ///
     /// The row shape the whole handler exists for. Under the built-in's
     /// per-tag extraction, described on `table_handler` above, this row keeps
@@ -1619,7 +1619,7 @@ mod tests {
         );
     }
 
-    /// [T-FC061] Table row between pipes has no run of two or more spaces
+    /// [T-FC061]
     ///
     /// htmd's built-in row formatter pads every cell out to the column's max
     /// width across the whole table (`compute_column_widths` /
@@ -1649,7 +1649,7 @@ mod tests {
         );
     }
 
-    /// [T-FC062] Separator row has exactly three dashes per cell
+    /// [T-FC062]
     ///
     /// htmd's built-in `format_separator_padded` widens each column's dash run
     /// to that column's computed width (htmd's element_handler/table.rs
@@ -1679,7 +1679,7 @@ mod tests {
         );
     }
 
-    /// [T-FC063] NBSP inside a cell survives without collapsing to a space
+    /// [T-FC063]
     ///
     /// The contract requires cell-content newline normalization to follow the
     /// built-in form (`normalize_cell_content` replaces `\n`/`\r` only,
@@ -1703,7 +1703,7 @@ mod tests {
         );
     }
 
-    /// [T-FC055] Pre newline survives when the neighboring span has an element child
+    /// [T-FC055]
     ///
     /// The neighboring span's child is an element rather than a bare text
     /// node, which a passthrough reading raw text would leave unconverted.
@@ -1748,7 +1748,7 @@ mod tests {
         );
     }
 
-    /// [T-FC065] th-only row in the middle of the body appears as a data row
+    /// [T-FC065]
     ///
     /// The header search reaches only `thead`'s first row or the table's first
     /// row. An all-`<th>` row anywhere else stays a data row
@@ -1785,7 +1785,7 @@ mod tests {
         );
     }
 
-    /// [T-FC066] Second and later rows of a multi-row thead appear as data rows
+    /// [T-FC066]
     ///
     /// Only a `thead`'s first row carries header candidacy.
     /// Its second and later rows must still reach the output, as data rows, so
@@ -1810,7 +1810,7 @@ mod tests {
             );
     }
 
-    /// [T-FC068] Faithful mode table with attributes delegates to the built-in handler and stays html
+    /// [T-FC068]
     ///
     /// `markdown_converter` is Pure-only, so the test builds its own converter
     /// in `Faithful` mode with the same handlers registered.
@@ -1852,7 +1852,7 @@ mod tests {
         );
     }
 
-    /// [T-FC067] Table with no all th row emits an empty header row and separator
+    /// [T-FC067]
     ///
     /// A table with no qualifying header row still opens with an empty header
     /// row and its separator, not with its data rows. The fixture is a
@@ -1890,7 +1890,7 @@ mod tests {
         );
     }
 
-    /// [T-FC069] All-th first body row becomes the header without a thead
+    /// [T-FC069]
     ///
     /// The affirmative half of the all-`<th>` rule. T-FC067 pins the rejection
     /// side (a mixed row stays in the body) and T-FC064 promotes through
@@ -1923,7 +1923,7 @@ mod tests {
         );
     }
 
-    /// [T-FC070] Table caption precedes the header row
+    /// [T-FC070]
     ///
     /// The built-in's caption placement is kept, which emits the
     /// caption's own converted content ahead of the header row rather than
@@ -1954,7 +1954,7 @@ mod tests {
         );
     }
 
-    /// [T-FC071] Table with no rows falls back to its walked content
+    /// [T-FC071]
     ///
     /// With no rows there is no column count to build a pipe table from, so the
     /// handler walks the children and returns their content instead of emitting
@@ -1976,7 +1976,7 @@ mod tests {
         );
     }
 
-    /// [T-FC072] Cells are extracted from a tr split across source lines
+    /// [T-FC072]
     ///
     /// A `<tr>` written across source lines carries whitespace text nodes
     /// between its cells. Both the cell walk and the all-`<th>` rule count
@@ -2006,7 +2006,7 @@ mod tests {
         );
     }
 
-    /// [T-FC034] Second pre child text starting with backtick survives unstripped
+    /// [T-FC034]
     ///
     /// `raw_pre_content` reads each Text child's `contents` off the DOM, so no
     /// escape is introduced and none has to be removed. Reverse-escaping the
@@ -2032,7 +2032,7 @@ mod tests {
         );
     }
 
-    /// [T-FC035] Backtick after a preceding element child survives unstripped
+    /// [T-FC035]
     ///
     /// Same DOM read as T-FC034, with an element sibling ahead of the text.
     /// A front-anchored strip over the joined `content` would miss the escape
@@ -2056,7 +2056,7 @@ mod tests {
         );
     }
 
-    /// [T-FC036] Inner pre backtick survives unstripped when pre is nested
+    /// [T-FC036]
     ///
     /// T-FC034's shape one level deeper: the outer `<pre>` delegates its
     /// `<pre>` child to `Handlers::handle`, which re-enters this crate's own
@@ -2080,7 +2080,7 @@ mod tests {
         );
     }
 
-    /// [T-FC037] Newlines survive across merged same-tag same-attrs spans in pre
+    /// [T-FC037]
     ///
     /// Unlike T-FC052/053 (spans with distinct attrs, or attrs that block
     /// htmd's adjacent-element merge), three `<span>` siblings sharing the same
@@ -2103,7 +2103,7 @@ mod tests {
         );
     }
 
-    /// [T-FC038] Adjacent block children boundary keeps newlines capped at two
+    /// [T-FC038]
     ///
     /// A block-level child's converted content already opens and closes with a
     /// blank line, so two such children in a row would stack both sides' blank
@@ -2134,7 +2134,7 @@ mod tests {
         );
     }
 
-    /// [T-FC039] Br directly under pre survives as two trailing spaces and a newline
+    /// [T-FC039]
     ///
     /// A `<br>` that is a direct child of `<pre>` reaches `raw_pre_content`'s
     /// `NodeData::Element` branch, which hands it to `Handlers::handle` and
@@ -2157,7 +2157,7 @@ mod tests {
         );
     }
 
-    /// [T-FC040] Unregistered tag child text inside pre is not escaped
+    /// [T-FC040]
     ///
     /// The fixture's inner tag has no handler registered for it by this
     /// crate or by htmd itself, so the `NodeData::Element` branch in
@@ -2181,7 +2181,7 @@ mod tests {
         );
     }
 
-    /// [T-FC041] A newline inside a paragraph collapses to a single space
+    /// [T-FC041]
     ///
     /// A raw `\n` makes a Text node fail htmd's `is_plain_text` check
     /// (htmd's dom_walker.rs `is_plain_text`), which routes it through
@@ -2204,7 +2204,7 @@ mod tests {
         );
     }
 
-    /// [T-FC042] Br inside a paragraph survives as two trailing spaces and a newline
+    /// [T-FC042]
     ///
     /// htmd's built-in `br_handler` converts a `<br>` to `"  \n"` under the
     /// default `BrStyle::TwoSpaces` (htmd's element_handler/br.rs `br_handler`),
@@ -2224,7 +2224,7 @@ mod tests {
         );
     }
 
-    /// [T-FC043] Pre content is not collapsed and keeps its newline
+    /// [T-FC043]
     ///
     /// A `<pre>` with no `<code>` child is rebuilt by this crate's own
     /// `pre_handler` via `raw_pre_content`, which reads a Text child's
@@ -2246,7 +2246,7 @@ mod tests {
         );
     }
 
-    /// [T-FC044] Consecutive spaces inside inline code survive unchanged
+    /// [T-FC044]
     ///
     /// A `<code>`'s children walk with `is_pre = true` from the tag name
     /// alone, so the whitespace compression that folds a paragraph never runs
@@ -2266,7 +2266,7 @@ mod tests {
         );
     }
 
-    /// [T-FC045] Br inside a table cell loses the line break and collapses to whitespace
+    /// [T-FC045]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
     /// this crate's own `normalize_cell_content` then replaces every `\n` with
@@ -2292,7 +2292,7 @@ mod tests {
         );
     }
 
-    /// [T-FC046] Br inside a list item loses its trailing spaces and becomes an indented newline
+    /// [T-FC046]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, but
     /// `list_item_handler` indents every line after the first with
@@ -2319,7 +2319,7 @@ mod tests {
         );
     }
 
-    /// [T-FC047] Text after a br inside a heading lands outside the heading line
+    /// [T-FC047]
     ///
     /// The `<br>` produces the same `"  \n"` hard break a paragraph gets, and
     /// the heading handler writes its `#` marker once, ahead of the whole
@@ -2347,7 +2347,7 @@ mod tests {
         );
     }
 
-    /// [T-FC048] Empty anchor inside pre disappears leaving the original line and indentation
+    /// [T-FC048]
     ///
     /// Fixture mirrors a syntax-highlighted code block's per-line
     /// `#__codelineno-…` anchor: a bare `<pre>` (no `<code>` child) with an
@@ -2376,7 +2376,7 @@ mod tests {
         );
     }
 
-    /// [T-FC049] Empty anchor to absolute url keeps destination and title
+    /// [T-FC049]
     ///
     /// Paired with a fragment-only empty anchor (`#top`) in the same paragraph
     /// so the assertion cannot pass by coincidence: suppression that reached
@@ -2402,7 +2402,7 @@ mod tests {
         );
     }
 
-    /// [T-FC050] Titled headerlink with empty content is removed
+    /// [T-FC050]
     #[test]
     fn titled_headerlink_with_empty_content_is_removed() {
         let article = article(
@@ -2427,7 +2427,7 @@ mod tests {
         );
     }
 
-    /// [T-FC051] Anchor without href delegates to the builtin handler
+    /// [T-FC051]
     ///
     /// Paired with a fragment-only empty anchor (`#nav`) in the same paragraph
     /// so the assertion cannot pass by coincidence: suppression is scoped to
@@ -2451,7 +2451,7 @@ mod tests {
         );
     }
 
-    /// [T-FC077] Anchor with an empty href and no content is suppressed
+    /// [T-FC077]
     ///
     /// `href=""` resolves to the current page, so it points at the same
     /// nothing a bare `#` does. Left to the builtin handler it emits
@@ -2475,7 +2475,7 @@ mod tests {
         );
     }
 
-    /// [T-FC073] Title disappears from the output of a link that has link text
+    /// [T-FC073]
     ///
     /// htmd's built-in anchor handler writes the `title` attribute straight
     /// into the link as `](url "title")`
@@ -2502,7 +2502,7 @@ mod tests {
         );
     }
 
-    /// [T-FC074] Title containing double quotes does not escape the rewrite
+    /// [T-FC074]
     ///
     /// htmd's built-in backslash-escapes every `"` inside the title
     /// (htmd's element_handler/anchor.rs `process_title`,
@@ -2531,7 +2531,7 @@ mod tests {
         );
     }
 
-    /// [T-FC075] Title containing a newline does not escape the rewrite
+    /// [T-FC075]
     ///
     /// htmd's built-in trims and rejoins each line of the title with `\n`
     /// (htmd's element_handler/anchor.rs `process_title`, `process_title`),
@@ -2558,7 +2558,7 @@ mod tests {
         );
     }
 
-    /// [T-FC076] Whitespace only title is treated as no title
+    /// [T-FC076]
     ///
     /// htmd's built-in `process_title` drops every whitespace-only line
     /// (htmd's element_handler/anchor.rs `process_title`), so a
@@ -2585,7 +2585,7 @@ mod tests {
         );
     }
 
-    /// [T-FC084] Script and style content left in content html does not reach the body
+    /// [T-FC084]
     ///
     /// htmd's own `block_handler` registers `script` and `style` among its
     /// "other block elements"
@@ -2681,7 +2681,7 @@ mod tests {
         );
     }
 
-    /// [T-FC086] Raw extraction end-to-end does not leak script content into the body
+    /// [T-FC086]
     ///
     /// Seam test: runs the real `--raw` path's own extraction
     /// (`extractor::extract_raw`, the function `fetch_page` calls when
@@ -2714,7 +2714,7 @@ mod tests {
         );
     }
 
-    /// [T-FC089] Body after a self-closed raw text tag still reaches the body
+    /// [T-FC089]
     ///
     /// `check_content_type` (src/fetch/download.rs) accepts
     /// `application/xhtml+xml`, but htmd parses every accepted body as HTML.
@@ -2754,7 +2754,7 @@ mod tests {
         );
     }
 
-    /// [T-FC092] A script tag inside js source is not rewritten into an early close
+    /// [T-FC092]
     ///
     /// The rewrite scans the byte string, so it has to track raw-text state
     /// itself or it will rewrite a `<script … />` that a JS string literal
@@ -2784,7 +2784,7 @@ mod tests {
         );
     }
 
-    /// [T-FC090] Self-closed tag rewrite respects name boundaries and quoted attributes
+    /// [T-FC090]
     ///
     /// Two ways the scan can overreach: matching a longer tag name that merely
     /// starts with a target name, and reading the `>` inside a quoted
@@ -2810,7 +2810,7 @@ mod tests {
         );
     }
 
-    /// [T-FC091] Desc outside the svg namespace keeps its text in the body
+    /// [T-FC091]
     ///
     /// htmd dispatches handlers by local tag name only, so registering `desc`
     /// for suppression reaches every element with that name. Outside `<svg>`,
@@ -3002,7 +3002,7 @@ mod tests {
         );
     }
 
-    /// [T-FC081] Pre outside a table still renders as a fenced block
+    /// [T-FC081]
     ///
     /// Regression guard alongside T-FC078-080: only a `<pre>` with a
     /// `<td>`/`<th>` ancestor switches to inline code. A `<pre><code>` with no
@@ -3021,7 +3021,7 @@ mod tests {
         );
     }
 
-    /// [T-FC104] A title over the cap still yields a closed frontmatter and a body
+    /// [T-FC104]
     ///
     /// `to_fetch_result` builds the frontmatter, then the caller's byte cap
     /// cuts the result. Without the field cap the cut lands inside the block,
@@ -3075,7 +3075,7 @@ mod tests {
         );
     }
 
-    /// [T-FC099] Table row keeps a space between a trailing backslash and the closing pipe
+    /// [T-FC099]
     ///
     /// Writing the pipe as `&#124;` leaves no `|` in the cell string at all, so
     /// a cell cannot reach the row delimiter. `\|` moves that guarantee onto
@@ -3102,7 +3102,7 @@ mod tests {
         );
     }
 
-    /// [T-FC097] The Readability failure path still drops script content
+    /// [T-FC097]
     ///
     /// `extract_article`'s dom_smoothie fallback (T-FX017) reaches this layer's
     /// suppression the same way `--raw` does, and this test walks the real

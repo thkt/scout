@@ -461,7 +461,7 @@ fn fetch_output_truncates_long_content() {
     );
 }
 
-/// [T-FC087] Fetch output truncated inside a closed fence leaves no live marker
+/// [T-FC087]
 ///
 /// `neutralize_yaml_markers_outside_fences` (src/yaml.rs) runs once, during
 /// fetch conversion, over the whole body: a marker inside a fence that closes

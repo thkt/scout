@@ -552,7 +552,7 @@ mod tests {
         );
     }
 
-    /// [T-MD036] Truncate with note with newlines cuts at line boundary leaving no partial line
+    /// [T-MD036]
     ///
     /// Byte 100 of a 120-byte input built from 20 six-byte lines falls inside the
     /// 17th line. Backing up to the preceding newline at byte 95 keeps 96 bytes,
@@ -574,7 +574,7 @@ mod tests {
         );
     }
 
-    /// [T-MD037] Truncate with note cutting mid dash run does not leave a lone thematic break
+    /// [T-MD037]
     ///
     /// A 7-dash line follows 15 six-byte lines, and the cut lands at byte 93.
     /// A plain `floor_char_boundary(93)` stops three bytes into the dash line,
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(content, &input[..90]);
     }
 
-    /// [T-MD028] Fence delimiter returns five backticks for content with longest run of four
+    /// [T-MD028]
     #[test]
     fn fence_delimiter_returns_five_backticks_for_content_with_longest_run_of_four() {
         let content = "some ```` text";
@@ -601,13 +601,13 @@ mod tests {
         assert_eq!(delim, "`".repeat(5));
     }
 
-    /// [T-MD029] Fence delimiter returns three backticks for content without backticks
+    /// [T-MD029]
     #[test]
     fn fence_delimiter_returns_three_backticks_for_content_without_backticks() {
         assert_eq!(fence_delimiter("plain content, no backticks here"), "```");
     }
 
-    /// [T-MD030] Shift headings does not close four backtick fence on shorter backtick run
+    /// [T-MD030]
     #[test]
     fn shift_headings_does_not_close_four_backtick_fence_on_shorter_backtick_run() {
         let input = "````\n```\ncontent\n````\n## After";
@@ -619,7 +619,7 @@ mod tests {
         );
     }
 
-    /// [T-MD031] Shift headings leaves heading syntax line inside four backtick fence unshifted
+    /// [T-MD031]
     #[test]
     fn shift_headings_leaves_heading_syntax_line_inside_four_backtick_fence_unshifted() {
         let input = "````\n```\n## Not a heading\n````";
@@ -631,25 +631,25 @@ mod tests {
         );
     }
 
-    /// [T-MD032] Fence marker recognizes three backticks as fence start
+    /// [T-MD032]
     #[test]
     fn fence_marker_recognizes_three_backticks_as_fence_start() {
         assert_eq!(fence_marker("```"), Some(('`', 3)));
     }
 
-    /// [T-MD033] Fence marker does not recognize two backticks as fence start
+    /// [T-MD033]
     #[test]
     fn fence_marker_does_not_recognize_two_backticks_as_fence_start() {
         assert_eq!(fence_marker("``"), None);
     }
 
-    /// [T-MD034] Fence marker recognizes three tildes as fence start
+    /// [T-MD034]
     #[test]
     fn fence_marker_recognizes_three_tildes_as_fence_start() {
         assert_eq!(fence_marker("~~~"), Some(('~', 3)));
     }
 
-    /// [T-MD035] Fence marker recognizes four space indented fence line
+    /// [T-MD035]
     ///
     /// `fence_marker` takes an already-trimmed line, so asserting on it
     /// directly would only restate T-MD032. `track_fence` owns the trim, so

@@ -203,7 +203,7 @@ mod tests {
         assert!(result.content_html.contains("<footer>"));
     }
 
-    /// [T-FX003] uses_parsed_result_for_minimal_html
+    /// [T-FX003]
     #[test]
     fn uses_parsed_result_for_minimal_html() {
         let minimal = "<html><body><p>hi</p></body></html>";
@@ -389,7 +389,7 @@ mod tests {
         );
     }
 
-    /// [T-FX017] Parse failure on non empty html falls back with the content intact
+    /// [T-FX017]
     ///
     /// dom_smoothie returns `GrabFailed` when it finds no article to grab, and
     /// a document holding only a `<script>` is such a case. From here the
@@ -412,7 +412,7 @@ mod tests {
         );
     }
 
-    /// [T-FX018] Relative document url falls back at init
+    /// [T-FX018]
     ///
     /// The other of the two fallback entries in `extract_article`:
     /// `Readability::new` rejects a relative `document_url` with

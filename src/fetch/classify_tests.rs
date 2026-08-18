@@ -105,7 +105,7 @@ fn browser_failed_is_io_error() {
     assert_eq!(c.kind, ErrorCode::IoError);
 }
 
-/// [T-FC018] Markdown conversion failure is data error
+/// [T-FC018]
 ///
 /// `MarkdownConversion` carries the htmd conversion failure (fail-close) and
 /// must classify the same way `UnsupportedContentType`

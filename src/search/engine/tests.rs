@@ -401,7 +401,7 @@ async fn source_fetch_timeout_states_the_timeout_once() {
     );
 }
 
-/// [T-SE019] Combined research output keeps each pages code fences independent
+/// [T-SE019]
 ///
 /// Each page's Markdown is independently well-formed (every fence it opens,
 /// it also closes), so `format_fetched_pages` concatenating several such
@@ -448,7 +448,7 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
     }
 }
 
-/// [T-SE020] Combined research output keeps a longer fence open across a shorter run
+/// [T-SE020]
 ///
 /// `format_fetched_pages` runs `shift_headings` per page, so the fence-length
 /// tracking has to hold on the path the report takes, not only on a direct
@@ -481,7 +481,7 @@ fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     );
 }
 
-/// [T-FC088] Combined research output reneutralizes a marker past a decoy close inside a longer fence
+/// [T-FC088]
 ///
 /// The fixture stands in for text `neutralize_yaml_markers_outside_fences`
 /// (src/yaml.rs) already ran over: `---` survived verbatim because, at

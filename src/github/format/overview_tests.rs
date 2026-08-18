@@ -367,7 +367,7 @@ fn readme_truncation_note_not_heading_shifted() {
     assert!(!output.contains("## (truncated"));
 }
 
-/// [T-GF044] Readme outside fence dashes become asterisks
+/// [T-GF044]
 #[test]
 fn readme_outside_fence_dashes_become_asterisks() {
     let repo = sample_repo();
@@ -383,7 +383,7 @@ fn readme_outside_fence_dashes_become_asterisks() {
     );
 }
 
-/// [T-GF045] Readme truncated outside fence dashes become asterisks
+/// [T-GF045]
 #[test]
 fn readme_truncated_outside_fence_dashes_become_asterisks() {
     let repo = sample_repo();
@@ -401,7 +401,7 @@ fn readme_truncated_outside_fence_dashes_become_asterisks() {
     );
 }
 
-/// [T-GF046] Readme unclosed fence marker becomes asterisks
+/// [T-GF046]
 #[test]
 fn readme_unclosed_fence_marker_becomes_asterisks() {
     let repo = sample_repo();
@@ -417,7 +417,7 @@ fn readme_unclosed_fence_marker_becomes_asterisks() {
     );
 }
 
-/// [T-GF047] Readme closed fence dashes stay verbatim
+/// [T-GF047]
 #[test]
 fn readme_closed_fence_dashes_stay_verbatim() {
     let repo = sample_repo();
