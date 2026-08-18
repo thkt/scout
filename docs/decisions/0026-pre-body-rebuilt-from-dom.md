@@ -37,7 +37,7 @@ htmd の出力を位置で逆変換しない。`escape_pre_text_if_needed` が�
 
 兄弟マージのために走査を 1 回捨てる。`raw_pre_content` は DOM の `node.children` を直接ループするため、htmd の `Handlers::walk_children` が内部で行う隣接兄弟マージ (`can_combine`, `attrs1 == attrs2` を含む複数条件がすべて揃う同タグ・同属性のインライン要素だけが対象) を経由しない。このマージは `node.children` という `RefCell` 自体を書き換える副作用であり、`Handlers::walk_children` を 1 回呼ぶだけで、その戻り値を使わなくても `node.children` へ反映される。したがって `pre_handler` は `raw_pre_content` を呼ぶ前に `walk_children` を 1 回呼び、htmd 標準のマージ済み DOM の上で `raw_pre_content` を走らせる。方式 D (子ごとに `walk_children` を呼ぶ) はこの兄弟マージの前提が崩れたうえ、`Handlers::walk_children` は子の中身しか歩かないため `<br>` のような子要素自身のハンドラ出力が失われ、不成立。
 
-`<td>` / `<th>` を祖先に持つ `<pre>` はこの分岐へ入らない。`pre_handler` は `<code>` 子の有無を見る前に `has_table_cell_ancestor` を判定し、`text_content` で DOM を読んで `inline_code_span` で包む経路へ抜ける (commit `a4acf72`、本 DR の受理より後)。この経路も DOM を直接読むので本 DR の決定 (走査後の文字列を逆変換しない) は保たれるが、`raw_pre_content` は通らない。下の Reassessment Triggers が `can_combine` の条件変化を挙げるとき、この分岐も同じ前提に依存している点で対象に含まれる。
+`<td>` / `<th>` を祖先に持つ `<pre>` はこの分岐へ入らない。`pre_handler` は `<code>` 子の有無を見る前に `has_table_cell_ancestor` を判定し、`text_content` で DOM を読んで `inline_code_span` で包む経路へ抜ける (commit `a4acf72`、本 DR の受理より後)。この経路も DOM を直接読むので本 DR の決定 (走査後の文字列を逆変換しない) は保たれるが、`raw_pre_content` は通らない。この分岐も兄弟マージ済みの `node.children` を読む。`pre_handler` は 3 分岐のいずれよりも先に `handlers.walk_children(element.node)` を 1 回呼び、その時点で `can_combine` のマージが `RefCell` を書き換えるためになる。`text_content` は `Handlers::handle` を呼ばないが、読む対象は既にマージ後の子になる。下の Reassessment Triggers が `can_combine` の条件変化を挙げるとき、この分岐も対象に含まれる。
 
 ### Consequences
 
