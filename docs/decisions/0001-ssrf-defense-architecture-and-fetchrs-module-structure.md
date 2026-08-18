@@ -89,23 +89,23 @@ field コメントに contract を追記、ADR は作らない。
 | -------------------------------------------------------- | ------------------------------------- |
 | SSRF contract 違反 incident 発生                         | `SsrfSafeClient` newtype 化を即検討   |
 | 新規 command 追加で計 9 以上                             | Review 漏れリスク上昇、Newtype 化検討 |
-| `fetch.rs` 行数 > 2000                                   | Module split 検討                     |
+| `src/fetch/` の 1 実装ファイルが 1000 行超                | そのファイルの split 検討             |
 | `#[cfg(feature = "js-rendering")]` 累積行数 > plain path | Module split 検討                     |
 
 ### 参照ファイル
 
 ADR 制定時の行参照は `fetch.rs` 分割 (commit `a7a7a4f`、後述 Addendum (2026-06-24): Decision Outcome ドリフト参照) で移動したため、現行位置に更新済み。
 
-- `src/tools.rs:160-163` (dual HTTP client `http`/`fetch_http` の field 定義)、`src/tools/builder.rs:57-76` (`build_default_clients`、`fetch_http` に `Policy::none()`)
-- `src/fetch/download.rs:22` (`download` function、per-hop SSRF check を伴う manual redirect 経路)
-- `src/fetch/cdp.rs:264` (CDP `EventRequestPaused` listener、protocol 上は `Fetch.RequestPaused`)、`src/fetch/cdp/launch.rs:85-113` (`check_browser_request` subrequest 判定)
+- `src/tools.rs` の `Scout` の `http` / `fetch_http` field 定義、`src/tools/builder.rs` の `build_default_clients` (`fetch_http` に `Policy::none()`)
+- `src/fetch/download.rs` の `download` (per-hop SSRF check を伴う manual redirect 経路)
+- `src/fetch/cdp.rs` の `cdp_navigate` の `EventRequestPaused` listener (protocol 上は `Fetch.RequestPaused`)、`src/fetch/cdp/launch.rs` の `check_browser_request` (subrequest 判定)
 - `docs/audit/2026-05-13-undocumented-decisions.md` (本 ADR の根拠 audit)
 
 ## Addendum (2026-06-24): blocklist 構成と CDP subrequest scheme の列挙
 
 ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade 候補 20/21) で、本 ADR の SSRF 境界を構成する 2 つの具体テーブル (blocked-host の合成と browser subrequest の scheme 判定) が docstring とテストにのみ pin され ADR 化されていないと判定された。ADR-0012 の Addendum 方針に倣い、決定本文は変えず以下を一次ソースの列挙として追記する。判定ロジックは `src/fetch/ssrf.rs` と `src/fetch/cdp/launch.rs` が真実源で、本節はその転記である。
 
-### blocked-host 合成 (downgrade 21、一次ソース `src/fetch/ssrf.rs:155-202`)
+### blocked-host 合成 (downgrade 21、一次ソース `src/fetch/ssrf.rs` の `validate_url_sync` / `is_blocked_host` / `is_private_ip`)
 
 `validate_url_sync` は scheme を `http`/`https` に限定し (それ以外は `InvalidScheme`)、`is_blocked_host` で host を判定する。`is_blocked_host` は host 種別ごとに分岐し、IP は `is_private_ip` へ委譲する。host が無い URL は `None` 分岐で fail closed (block)。
 
@@ -118,7 +118,7 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade �
 
 IPv6 の IPv4 埋め込みは `to_ipv4` (`to_ipv4_mapped` ではない) で unwrap し、IPv4-mapped (`::ffff:a.b.c.d`) と IPv4-compatible (`::a.b.c.d`、例 `::7f00:1` = `::127.0.0.1`) の双方を再帰的に IPv4 判定へ通す。CGN は `is_cgn` が先頭 octet 100 かつ 2 番目 octet 64..=127 で判定する。`is_private_ip` は connect-time の `SsrfResolver` (ADR-0012) も同じ関数を共用するため、pre-flight と connect 時で blocklist が一致する。
 
-### CDP browser subrequest の scheme 判定 (downgrade 20、一次ソース `src/fetch/cdp/launch.rs:85-113`)
+### CDP browser subrequest の scheme 判定 (downgrade 20、一次ソース `src/fetch/cdp/launch.rs` の `check_browser_request`)
 
 `js-rendering` 経路で chromium が `Fetch.RequestPaused` を発火するたび、`check_browser_request` が subrequest URL の scheme で許可/遮断を決める。SOCKS5 proxy (ADR-0021) が TCP egress を縛るのと別に、scheme 単位の allowlist をここで適用する。
 
@@ -141,7 +141,7 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、DRIFT 側�
 
 ### URL 軸の型強制 (`ValidatedUrl`) が追加済み
 
-commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL logs (issue #100)`) で `ValidatedUrl` newtype (`src/fetch/ssrf.rs:88-102`) が導入された。これは async な `ssrf_check` (前述 Addendum の sync 段 `validate_url_sync` を内包し、続けて connect-time の IP guard を適用する gate) のみが構築でき、downstream (`download`/`reqwest::Client::get`) が `&ValidatedUrl` を受け取ることで「全 fetch path が SSRF check を通過した URL のみを扱う」ことを型で強制する。
+commit `871da8f` (`fix(security): enforce SSRF via ValidatedUrl + redact URL logs (issue #100)`) で `ValidatedUrl` newtype (`src/fetch/ssrf.rs` の `ValidatedUrl`) が導入された。これは async な `ssrf_check` (前述 Addendum の sync 段 `validate_url_sync` を内包し、続けて connect-time の IP guard を適用する gate) のみが構築でき、downstream (`download`/`reqwest::Client::get`) が `&ValidatedUrl` を受け取ることで「全 fetch path が SSRF check を通過した URL のみを扱う」ことを型で強制する。
 
 この型強制は Option A が想定した `SsrfSafeClient` とは別軸である。Option A の newtype は client 選択 (`http` か `fetch_http` か) を型で縛る client 単位の抽象で、これは現状も未導入である。`ValidatedUrl` は URL 単位の検証済みマーカーで、enforcement の軸が異なる。
 

@@ -47,7 +47,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 
 `repo_overview` 等の multi-fetch 経路で部分失敗が発生した場合:
 
-- 結果 struct に `degraded: bool` と `reason: Option<DegradedReason>` フィールドを追加
+- 結果 struct に `degraded: bool` と `degraded_reasons: Vec<DegradedReason>` フィールドを追加。1 コマンドが複数の理由を積むため、1 個に絞る形は採らない
 - `--json` 出力にも expose
 - `DegradedReason` は `ReadmeMissing`, `IssuesFetchFailed`, `PullsFetchFailed`, `ReleasesFetchFailed` 等 enum で typed
 - silent log-only fallback (`unwrap_or_note` 系) は廃止
@@ -70,7 +70,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 >
 > **Note (2026-08-07, 名前解決の呼び出し失敗と cap の区別)**: `fetch_slack` の名前解決が `users.info` / `conversations.info` 呼び出し自体の失敗 (transport/API error) で raw ID にフォールバックしても、従来は `SlackUsersCapped` (件数超過による cap) と区別がつかなかった。呼び出し側 AI エージェントが raw ID の原因を判別できるよう `SlackLookupFailed` variant 追加で**計 14 variants**。`SlackClient::fetch_message` が `resolve_channel` の失敗と `prefetch_users` の in-cap 失敗のいずれかで `SlackFetchOutcome::lookups_failed` を立て、`fetch_slack` (`src/tools/query.rs`) が cap 系 3 variant と同じ形で preamble note (`"Some user or channel lookups failed, so those authors and mentions show raw IDs."`) を組み立てて `degradation.push` する。この variant も callsite で note text を直接構築するため `unwrap_or_degraded` を経由せず、`label()` は既存の `"resource"` 群にそのまま合流する。よって `unwrap_or_degraded` 経由で meaningful label を持つのは引き続き `*FetchFailed` の 3 variants で不変。追加は serde additive (新 variant は `degraded_reasons` の skip-if-empty で feature-detect 可能) のため既存 JSON consumer に無影響。
 >
-> **README 404 silent の意図的選択**: 「README が存在しない repo」は scout として degraded ではない (overview は他フィールドだけで成立)。404 を silent にすることで `degraded` flag を「abnormal なときだけ立てる」契約に保つ。代わりに JSON consumer は `data.readme` が null か否かで「README の有無」を直接判別可能 (404 と fetch error の区別は `degraded_reasons` の `ReadmeFetchFailed` の有無で行う)。403 等の non-404 4xx は `ReadmeFetchFailed` で集約しており、status code 別の細分は当面 scope 外。
+> **README 404 silent の意図的選択**: 「README が存在しない repo」は scout として degraded ではない (overview は他フィールドだけで成立)。404 を silent にすることで、README 不在が `degraded` を立てないようにする。代わりに JSON consumer は `data.readme` が null か否かで「README の有無」を直接判別可能 (404 と fetch error の区別は `degraded_reasons` の `ReadmeFetchFailed` の有無で行う)。403 等の non-404 4xx は `ReadmeFetchFailed` で集約しており、status code 別の細分は当面 scope 外。
 
 ### Consequences
 
@@ -113,7 +113,7 @@ Chosen option: Option A, because public CLI contract として一貫した class
 - 各 `ErrorCode` バリアントの construction site で本 ADR の mapping table を参照
 - `unwrap_or_note` を `unwrap_or_degraded` に rename 済み (`src/tools/errors.rs` `unwrap_or_degraded`)。`DegradedReason` を受け取り、`Degradation::push` 経由で `(notes[i], reasons[i])` の pair invariant を保ったまま統一的に蓄積する形に refactor 済み
 - `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 12 variants、上記 Note 2026-06-17 post-issue-#222 update を参照)
-- ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 error type の `classify()` メソッド (`src/slack.rs:56-94`, `src/github/errors.rs:58-108`) の match arm 順序と `// Priority N` コメントで明示する。各 `From<...>` 実装は `e.classify()` に委譲する (`src/tools/errors.rs:191-217`)。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool/IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script/agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
+- ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 error type の `classify()` メソッド (`src/slack.rs` の `SlackError::classify`、`src/github/errors.rs` の `GitHubError::classify`) の match arm 順序と `// Priority N` コメントで明示する。各 `From<...>` 実装は `e.classify()` に委譲する (`src/tools/errors.rs` の `From<GitHubError>` / `From<FetchError>` / `From<SlackError>` / `From<BraveError> for ScoutError`)。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool/IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script/agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
 
 ### Reassessment Triggers
 
@@ -140,3 +140,11 @@ Chosen option: Option A, because public CLI contract として一貫した class
 `Classification::from_http_status` (`src/classify.rs`) を呼ぶのは `SlackError`、`GitHubError`、`FetchError::Status` (`src/fetch/download.rs`)、`BraveError::Api` / `BraveError::Server` (`src/brave/client.rs`) の 4 source。Confirmation と Reassessment Triggers はこの 4 source を指すよう更新済み。
 
 Reassessment Triggers が `Gemini` を挙げていた間、Brave または Fetch の 4xx 分岐が増えても trigger が発火しなかった。source 名を trigger に直書きする形はこの取りこぼしを生むので、backend を追加または削除する変更では本 ADR の Confirmation と Reassessment Triggers を同じ変更単位で見直す。
+
+## Addendum (2026-08-18): degraded の形と発火条件を実装へ揃える
+
+Partial Failure Handling の記述が `reason: Option<DegradedReason>` だった。実装は `src/envelope.rs` の `CommandOutput` が `degraded_reasons: Vec<DegradedReason>` を持つ。`src/tools/query.rs` の `fetch_slack` は 1 回の出力へ最大 4 個 (`SlackThreadTruncated` / `SlackUsersCapped` / `SlackLookupFailed` / `SlackOutputTruncated`) を積むので、1 個に絞る形では表せない。
+
+README 404 の項が `degraded` を「abnormal なときだけ立てる」契約と書いていた。`src/envelope.rs` の `CommandOutput::with_degradation` は `degraded = !degradation.is_empty()` を無条件に置く。issue #222 以降、`fetch_slack` は文書化された page / size 上限に達しただけで `SlackThreadTruncated` などを積むので、`degraded` は失敗だけでなく「出力が完全ではない」ことを表す。README 404 を silent にする判断そのものは変わらないため、その根拠だけを残した。
+
+`degraded` を失敗に限る形へ実装を戻す案は採らない。上限到達を caller が検出する手段が `degraded_reasons` 以外に無く、flag だけを分けると 2 つの真実源ができる。
