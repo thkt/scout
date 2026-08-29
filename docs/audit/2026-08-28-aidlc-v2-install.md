@@ -72,6 +72,27 @@ hook が発火しているかは doctor の `Hooks last fired:` 行で見る。`
 
 bun を上げると `latest` の実体が入れ替わる。その場合は「そのファイルが無い」と鳴って落ちるので、空振りより検出できる。
 
+## Bash コマンドを改行で分けると runtime-graph の再構築 hook が空振りする
+
+**`bun` という語とツールのパスは同じ行に置く。** 分けると hook が黙って起動せず、学びの儀式が動かなくなる。
+
+`.claude/hooks/aidlc-rebuild-stage-graph.ts` は PostToolUse で Bash コマンドの文字列を読み、`aidlc-runtime.ts compile` を起動する。それが intent 記録直下の `runtime-graph.json` を書く。判定は `aidlc-lib.ts` の `classifyRuntimeCompileCommand` が持ち、`runtimeCompileReport` は `\bbun\b.*<harness>/tools/aidlc-orchestrate\.ts\b.*\breport\b` の 1 本である。`s` フラグが無いので `.*` は改行を越えない。
+
+2026-08-29 の Reverse Engineering 実行で、承認コマンドを 1 行目 `BUN=$(mise which bun); cd <repo>`、2 行目 `"$BUN" .claude/tools/aidlc-orchestrate.ts report --result approved` の 2 行で出した。分類器は `pass` を返し、hook は起動せず、`runtime-graph.json` は作られなかった。`aidlc-learnings.ts surface` はそのファイルを要求するので失敗し、**学びの候補抽出と `persist` が走らないまま stage が承認された**。承認後は `surface` が `slug mismatch` を返すので、その stage の儀式はもう実行できない。
+
+`"$BUN"` の使用は原因ではない。`mise which bun` の中に `bun` の語が入るため `\bbun\b` は当たる。効いているのは改行だけである。
+
+| コマンドの形 | `classifyRuntimeCompileCommand` |
+| ------------ | ------------------------------- |
+| 1 行、`"$BUN"` を使用 | fire |
+| 改行を挟む、`"$BUN"` を使用 | pass |
+| 改行あり、`bun` とパスが同じ行 | fire |
+| 1 行、ドキュメントどおりの形 | fire |
+
+空振りは exit 0 で出力も無く、`.aidlc-hooks-health` の drop にも残らない。唯一の手がかりは `/aidlc --doctor` の `! [runtime-graph-missing]` 1 行で、これは advisory なので 51 passed / 0 failed のまま出る。
+
+失われた儀式の代わりに、その stage で起きたことは `<record>/inception/reverse-engineering/memory.md` へ手で 5 件書き足した。観察ノートは stage 記録の一部として残るが、`project.md` の規則にはならない。
+
 ## 検証
 
 ```
