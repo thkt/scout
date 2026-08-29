@@ -93,6 +93,64 @@ bun を上げると `latest` の実体が入れ替わる。その場合は「そ
 
 失われた儀式の代わりに、その stage で起きたことは `<record>/inception/reverse-engineering/memory.md` へ手で 5 件書き足した。観察ノートは stage 記録の一部として残るが、`project.md` の規則にはならない。
 
+### 当てたローカルパッチ
+
+`.claude/` は追跡対象外なので、このパッチは再インストールで消える。再現するときは下の diff を `.claude/tools/aidlc-lib.ts` へ当て直す。
+
+`\bbun\b` のアンカーを外し、判定をコマンド全体からシェルのセグメント単位へ移した。アンカーは「ツールのパスの隣に `bun` という語が同じ行にある」ことを要求しており、絶対パス指定・`"$BUN"` 変数・複数行コマンドのいずれでも外れる。ツールのパスと動詞だけで呼び出しは identify でき、セグメント単位にすることで隣のコマンドが判定を広げることを防ぐ。
+
+```diff
+@@ -1502,27 +1502,38 @@
+ const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
+   .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+   .join("|");
++// LOCAL PATCH (scout): the `\bbun\b` anchor and whole-command matching made
++// this gate miss any invocation where the runtime is not the literal word
++// `bun` next to the tool path on one line - an absolute path, a `"$BUN"`
++// variable, or the call on a later line of a multi-line command. The miss is
++// silent (exit 0, no output, no hooks-health drop), and it stops
++// runtime-graph.json from ever being compiled, which in turn makes
++// `aidlc-learnings.ts surface` fail and the learnings ritual never run. The
++// tool path plus its verb identifies the call on its own; matching per shell
++// segment keeps an unrelated neighbouring command from widening the match.
+ const runtimeCompileTool = new RegExp(
+-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
++  `(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|unit|utility)\\.ts\\b`,
+ );
+ const runtimeCompileReport = new RegExp(
+-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
++  `(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
+ );
+ const runtimeCompileSelf = new RegExp(
+-  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
++  `(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
+ );
+ 
+ export function classifyRuntimeCompileCommand(
+   command: string,
+ ): "reject" | "fire" | "pass" {
+-  const invokesRuntime = shellCommandSegments(command)
++  const segments = shellCommandSegments(command);
++  const invokesRuntime = segments
+     .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
+   if (runtimeCompileSelf.test(command) || invokesRuntime) {
+     return "reject";
+   }
+   if (
+-    runtimeCompileTool.test(command) ||
+-    runtimeCompileReport.test(command) ||
++    segments.some((segment) =>
++      runtimeCompileTool.test(segment) || runtimeCompileReport.test(segment)
++    ) ||
+     /\baidlc\s+(?:state|jump|bolt|unit)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
+     /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
+   ) {
+```
+
+**引き換えに偽陽性を受け入れている。** `echo "... .claude/tools/aidlc-orchestrate.ts report ..."` のような言及もセグメントに含まれれば fire する。代償は不要な `aidlc-runtime.ts compile` が 1 回走ることで、compile は audit shard と memory ファイルから決定的に組み立てるので結果は変わらない。パッチ前の偽陰性 (グラフが一度も作られず儀式が黙って死ぬ) より軽い。
+
+分類器の判定は 8 ケースで確認した。失敗していた形 (改行 + `"$BUN"`)、ドキュメントどおりの 1 行の形、絶対パス指定の 3 つが fire、再帰ガードの 2 つが reject、無関係な 2 つが pass、上記の偽陽性 1 つが fire。
+
 ## 検証
 
 ```
