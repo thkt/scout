@@ -1,9 +1,6 @@
-# Team-Level Rules
+# Team Practices — scout
 
-> This team's affirmed practices and corrections. Loaded after `org.md` as
-> strict-additive guidance; contradictions with broader policy are rejected.
-> Populated by the practices-discovery affirmation gate. Edit at the gate,
-> not directly.
+このリポジトリが実際にどう回っているかを、証跡から書き起こしたもの。`aidlc/spaces/default/memory/team.md` の 5 見出しが空だったため、これは再走査ではなく最初の記録である。org.md が持つフレームワーク既定と重なる項目でも、ここに書くのは scout 自身の証跡から確認できた事実だけで、既定へ寄せて書いてはいない。既定と一致する箇所・乖離する箇所のどちらも `evidence.md` に根拠を残す。3 名の support agent (quality/developer/devsecops) の指摘と、人間の 3 件の確認回答を統合した版である。
 
 ## Way of Working
 
@@ -92,14 +89,3 @@
 - 全ての fetch 経路で SSRF 防御を必須とする (`.claude/OUTCOME.md` の `## Constraints`、DR-0001)。DR-0001 自身が「型強制ではないので契約違反は code review にのみ依存する」と Consequences に書いている。
 - 新しい secret を扱うときは `Redacted` に載せる (DR-0015)。既存の Slack/GitHub の 2 経路は型と named test で pin されているが、3 本目以降の secret を止める仕組みは無い。
 - 新しい出力経路は中和の境界関数へ通す (DR-0014 の Confirmation 末尾)。既存の層は named test で pin されているが、新しい出力経路そのものを検出する仕組みは無い。
-## Forbidden
-
-<!-- Team-specific forbidden patterns -->
-
-## Mandated
-
-<!-- Team-specific mandates -->
-
-## Corrections
-
-<!-- Self-learning loop appends here. -->
