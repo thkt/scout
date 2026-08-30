@@ -17,6 +17,8 @@
 
 MSRV は renovate が自動追跡する。追跡の仕組みと、その datasource が crates.io ではなく Docker Hub である理由は `dependencies.md` の `## 依存の自動更新` が持つ。
 
+**`.config/nextest.toml` の `ci` プロファイルは `retries` を設定していない。** `final-status-level = "flaky"` は現状 1 度も発火しない。根拠は `code-quality-assessment.md` の `### retries は 0 で、final-status-level = "flaky" は現状発火しない` が持つ。
+
 ## feature フラグ
 
 **構成の実質的な軸は `js-rendering` である。既定では無効。** `Cargo.toml` の `[features]` にある `js-rendering = ["chromiumoxide", "nix", "tempfile"]` が optional 依存 3 件を有効化し、headless Chromium による JS レンダリング経路 (`src/fetch/cdp*`) をコンパイルする。
@@ -32,7 +34,7 @@ MSRV は renovate が自動追跡する。追跡の仕組みと、その datasou
 
 ## ライブラリ
 
-`Cargo.toml` は範囲 (`"4"`、`"0.13"` など) で宣言する。**下表の version は `Cargo.lock` が実際に解決した値である。** `Cargo.lock` は測定時点で作業ツリー上 modified 状態だったので、読んだのは作業ツリー側の内容である (差分の内訳は `code-quality-assessment.md` の `## 技術的負債` 参照)。
+`Cargo.toml` は範囲 (`"4"`、`"0.13"` など) で宣言する。**下表の version は `git show HEAD:Cargo.lock` が実際に解決した値である。** 作業ツリーの `Cargo.lock` は未コミットの変更を持つが、**動いているのは推移的依存 14 件だけで、下表の直接依存は 1 件も違わない** (`dependencies.md` の `## 作業ツリーと HEAD の差`)。
 
 依存の件数・ライセンス方針・version 分裂は `dependencies.md` が持つ。ここは「何をどの目的で使っているか」だけを持つ。
 
@@ -50,16 +52,16 @@ MSRV は renovate が自動追跡する。追跡の仕組みと、その datasou
 | `serde_json`         | 1.0.151           | 同上                                                                                                                                              |
 | `thiserror`          | 2.0.20            | 各バックエンドのエラー enum の `Display` 導出                                                                                                     |
 | `url`                | 2.5.8             | URL 解析。`ValidatedUrl` の内部型                                                                                                                 |
-| `futures`            | 0.3.34            | `stream::buffer_unordered`。`research` の並列取得と Slack `users.info` の並列解決                                                                 |
+| `futures`            | 0.3.34            | `stream::buffer_unordered`。`research` の並列取得 (並列度 5) と Slack `users.info` の並列解決                                                     |
 | `base64`             | 0.23.1            | GitHub Contents / Blob API の本文復号                                                                                                             |
 | `globset`            | 0.4.20            | `repo-tree --pattern` のグロブ照合                                                                                                                |
 | `percent-encoding`   | 2.3.2             | GitHub API のパスセグメントのエンコード                                                                                                           |
 | `tracing`            | 0.1.44            | 構造化ログ。stderr 固定                                                                                                                           |
 | `tracing-subscriber` | 0.3.23            | `EnvFilter` に `scout=info` を最後に足すので `RUST_LOG` で消せない (`src/lib.rs` の `init_tracing`)                                               |
-| `encoding_rs`        | 0.8.35            | ラベル指定 / BOM 由来のデコード                                                                                                                   |
+| `encoding_rs`        | 0.8.35            | ラベル指定 / BOM 由来のデコード。`src/charset.rs` が信頼できる検出とみなす 8 エンコーディングの判定にも使う                                       |
 | `chardetng`          | 1.0.0             | 文字コード自動判定 (DR-0013)                                                                                                                      |
-| `fastrand`           | 2.5.0             | バックオフのジッタ。`Rng` trait の本番実装                                                                                                        |
-| `httpdate`           | 1.0.3             | `Retry-After` の HTTP-date 形式の解釈                                                                                                             |
+| `fastrand`           | 2.5.0             | バックオフのジッタ。`src/rng.rs` の `Rng` trait の本番実装                                                                                        |
+| `httpdate`           | 1.0.3             | `src/retry.rs` が読む `Retry-After` の HTTP-date 形式                                                                                             |
 
 ### optional 依存 (`js-rendering` 時のみ)
 
@@ -74,9 +76,30 @@ MSRV は renovate が自動追跡する。追跡の仕組みと、その datasou
 | name                  | version | purpose                                                                           |
 | --------------------- | ------- | --------------------------------------------------------------------------------- |
 | `wiremock`            | 0.6.5   | HTTP モックサーバ                                                                 |
-| `tracing-test`        | 0.2.6   | ログ出力の assertion (`logs_contain`)                                             |
+| `tracing-test`        | 0.2.6   | ログ出力の assertion (`logs_contain`)。「ログに出ていない」の assertion にも使う  |
 | `flate2`              | 1.1.9   | 圧縮応答のテスト fixture 生成                                                     |
 | `tokio` (`test-util`) | 1.53.1  | `start_paused` による仮想時間。タイムアウトとバックオフのテストが実時間を待たない |
+
+### 横断リーフが直接使う crate
+
+**12 の横断リーフを全行読んだうえで、各ファイルが直接触る外部 crate を対応させた。** 上の表と重複するが、リーフを 1 本触るときにどの crate の挙動へ踏み込むかが分かる形にしてある。
+
+| ファイル              | 実装部が直接使う crate         | 何のために                                                                          |
+| --------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| `src/retry.rs`        | `reqwest`、`httpdate`、`tokio`、`tracing` | `is_connect`/`is_timeout`/`is_decode` 判定、`Retry-After` の 2 形式、`sleep`     |
+| `src/envelope.rs`     | `serde`、`serde_json`          | envelope の serde 属性と `to_json_line`                                              |
+| `src/signals.rs`      | `tokio`、`tracing`             | signal 受信と `watch` による graceful drain                                          |
+| `src/token_source.rs` | `tokio`、`tracing`             | `gh auth token` の subprocess と `timeout`                                           |
+| `src/body_limit.rs`   | `reqwest`                      | `Response::chunk()` による cap 付き読み出し                                          |
+| `src/classify.rs`     | `reqwest`                      | `reqwest::Error` から `Classification` への写像                                      |
+| `src/charset.rs`      | `encoding_rs`                  | ラベルと BOM からの `Encoding` 解決。**自動判定の `chardetng` はここには無い** — 呼ぶのは `src/fetch/download.rs`、`src/github/encoding.rs`、`src/github/helpers.rs`、`src/tools/params.rs` の側である |
+| `src/rng.rs`          | `fastrand`                     | backoff のジッタ                                                                     |
+| `src/clock.rs`        | なし (`std::time` のみ)        | **壁時計の抽象であって sleep の抽象ではない。** `now_secs()` 1 メソッドで、仮想時間を進めるのは `tokio` の `start_paused` 側の役目 |
+| `src/redacted.rs`     | なし                           | `std::fmt::Debug` のみ。`Display`/`Serialize` を意図的に持たない                     |
+| `src/markdown.rs`     | なし                           | 文字列処理のみ                                                                       |
+| `src/yaml.rs`         | なし                           | 文字列処理のみ                                                                       |
+
+測定範囲は各ファイルの実装部 (inline `#[cfg(test)] mod tests` ブロックを除いた範囲) で、`<crate>::` の形のパス参照を数えている。
 
 ## 技術選択の判断が残っている場所
 
@@ -90,4 +113,4 @@ MSRV は renovate が自動追跡する。追跡の仕組みと、その datasou
 | 文字コードの判定とデコード方針                                                 | 0013             |
 | `<pre>` / `<br>` と改行の扱い (htmd の出力に対する上書き)                      | 0025, 0026, 0027 |
 
-`markup5ever_rcdom` の pin は上の表に無い — 選定ではなく htmd への追随であり、判断の記録は `Cargo.toml` のコメントと `renovate.json` の側にある。**この 2 つは相互に相手を名指ししており、値も整合している** (attempt 2 で確認)。renovate 側の 4 規則と、解除手順が `Cargo.toml` 側にしか無いことは `dependencies.md` の `## 依存の自動更新` が持つ。
+`markup5ever_rcdom` の pin は上の表に無い — 選定ではなく htmd への追随であり、判断の記録は `Cargo.toml` のコメントと `renovate.json` の側にある。**この 2 つは相互に相手を名指ししており、値も整合している。** renovate 側の 4 規則と、解除手順が `Cargo.toml` 側にしか無いことは `dependencies.md` の `## 依存の自動更新` が持つ。

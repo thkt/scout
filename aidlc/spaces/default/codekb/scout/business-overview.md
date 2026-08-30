@@ -25,6 +25,8 @@
 
 出力そのものがエージェントへの攻撃面になるという判断が DR-0014 (Output-Injection Defense for AI-Agent Consumers) に記録されており、`src/markdown.rs` と `src/yaml.rs` の中和処理がその実装にあたる。
 
+**この 2 つの中和層は同じ 1 つの予算値を共有している。** `src/yaml.rs` の frontmatter フィールド上限は `search::engine::MAX_PAGE_BYTES` (4,500) の 1/10 として導かれ、その参照が crate 内で唯一の循環辺になる。設計上の意図と、それを守る仕掛けが無いことは `architecture.md` の `## モジュール依存の実形` が持つ。
+
 ## 提供する 6 つの能力
 
 CLI サブコマンドは `src/tools/params.rs` の `enum Command` が定義する 6 本である。実際の分岐は `src/tools.rs` の `run()` にある。
@@ -45,9 +47,10 @@ Slack permalink の取得は独立したサブコマンドではない。`src/to
 境界は防御の設計と直結しているため、明示された「やらないこと」がそのまま安全性の根拠になっている。
 
 - **内部ネットワークへは出ない。** ユーザー入力 URL は SSRF 防御の対象であり、名前解決の結果を接続時に再検査する (DR-0001, DR-0009, DR-0012)。proxy 経由の経路だけは名前解決由来の防御を proxy の egress control へ委譲する (DR-0023)
-- **秘密を出力へ漏らさない。** トークンは `src/redacted.rs` の `Redacted` 型に封じ込める (DR-0015)。`gh auth token` サブプロセスの stderr はトークンを含みうるので破棄し、終了コードだけを報告する (DR-0018)
+- **秘密を出力へ漏らさない。** トークンは `src/redacted.rs` の `Redacted` 型に封じ込める (DR-0015)。`Redacted` は `Debug` だけを実装し `Display` も `Serialize` も持たないので、出力経路へ渡すとコンパイルが落ちる。`gh auth token` サブプロセスの stderr はトークンを含みうるので破棄し、終了コードだけを報告する (DR-0018)
 - **状態を持たない。** 永続ストア、キャッシュ層、設定ファイルのいずれも持たない。設定は環境変数と CLI 引数だけで、既定値と許容範囲は `--help` に載る (DR-0019)
 - **書き込まない。** 外部 API への要求は全部 GET である。GitHub 8 本・Slack 4 メソッドのすべてが読み取りのみで、この一方向性が `api-documentation.md` の Consumed 表に列挙されている
+- **人間を無制限に待たせない。** `src/retry.rs` の `MAX_RETRY_AFTER_SECS` は 300 で、サーバが返した `Retry-After` がこれを超えても待たない。値の根拠 (端末で待つ人間の忍耐) が doc コメントにある
 
 ## 一次ソースの所在
 
@@ -60,6 +63,8 @@ Slack permalink の取得は独立したサブコマンドではない。`src/to
 | 実装ファイル単位の評価と未着手の判断   | `docs/audit/2026-08-11-rust-code-assessment.md` (v2.5.0 / commit `c0499fd` / 測定日 2026-08-17 基準)                                              |
 | コーディング規約の本体                 | `.claude/rules/CONVENTIONS.md` が索引で、規約本体は `Cargo.toml` の lints、`clippy.toml` の reason、`src/test_support.rs` の crate doc に置かれる |
 
-**ただし右列が常に新しいとは限らない。** `docs/audit/2026-08-11-rust-code-assessment.md` は v2.5.0 基準であり、この CodeKB が同じ対象を測り直して監査文書の記述を覆した箇所が 3 つある (E-1 / E-3 / E-4)。**その 3 項目についてはこの CodeKB の実測が新しく、`code-quality-assessment.md` の `## 技術的負債` が測定範囲つきで持つ。** 同じ理由で、`.claude/rules/CONVENTIONS.md` が `src/fetch/converter.rs` について書く「6 群」も上書き済みである。測っていない範囲では右列が正しいという原則はそのまま残る — DR の本文、テスト ID の規約、lint の deny リストはいずれも一次ソース側が持つ。
+**ただし右列が常に新しいとは限らない。** `docs/audit/2026-08-11-rust-code-assessment.md` は v2.5.0 基準であり、この CodeKB が同じ対象を測り直して監査文書の記述を覆した箇所が 3 つある (E-1/E-3/E-4)。**その 3 項目についてはこの CodeKB の実測が新しく、`code-quality-assessment.md` の `## 技術的負債` が測定範囲つきで持つ。** 同じ理由で、`.claude/rules/CONVENTIONS.md` が `src/fetch/converter.rs` について書く「6 群」も上書き済みである。測っていない範囲では右列が正しいという原則はそのまま残る — DR の本文、テスト ID の規約、lint の deny リストはいずれも一次ソース側が持つ。
+
+**逆向きの食い違いも 1 度起きている。** `aidlc/spaces/default/memory/team.md` の `## Code Style` は「循環が無い」という形の主張を書かないと定め、その理由に `src/yaml.rs` の import を名指ししていた。**この CodeKB の側が 9 箇所でそれと矛盾する主張を載せていた。** 二次資料どうしが食い違ったときは、どちらが新しいかではなく、どちらが測定範囲を書いているかで判断する。
 
 この索引方式は scout 自身の規約でもある。`.claude/rules/CONVENTIONS.md` は「一次ソースを写した時点で 2 箇所が食い違う」と定め、規約の所在だけを持って本体を書かない。
