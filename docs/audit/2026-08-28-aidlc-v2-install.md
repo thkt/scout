@@ -2,6 +2,7 @@
 
 対象: scout main
 実施日: 2026-08-28
+更新日: 2026-09-02 (v2.7.0 へ載せ替え)
 基準 commit: c43278f (v2.6.0)
 
 scout の開発フローを AI-DLC Workflows 2.0 へ置き換えるために、engine を `.claude/` へ、workspace を `aidlc/` へ入れた。同梱の設定のうち 3 点を落として入れている。再インストールと撤去に必要な情報をここに残す。`/think` `/issue` `/build` `/audit` などの旧フローは `~/.claude` のグローバル資産なので、この導入では触っていない。
@@ -11,11 +12,30 @@ scout の開発フローを AI-DLC Workflows 2.0 へ置き換えるために、e
 | 項目 | 値 |
 | ---- | -- |
 | リポジトリ | https://github.com/awslabs/aidlc-workflows |
-| ブランチ | `v2` |
-| commit | `2fbee12fb29d2a6614b70b6f61f3cceeaf235245` (2026-08-28) |
-| AIDLC_VERSION | 2.6.123 |
+| タグ | `v2.7.0` |
+| commit | `96b11d39028955d4f92375e783525db5275cdfd8` (2026-09-01) |
+| AIDLC_VERSION | 2.7.0 |
 
-`v2` はリリースタグではなくブランチである。GitHub Releases は v1.0.1 (2026-06-30) で止まっており、PR #756 の six-command reshape が進行中。再現するときは `git clone --branch v2` の後に上の commit を checkout する。
+`v2.7.0` は GitHub Release のタグで、同じ日に `main` が v2 の source of truth になった。再現するときは `git clone --branch v2.7.0` で取る。初回導入 (2026-08-28) は `v2` ブランチの commit `2fbee12` (AIDLC_VERSION 2.6.123) を使い、2026-09-02 に v2.7.0 へ載せ替えた。
+
+## 2.7.0 への載せ替え (2026-09-02)
+
+2.6.123 から 2.7.0 までで `dist/claude/` が変わったのは 4 ファイルで、いずれも `aidlc-state.md` が絶対パスを持つ問題 (upstream issue #937、2.6.124 で対処) と版番号である。2.7.0 自体は 2.6.x を新しい minor に束ねた版で、CHANGELOG は「2.6.124 から runtime の挙動を変えていない」と書く。
+
+| ファイル | 変更 |
+| -------- | ---- |
+| `.claude/tools/aidlc-utility.ts` | 新規 state の `Project Root` を絶対パスではなく `.` で書く |
+| `.claude/tools/aidlc-state.ts` | worktree state の `Worktree Path` を project-relative で書く |
+| `.claude/knowledge/aidlc-shared/state-template.md` | `Project Root` の placeholder を上の形に合わせる |
+| `.claude/tools/aidlc-version.ts` | `2.6.123` → `2.7.0` |
+
+`aidlc/` の method tree、同梱 `.gitignore`、`.mcp.json`、`settings.json`、`aidlc-lib.ts` は上流側で 1 バイトも変わっていない。したがって上の 4 ファイルを `.claude/` へ上書きすれば `dist/claude/` を丸ごと差し替えたのと同じ状態になり、「同梱から外したもの」の 3 点、bun の絶対パス化、`aidlc-lib.ts` のローカルパッチはそのまま残る。上書き後に `/usr/bin/diff -rq` で v2.7.0 の `dist/claude/.claude` と突き合わせ、差分が scout 固有のファイルと `settings.json`・`aidlc-lib.ts` の 2 本だけであることを確かめた。
+
+上書き後に `aidlc-utility.ts plugin-sync` を走らせた (2.7.0 は engine を差し替えるたびにこれを要求する)。plugin は入れていないので `no installed plugins; nothing to sync` で終わる。
+
+既存の `aidlc-state.md` の `Project Root` は `/Users/thkt/GitHub/cli/scout` の絶対パスのまま残る。2.6.124 の CHANGELOG は「実行時に `projectRootFor` が `aidlc/` を探して再導出するので、この値は到達しない fallback であり移行は不要。engine が次にそのフィールドを書くときに置き換わる」としている。手では書き換えない。
+
+2.7.0 の release note が Claude Code に求める `/hooks` での承認と完全再起動は、載せ替え後に人が行う。hook の command 文字列は変わっていない。
 
 ## 入れたもの
 
@@ -95,7 +115,7 @@ bun を上げると `latest` の実体が入れ替わる。その場合は「そ
 
 ### 当てたローカルパッチ
 
-`.claude/` は追跡対象外なので、このパッチは再インストールで消える。再現するときは下の diff を `.claude/tools/aidlc-lib.ts` へ当て直す。
+`.claude/` は追跡対象外なので、このパッチは再インストールで消える。再現するときは下の diff を `.claude/tools/aidlc-lib.ts` へ当て直す。v2.7.0 の `aidlc-lib.ts` は 2.6.123 と同一なので hunk の行番号はそのまま当たり、上流の 3 本の正規表現も `\bbun\b` アンカー付きのままである。
 
 `\bbun\b` のアンカーを外し、判定をコマンド全体からシェルのセグメント単位へ移した。アンカーは「ツールのパスの隣に `bun` という語が同じ行にある」ことを要求しており、絶対パス指定・`"$BUN"` 変数・複数行コマンドのいずれでも外れる。ツールのパスと動詞だけで呼び出しは identify でき、セグメント単位にすることで隣のコマンドが判定を広げることを防ぐ。
 
@@ -157,7 +177,7 @@ bun を上げると `latest` の実体が入れ替わる。その場合は「そ
 bun .claude/tools/aidlc-utility.ts doctor
 ```
 
-2026-08-28 の結果は 50 passed / 0 failed。
+2026-08-28 の結果は 50 passed / 0 failed。2026-09-02 (v2.7.0 へ載せ替え後) は 51 passed / 0 failed。advisory は `hook-heartbeat-frozen` 4 件で、直近 58〜64 時間 AI-DLC の stage を動かしていないことによる。
 
 ## 使い方
 
