@@ -58,3 +58,29 @@ fn rejects_non_textual_content_types() {
         );
     }
 }
+
+/// [T-F086] RFC 9110 section 8.3.1 makes media types case-insensitive.
+#[test]
+fn accepts_textual_content_types_regardless_of_ascii_case() {
+    for ct in [
+        "Text/HTML; charset=UTF-8",
+        "TEXT/PLAIN",
+        "APPLICATION/XML",
+        "Application/Rss+Xml",
+        "APPLICATION/ATOM+XML",
+        "Application/Xhtml+Xml",
+    ] {
+        assert!(check_content_type(ct).is_ok(), "should accept: {ct}");
+    }
+}
+
+/// [T-F087] Case folding does not broaden the allowed media-type families.
+#[test]
+fn rejects_mixed_case_non_textual_types_with_original_spelling() {
+    for ct in ["IMAGE/SVG+XML", "Application/Pdf", "APPLICATION/JSON"] {
+        assert!(
+            matches!(check_content_type(ct), Err(FetchError::UnsupportedContentType(mime)) if mime == ct),
+            "should reject and preserve the original type: {ct}"
+        );
+    }
+}

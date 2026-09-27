@@ -225,6 +225,17 @@ fn backoff_is_capped_at_max_retry_after() {
     );
 }
 
+/// [T-R019] The 300-second retry limit is inclusive, not a strict upper bound.
+#[test]
+fn retry_after_cap_includes_exact_boundary() {
+    for value in [None, Some(0), Some(299), Some(300)] {
+        assert!(retry_after_within_cap(value), "must allow {value:?}");
+    }
+    for value in [Some(301), Some(u64::MAX)] {
+        assert!(!retry_after_within_cap(value), "must refuse {value:?}");
+    }
+}
+
 /// [T-R004] reqwest 0.13 surfaces a mid-stream body drop as
 /// `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
 /// source chain. is_transient_network must classify this as transient
