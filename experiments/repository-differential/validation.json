@@ -1,0 +1,214 @@
+[
+  {
+    "check": "comparison",
+    "command": [
+      "python3",
+      "experiments/repository-differential/run.py",
+      "--go",
+      "/tmp/scout-mention-go-1.27.1/go/bin/go",
+      "--report",
+      "experiments/repository-differential/after.json"
+    ],
+    "exit_code": 1,
+    "passed": true,
+    "note": {
+      "documented_partial_ref_validation": 57,
+      "git_agrees_with_stricter_reference": true,
+      "isolated_build_directory": "target/repository-differential"
+    },
+    "summaries": [
+      "67997 cases across 21 operations; mismatches: {'ref': 57}"
+    ],
+    "log": "/tmp/scout-isolated-comparison.log"
+  },
+  {
+    "check": "default-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--all-targets"
+    ],
+    "environment": {
+      "SCOUT_NETWORK_TESTS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "exit_code": 0,
+    "passed": true,
+    "summaries": [
+      "test result: ok. 802 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.33s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
+      "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+    ],
+    "log": "/tmp/scout-revalidated-default-tests.log",
+    "previous_attempts": [
+      {
+        "check": "default-tests",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--all-targets"
+        ],
+        "exit_code": 101,
+        "passed": false,
+        "note": null,
+        "summaries": [
+          "test result: FAILED. 802 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.65s"
+        ],
+        "log": "/tmp/scout-final-default-tests.log",
+        "diagnosis": "The initial run reused an experiment-instrumented test artifact. Build directories are now isolated; this rerun rebuilt the normal suite."
+      }
+    ]
+  },
+  {
+    "check": "all-feature-tests",
+    "command": [
+      "cargo",
+      "nextest",
+      "run",
+      "--offline",
+      "--locked",
+      "--all-features",
+      "--run-ignored",
+      "all",
+      "--profile",
+      "ci",
+      "-j",
+      "4"
+    ],
+    "environment": {
+      "SCOUT_NETWORK_TESTS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "exit_code": 0,
+    "passed": true,
+    "summaries": [
+      "Summary [ 181.407s] 865 tests run: 865 passed, 0 skipped"
+    ],
+    "log": "/tmp/scout-revalidated-all-feature-tests.log",
+    "previous_attempts": [
+      {
+        "check": "all-feature-tests",
+        "command": [
+          "cargo",
+          "nextest",
+          "run",
+          "--offline",
+          "--locked",
+          "--all-features",
+          "--run-ignored",
+          "all",
+          "--profile",
+          "ci"
+        ],
+        "exit_code": 100,
+        "passed": false,
+        "note": null,
+        "summaries": [
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 809 filtered out; finished in 5.09s",
+          "Summary [ 167.949s] 865 tests run: 864 passed, 1 failed, 0 skipped"
+        ],
+        "log": "/tmp/scout-final-all-feature-tests.log",
+        "diagnosis": "The new depth fixture was too short and triggered browser fallback. It now serves a substantive article so the test measures HTTP request depth independently of browser availability."
+      }
+    ]
+  },
+  {
+    "check": "clippy-default",
+    "command": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "note": null,
+    "summaries": [],
+    "log": "/tmp/scout-final-clippy-default.log"
+  },
+  {
+    "check": "clippy-all-features",
+    "command": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "note": null,
+    "summaries": [],
+    "log": "/tmp/scout-final-clippy-all-features.log"
+  },
+  {
+    "check": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "note": null,
+    "summaries": [],
+    "log": "/tmp/scout-final-format.log"
+  },
+  {
+    "check": "cli",
+    "command": [
+      "python3",
+      "experiments/repository-differential/cli_probes.py",
+      "--report",
+      "experiments/repository-differential/cli-after.json"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "note": null,
+    "summaries": [
+      "31/31 process fixtures passed"
+    ],
+    "log": "/tmp/scout-final-cli.log"
+  },
+  {
+    "check": "inventory",
+    "command": [
+      "python3",
+      "experiments/repository-differential/inventory.py"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "note": null,
+    "summaries": [],
+    "log": "/tmp/scout-final-inventory.log"
+  },
+  {
+    "check": "isolated-mutations",
+    "command": [
+      "python3",
+      "experiments/repository-differential/mutations.py",
+      "--report",
+      "experiments/repository-differential/mutations-after.json"
+    ],
+    "passed": true,
+    "summaries": [
+      "21 of 21 deliberate faults detected"
+    ],
+    "log": "/tmp/scout-isolated-mutations.log"
+  }
+]

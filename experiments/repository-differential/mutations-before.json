@@ -1,0 +1,241 @@
+[
+  {
+    "id": "inline_pipe",
+    "source": "markdown.rs",
+    "filter": "markdown::",
+    "status": "detected",
+    "failed_tests": [
+      "test markdown::tests::escape_md_inline_pipes_and_newlines ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 36 passed; 1 failed; 0 ignored; 0 measured; 760 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "yaml_null",
+    "source": "yaml.rs",
+    "filter": "yaml::",
+    "status": "invalid_or_infrastructure_failure",
+    "failed_tests": [],
+    "summaries": [],
+    "diagnostic": "   Compiling scout v2.6.0 (/var/folders/mv/9vj8x1010916rllt6m9c06cm0000gn/T/scout-test-mutations-v6jpdwud)\nerror: expected `,` following `match` arm\n   --> src/yaml.rs:191:32\n    |\n191 |             '\\0' => out.push(c)\n    |                                ^\n    |\nhelp: missing a comma here to end this `match` arm\n    |\n191 |             '\\0' => out.push(c),\n    |                                +\n\nerror: could not compile `scout` (lib test) due to 1 previous error\n"
+  },
+  {
+    "id": "charset_single_byte",
+    "source": "charset.rs",
+    "filter": "charset::",
+    "status": "detected",
+    "failed_tests": [
+      "test charset::tests::rejects_single_byte_encodings ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 794 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "retry_boundary",
+    "source": "retry.rs",
+    "filter": "retry::",
+    "status": "survived",
+    "failed_tests": [],
+    "summaries": [
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 784 filtered out; finished in 2.07s"
+    ]
+  },
+  {
+    "id": "body_boundary",
+    "source": "body_limit.rs",
+    "filter": "body_limit::",
+    "status": "detected",
+    "failed_tests": [
+      "test body_limit::tests::body_of_exactly_cap_bytes_returns_in_full ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 792 filtered out; finished in 2.77s"
+    ]
+  },
+  {
+    "id": "token_priority",
+    "source": "token_source.rs",
+    "filter": "token_source::",
+    "status": "survived",
+    "failed_tests": [],
+    "summaries": [
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 791 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "redacted_trim",
+    "source": "redacted.rs",
+    "filter": "redacted::",
+    "status": "detected",
+    "failed_tests": [
+      "test redacted::tests::new_rejects_whitespace_only_input ... FAILED",
+      "test redacted::tests::whitespace_only_env_value_becomes_the_same_missing_error ... FAILED",
+      "test redacted::tests::new_trims_surrounding_whitespace ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 790 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "sigint_code",
+    "source": "signals.rs",
+    "filter": "signals::",
+    "status": "detected",
+    "failed_tests": [
+      "test signals::tests::sigint_exit_code_is_130 ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 793 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "lang_auto",
+    "source": "search/lang.rs",
+    "filter": "search::lang::",
+    "status": "detected",
+    "failed_tests": [
+      "test search::lang::tests::auto_maps_to_none ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 794 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "research_depth",
+    "source": "search/engine.rs",
+    "filter": "search::engine::",
+    "status": "survived",
+    "failed_tests": [],
+    "summaries": [
+      "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 780 filtered out; finished in 3.88s"
+    ]
+  },
+  {
+    "id": "research_failure_order",
+    "source": "search/engine.rs",
+    "filter": "search::engine::",
+    "status": "detected",
+    "failed_tests": [
+      "test search::engine::tests::partition_by_rank_orders_failures_like_pages ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 16 passed; 1 failed; 0 ignored; 0 measured; 780 filtered out; finished in 3.02s"
+    ]
+  },
+  {
+    "id": "github_binary",
+    "source": "github/encoding.rs",
+    "filter": "github::encoding::",
+    "status": "detected",
+    "failed_tests": [
+      "test github::encoding::tests::decode_bytes_with_null_bytes_returns_non_utf8_error ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 781 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "github_range_zero",
+    "source": "github/helpers.rs",
+    "filter": "github::helpers::",
+    "status": "detected",
+    "failed_tests": [
+      "test github::helpers::tests::parse_line_range_invalid ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 766 filtered out; finished in 0.05s"
+    ]
+  },
+  {
+    "id": "timeout_minimum",
+    "source": "tools/config.rs",
+    "filter": "tools::config::",
+    "status": "detected",
+    "failed_tests": [
+      "test tools::config::tests::github_timeout_out_of_range_fails ... FAILED",
+      "test tools::config::tests::timeout_below_min_fails ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 778 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "stdin_trim",
+    "source": "tools/params.rs",
+    "filter": "tools::",
+    "status": "detected",
+    "failed_tests": [
+      "test tools::params::tests::stdin_content_is_trimmed ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 143 passed; 1 failed; 0 ignored; 0 measured; 653 filtered out; finished in 4.68s"
+    ]
+  },
+  {
+    "id": "slack_empty_channel",
+    "source": "slack/url.rs",
+    "filter": "slack::url::",
+    "status": "detected",
+    "failed_tests": [
+      "test slack::url::url_tests::parse_rejects_empty_channel ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 789 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "slack_whitespace",
+    "source": "slack/mention.rs",
+    "filter": "slack::mention::",
+    "status": "detected",
+    "failed_tests": [
+      "test slack::mention::mention_tests::whitespace_in_mention_id_is_preserved_and_not_looked_up ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 776 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "id": "http_not_found",
+    "source": "classify.rs",
+    "filter": "classify",
+    "status": "detected",
+    "failed_tests": [
+      "test fetch::classify_tests::status_404_is_not_found_not_data_error ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 55 passed; 1 failed; 0 ignored; 0 measured; 741 filtered out; finished in 1.88s"
+    ]
+  },
+  {
+    "id": "retryability",
+    "source": "envelope.rs",
+    "filter": "errors::",
+    "status": "detected",
+    "failed_tests": [
+      "test tools::errors::exit_code_tests::timeout_errors_have_exit_code_124 ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 44 passed; 1 failed; 0 ignored; 0 measured; 752 filtered out; finished in 3.70s"
+    ]
+  },
+  {
+    "id": "html_paragraph_break",
+    "source": "fetch/converter.rs",
+    "filter": "fetch::converter::",
+    "status": "detected",
+    "failed_tests": [
+      "test fetch::converter::tests::br_directly_under_pre_survives_as_two_trailing_spaces_and_a_newline ... FAILED",
+      "test fetch::converter::tests::body_after_a_self_closed_raw_text_tag_still_reaches_the_body ... FAILED",
+      "test fetch::converter::tests::br_inside_a_list_item_loses_its_trailing_spaces_and_becomes_an_indented_newline ... FAILED",
+      "test fetch::converter::tests::br_inside_a_paragraph_survives_as_two_trailing_spaces_and_a_newline ... FAILED",
+      "test fetch::converter::tests::br_inside_a_table_cell_loses_the_line_break_and_collapses_to_whitespace ... FAILED",
+      "test fetch::converter::tests::text_after_a_br_inside_a_heading_lands_outside_the_heading_line ... FAILED"
+    ],
+    "summaries": [
+      "test result: FAILED. 73 passed; 6 failed; 0 ignored; 0 measured; 718 filtered out; finished in 0.01s"
+    ]
+  }
+]

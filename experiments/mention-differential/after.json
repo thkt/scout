@@ -1,0 +1,13 @@
+{
+  "seed": 20260927,
+  "cases": 80956,
+  "explicit_oracles": 37,
+  "go_version": "go version go1.27.1 darwin/arm64",
+  "rust_version": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "production_sha256": "6f0af51534fb92b37917b0e2d2936a012e672949874cb93006d86cf6c38b5b77",
+  "reference_sha256": "6e47dd0117aa9fa9e731bf138e267be5e76748fad8390b291e2087ce61b64c3a",
+  "module_tests": "\nrunning 21 tests\ntest slack::mention::mention_tests::malformed_mention_tokens_are_left_verbatim ... ok\ntest slack::mention::mention_tests::malformed_mention_tokens_are_not_collected ... ok\ntest slack::mention::mention_tests::mention_after_malformed_token_still_substitutes ... ok\ntest slack::mention::mention_tests::t004_multiple_adjacent_mentions ... ok\ntest slack::mention::mention_tests::t006_multibyte_characters_correct_offsets ... ok\ntest slack::mention::mention_tests::t001_no_mentions_returns_empty ... ok\ntest slack::mention::mention_tests::t002_single_mention_returns_one_span ... ok\ntest slack::mention::mention_tests::t003_pipe_label_extracts_user_id_only ... ok\ntest slack::mention::mention_tests::t003b_pipe_label_captured ... ok\ntest slack::mention::mention_tests::t003c_bare_mention_has_no_label ... ok\ntest slack::mention::mention_tests::t003d_empty_label_normalized_to_none ... ok\ntest slack::mention::mention_tests::t005_unclosed_mention_breaks_early ... ok\ntest slack::mention::mention_tests::t007_known_user_replaced_with_display_name ... ok\ntest slack::mention::mention_tests::t026_cache_miss_empty_label_renders_user_id ... ok\ntest slack::mention::mention_tests::whitespace_in_mention_id_is_preserved_and_not_looked_up ... ok\ntest slack::mention::mention_tests::t008_unknown_user_kept_as_at_uid ... ok\ntest slack::mention::mention_tests::t009_no_mentions_returns_text_unchanged ... ok\ntest slack::mention::mention_tests::t009b_pipe_label_substituted_with_display_name ... ok\ntest slack::mention::mention_tests::t027_empty_cache_value_falls_through_to_label ... ok\ntest slack::mention::mention_tests::t028_cache_hit_takes_priority_over_label ... ok\ntest slack::mention::mention_tests::t025_cache_miss_renders_embedded_label ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+  "mismatch_count": 0,
+  "oracle_failures": [],
+  "mismatches": []
+}

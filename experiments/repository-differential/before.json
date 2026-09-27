@@ -1,0 +1,538 @@
+{
+  "seed": 20260927,
+  "cases": 67997,
+  "cases_by_operation": {
+    "inline": 2623,
+    "heading": 2623,
+    "fence": 2623,
+    "yaml": 2623,
+    "yaml_field": 2628,
+    "markers": 2623,
+    "encode_path": 2623,
+    "path": 2623,
+    "mention": 2623,
+    "truncate": 17926,
+    "size": 10009,
+    "repo": 1989,
+    "ref": 1548,
+    "range": 209,
+    "config": 70,
+    "base64": 380,
+    "content_type": 76,
+    "ip": 10121,
+    "retry": 57,
+    "status": 1000,
+    "retry_cap": 1000
+  },
+  "mismatch_counts": {
+    "ref": 57,
+    "content_type": 24
+  },
+  "examples": {
+    "ref": [
+      {
+        "input": {
+          "op": "ref",
+          "a": "@",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "@{-1}",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "/main",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "main/",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a//b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": ".a",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a/.b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a.lock/b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0001b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0002b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0003b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0004b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0005b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0006b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u0007b",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\bb",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\tb",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u000bb",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\fb",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      },
+      {
+        "input": {
+          "op": "ref",
+          "a": "a\u000eb",
+          "b": "",
+          "n": 0
+        },
+        "go": false,
+        "rust": true
+      }
+    ],
+    "content_type": [
+      {
+        "input": {
+          "op": "content_type",
+          "a": "TEXT/HTML",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "TEXT/HTML; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Text/Html",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Text/Html; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "TEXT/PLAIN",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "TEXT/PLAIN; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Text/Plain",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Text/Plain; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/XML",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/XML; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Xml",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Xml; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/RSS+XML",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/RSS+XML; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Rss+Xml",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Rss+Xml; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/ATOM+XML",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "APPLICATION/ATOM+XML; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Atom+Xml",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      },
+      {
+        "input": {
+          "op": "content_type",
+          "a": "Application/Atom+Xml; charset=UTF-8",
+          "b": "",
+          "n": 0
+        },
+        "go": true,
+        "rust": false
+      }
+    ]
+  },
+  "corpus_sha256": "122efb93a502c3e43c84c5e9e99279760aa9e082785938c151e19eb6416d7048",
+  "go_reference_sha256": "82ea0226290cb903c9f29198de49310edb5b173414e9a5c3bffe3ab85ba240f4",
+  "source_sha256": {
+    "src/body_limit/tests.rs": "ea66576234a139715d0e284c785b0b3795f71020efbb3c64e66396658196cd04",
+    "src/body_limit.rs": "12e4c1e9305f0be52cc089f462831d39370ded204fc4b4a374368cbaf6332cb1",
+    "src/brave/client/classify_tests.rs": "347c5cf486a7fd2a7bfb776dd0104f0cae6d0f48579eee4088c9c75bd28d9cef",
+    "src/brave/client/http_tests.rs": "ba7c68215eb3e46e768c6f2a5e0c4d42bbaeeee9f2db5ffabc37214bd38f8e00",
+    "src/brave/client.rs": "7eb3b8d0dc722651c884b2cfe00eef7c4bee30ac6dc6bde43ee4a9b25c59309c",
+    "src/brave/types.rs": "778f64c903867f6531b1a41843ef4de90bc26e52998cf2b3cf77383167688020",
+    "src/brave.rs": "1e5468b693f867bdaf7394b2f781c0f46ac5fbc4ecf3ca81af5590ce0aecb2f5",
+    "src/charset.rs": "2efab620c863f2e0472091c7f44be432ba7a71c9c9397afa376805d4f2d8cd67",
+    "src/classify.rs": "d71b0694ea0d58b54cf8483e88653925738d65583fd41c2ff545620c5e686838",
+    "src/clock.rs": "7edb913cdf6035fc4a1ba5b75560acaee0a43da84ef9aa0d04c837d98734c505",
+    "src/envelope/tests.rs": "db3b4ee3a31c0b2a434ed32db223b12117cf9cfa4e92c3f00f0f3cb05a62b7ce",
+    "src/envelope.rs": "94be8b4e9617879b2fdf778bc6d433c7944b96e14637800657d8b87568fb38f2",
+    "src/fetch/cdp/cdp_integration_tests.rs": "a0e2a9fee181316fcf237273cdd7c0b03bb6e449b77bff4ad233bb1217851ab0",
+    "src/fetch/cdp/launch/browser_binary_tests.rs": "4bb22695b7032dde9ca0445baf8d46b87f5c777bc42786c690a2c63126639b34",
+    "src/fetch/cdp/launch/browser_request_tests.rs": "1e5d0f58d90d31265b34ac936bd1314575cb9d07da234f0afabfe92b939c683d",
+    "src/fetch/cdp/launch/cdp_launch_tests.rs": "152c6cf8d8b257d725c9a90a7b8541ddf34d24081d655bf3376c1b52f728a47d",
+    "src/fetch/cdp/launch/ws_url_parse_tests.rs": "c5692616cd255c84ec300fa568e2743455353e6724873cd4805f8656e3b56b78",
+    "src/fetch/cdp/launch.rs": "e13ec29f1119f925d68d46c1e1fb9cf4f2afbf9c1ba0fa718eab3bfa2e2d7fe3",
+    "src/fetch/cdp/proxy/proxy_tests.rs": "ea90cc7b1e73b72d3bf336237f9a2b92a671dafd8534b90b51e225e69e18115b",
+    "src/fetch/cdp/proxy/transport.rs": "98732f039de35b0da700b53d1a7ffab4f01043e831ece22cb5918dfde2e94504",
+    "src/fetch/cdp/proxy.rs": "23ad3649799405efa1c09b42d2402c1e2cbef5acb3e83718661e7f6a79629968",
+    "src/fetch/cdp.rs": "e94dd2f227c0e02f93497e608019a3f582a5e38a79024de0320f84cec382e7e0",
+    "src/fetch/classify_tests.rs": "5fb6bdc926fd51cdc520dc8e1808d0cdb10849362b680858987b158fefd8152b",
+    "src/fetch/converter.rs": "718d9a057373cbef1e5ac1eb0170e48c5a28a0cc690f32fca10c8fc5fa7b0244",
+    "src/fetch/download/charset_tests.rs": "d73f3305af6d03850056f10f3fc819057318572785895613ab7e014317a234c7",
+    "src/fetch/download/content_type_tests.rs": "bcfe86434f4ea99a795141086a5e0b5009710c6e7356d53b0825e11948108d83",
+    "src/fetch/download/download_tests.rs": "e5cc37aaf58626aaed724b8a85b0906e6f2cd8a4890f5fd6c8a231cae9f409e9",
+    "src/fetch/download.rs": "7e5ed7e4d211778c240300740273a00f8d870a391207cb9585dc64b8a822ee39",
+    "src/fetch/extractor.rs": "ee3eb41240ca1338749b7a1e8b305e284a27d7a7965f62ee05672498a2b1a0fe",
+    "src/fetch/fetch_page_tests.rs": "536ef455cd1df6cceab51dbceb1fd90806aeb58091a712cd986c47ba17421342",
+    "src/fetch/js_dependent_tests.rs": "d176a7fa3069127b27ee341e63e2e4df5fe70547a0e0b7106e3a5326c1aa4d82",
+    "src/fetch/ssrf/dns_tests.rs": "9184dad1b72145fe71f86ab4d1ddc214cff2334e6a9cfc743e5e18b538b0f459",
+    "src/fetch/ssrf/egress_tests.rs": "56b25ffb103eac7314a25689c0b7d7ab1648e1c965ec66f40a51c1ee97fcb7ae",
+    "src/fetch/ssrf/tests.rs": "03b1a5f92813685a6b16571bdbe94b907563c5ef8da79276be4895602573e21b",
+    "src/fetch/ssrf.rs": "dd43291fe44fbc44a353eac2da2bdcecf2894af90d0d6a629bdbb4a96d7dd814",
+    "src/fetch/thin_body_tests.rs": "b4ce2285c185c0bcab99c52d2b3a9424e8e874d29bb349514595b37222085f26",
+    "src/fetch/thin_extract_tests.rs": "1d8714873987005d28eedf12d3927e77758da6517c38a5b2cec160a4f999a851",
+    "src/fetch.rs": "cba9554fd88972cb9dde328ed756f85fe2ee757c5b7ab27985037ab6c4f36fcf",
+    "src/github/encoding/tests.rs": "f75a7a420bffead7f272334c17718fd2cc796a5ca52dbe762465d7dfe03bd149",
+    "src/github/encoding.rs": "3078094d63c6703da1e347aa81a392509fecbcf75a7d43602189aca775ad20a6",
+    "src/github/errors/classify_tests.rs": "1afd5d6c6218929a27c210d1cf62997a395a272cbe14e9ad092b8c896519d5d9",
+    "src/github/errors.rs": "4d7458f5ca5e567c776036762bc8e5638506186575773f9f38a5e5796a9f873d",
+    "src/github/format/file_content_tests.rs": "f1fe1d8dba377cb7e7b243e08857f7471238ea1ad4d926c6dd91f90b5e5378f5",
+    "src/github/format/overview_tests.rs": "0f790175d5e695cf904887f47faef190520b7f2852038419d59fcfff936a47b4",
+    "src/github/format/size_tests.rs": "f8aa465c07830abf84fe01e2bfa198d9fe395da224a64eac2767a06c476e358e",
+    "src/github/format/tree_tests.rs": "03d6625a057e6877cdc47f133407e1ad003699bd2d98500a2ddbffb6919b8c38",
+    "src/github/format.rs": "a9f5f3557280e8fdb1b34de443648a5b005bf7e1699293fbf9edba02dc4155f8",
+    "src/github/helpers/tests.rs": "5e97cd8277a77336542e45dcf622ba13e43d5260e1246f5e6f9584c3f3d7c94d",
+    "src/github/helpers.rs": "5876707d2549ab73b2fbf11583865a1cd435bef0eea7836936512be3b2fd513a",
+    "src/github/http_tests.rs": "89a47b5074fa7e09e1a7e1e500fde6d36cef5b51067de5c37d6c8f68148dfec7",
+    "src/github/types.rs": "62433788dce91241d64b57ffc4da1355c59ff2e4806a6e08fbc1a9af06bd7b67",
+    "src/github.rs": "af40867d1f20149930e80f2d3239241b9ffe1028a23dbd2d5a0951553418c794",
+    "src/lib.rs": "4d2d83c6600836be7c929bd31b0d74eda453bb461c7c5275739eacfd137a5e14",
+    "src/main.rs": "7ef91832bd8899bd396157f3c296912033ce5c1a12a683755f60339562a584b3",
+    "src/markdown.rs": "1a17a768c99cb5f5231d5241b1d62160ae31f0685dfbd00a52cc36544da6b259",
+    "src/redacted.rs": "7d5016a87e1713c6dbe0a92becbdd9c21c2c79081109e0f1264471e4cddb7622",
+    "src/retry/tests.rs": "3d2788ef6f02c0b053bac90575c26c9d521092db9db90cc22283ddb1a48ccb9a",
+    "src/retry.rs": "2db0ee40647801c776edbbe011180d0d0188df1814aadcbb99a9c2649cdbcff9",
+    "src/rng.rs": "26ba0d5de408d8082f4801279bee70d1d4689dde50b87ec0ff608f2948486c8c",
+    "src/search/engine/tests.rs": "8760f2a362d99c2b7be57a9ce9d4217e8c1b7eee73e0f1123015db295b50d080",
+    "src/search/engine.rs": "620abff052e02b4225fc6d3768335d0285a55b8a3aea8bbd7e95b7156c86085e",
+    "src/search/lang.rs": "559bde1a1d9b424bf052c63383f17f00ea0dad7127030cafd308aa3920126bdb",
+    "src/search.rs": "a3a52423ffdf4969ab407e6cfbde127a9c2b042317828cdb187d14440705d881",
+    "src/signals.rs": "59efd8336e475926156f07b2be56adf472dcb76d8e3da97a60da6f2b813d3d44",
+    "src/slack/classify_tests.rs": "58d01852dc1d7747c16c1096e3baad7f86d338f86a9ac319f539033d7f2adcb2",
+    "src/slack/client/constructor_tests.rs": "efd98df6ce22d2c5aafdab8b41bf72f5edca8399935c818af2db732dad54299a",
+    "src/slack/client/http_tests.rs": "8279e3b7aa3f55904d62ea8f77a428e66e888a8b28c2dce04730fc5322ca5e9b",
+    "src/slack/client.rs": "3e87a0133420d9883193be2e3d11d60674608795a48445551c305afdb947d6b7",
+    "src/slack/format/format_tests.rs": "1296a5937d2d4ed0205ea55cba8176425cf2c6db32e3f61dd9c328ae469a5bbd",
+    "src/slack/format/resolve_messages_tests.rs": "7b9f9e176d2cd9acf9f027435b7460c75820bc46f8a0707f42e9bdbf8035ff1c",
+    "src/slack/format.rs": "e9c05fe4d93cfa45300200b841f957e22b655bd12716bfabc9e383116f0665b7",
+    "src/slack/mention/mention_tests.rs": "07bbf53e17a5a69727b735a529e1fb319cd64c1dd13b716cfd9262c4fba55ffa",
+    "src/slack/mention.rs": "6f0af51534fb92b37917b0e2d2936a012e672949874cb93006d86cf6c38b5b77",
+    "src/slack/url/url_tests.rs": "7d39cd277c5a7c9cb8145edf7ec68dcd444671bbfb18be09dc478654e824bb45",
+    "src/slack/url.rs": "e3aeaa3fd00bcb236e09ccdc7f14e67466ab7642dfe1b14ae459a0b0e454cf3c",
+    "src/slack.rs": "d40ac21c0fd75db713b0fdcaf8c31d03fae9aae452c2f7f898ecf67fd762844f",
+    "src/test_support.rs": "186475e5e9b39feb89c896eda0e4af5b9a33392569dd2c8f95b4de2fa3032e05",
+    "src/token_source.rs": "3dc8be575978db7bd9cee8310a1d240930f066561f51bee7cc8c2c7f2474f4dd",
+    "src/tools/builder.rs": "ee7c7fa88a9a7dcb24db6c0999d379d39fa91b822537739104b2d726debbd531",
+    "src/tools/builder_tests.rs": "8dc2c148d9ce4439b87ed45020749b6786607171cb367a1f134d572bd128ad90",
+    "src/tools/config.rs": "5de26395c27a95abfc763bfa5a4a25cc4f8bf82ac167c6cbec674421a1471d44",
+    "src/tools/errors/classification_tests.rs": "803338d30111db7d73e870f8810b5bf17bb4994d382f86b8be5557ee891affac",
+    "src/tools/errors/exit_code_tests.rs": "a46930c8721123c4a362bf3f9906f48a71b2e00d385a52cee7ecd1c3eec8ecaf",
+    "src/tools/errors.rs": "ca07469e627f77b69ebe9c5a001b45be3d45ec1ff4b46e818d2361e93c37938d",
+    "src/tools/params.rs": "0e3af3a3d14c7149ead3df786682467e10676d9f9db7d59f3a082994b2e1beea",
+    "src/tools/query.rs": "4297e8fbf4eee24f30515ac5c275d03d6b4ba4c24c0dd597f1d905f4873764a2",
+    "src/tools/query_tests.rs": "191bec5ca5d0f05a7d73fe2ab58aabb6abc3129fccea1b27b651a1a9e7645f17",
+    "src/tools/repo.rs": "e7e09f0936e04f3ee8963fcf4d4d404ae97fb3b0431d99a55c3b77be0bbd55af",
+    "src/tools/repo_io_tests.rs": "822acfa8ce18c1c8b96eccf5c608b6fb3766f357db3325ea85c76548e6694089",
+    "src/tools/repo_lazy_tests.rs": "58027ecf5aee02f9297d809c7fd9dcf3a5736a2259866600682be52d11c63f04",
+    "src/tools/stdin_tests.rs": "6169a039729ff3ca505a1fcf9a19ba91da05c679e7c53ffc12c9984c311ef784",
+    "src/tools/test_helpers.rs": "73ce909d78571b9b19709a2083a11a39131f5434ba8c9354de6889dc166ac467",
+    "src/tools/typo.rs": "887655c1f91334e9b5a0b8c303bb8d93467818b0e3ce4da79a85e9e521492f48",
+    "src/tools.rs": "aa4d8304f04aa4db5ddfbff2b7906f7569cf3448d7a0223865c80338b9a0eecf",
+    "src/yaml.rs": "bb0f1158b234ee27fb7bf1d4222610324e85c98ba8aaa40064ca8cfb19a465a7"
+  },
+  "go_version": "go version go1.27.1 darwin/arm64",
+  "rust_version": "rustc 1.98.1 (48a229cea 2026-09-01)"
+}

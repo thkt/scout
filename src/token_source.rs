@@ -141,6 +141,24 @@ mod tests {
         );
     }
 
+    /// [T-TOK007] Both variables may be set; GITHUB_TOKEN takes precedence.
+    #[tokio::test]
+    async fn github_token_wins_when_both_env_tokens_are_present() {
+        let token = resolve_from_env_or_gh(
+            |key| match key {
+                "GITHUB_TOKEN" => Some("preferred-token".to_owned()),
+                "GH_TOKEN" => Some("fallback-token".to_owned()),
+                _ => None,
+            },
+            gh_must_not_run,
+        )
+        .await;
+        assert_eq!(
+            token.as_ref().map(Redacted::expose),
+            Some("preferred-token")
+        );
+    }
+
     /// [T-TOK002] Empty/whitespace env values must not register as "set"; the
     /// resolver falls through to the next candidate in the chain.
     #[tokio::test]

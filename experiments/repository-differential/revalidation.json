@@ -1,0 +1,53 @@
+[
+  {
+    "check": "default-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--all-targets"
+    ],
+    "environment": {
+      "SCOUT_NETWORK_TESTS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "exit_code": 0,
+    "passed": true,
+    "summaries": [
+      "test result: ok. 802 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.33s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
+      "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+    ],
+    "log": "/tmp/scout-revalidated-default-tests.log"
+  },
+  {
+    "check": "all-feature-tests",
+    "command": [
+      "cargo",
+      "nextest",
+      "run",
+      "--offline",
+      "--locked",
+      "--all-features",
+      "--run-ignored",
+      "all",
+      "--profile",
+      "ci",
+      "-j",
+      "4"
+    ],
+    "environment": {
+      "SCOUT_NETWORK_TESTS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "exit_code": 0,
+    "passed": true,
+    "summaries": [
+      "Summary [ 181.407s] 865 tests run: 865 passed, 0 skipped"
+    ],
+    "log": "/tmp/scout-revalidated-all-feature-tests.log"
+  }
+]
