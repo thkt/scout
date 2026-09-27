@@ -62,6 +62,70 @@ fn make_source(url: &str, title: &str) -> SearchResult {
     }
 }
 
+/// [T-SE022] Depth limits actual requests, not just the displayed result count.
+#[tokio::test]
+async fn fetch_sources_requests_only_the_ranked_depth_prefix() {
+    let Some(server) = try_spawn_mock_server("engine::depth_prefix").await else {
+        return;
+    };
+    // A substantive article keeps this depth test on the HTTP path even when
+    // js-rendering is enabled; a thin fixture would launch a real browser.
+    let body = format!(
+        "<article><h1>Fixture article</h1><p>{}</p></article>",
+        "This is a complete paragraph describing the fixture article in detail. ".repeat(30)
+    );
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let addr = *server.address();
+    let http = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .expect("test client builds");
+    let sources: Vec<_> = ["first", "second", "third"]
+        .iter()
+        .map(|name| {
+            make_source(
+                &format!("http://scout-test.example:{}/{name}", addr.port()),
+                name,
+            )
+        })
+        .collect();
+    let (cancel, _) = watch::channel(false);
+    let (pages, failures) = fetch_sources(
+        &http,
+        &sources,
+        2,
+        &EgressMode::Direct,
+        Arc::new(StaticDnsResolver::single("93.184.216.34")),
+        &cancel,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        failures.is_empty(),
+        "unexpected fetch failures: {failures:?}"
+    );
+    assert_eq!(
+        pages.iter().map(FetchResult::url).collect::<Vec<_>>(),
+        [sources[0].url.as_str(), sources[1].url.as_str()],
+        "exactly the first two ranked sources must be fetched"
+    );
+    let mut requested: Vec<_> = server
+        .received_requests()
+        .await
+        .expect("request recording is enabled")
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
+    requested.sort();
+    assert_eq!(requested, ["/first", "/second"]);
+}
+
 /// [T-SE003]
 #[test]
 fn format_report_includes_sections() {
