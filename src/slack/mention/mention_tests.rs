@@ -209,3 +209,33 @@ fn mention_after_malformed_token_still_substitutes() {
         "<@U123 bad> and @Alice"
     );
 }
+
+/// [T-SK089] Unicode whitespace (and ASCII vertical tab) cannot be part of an
+/// ID. Preserve malformed text and keep it out of the user lookup queue.
+#[test]
+fn whitespace_in_mention_id_is_preserved_and_not_looked_up() {
+    let whitespace = [
+        '\t', '\n', '\u{000b}', '\u{000c}', '\r', ' ', '\u{0085}', '\u{00a0}', '\u{1680}',
+        '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}',
+        '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}',
+        '\u{205f}', '\u{3000}',
+    ];
+    let cache = [("U100".to_owned(), "Alice".to_owned())]
+        .into_iter()
+        .collect();
+    for space in whitespace {
+        for suffix in ["", "|label"] {
+            let malformed = format!("<@U{space}123{suffix}>");
+            let text = format!("{malformed} <@U100>");
+            assert_eq!(
+                substitute_mentions(&text, &cache),
+                format!("{malformed} @Alice"),
+                "whitespace {space:?} must not become an ID"
+            );
+            let mut seen = HashSet::new();
+            let mut ids = Vec::new();
+            collect_mention_ids_ordered(&text, &mut seen, &mut ids);
+            assert_eq!(ids, ["U100"], "invalid ID must not consume a lookup");
+        }
+    }
+}
