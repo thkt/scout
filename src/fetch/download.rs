@@ -225,10 +225,13 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
         .split_once(';')
         .map_or(content_type, |(mime, _params)| mime)
         .trim();
-    let accepted = mime.is_empty()
-        || mime.starts_with("text/")
-        || mime == "application/xml"
-        || (mime.starts_with("application/") && mime.ends_with("+xml"));
+    // Media type tokens are case-insensitive (RFC 9110 section 8.3.1).
+    // Keep `mime` for diagnostics so rejection still reports the actual header.
+    let normalized = mime.to_ascii_lowercase();
+    let accepted = normalized.is_empty()
+        || normalized.starts_with("text/")
+        || normalized == "application/xml"
+        || (normalized.starts_with("application/") && normalized.ends_with("+xml"));
     if !accepted {
         return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
