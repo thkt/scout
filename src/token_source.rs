@@ -144,12 +144,12 @@ mod tests {
     /// [T-TOK007] Both variables may be set; GITHUB_TOKEN takes precedence.
     #[tokio::test]
     async fn github_token_wins_when_both_env_tokens_are_present() {
+        let env = std::collections::HashMap::from([
+            ("GITHUB_TOKEN", "preferred-token"),
+            ("GH_TOKEN", "fallback-token"),
+        ]);
         let token = resolve_from_env_or_gh(
-            |key| match key {
-                "GITHUB_TOKEN" => Some("preferred-token".to_owned()),
-                "GH_TOKEN" => Some("fallback-token".to_owned()),
-                _ => None,
-            },
+            |key| env.get(key).map(|value| (*value).to_owned()),
             gh_must_not_run,
         )
         .await;
