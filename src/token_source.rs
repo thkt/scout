@@ -104,6 +104,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
@@ -144,7 +145,7 @@ mod tests {
     /// [T-TOK007] Both variables may be set; GITHUB_TOKEN takes precedence.
     #[tokio::test]
     async fn github_token_wins_when_both_env_tokens_are_present() {
-        let env = std::collections::HashMap::from([
+        let env = HashMap::from([
             ("GITHUB_TOKEN", "preferred-token"),
             ("GH_TOKEN", "fallback-token"),
         ]);
