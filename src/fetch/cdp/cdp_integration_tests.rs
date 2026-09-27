@@ -82,8 +82,10 @@ async fn t005_t006_cdp_renders_and_removes_profile_dir() {
     )
     .await
     .expect("fetch_with_cdp should succeed for public URL");
+    // Chrome's own error page can include the requested hostname. The hostname
+    // alone therefore cannot prove the document actually rendered.
     assert!(
-        html.contains("Example Domain") || html.contains("example"),
+        html.contains("Example Domain"),
         "rendered HTML should contain page content, got {} bytes",
         html.len()
     );

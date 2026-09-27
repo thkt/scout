@@ -37,11 +37,7 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
         // cap out the real mentions behind it. The rule stays this narrow on
         // purpose: a full shape check would start dropping real mentions the day
         // Slack widens its id alphabet.
-        if user_id.is_empty()
-            || user_id
-                .bytes()
-                .any(|b| b.is_ascii_whitespace() || b == b'<')
-        {
+        if user_id.is_empty() || user_id.chars().any(|c| c.is_whitespace() || c == '<') {
             search_from = abs_end;
             continue;
         }
