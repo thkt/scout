@@ -241,7 +241,7 @@ const CANDIDATE_TOP_N: usize = 3;
 /// Best-effort: fetch the repo tree and return up to `CANDIDATE_TOP_N` paths
 /// most similar to `target` (OSA distance ≤ `CANDIDATE_MAX_DISTANCE`).
 /// Returns empty on any API failure or if the fetch exceeds
-/// `CANDIDATE_FETCH_TIMEOUT`.
+/// `CANDIDATE_FETCH_TIMEOUT`, or the tree/matching work exceeds its cap.
 async fn collect_path_candidates(
     github: &GitHubClient,
     owner: &str,
@@ -270,12 +270,17 @@ async fn collect_path_candidates(
         if tree.truncated {
             warn!("candidate fetch: tree truncated (>100k entries); candidates may be incomplete");
         }
+        // Count all entries, including directories, before the lazy blob filter:
+        // otherwise an arbitrarily large directory-only tree is one sync scan.
+        if tree.tree.len() > typo::MAX_POOL_ENTRIES {
+            return Vec::new();
+        }
         let entries = tree
             .tree
             .iter()
             .filter(|e| matches!(e.entry_type, github::types::EntryType::Blob))
             .map(|e| e.path.as_str());
-        typo::closest_matches(target, entries, CANDIDATE_MAX_DISTANCE, CANDIDATE_TOP_N)
+        typo::closest_matches(target, entries, CANDIDATE_MAX_DISTANCE, CANDIDATE_TOP_N).await
     };
     timeout(CANDIDATE_FETCH_TIMEOUT, fut)
         .await
@@ -339,6 +344,92 @@ mod tests {
     use crate::tools::test_helpers::scout_with_github;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
+
+    /// [T-TS040] The real repo-read error path must keep ranked small-tree hints
+    /// and omit them when long-path DP or raw tree size exceeds the work caps.
+    /// Directory entries count toward the cap even though they are not hints.
+    #[tokio::test]
+    async fn repo_read_not_found_preserves_contract_with_bounded_candidates() {
+        let Some(server) = try_spawn_mock_server("repo_read_bounded_candidates").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/contents/"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let blob = |p: &str| serde_json::json!({"path": p, "type": "blob"});
+        let small = vec![
+            serde_json::json!({"path": "REDME.md", "type": "tree"}),
+            blob("REDXX.md"),
+            blob("README.md"),
+            blob("REDAME.md"),
+            blob("REDME.mx"),
+            blob("totally-different.txt"),
+        ];
+        let long_path = "a".repeat(400);
+        let long = vec![blob(&long_path); 100];
+        let mut large = vec![blob("README.md")];
+        large.extend(
+            (0..4_096)
+                .map(|i| serde_json::json!({"path": format!("directory-{i}"), "type": "tree"})),
+        );
+
+        let scout = scout_with_github("http://localhost:0", &server.uri());
+        for (ref_, target, tree, candidates) in [
+            (
+                "small",
+                "REDME.md",
+                small,
+                Some(vec!["README.md", "REDAME.md", "REDME.mx"]),
+            ),
+            ("long", long_path.as_str(), long, None),
+            ("large", "REDME.md", large, None),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/owner/repo/git/trees/{ref_}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "tree": tree,
+                    "truncated": false
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let err = scout
+                .run(super::super::Command::RepoRead(RepoReadParams {
+                    repository: Some("owner/repo".into()),
+                    path: Some(target.into()),
+                    ref_: Some(ref_.into()),
+                    lines: None,
+                    encoding: None,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(err.exit_code(), 66, "{ref_}");
+            let mut expected = serde_json::json!({
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Not found: {target}"),
+                    "next_step": "Check that the repository or path exists, and that you have access",
+                    "retryable": false
+                }
+            });
+            if let Some(candidates) = candidates {
+                expected["error"]["candidates"] = serde_json::json!(candidates);
+            }
+            let actual: serde_json::Value =
+                serde_json::from_str(&crate::render_json_error(&err)).unwrap();
+            assert_eq!(actual, expected, "{ref_}");
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Not found: {target} — Check that the repository or path exists, and that you have access"
+                )
+            );
+        }
+    }
 
     /// [T-TS032] For one issue list, the Markdown Recent Issues section and the JSON
     /// issues array exclude the same entries

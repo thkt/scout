@@ -217,6 +217,8 @@ scout repo-read owner/repo legacy.txt --encoding shift_jis
 | `-l, --lines` | 行範囲: `1-80`、`50-`、または `100`（先頭N行）                                                                                                                                                                 |
 | `--encoding`  | 文字エンコーディング（例: `shift_jis`, `euc-jp`, `gbk`）。省略時はUTF-8・Shift_JIS・EUC-JP・GBK・EUC-KRなどマルチバイトを自動検出。windows-1252・ISO-8859-\*等のシングルバイトは `--encoding` で明示指定が必要 |
 
+ファイルが見つからない場合、`error.candidates` にOSA編集距離3以内のパスを最大3件提示します（隣接文字の入れ替えを含む）。候補は補助情報で、tree取得と照合には合わせて5秒の予算を設けています。treeが4,096件を超える場合（ディレクトリを含む）、対象または候補がUnicode文字数で512文字を超える場合、距離計算が1,000,000セルを超える場合は候補を省略します。元のnot-foundエラー（終了66）は維持し、正常なファイル読み取りにはこの上限を適用しません。処理の中断点と仕事量上限は[DR-0033](docs/decisions/0033-bound-repo-candidate-matching.md)に記録しています。
+
 ### `scout repo-overview` — リポジトリ概要
 
 ```sh
