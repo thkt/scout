@@ -36,6 +36,9 @@
 
 mod common;
 
+#[path = "common/tests.rs"]
+mod common_tests;
+
 use common::parse_envelope;
 use std::process::Output;
 use std::sync::atomic::AtomicUsize;

@@ -78,24 +78,36 @@ fn error_envelope_wraps_payload_under_error_key() {
     );
 }
 
-/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010.
+/// [T-EN016] INTERNAL errors remain single-line JSON with escaped message content.
 #[test]
-fn to_json_line_matches_direct_serialize() {
+fn to_json_line_preserves_internal_error_and_escapes_message() {
     let env = ErrorEnvelope {
         error: ErrorPayload {
             code: ErrorCode::Internal,
-            message: String::from("failed to serialize fetch result"),
+            message: String::from("failed to serialize\nfetch \"result\"\r\npath: C:\\tmp"),
             next_step: None,
             candidates: vec![],
             retryable: false,
         },
     };
     let line = to_json_line(&env);
-    assert_eq!(line, serde_json::to_string(&env).unwrap());
-    assert!(line.starts_with(r#"{"error":"#), "got: {line}");
-    assert!(line.contains(r#""code":"INTERNAL""#), "got: {line}");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("valid JSON output");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "error": {
+                "code": "INTERNAL",
+                "message": "failed to serialize\nfetch \"result\"\r\npath: C:\\tmp",
+                "retryable": false
+            }
+        })
+    );
     assert!(
-        !line.contains('\n'),
+        line.contains(r#"serialize\nfetch \"result\"\r\npath: C:\\tmp"#),
+        "got: {line}"
+    );
+    assert!(
+        !line.contains(['\n', '\r']),
         "envelope must be one line, got: {line}"
     );
 }

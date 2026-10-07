@@ -291,42 +291,6 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
     value
 }
 
-// T-C015: direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked
-#[test]
-fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        .args(["--json", "fetch", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch failed to run");
-    assert_reject_envelope(&output, "Direct");
-}
-
-// T-C016: http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy
-#[test]
-fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        // Port 1 on loopback has nothing listening, so if the literal-loopback
-        // rejection were skipped under Proxied egress, the process would fail
-        // fast with a connection error instead of hanging.
-        //
-        // Scope: this catches only the rejection moving after the Proxied
-        // branch. It cannot tell which egress mode was selected, because
-        // rejection precedes either branch dialing and both modes therefore
-        // produce the same envelope. Mode selection is pinned by
-        // detect_egress_mode's own tests.
-        .env("HTTP_PROXY", "http://127.0.0.1:1")
-        .args(["--json", "fetch", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch failed to run");
-    assert_reject_envelope(&output, "Proxied");
-}
-
 // T-C017: localhost_hostname_fetch_exits_65_data_error — Host::Domain arm, not the IP-literal one
 #[test]
 fn localhost_hostname_fetch_exits_65_data_error() {
@@ -340,34 +304,13 @@ fn localhost_hostname_fetch_exits_65_data_error() {
     assert_reject_envelope(&output, "localhost hostname");
 }
 
-// T-C018: js_flag_literal_loopback_fetch_exits_65_data_error — `ssrf_check`
-// (src/fetch.rs) runs before `fetch_page` ever calls `fetch_with_cdp`, so the
-// rejection fires before chromium launches and the SOCKS5 hop the CDP path
-// would otherwise open (ADR-0021) never runs. Gated on `js-rendering` because
-// without the feature `--js` short-circuits to `BrowserNotFound`
-// (USAGE_ERROR) ahead of `ssrf_check`, asserting a different contract than the
-// one under test.
-#[cfg(feature = "js-rendering")]
-#[test]
-fn js_flag_literal_loopback_fetch_exits_65_data_error() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch --js failed to run");
-    assert_reject_envelope(&output, "--js");
-}
-
 // T-C019: direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url
 //
-// A launch form that stops sharing the SSRF rejection path fails here even
-// though its own T-C015/T-C016/T-C018 test still passes in isolation. The
-// `--js` row is added only when `js-rendering` is compiled in, for the same
-// `BrowserNotFound` reason as T-C018; Direct vs Proxied still runs in the
-// default job. `cfg!` rather than `#[cfg]` keeps the push in the AST so
-// neither `mut` nor `LaunchForm` reads as unused under the default features.
+// Each launch form must reject literal loopback with exit 65, DATA_ERROR and
+// private-IP guidance; their next_step values must also agree. The --js row
+// requires js-rendering: without it BrowserNotFound (USAGE_ERROR) precedes
+// ssrf_check. With it rejection runs before fetch_with_cdp launches Chromium.
+// cfg! keeps the push visible to the default build's unused-mut analysis.
 struct LaunchForm {
     name: &'static str,
     args: Vec<&'static str>,
@@ -385,7 +328,9 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
         LaunchForm {
             name: "Proxied",
             args: vec![],
-            // Port 1 and the scope caveat that comes with it: see T-C016.
+            // A missed rejection fails fast at port 1 instead of hanging.
+            // Rejection precedes dialing in both modes, so this does not prove
+            // proxy selection; detect_egress_mode's tests cover that contract.
             env: vec![("HTTP_PROXY", "http://127.0.0.1:1")],
         },
     ];
@@ -419,10 +364,6 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
 
     let (baseline_name, baseline) = &envelopes[0];
     for (name, envelope) in &envelopes[1..] {
-        assert_eq!(
-            envelope["error"]["code"], baseline["error"]["code"],
-            "{name} should return the same error.code as {baseline_name}, got: {envelope}"
-        );
         assert_eq!(
             envelope["error"]["next_step"], baseline["error"]["next_step"],
             "{name} should return the same next_step as {baseline_name}, got: {envelope}"

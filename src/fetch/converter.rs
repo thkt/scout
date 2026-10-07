@@ -76,13 +76,14 @@ pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could
 /// plain owned data, not amortized global state, so there is nothing to gain
 /// from caching an instance across calls.
 ///
-/// `Options::default()` already sets `translation_mode: TranslationMode::Pure`
-/// (htmd's options.rs `Options`); `preformatted_code: true` is the one
-/// field the contract adds on top, so it keeps whitespace inside inline
-/// `<code>` instead of collapsing it
+/// `Pure` is the only translation mode used by scout: comments stay out of
+/// the fetched body and tables use positional Markdown extraction.
+/// `preformatted_code: true` keeps whitespace inside inline `<code>`
+/// instead of collapsing it
 /// (htmd's element_handler/code.rs `handle_inline_code`).
 fn markdown_converter() -> HtmlToMarkdown {
     let options = Options {
+        translation_mode: TranslationMode::Pure,
         preformatted_code: true,
         ..Options::default()
     };
@@ -670,16 +671,13 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 /// Cell-content newline normalization, caption handling, and column-count
 /// estimation follow the built-in's shape.
 ///
-/// Any non-`Pure` translation mode falls straight to `Handlers::fallback` and
-/// the built-in's own `serialize_if_faithful!` gate.
-/// `markdown_converter` always builds `Pure`, so scout's runtime never takes
-/// that branch; T-FC068 exercises it through a `Faithful`-mode converter built
-/// in the test.
+/// Registered only by `markdown_converter`, which explicitly selects `Pure`.
+/// There is no alternate translation-mode entry point in scout.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "htmd's ElementHandler blanket impl takes Element by value"
+)]
 fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if handlers.options().translation_mode != TranslationMode::Pure {
-        return handlers.fallback(element);
-    }
-
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -1370,7 +1368,8 @@ mod tests {
     /// htmd's built-in `code_handler`
     /// (htmd's element_handler/code.rs `code_handler`). The added `pre` handler
     /// must recognize this case by the direct `<code>` child in the DOM, and
-    /// pass it through instead of wrapping it in a second fence.
+    /// pass it through instead of wrapping it in a second fence. Outside a
+    /// table cell it must remain a fenced block, unlike T-FC078-080.
     #[test]
     fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
         let article = article("<pre><code>fn main() {}</code></pre>");
@@ -1808,48 +1807,6 @@ mod tests {
                 "the thead's second row must survive as a data row, not be dropped from the \
                  output",
             );
-    }
-
-    /// [T-FC068]
-    ///
-    /// `markdown_converter` is Pure-only, so the test builds its own converter
-    /// in `Faithful` mode with the same handlers registered.
-    ///
-    /// Delegation shows up as raw HTML because the built-in opens with
-    /// `serialize_if_faithful!` (htmd's element_handler/table.rs `table_handler`),
-    /// which serializes the element unconverted. Running the positional
-    /// extraction instead would emit a pipe table, since that path carries no
-    /// mode check of its own. The table needs an attribute to get there:
-    /// `serialize_if_faithful!` requires more than 0 of them.
-    #[test]
-    fn faithful_mode_table_with_attributes_delegates_to_the_built_in_handler_and_stays_html() {
-        use htmd::options::{Options, TranslationMode};
-
-        let options = Options {
-            translation_mode: TranslationMode::Faithful,
-            ..Options::default()
-        };
-        let converter = HtmlToMarkdown::builder()
-            .options(options)
-            .add_handler(vec!["pre"], pre_handler)
-            .add_handler(vec!["span"], span_handler)
-            .add_handler(vec!["table"], table_handler)
-            .build();
-
-        let html = r#"<table class="data"><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>"#;
-        let markdown = converter.convert(html).expect("conversion must succeed");
-
-        assert!(
-            markdown.contains("<table"),
-            "a table with attributes under Faithful mode must delegate to htmd's built-in \
-             table handler and come out as raw HTML, not the app's positional Markdown \
-             table:\n{markdown}"
-        );
-        assert!(
-            !markdown.contains("| Name |"),
-            "the app's own pipe-delimited table formatting must not run under Faithful \
-             mode:\n{markdown}"
-        );
     }
 
     /// [T-FC067]
@@ -2842,7 +2799,7 @@ mod tests {
     ///
     /// A `<pre><code>` written inside a `<td>`/`<th>` must render as inline
     /// code delimited by a single backtick, not as the 3-line fenced block a
-    /// `<pre><code>` gets outside a table (T-FC020, T-FC081).
+    /// `<pre><code>` gets outside a table (T-FC020).
     #[test]
     fn table_cell_code_block_renders_as_inline_code_with_one_backtick_delimiter() {
         let article = article(
@@ -2999,25 +2956,6 @@ mod tests {
             markdown.contains("| `` `code` `` |"),
             "content starting and ending with a backtick must get a single \
              inner space next to each delimiter:\n{markdown}"
-        );
-    }
-
-    /// [T-FC081]
-    ///
-    /// Regression guard alongside T-FC078-080: only a `<pre>` with a
-    /// `<td>`/`<th>` ancestor switches to inline code. A `<pre><code>` with no
-    /// such ancestor must keep the 3-line fenced block T-FC020 already pins.
-    #[test]
-    fn pre_outside_a_table_still_renders_as_a_fenced_block() {
-        let article = article("<pre><code>fn main() {}</code></pre>");
-
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
-        let markdown = result.markdown();
-
-        assert!(
-            markdown.contains("```\nfn main() {}\n```"),
-            "a <pre><code> outside any table must still render as a fenced \
-             block:\n{markdown}"
         );
     }
 

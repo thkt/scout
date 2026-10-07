@@ -323,12 +323,32 @@ fn format_report_sanitizes_query_newlines() {
     assert!(!text.contains("# Research: line1\n"));
 }
 
-/// [T-SE008] research returns a populated report when search succeeds
+/// [T-SE008] research forwards the English query and delivers the fetched source body.
 #[tokio::test]
 async fn research_with_mock_returns_report() {
-    let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
-    let http = Client::new();
-    let resolver = real_resolver();
+    let Some(server) = try_spawn_mock_server("engine::research_report").await else {
+        return;
+    };
+    // A full article avoids automatic JS fallback under all-features.
+    let body = "Primary source fixture describes the research result in detail. ".repeat(30);
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            "<article><h1>Source article</h1><p>{body}</p></article>"
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let addr = *server.address();
+    let url = format!("http://scout-test.example:{}/article", addr.port());
+    let mock = MockSearch::with_results(vec![make_source(&url, "Source article")]);
+    let http = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .expect("test client builds");
+    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
 
     let req = ResearchRequest {
         query: "test",
@@ -342,6 +362,15 @@ async fn research_with_mock_returns_report() {
         .unwrap();
 
     assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].url, url);
+    assert_eq!(report.sources[0].title, "Source article");
+    assert!(report.failed_urls.is_empty(), "{:?}", report.failed_urls);
+    assert_eq!(report.fetched_pages.len(), 1);
+    assert_eq!(report.fetched_pages[0].url(), url);
+    assert!(
+        report.fetched_pages[0].markdown().contains(body.trim()),
+        "the report must deliver the fixture body, not merely its source URL"
+    );
 
     let captured = mock.captured();
     assert_eq!(
@@ -360,7 +389,7 @@ async fn research_with_mock_returns_report() {
 /// [T-SE017] Lang::Auto issues exactly one Brave call, with no bilingual expansion
 #[tokio::test]
 async fn research_auto_lang_issues_single_call() {
-    let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
+    let mock = MockSearch::with_results(vec![]);
     let http = Client::new();
     let resolver = real_resolver();
 
@@ -371,9 +400,13 @@ async fn research_auto_lang_issues_single_call() {
         egress: EgressMode::Direct,
     };
     let (cancel, _) = watch::channel(false);
-    let _ = research(&mock, &http, &req, resolver, &cancel)
+    let report = research(&mock, &http, &req, resolver, &cancel)
         .await
         .unwrap();
+
+    assert!(report.sources.is_empty());
+    assert!(report.fetched_pages.is_empty());
+    assert!(report.failed_urls.is_empty());
 
     let captured = mock.captured();
     assert_eq!(

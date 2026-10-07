@@ -838,53 +838,42 @@ mod tests {
         );
     }
 
-    /// [T-SUP013] Input carrying FR-018 is reported as a violation
+    /// [T-SUP013] Real extraction respects prefix/digit boundaries and reports file + code.
     #[test]
-    fn fr_requirement_code_in_input_is_reported_as_violation() {
-        let occurrences = vec![ScannedToken {
-            file: PathBuf::from("fake/req_code_tests.rs"),
-            token: "FR-018".to_owned(),
-        }];
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("FR-018")),
-            "FR-018 should be reported by file and code, got: {violations:?}"
-        );
-    }
-
-    /// [T-SUP014] Input carrying BR-001 is reported as a violation
-    #[test]
-    fn br_requirement_code_in_input_is_reported_as_violation() {
-        let occurrences = vec![ScannedToken {
-            file: PathBuf::from("fake/req_code_tests.rs"),
-            token: "BR-001".to_owned(),
-        }];
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("BR-001")),
-            "BR-001 should be reported by file and code, got: {violations:?}"
-        );
-    }
-
-    /// [T-SUP015] Input carrying no requirement code is not reported as a violation
-    #[test]
-    fn input_without_requirement_code_is_not_reported_as_violation() {
-        let occurrences: Vec<ScannedToken> = Vec::new();
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations.is_empty(),
-            "input without a requirement code should report no violations, got: {violations:?}"
-        );
+    fn requirement_code_boundaries_and_diagnostics() {
+        for (input, expected) in [
+            (
+                "// FR-018, BR-001; NFR-123",
+                vec!["BR-001", "FR-018", "NFR-123"],
+            ),
+            ("FR-018", vec!["FR-018"]),
+            ("BR-001", vec!["BR-001"]),
+            ("NFR-123", vec!["NFR-123"]),
+            ("// XFR-018 XBR-001 XNFR-123", vec![]),
+            ("// FR-01 BR-00 NFR-12", vec![]),
+            ("// FR-0180 BR-0012 NFR-1234", vec![]),
+            ("// no requirement code", vec![]),
+            ("", vec![]),
+        ] {
+            let mut codes = extract_requirement_codes(input);
+            codes.sort();
+            assert_eq!(codes, expected, "extraction boundary for {input:?}");
+            let occurrences: Vec<_> = codes
+                .into_iter()
+                .map(|token| ScannedToken {
+                    file: PathBuf::from("fake/req_code_tests.rs"),
+                    token,
+                })
+                .collect();
+            let violations = find_requirement_code_violations(&occurrences);
+            assert_eq!(violations.len(), expected.len(), "{input:?}");
+            for (violation, code) in violations.iter().zip(expected) {
+                assert!(
+                    violation.contains("fake/req_code_tests.rs") && violation.contains(code),
+                    "violation must identify file and code: {violation}"
+                );
+            }
+        }
     }
 
     /// [T-SUP016] Scanning the real `src/` and `tests/` finds no requirement-code violations
