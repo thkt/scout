@@ -608,3 +608,35 @@ fn failed_url_line_escapes_url_and_reason_alike() {
         "url and reason must escape `|` the same way, got: {line}"
     );
 }
+
+/// [T-SE023] A cut code block must end before the next page and report sections.
+/// Literal section boundaries, not the production fence tracker, are the oracle.
+#[test]
+fn truncated_fences_keep_research_sections_independent() {
+    for (opening, decoy, closing) in [
+        ("```rust", "~~~", "```"),
+        ("~~~~rust", "~~~", "~~~~"),
+        ("`````rust", "````", "`````"),
+        ("   ```rust", "``` not a close", "```"),
+    ] {
+        let body = format!(
+            "{opening}\n{decoy}\n---\n...\n{}\n{closing}\n",
+            "let x = 1;\n".repeat(600)
+        );
+        let report = ResearchReport {
+            fetched_pages: vec![
+                FetchResult::for_test("https://first.example".into(), body, false),
+                FetchResult::for_test("https://second.example".into(), "Second body".into(), false),
+            ],
+            failed_urls: vec![FailedUrl {
+                url: "https://failed.example".into(),
+                reason: "failed".into(),
+            }],
+            sources: vec![make_source("https://source.example", "Source")],
+        };
+        let output = format_report(&report, "q");
+        assert!(output.contains("(truncated: showing"));
+        assert!(!output.lines().any(|line| matches!(line, "---" | "...")));
+        assert!(output.contains(&format!(")\n{closing}\n\n### https://second.example\n\nSecond body\n\n## Failed URLs\n\n- https://failed.example (failed)\n\n## Sources\n\n- [Source](https://source.example)")), "sections must follow a standalone closing fence: {opening:?}");
+    }
+}

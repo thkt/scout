@@ -4,8 +4,9 @@
 
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::iter::repeat_n;
 
-use crate::markdown::{track_fence, truncate_with_note};
+use crate::markdown::{dangling_report_fence, track_fence, truncate_with_note};
 use crate::search::engine::MAX_PAGE_BYTES;
 
 /// Neutralize YAML document markers in untrusted body text appended after a
@@ -80,6 +81,20 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
 /// or an inner line resembling one, and only a forward pass carries the
 /// open/close state that separates the two.
 pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
+    let dangling_start = conservative_dangling_start(truncated);
+    match dangling_start {
+        Some(start) => {
+            let mut out = String::with_capacity(truncated.len());
+            out.push_str(&truncated[..start]);
+            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(truncated),
+    }
+}
+
+/// Locate the conservative dangling tail without rewriting it.
+fn conservative_dangling_start(truncated: &str) -> Option<usize> {
     let mut fence: Option<(char, usize)> = None;
     let mut dangling_start: Option<usize> = None;
     let mut offset = 0usize;
@@ -93,22 +108,65 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
         }
         offset += line.len() + 1;
     }
-    match dangling_start {
-        Some(start) => {
-            let mut out = String::with_capacity(truncated.len());
-            out.push_str(&truncated[..start]);
-            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
-            Cow::Owned(out)
-        }
-        None => Cow::Borrowed(truncated),
+    dangling_start
+}
+
+/// The two report inputs have different preexisting YAML guarantees.
+#[derive(Clone, Copy)]
+pub(crate) enum ReportBody {
+    /// Fetch output is already neutralized; only exposed tails need rewriting.
+    Fetched,
+    /// Raw README needs outside-fence rewriting and whole-body fallback.
+    Readme,
+}
+
+/// Select the union of required YAML ranges before rewriting each line once,
+/// then close the actual top-level fence. Never let a synthetic close hide
+/// the source's dangling fence from either defense.
+pub(crate) fn finish_report_body(body: &str, kind: ReportBody) -> Cow<'_, str> {
+    let actual = dangling_report_fence(body);
+    let conservative = conservative_dangling_start(body);
+    let fetched = matches!(kind, ReportBody::Fetched);
+    let rewrite_from = match (conservative, actual) {
+        (Some(_), _) if !fetched => Some(0),
+        (Some(start), Some((actual_start, _, _))) => Some(start.min(actual_start)),
+        (Some(start), None) => Some(start),
+        (None, Some((start, _, _))) => Some(start),
+        (None, None) => None,
+    };
+    if fetched && rewrite_from.is_none() {
+        return Cow::Borrowed(body);
     }
+    let mut out = String::with_capacity(body.len() + 8);
+    let mut fence = None;
+    let mut offset = 0;
+    for (i, line) in body.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if rewrite_from.is_some_and(|start| offset >= start)
+            || (!fetched && !track_fence(&mut fence, line))
+        {
+            append_marker_rewritten(&mut out, line);
+        } else {
+            out.push_str(line);
+        }
+        offset += line.len() + 1;
+    }
+    if let Some((_, marker, width)) = actual {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.extend(repeat_n(marker, width));
+    }
+    Cow::Owned(out)
 }
 
 /// [`truncate_with_note`] followed by [`reneutralize_dangling_fence`].
 ///
-/// Every caller that truncates already fence-neutralized markdown needs both
-/// steps, so they are not offered separately: chaining them at each call site
-/// is how one site ends up with only the first half.
+/// Standalone fetch truncation uses this pair. Composed reports instead use
+/// [`finish_report_body`] after truncation to combine the two tail defenses
+/// before adding a closing delimiter.
 pub(crate) fn truncate_and_reneutralize(s: &str, max_bytes: usize) -> Cow<'_, str> {
     let truncated = truncate_with_note(s, max_bytes);
     match reneutralize_dangling_fence(&truncated) {
@@ -284,6 +342,14 @@ mod tests {
         assert_eq!(
             neutralize_yaml_markers_outside_fences("```yaml\n---\nfoo"),
             "```yaml\n***\nfoo"
+        );
+        // T-C042's converted inline-code shape is not a CommonMark fence,
+        // but must still trigger the existing whole-body YAML fallback.
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences(
+                "```\n---\n...\n```\n--- outside\n```` ``` ```` before marker\n... tail"
+            ),
+            "```\n***\n***\n```\n*** outside\n```` ``` ```` before marker\n*** tail"
         );
     }
 

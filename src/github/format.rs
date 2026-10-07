@@ -4,7 +4,7 @@ use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserIn
 use crate::markdown::{
     escape_md_inline, fence_delimiter, md_link, shift_headings, truncation_note,
 };
-use crate::yaml::neutralize_yaml_markers_outside_fences;
+use crate::yaml::{ReportBody, finish_report_body};
 
 const MAX_README_BYTES: usize = 24_000;
 
@@ -163,9 +163,9 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
-    // Not reusing truncate_with_note: shift_headings and the neutralization
-    // both run between the cut and the note. Neutralizing after the cut is
-    // what lets the fail-closed branch see a fence the cut left open.
+    // Not reusing truncate_with_note: shift_headings runs between the cut and
+    // the note. Finish YAML defense after the cut and before adding a close,
+    // so the whole-body fallback still sees the original dangling fence.
     let truncated = content.len() > MAX_README_BYTES;
     let end = if truncated {
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
@@ -177,10 +177,12 @@ fn format_readme_section(readme: Option<&str>, out: &mut String) {
         content.len()
     };
     let shifted = shift_headings(&content[..end], 2);
-    out.push_str(&neutralize_yaml_markers_outside_fences(&shifted));
+    let mut body = shifted;
     if truncated {
-        out.push_str(&truncation_note(end, content.len()));
+        body.push_str(&truncation_note(end, content.len()));
     }
+    // Close only after neutralization, preserving the unclosed-fence defense.
+    out.push_str(&finish_report_body(&body, ReportBody::Readme));
     out.push_str("\n\n");
 }
 

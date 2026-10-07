@@ -428,3 +428,97 @@ fn readme_closed_fence_dashes_stay_verbatim() {
         "a --- inside a closed fence is source code, not a YAML marker, and should not be rewritten"
     );
 }
+
+/// [T-GF048] A truncated README must end before every following overview section.
+/// Checks literal closing/section boundaries without reusing the fence scanner.
+#[test]
+fn truncated_fences_keep_overview_sections_independent() {
+    let issues = [IssueInfo {
+        number: 1,
+        title: "Issue".into(),
+        html_url: "https://example.com/issue".into(),
+        labels: vec![],
+        user: None,
+        pull_request: None,
+    }];
+    let pulls = [PullInfo {
+        number: 2,
+        title: "Pull".into(),
+        html_url: "https://example.com/pull".into(),
+        draft: Some(false),
+        user: None,
+    }];
+    let releases = [ReleaseInfo {
+        tag_name: "v1".into(),
+        name: None,
+        html_url: "https://example.com/release".into(),
+        published_at: None,
+        prerelease: false,
+    }];
+    // Closed container blocks must not cause a synthetic top-level opener.
+    for prefix in [
+        "<!--\n```\n-->\n",
+        "- ```rust\n  let x = 1;\n  ```\n",
+        "<pre>\n```\n</pre>\n",
+        "<![CDATA[\n```\n]]>\n",
+        "```\rcode\r```\n",
+        "```\ncode\n```\t\nprose\n",
+    ] {
+        for padding in [String::new(), "ordinary text\n".repeat(2500)] {
+            let readme = format!("{prefix}\n{padding}");
+            let output = format_overview(&sample_repo(), Some(&readme), &issues, &pulls, &releases);
+            let retained = output
+                .split("## README\n\n")
+                .nth(1)
+                .unwrap()
+                .split("\n\n## Recent Issues\n")
+                .next()
+                .unwrap();
+            // Literal section boundary: ordinary prose or the note, never a new fence.
+            if padding.is_empty() {
+                assert_eq!(
+                    retained.trim_end(),
+                    prefix.trim_end(),
+                    "false completion: {prefix:?}"
+                );
+            } else {
+                assert!(retained.ends_with(')'), "false completion: {prefix:?}");
+            }
+            assert!(retained.starts_with(prefix.trim_end()));
+            assert_eq!(output.contains("(truncated: showing"), !padding.is_empty());
+            assert!(output.contains("\n\n## Recent Issues\n"));
+            assert!(output.contains("\n\n## Recent Pull Requests\n"));
+            assert!(output.contains("\n\n## Recent Releases\n"));
+        }
+    }
+    // The conservative whole-body fallback must survive composition even
+    // when the Markdown parser correctly rejects the last inline-code run.
+    let readme = "```\n---\n```\n\n```` ``` ```` before marker\n... tail";
+    let output = format_overview(&sample_repo(), Some(readme), &issues, &pulls, &releases);
+    assert!(output.contains("```\n***\n```"));
+    assert!(output.contains("*** tail\n\n## Recent Issues\n"));
+    for (opening, decoy, closing) in [
+        ("```rust", "~~~", "```"),
+        ("~~~~rust", "~~~", "~~~~"),
+        ("`````rust", "````", "`````"),
+        ("   ```rust", "``` not a close", "```"),
+    ] {
+        let readme = format!(
+            "{opening}\n{decoy}\n---\n...\n{}\n{closing}\n",
+            "let x = 1;\n".repeat(2500)
+        );
+        let output = format_overview(&sample_repo(), Some(&readme), &issues, &pulls, &releases);
+        let shown = parse_shown_bytes(&output);
+        assert!(shown > 0 && shown <= MAX_README_BYTES);
+        assert!(!output.lines().any(|line| matches!(line, "---" | "...")));
+        assert!(
+            output.contains(&format!(")\n{closing}\n\n## Recent Issues\n")),
+            "README must close before issues: {opening:?}"
+        );
+        assert!(output.contains("\n## Recent Pull Requests\n"));
+        assert!(output.contains("\n## Recent Releases\n"));
+        assert!(output.contains("[#1](https://example.com/issue) Issue"));
+        assert!(output.contains("[#2](https://example.com/pull) Pull"));
+        assert!(output.contains("[v1](https://example.com/release)"));
+    }
+}

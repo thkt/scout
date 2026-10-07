@@ -146,7 +146,9 @@ JSON エンベロープ: `data = {query, sources}`、各 `sources[i] = {url, tit
 
 ### `scout research` — 複数ソース深掘り調査
 
-Brave で Web 検索し、上位 N ページを取得してレポートにまとめます。ページ全文と URL リストを返します。`search` が URL 一覧のみ返すのに対し、`research` は実際にページを読みに行き全文を含めるため、一次ソースに基づいた判断ができます。
+Brave で Web 検索し、上位 N ページを取得してレポートにまとめます。取得したページ本文と URL リストを返します。`search` が URL 一覧のみ返すのに対し、`research` は実際にページを読みに行き本文を含めるため、一次ソースに基づいた判断ができます。
+
+Markdownレポートの各ページ本文は4,500バイトを上限とし、可能な場合はUTF-8文字境界・改行位置で打ち切り、`(truncated: showing … / … bytes)` と表示します。YAMLマーカーの中和後に開いたコードフェンスを閉じ、次のページ、Failed URLs、Sourcesを独立したセクションに保ちます。
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
@@ -224,6 +226,8 @@ scout repo-overview denoland/deno
 ```
 
 リポジトリのメタデータ、README、GitHub が先頭に返すオープンな Issue 5 件と PR 5 件、最新のリリース 3 件。リポジトリの存在確認後、残りを並列取得します。
+
+Markdown出力のREADME本文の上限は見出し変換前の24,000バイトです。同様にUTF-8文字境界・改行位置で打ち切りを表示し、YAMLマーカーの中和後に開いたコードフェンスを閉じて、Recent Issues、Pull Requests、Releasesを独立したセクションに保ちます。
 
 各リストはページングしません。取得するのは 1 ページ目だけで、Issue 5 件、PR 5 件、リリース 3 件が上限です。件数の多いリポジトリでは、概要に出ない分が残ります。
 

@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+
 /// Escape characters that break Markdown link syntax, folding newlines to
 /// spaces so an untrusted value cannot inject block Markdown.
 ///
@@ -194,6 +196,70 @@ pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool
     fence.is_some() || marker.is_some()
 }
 
+/// Find a dangling top-level fence at a report composition boundary.
+/// Parse block context before examining delimiters: fence-looking lines in
+/// HTML, lists, blockquotes or indented code must not manufacture a new block.
+/// YAML defense continues to use the separate conservative `track_fence`.
+pub(crate) fn dangling_report_fence(body: &str) -> Option<(usize, char, usize)> {
+    let parsed = report_parser_input(body);
+    let mut depth = 0;
+    for (event, range) in Parser::new(&parsed).into_offset_iter() {
+        match event {
+            Event::Start(tag) => {
+                if depth == 0 && matches!(tag, Tag::CodeBlock(CodeBlockKind::Fenced(_))) {
+                    let block = &parsed[range.clone()];
+                    let (marker, width) = fence_marker(block)?;
+                    let closed = block.split_once('\n').is_some_and(|(_, rest)| {
+                        rest.lines().last().is_some_and(|line| {
+                            let indent = line.bytes().take_while(|&b| b == b' ').count();
+                            let trimmed = &line[indent..];
+                            indent <= 3
+                                && fence_marker(trimmed).is_some_and(|(c, len)| {
+                                    c == marker
+                                        && len >= width
+                                        && trimmed[len..].trim_matches([' ', '\t', '\r']).is_empty()
+                                })
+                        })
+                    });
+                    if !closed {
+                        let line_start = parsed[..range.start].rfind('\n').map_or(0, |p| p + 1);
+                        return Some((line_start, marker, width));
+                    }
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// pulldown-cmark 0.13.4 scans block lines by LF and closing whitespace by
+/// spaces. Normalize lone CR and trailing tabs only for parsing. Replacing
+/// these ASCII bytes preserves source offsets and leaves emitted text intact.
+fn report_parser_input(body: &str) -> Cow<'_, str> {
+    if !body.contains(['\r', '\t']) {
+        return Cow::Borrowed(body);
+    }
+    let mut bytes = body.as_bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
+            bytes[i] = b'\n';
+        }
+    }
+    let mut trailing = true;
+    for byte in bytes.iter_mut().rev() {
+        match *byte {
+            b'\n' | b'\r' => trailing = true,
+            b'\t' if trailing => *byte = b' ',
+            b' ' => {}
+            _ => trailing = false,
+        }
+    }
+    Cow::Owned(String::from_utf8(bytes).expect("ASCII replacements preserve UTF-8"))
+}
+
 /// Return the fence character and run length if `trimmed` opens or closes a
 /// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
 fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
@@ -282,6 +348,40 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::yaml::{ReportBody, finish_report_body};
+
+    /// [T-MD038] Close only an actual dangling top-level fence: shorter runs,
+    /// info text and indented code must not manufacture section boundaries.
+    #[test]
+    fn report_body_preserves_body_and_adds_only_a_valid_close() {
+        for (body, expected) in [
+            ("plain", "plain"),
+            ("```", "```\n```"),
+            ("```\n", "```\n```"),
+            ("~~~", "~~~\n~~~"),
+            ("~~~\n", "~~~\n~~~"),
+            ("```rust\ncode", "```rust\ncode\n```"),
+            ("~~~rust\ncode\n", "~~~rust\ncode\n~~~"),
+            ("````\n```\ncode", "````\n```\ncode\n````"),
+            ("~~~\n```\ncode", "~~~\n```\ncode\n~~~"),
+            ("```\n```rust", "```\n```rust\n```"),
+            ("```\n    ```", "```\n    ```\n```"),
+            ("    ```\ncode", "    ```\ncode"),
+            ("\t~~~\ncode", "\t~~~\ncode"),
+            ("\u{a0}```\ncode", "\u{a0}```\ncode"),
+            ("```bad`info\ncode", "```bad`info\ncode"),
+            ("   ~~~~\ncode\n ~~~~~\t", "   ~~~~\ncode\n ~~~~~\t"),
+            ("```\r\ncode\r\n```\r\n", "```\r\ncode\r\n```\r\n"),
+            ("```\rcode\r```", "```\rcode\r```"),
+            ("```\ncode\n```\t\nprose", "```\ncode\n```\t\nprose"),
+        ] {
+            assert_eq!(
+                finish_report_body(body, ReportBody::Fetched),
+                expected,
+                "body: {body:?}"
+            );
+        }
+    }
 
     /// [T-MD001] escape_md_link brackets and parens
     #[test]

@@ -13,9 +13,11 @@ use crate::brave::types::SearchResult;
 use crate::fetch;
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{DnsResolver, EgressMode};
-use crate::markdown::{escape_md_inline, md_link, sanitize_heading, shift_headings};
+use crate::markdown::{
+    escape_md_inline, md_link, sanitize_heading, shift_headings, truncate_with_note,
+};
 use crate::search::Lang;
-use crate::yaml::truncate_and_reneutralize;
+use crate::yaml::{ReportBody, finish_report_body};
 
 /// `pub(crate)` because `yaml::MAX_FIELD_BYTES` derives the per-field
 /// frontmatter cap from this same page budget.
@@ -197,7 +199,8 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         // h1->h4, h2->h5, ...: unshifted, a page's own headings would collide
         // with the report's hierarchy.
         let content = shift_headings(page.markdown(), 3);
-        out.push_str(&truncate_and_reneutralize(&content, MAX_PAGE_BYTES));
+        let body = truncate_with_note(&content, MAX_PAGE_BYTES);
+        out.push_str(&finish_report_body(&body, ReportBody::Fetched));
         out.push_str("\n\n");
     }
 }
