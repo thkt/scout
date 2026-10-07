@@ -31,8 +31,7 @@ use super::FetchError;
 use super::ssrf::{self, RedactedLogUrl, ValidatedUrl};
 #[cfg(feature = "js-rendering")]
 use launch::{
-    check_browser_request, parse_ws_url_from_lines, reap_pgroup, resolve_browser_binary,
-    spawn_chromium_pgroup,
+    check_browser_request, parse_ws_url_from_lines, resolve_browser_binary, spawn_chromium_pgroup,
 };
 
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
@@ -95,10 +94,9 @@ impl From<CdpInterceptError> for BrowserError {
 #[cfg(feature = "js-rendering")]
 pub(crate) const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Aborts the wrapped task when dropped, so the SSRF proxy is torn down on every
-/// exit path of `fetch_with_cdp` (early `return`s included). Awaiting the task to
-/// observe a panic is not possible from `Drop`; an abort is sufficient because the
-/// proxy holds no state that must be flushed.
+/// Aborts owned proxy/handler/interceptor tasks on every exit path, including
+/// Future destruction. Awaiting a task to observe a panic is not possible from
+/// Drop; the browser group itself has a separate synchronous cleanup owner.
 #[cfg(feature = "js-rendering")]
 struct AbortOnDrop(JoinHandle<()>);
 
@@ -147,25 +145,23 @@ pub(super) async fn fetch_with_cdp_with(
             .map_err(|e| BrowserError::ProcessFailed(format!("spawn SSRF proxy: {e}")))?;
 
     // Abort the proxy on every exit path (early `return`s included) via RAII.
-    // Declared before the chromium locals so it drops last — after `reap_pgroup`
-    // below — so no late subrequest can reach the proxy once chromium is gone and
-    // its validation context with it. On the SIGINT path the `cancel` flag already
-    // ended the accept loop, so the abort is a no-op there and a stop otherwise.
+    // Declared before chromium so it drops after group termination is requested.
+    // On the signal path `cancel` already ends the accept loop, so abort is a
+    // no-op there and a stop otherwise.
     let _proxy_guard = AbortOnDrop(proxy_task);
 
-    // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
-    // function returns — i.e. after every `reap_pgroup` path below — so its
-    // `Drop` removes the dir only once chromium has exited.
-    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(browser_path, proxy_port)?;
+    // This owner kills the entire group on Future destruction, before removing
+    // its profile. On completed paths it retains graceful, bounded reaping.
+    let (mut process, reader) = spawn_chromium_pgroup(browser_path, proxy_port)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
         Ok(Ok(url)) => url,
         Ok(Err(e)) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(e);
         }
         Err(_) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(BrowserError::TimedOut);
         }
     };
@@ -176,24 +172,23 @@ pub(super) async fn fetch_with_cdp_with(
     let (mut browser, mut handler) = match connect_result {
         Ok(pair) => pair,
         Err(e) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(e);
         }
     };
 
-    let handler_task = tokio::spawn(async move {
+    let mut handler_task = AbortOnDrop(tokio::spawn(async move {
         while let Some(h) = handler.next().await {
             if let Err(e) = h {
                 debug!(error = ?e, "CDP handler stream ended with error");
                 break;
             }
         }
-    });
+    }));
 
     // Race navigate against cancellation so SIGINT/SIGTERM still reaches the
-    // graceful close path below. Without this branch the future would be
-    // dropped by the outer select! in lib::run and chromium subprocesses
-    // would orphan to ppid=1.
+    // graceful close path below. The process owner is the fallback if the
+    // outer fetch timeout or bounded signal drain drops this Future instead.
     //
     // `wait_for` is sticky: if the flag was already `true` at subscribe time
     // (e.g. SIGINT arrived while reqwest was still downloading the initial
@@ -211,7 +206,7 @@ pub(super) async fn fetch_with_cdp_with(
     // Drive the CDP graceful close first so chromium runs its own teardown
     // sequence (flush IPC, write profile state, etc). Surface both arms:
     // an `Err` from close() means CDP refused the teardown, an `Elapsed`
-    // means chromium hung past the budget; either way `reap_pgroup` below
+    // means chromium hung past the budget; either way the process owner below
     // will SIGTERM/SIGKILL but operators need to see why the graceful path
     // failed.
     match timeout(Duration::from_secs(5), browser.close()).await {
@@ -219,11 +214,11 @@ pub(super) async fn fetch_with_cdp_with(
         Ok(Err(e)) => warn!(error = ?e, "CDP browser.close() returned error"),
         Err(_) => warn!(
             timeout_secs = 5,
-            "CDP browser.close() exceeded timeout; falling back to reap_pgroup"
+            "CDP browser.close() exceeded timeout; falling back to process group cleanup"
         ),
     }
-    handler_task.abort();
-    match handler_task.await {
+    handler_task.0.abort();
+    match (&mut handler_task.0).await {
         Ok(()) => {}
         Err(e) if e.is_cancelled() => {}
         Err(e) => error!(error = ?e, "CDP handler task panicked"),
@@ -232,7 +227,7 @@ pub(super) async fn fetch_with_cdp_with(
     // macOS has no PR_SET_PDEATHSIG, so Helper Renderer / GPU / Network service
     // would otherwise reparent to ppid=1 after browser.close() returns.
     // chrome_crashpad_handler may also outlive its parent by design.
-    reap_pgroup(pgid, &mut child).await;
+    process.reap().await;
 
     result
 }
@@ -272,7 +267,7 @@ async fn cdp_navigate(
 
     let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
     let intercept_page = page.clone();
-    let interceptor = tokio::spawn(async move {
+    let mut interceptor = AbortOnDrop(tokio::spawn(async move {
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, resolver.as_ref()).await;
@@ -297,7 +292,7 @@ async fn cdp_navigate(
                 break;
             }
         }
-    });
+    }));
 
     let navigation = async {
         page.goto(url.as_str())
@@ -321,8 +316,8 @@ async fn cdp_navigate(
         nav_result = &mut navigation => nav_result,
     };
 
-    interceptor.abort();
-    match interceptor.await {
+    interceptor.0.abort();
+    match (&mut interceptor.0).await {
         Ok(()) => {}
         Err(e) if e.is_cancelled() => {}
         Err(e) => error!(error = ?e, "CDP intercept task panicked"),

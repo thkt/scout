@@ -125,7 +125,75 @@ pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsRes
 #[cfg(feature = "js-rendering")]
 const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 
-/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
+/// Own the entire browser group and its profile across every await point.
+///
+/// Drop must work even when the runtime is shutting down: send SIGKILL
+/// synchronously, before TempDir removes the profile. The Child's existing
+/// kill-on-drop handles the directly owned parent; it cannot kill descendants.
+/// No asynchronous cleanup task may carry this responsibility (DR-0032).
+#[cfg(feature = "js-rendering")]
+pub(super) struct ChromiumProcess {
+    child: TokioChild,
+    pgid: Pid,
+    group_armed: bool,
+    _profile: TempDir,
+}
+
+#[cfg(feature = "js-rendering")]
+impl ChromiumProcess {
+    /// Preserve TERM grace and bounded parent reaping on completed paths.
+    /// Cancellation during the grace period still invokes the Drop fallback.
+    pub(super) async fn reap(&mut self) {
+        use nix::errno::Errno;
+        use nix::sys::signal::{Signal, killpg};
+
+        let term = killpg(self.pgid, Signal::SIGTERM);
+        let already_gone = matches!(term, Err(Errno::ESRCH));
+        if let Err(e) = term
+            && e != Errno::ESRCH
+        {
+            warn!(error = %e, pgid = %self.pgid, "killpg SIGTERM failed");
+        }
+        if already_gone {
+            self.group_armed = false;
+        } else {
+            sleep(PGROUP_SIGTERM_GRACE).await;
+            self.kill_group();
+        }
+        // Disarm once KILL was sent (or ESRCH observed), before wait can reap
+        // the group leader and make its numeric PID available for reuse.
+        match timeout(Duration::from_secs(2), self.child.wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                warn!(error = %e, pgid = %self.pgid, "chromium child.wait() failed during reap")
+            }
+            Err(_) => {
+                warn!(timeout_secs = 2, pgid = %self.pgid, "chromium child did not exit within timeout after SIGKILL")
+            }
+        }
+    }
+
+    fn kill_group(&mut self) {
+        use nix::errno::Errno;
+        use nix::sys::signal::{Signal, killpg};
+
+        match killpg(self.pgid, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => self.group_armed = false,
+            Err(e) => warn!(error = %e, pgid = %self.pgid, "killpg SIGKILL failed"),
+        }
+    }
+}
+
+#[cfg(feature = "js-rendering")]
+impl Drop for ChromiumProcess {
+    fn drop(&mut self) {
+        if self.group_armed {
+            self.kill_group();
+        }
+    }
+}
+
+/// Spawn chromium in a new process group and return its owner and stderr reader.
 ///
 /// Synchronous so the caller captures `pgid` before any timeout can drop the
 /// future and orphan the group. The pgid equals the chromium child's pid (the
@@ -140,14 +208,14 @@ const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
     proxy_port: u16,
-) -> Result<(TokioChild, Pid, BufReader<ChildStderr>, TempDir), BrowserError> {
+) -> Result<(ChromiumProcess, BufReader<ChildStderr>), BrowserError> {
     use std::process::Stdio;
 
     // `TempDir` gives each --js fetch a unique profile dir (random suffix avoids
     // chromium's `SingletonLock` failure when two scout processes run --js
     // concurrently) and deletes it on `Drop`. The caller must hold the returned
-    // guard until after `reap_pgroup`, because chromium keeps writing profile
-    // state during graceful shutdown.
+    // owner until after group termination, because chromium keeps writing
+    // profile state during graceful shutdown.
     let user_data_dir = Builder::new()
         .prefix("scout-chromium-")
         .tempdir()
@@ -164,7 +232,7 @@ pub(super) fn spawn_chromium_pgroup(
         .process_group(0)
         .kill_on_drop(true);
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| BrowserError::ProcessFailed(format!("spawn chromium: {e}")))?;
     let pid = child
@@ -175,11 +243,20 @@ pub(super) fn spawn_chromium_pgroup(
             .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
     );
 
-    let stderr = child
+    // Establish group ownership before the next fallible step, with no await
+    // between spawn and this guard. Even a missing stderr cleans up the group.
+    let mut process = ChromiumProcess {
+        child,
+        pgid,
+        group_armed: true,
+        _profile: user_data_dir,
+    };
+    let stderr = process
+        .child
         .stderr
         .take()
         .ok_or_else(|| BrowserError::ProcessFailed("chromium stderr missing".into()))?;
-    Ok((child, pgid, BufReader::new(stderr), user_data_dir))
+    Ok((process, BufReader::new(stderr)))
 }
 
 /// Read chromium stderr line-by-line until `DevTools listening on ws://...`.
@@ -211,48 +288,6 @@ where
         {
             return Ok(ws.trim().to_owned());
         }
-    }
-}
-
-/// Send SIGTERM to the pgroup, wait a short grace, then SIGKILL.
-///
-/// `ESRCH` from the first killpg means the group already exited (the common
-/// case after a successful `browser.close()`); skip the grace + SIGKILL in
-/// that branch to avoid a 50 ms cleanup penalty on every `--js` fetch. The
-/// `Child` is awaited unconditionally so the kernel can reap the parent and
-/// we don't leave a zombie pid behind.
-#[cfg(feature = "js-rendering")]
-pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
-    use nix::errno::Errno;
-    use nix::sys::signal::{Signal, killpg};
-
-    let term = killpg(pgid, Signal::SIGTERM);
-    let already_gone = matches!(term, Err(Errno::ESRCH));
-    if let Err(e) = term
-        && e != Errno::ESRCH
-    {
-        warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
-    }
-    if !already_gone {
-        sleep(PGROUP_SIGTERM_GRACE).await;
-        if let Err(e) = killpg(pgid, Signal::SIGKILL)
-            && e != Errno::ESRCH
-        {
-            warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
-        }
-    }
-    // `Ok(Err)` means waitpid itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
-    // means the 2s budget elapsed before chromium exited, which is the zombie
-    // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
-    // honest.
-    match timeout(Duration::from_secs(2), child.wait()).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
-        Err(_) => warn!(
-            timeout_secs = 2,
-            pgid = %pgid,
-            "chromium child did not exit within timeout after SIGKILL"
-        ),
     }
 }
 

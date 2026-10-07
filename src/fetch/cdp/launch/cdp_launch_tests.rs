@@ -1,4 +1,24 @@
 use super::*;
+use crate::test_support::browser_fixture::FakeBrowser;
+use futures::poll;
+use tokio::time::pause;
+
+/// [T-BGC001] Drop during TERM grace must stop resistant descendants.
+#[tokio::test]
+async fn browser_owner_cleans_interrupted_reap() {
+    let browser = FakeBrowser::new(false);
+    let (mut process, _reader) = spawn_chromium_pgroup(&browser.binary, 0).expect("fake launch");
+    browser.wait_ready();
+    // Poll reap through TERM into its pending grace, then destroy it.
+    pause();
+    {
+        let reap = process.reap();
+        tokio::pin!(reap);
+        assert!(poll!(reap.as_mut()).is_pending());
+    }
+    drop(process);
+    browser.assert_clean();
+}
 
 /// [T-F043]
 #[test]

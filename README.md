@@ -110,6 +110,12 @@ Prebuilt binaries (Homebrew, GitHub Releases) ship with the `js-rendering` featu
 cargo install --path . --features js-rendering
 ```
 
+On fetch timeout (exit 124) or handled SIGINT/SIGTERM (130/143), scout cleans up
+its browser process group and temporary profile. Signals allow up to 7 seconds
+for graceful drain; if the fetch future is dropped, cleanup sends SIGKILL to the
+owned group without waiting for another async task. This does not cover killing
+scout with SIGKILL or browser processes that leave the owned process group.
+
 ### Claude Code integration
 
 Add to your project's `CLAUDE.md`:

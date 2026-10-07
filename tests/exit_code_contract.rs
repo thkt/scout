@@ -269,3 +269,7 @@ fn fetch_timeout_message_states_the_timeout_once() {
         "error.message should state the timeout once, got: {message}"
     );
 }
+
+#[cfg(all(unix, feature = "js-rendering"))]
+#[path = "exit_code_contract/browser_cleanup.rs"]
+mod browser_cleanup;

@@ -898,3 +898,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(feature = "js-rendering")]
+pub(crate) mod browser_fixture;
