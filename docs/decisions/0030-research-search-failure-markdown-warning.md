@@ -79,9 +79,10 @@ Its empty-array detection conditions remain; only separate failure isolation is
 lost. T-TS030 retains the HTTP 401 case and now checks exit 64, `USAGE_ERROR`,
 and non-retryable JSON errors. The comparison acquires one result per response
 scenario, then uses test-only `CommandOutput::clone` (`src/envelope.rs`) to feed
-both consuming `emit_success` branches (`src/lib.rs`). The mock requires at
-least one HTTP call per scenario. With the current default retry budget of two
-(`DEFAULT_MAX_RETRIES` in `src/retry.rs`), the fixed responses require three
+both consuming `emit_success` branches (`src/lib.rs`). Each scenario explicitly
+verifies the mock's minimum of one HTTP call after acquisition and before the
+next reset can discard its expectation. With the current default retry budget
+of two (`DEFAULT_MAX_RETRIES` in `src/retry.rs`), the fixed responses require three
 HTTP calls for 503 and one for 200. Production ownership and retry behavior are
 unchanged. No live API key is needed.
 
@@ -101,6 +102,8 @@ mode never affected acquisition. The small test-only clone avoids another
 fixture or production cache. Runtime and flakiness changes remain unmeasured;
 the historical times are not a controlled before/after comparison.
 
+### R1-1 revision handoff (historical)
+
 The unchanged configured host check runs default and all-features nextest with
 `SCOUT_NETWORK_TESTS=1`, which rejects unavailable loopback fixtures instead of
 silently skipping. No browser or mock server was started in the implementation
@@ -117,6 +120,84 @@ the sandbox (Rust 1.99.0; Cargo declares minimum Rust 1.98.1 and CI uses stable)
 build lock because sandbox write permission was denied; no compilation success
 is claimed. The configured host check includes compilation of test targets in
 both feature configurations, so this does not require a separate host command.
+
+### PR #486 CI repair
+
+The adopted repair request starts from published commit
+`6eb88329e2f088e37bbee47ad46b9ed993daa18f`. In
+[Actions run 37664301132](https://github.com/thkt/scout/actions/runs/37664301132),
+coverage job `112939453599` reported four unexecuted lines in the new
+`emit_success` write-error branches (`src/lib.rs`): 11 of 15 changed lines
+were covered (73%, below the unchanged 95% gate). This is a historical CI
+result, not a measurement of the repair. The adopted request reports the other
+CI checks passing; their success does not establish coverage of those branches.
+
+T-W003 in `src/lib.rs` now injects BrokenPipe and StorageFull at `emit_success`
+in both output modes, expecting exit 0 and exit 74 respectively. Previously it
+called only `write_output` and checked the propagated BrokenPipe kind, leaving
+the CLI's special-case success and other-error exit mapping unobserved. The
+updated test detects making a closed downstream pipe a command failure or
+silently treating a full output device as success. Expected exit codes are
+literal public-contract values, not derived from the mapping under test.
+
+This replaces the lower-level BrokenPipe test rather than adding an overlapping
+test. Its independent observation of the returned `io::ErrorKind` is lost; the
+writer-to-exit behavior is now observed through the actual CLI success-output
+entry. T-W001/T-W002 still check newline handling, and T-W004/T-W005 still check
+the JSON IO_ERROR/non-retryable and plain error renderings. T-TS029/T-TS030 and
+the single-acquisition fixture arrangement remain unchanged. The updated test
+performs four synchronous fault injections, with no HTTP, browser,
+subprocess, or timing dependency. No measured runtime or flakiness improvement
+is claimed. Production code, README behavior, CI thresholds, and accepted DRs
+are unchanged. No new test ID or decision number is allocated.
+
+For this repair, `cargo fmt -- --check` and `git diff --check` passed in the
+sandbox. The targeted command `cargo test --offline --lib
+tests::emit_success_preserves_write_failure_exit_codes -- --exact` could not
+open the shared target's build lock because sandbox write permission was denied;
+it did not execute the test and is neither a regression failure nor a pass.
+The configured host check runs this test under default and all features. The
+configured CI coverage check uses `cargo llvm-cov --features js-rendering --lcov
+--output-path lcov.info -- --include-ignored`, followed by the existing diff
+coverage gate. New check and CI results must be recorded
+for the repaired version; the previous run and the R1-1 history above remain
+evidence for their own versions only. The fault-injection test observes return
+codes, not subprocess stderr; error text remains covered by T-W004/T-W005.
+
+### Mock expectation repair after CI-repair evaluation
+
+The CI-repair evaluation (`review-1.json`, host-held record at
+`/private/tmp/scout-implement-480-ci-repair-20261008/verification/review-1.json`),
+target `d8aa14472a277f828a3c18ce62f5a2f27ec5c98f2525a97a34a1cb46a2afc71c`,
+found that T-TS029 erased the 503 mock expectation when starting the 200
+scenario. This is a separate evaluation from the initial acquisition review
+above. In wiremock 0.6.5 (`Cargo.lock`), `MockServer::reset` delegates to
+`MountedMockSet::reset`, which clears mocks without verification. Drop verifies
+only mocks still present. A network failure before reaching the 503 fixture
+could therefore satisfy the general degraded-output assertions. The earlier
+minimum-call guarantee was incomplete despite successful host checks; the
+review does not claim those checks actually substituted a network failure.
+
+T-TS029 now calls `MockServer::verify` immediately after each acquisition,
+before any subsequent reset. The existing `expect(1..)` rejects zero matching
+requests, so a failure before reaching the 503 response cannot substitute for
+the required HTTP scenario. This failure condition follows the pinned
+dependency's verification implementation; a deliberate no-request execution
+has not been run in the sandbox, where starting a mock server is prohibited.
+The configured host check executes the revised regression under default and
+all features with `SCOUT_NETWORK_TESTS=1`.
+
+The same acquired result still feeds both output formats, and all warning,
+JSON, exit-code, and empty-array assertions remain. No detection condition,
+test ID, or fixture acquisition is removed or added. Two expectation checks
+add no HTTP requests or retry waits; their runtime and flakiness impact has
+not been measured. Keeping verification beside acquisition prevents the next
+reset from silently invalidating this scenario's HTTP-boundary guarantee.
+This local repair requires no repository-wide rule or new lint. Production
+behavior, authentication checks, and the writer-failure repair are preserved.
+New host check and independent-evaluation results remain pending for this
+revision; earlier successes are evidence only for their recorded versions.
+`cargo fmt -- --check` and `git diff --check` passed for this local revision.
 
 ## Reassessment Triggers
 

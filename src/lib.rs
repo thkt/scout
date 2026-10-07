@@ -327,13 +327,15 @@ fn emit_error(err: &ScoutError, json_mode: bool) -> ExitCode {
 mod tests {
     use std::future::{pending, ready};
     use std::io::{self, Write};
+    use std::process::ExitCode;
 
     use clap::CommandFactory;
     use tokio::sync::watch;
 
     use super::{
         CommandOutput, ErrorCode, InterruptSignal, Outcome, ScoutError, bare_error_line, drive,
-        init_tracing, interrupted_line, render_json_success, write_failure_line, write_output,
+        emit_success, init_tracing, interrupted_line, render_json_success, write_failure_line,
+        write_output,
     };
 
     /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
@@ -440,21 +442,36 @@ mod tests {
         assert_eq!(&buf, b"hello\n");
     }
 
-    /// [T-W003] write_output propagates BrokenPipe error from writer
+    /// [T-W003] The shared CLI output path treats a closed pipe as success but
+    /// reports other write failures with exit 74 in both Markdown and JSON modes.
+    /// Testing only write_output would miss a regression in the exit-code mapping.
     #[test]
-    fn write_output_propagates_broken_pipe() {
-        struct BrokenPipeWriter;
-        impl Write for BrokenPipeWriter {
+    fn emit_success_preserves_write_failure_exit_codes() {
+        struct FailingWriter(io::ErrorKind);
+        impl Write for FailingWriter {
             fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+                Err(io::Error::from(self.0))
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())
             }
         }
-        let mut w = BrokenPipeWriter;
-        let err = write_output(&mut w, "hello").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        for json_mode in [false, true] {
+            for (kind, expected) in [
+                (io::ErrorKind::BrokenPipe, ExitCode::SUCCESS),
+                (io::ErrorKind::StorageFull, ExitCode::from(74)),
+            ] {
+                let output = CommandOutput::ok(
+                    String::from("hello"),
+                    serde_json::json!({"markdown": "hello"}),
+                );
+                assert_eq!(
+                    emit_success(output, json_mode, &mut FailingWriter(kind)),
+                    expected,
+                    "incorrect exit code for {kind:?} with json_mode={json_mode}"
+                );
+            }
+        }
     }
 
     /// [T-W004] under `--json` a stdout write failure is reported as an envelope

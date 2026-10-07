@@ -251,6 +251,9 @@ async fn research_search_failure_is_distinct_from_successful_zero_results() {
             })
             .await
             .expect("both degraded search and successful zero results must return Ok");
+        // reset() discards expectations without checking them. Verify this
+        // response was reached before the next scenario can erase its mock.
+        server.verify().await;
         // Output mode is selected after acquisition; reuse this fixed response
         // to exercise both consuming writers without repeating HTTP retries.
         for json_mode in [false, true] {
