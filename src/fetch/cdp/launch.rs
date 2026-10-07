@@ -1,13 +1,24 @@
 //! Browser binary discovery and Chrome process lifecycle for CDP rendering.
 
 use std::borrow::Cow;
+#[cfg(feature = "js-rendering")]
+use std::future::Future;
+#[cfg(feature = "js-rendering")]
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::process::ExitStatus;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 
 #[cfg(feature = "js-rendering")]
 use nix::unistd::Pid;
+#[cfg(feature = "js-rendering")]
+use nix::{
+    errno::Errno,
+    sys::signal::{Signal, killpg},
+};
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "js-rendering")]
@@ -144,43 +155,51 @@ impl ChromiumProcess {
     /// Preserve TERM grace and bounded parent reaping on completed paths.
     /// Cancellation during the grace period still invokes the Drop fallback.
     pub(super) async fn reap(&mut self) {
-        use nix::errno::Errno;
-        use nix::sys::signal::{Signal, killpg};
-
-        let term = killpg(self.pgid, Signal::SIGTERM);
-        let already_gone = matches!(term, Err(Errno::ESRCH));
-        if let Err(e) = term
-            && e != Errno::ESRCH
-        {
-            warn!(error = %e, pgid = %self.pgid, "killpg SIGTERM failed");
-        }
-        if already_gone {
-            self.group_armed = false;
-        } else {
-            sleep(PGROUP_SIGTERM_GRACE).await;
-            self.kill_group();
-        }
-        // Disarm once KILL was sent (or ESRCH observed), before wait can reap
-        // the group leader and make its numeric PID available for reuse.
-        match timeout(Duration::from_secs(2), self.child.wait()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => {
-                warn!(error = %e, pgid = %self.pgid, "chromium child.wait() failed during reap")
-            }
-            Err(_) => {
-                warn!(timeout_secs = 2, pgid = %self.pgid, "chromium child did not exit within timeout after SIGKILL")
-            }
-        }
+        reap_group(self.pgid, &mut self.group_armed, self.child.wait(), killpg).await;
     }
 
     fn kill_group(&mut self) {
-        use nix::errno::Errno;
-        use nix::sys::signal::{Signal, killpg};
+        kill_group_with(self.pgid, &mut self.group_armed, killpg);
+    }
+}
 
-        match killpg(self.pgid, Signal::SIGKILL) {
-            Ok(()) | Err(Errno::ESRCH) => self.group_armed = false,
-            Err(e) => warn!(error = %e, pgid = %self.pgid, "killpg SIGKILL failed"),
+// Keep the OS boundary injectable without changing the ownership or timing.
+#[cfg(feature = "js-rendering")]
+async fn reap_group(
+    pgid: Pid,
+    armed: &mut bool,
+    wait: impl Future<Output = io::Result<ExitStatus>>,
+    mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
+) {
+    match signal(pgid, Signal::SIGTERM) {
+        Err(Errno::ESRCH) => *armed = false,
+        term => {
+            if let Err(e) = term {
+                warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
+            }
+            sleep(PGROUP_SIGTERM_GRACE).await;
+            kill_group_with(pgid, armed, signal);
         }
+    }
+    // Disarm before parent wait can make its numeric PID available for reuse.
+    match timeout(Duration::from_secs(2), wait).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
+        Err(_) => {
+            warn!(timeout_secs = 2, pgid = %pgid, "chromium child did not exit within timeout after SIGKILL")
+        }
+    }
+}
+
+#[cfg(feature = "js-rendering")]
+fn kill_group_with(
+    pgid: Pid,
+    armed: &mut bool,
+    mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
+) {
+    match signal(pgid, Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => *armed = false,
+        Err(e) => warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed"),
     }
 }
 

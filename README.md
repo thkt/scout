@@ -115,6 +115,8 @@ its browser process group and temporary profile. Signals allow up to 7 seconds
 for graceful drain; if the fetch future is dropped, cleanup sends SIGKILL to the
 owned group without waiting for another async task. This does not cover killing
 scout with SIGKILL or browser processes that leave the owned process group.
+OS signal/profile deletion errors and uninterruptible kernel waits can prevent
+cleanup from completing.
 
 ### Claude Code integration
 

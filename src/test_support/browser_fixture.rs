@@ -1,15 +1,11 @@
 //! Owned fake browser resources, shared by library and CLI regressions.
-#![expect(
-    dead_code,
-    reason = "Library and CLI test crates use different fixture helpers"
-)]
-
 use std::cell::Cell;
 use std::fs;
+use std::io;
 use std::io::ErrorKind;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,10 +22,17 @@ pub(crate) struct FakeBrowser {
 
 impl FakeBrowser {
     pub(crate) fn new(close_stderr: bool) -> Self {
+        Self::with_devtools(close_stderr, None)
+    }
+
+    pub(crate) fn with_devtools(close_stderr: bool, devtools: Option<&str>) -> Self {
         let dir = tempdir().expect("fixture directory");
         let binary = dir.path().join("chromium");
         let record = dir.path().to_string_lossy().replace('\'', "'\\''");
         let stderr = if close_stderr { "exec 2>/dev/null" } else { "" };
+        let devtools = devtools.map_or(String::new(), |url| {
+            format!("printf '%s\\n' 'DevTools listening on {url}' >&2\n")
+        });
         // Record the group before spawning descendants, so even failure before
         // the ready marker gives Drop enough information to clean up.
         fs::write(
@@ -48,7 +51,7 @@ sleep 120 2>/dev/null &
 printf '%s' "$!" > "$record/descendant"
 touch "$record/ready"
 {stderr}
-wait
+{devtools}wait
 "#
             ),
         )
@@ -73,16 +76,15 @@ wait
         self.dir.path().join("ready").exists()
     }
 
-    pub(crate) fn wait_ready(&self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !self.ready() {
-            assert!(Instant::now() < deadline, "fake browser never became ready");
-            thread::sleep(Duration::from_millis(10));
-        }
+    pub(crate) fn wait_ready(&self) -> (Pid, Pid) {
+        assert!(
+            wait_until(Duration::from_secs(5), || self.ready()),
+            "fake browser never became ready"
+        );
         let group = self.pid("group");
         let descendant = self.pid("descendant");
         assert!(self.profile().is_dir(), "launch must create its profile");
-        assert!(pid_running(descendant), "descendant must start alive");
+        assert_pid_running_with(descendant, query_pid);
         for pid in [group, descendant] {
             let output = Command::new("ps")
                 .args(["-o", "pgid=", "-p", &pid.to_string()])
@@ -94,6 +96,7 @@ wait
                 "fixture must run in its owned browser group"
             );
         }
+        (group, descendant)
     }
 
     pub(crate) fn pid(&self, name: &str) -> Pid {
@@ -112,19 +115,53 @@ wait
     pub(crate) fn assert_clean(&self) {
         let group = self.pid("group");
         let descendant = self.pid("descendant");
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while pid_running(group) || pid_running(descendant) {
-            assert!(
-                Instant::now() < deadline,
-                "owned browser or descendant survived cleanup"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            wait_until(Duration::from_secs(3), || !pid_running(group)
+                && !pid_running(descendant)),
+            "owned browser or descendant survived cleanup"
+        );
         assert!(
             !self.profile().exists(),
             "temporary browser profile survived"
         );
         self.cleaned.set(true);
+    }
+
+    // Inject only destructive OS operations and the bounded liveness wait.
+    // Keep record parsing and failure aggregation on the actual Drop path.
+    pub(crate) fn cleanup_with(
+        &self,
+        mut kill: impl FnMut(Pid) -> Result<(), Errno>,
+        mut wait: impl FnMut(Pid, Option<Pid>) -> Result<(), String>,
+        mut remove: impl FnMut(&Path) -> io::Result<()>,
+    ) -> Vec<String> {
+        let mut failures = Vec::new();
+        if let Some(group) = self.recorded_pid("group") {
+            if let Err(e) = kill(group)
+                && e != Errno::ESRCH
+            {
+                failures.push(format!("kill owned fixture group {group}: {e}"));
+            }
+            if let Err(e) = wait(group, self.recorded_pid("descendant")) {
+                failures.push(e);
+            }
+        }
+        if let Ok(record) = fs::read_to_string(self.dir.path().join("profile"))
+            && let Err(e) = remove(Path::new(&record))
+            && e.kind() != ErrorKind::NotFound
+        {
+            failures.push(format!("remove fixture profile: {e}"));
+        }
+        failures
+    }
+
+    fn recorded_pid(&self, name: &str) -> Option<Pid> {
+        fs::read_to_string(self.dir.path().join(name))
+            .ok()?
+            .parse::<i32>()
+            .ok()
+            .filter(|&pid| pid > 0)
+            .map(Pid::from_raw)
     }
 }
 
@@ -133,44 +170,38 @@ impl Drop for FakeBrowser {
         if self.cleaned.get() {
             return;
         }
-        let mut failures = Vec::new();
-        // Best-effort backstop independent of the production guard. Restrict
-        // signals to the recorded group owned by this fixture, even on panic.
-        if let Ok(record) = fs::read_to_string(self.dir.path().join("group"))
-            && let Ok(pid) = record.parse::<i32>()
-            && pid > 0
-        {
-            if let Err(e) = killpg(Pid::from_raw(pid), Signal::SIGKILL)
-                && e != Errno::ESRCH
-            {
-                failures.push(format!("kill owned fixture group {pid}: {e}"));
-            }
-            let descendant = fs::read_to_string(self.dir.path().join("descendant"))
-                .ok()
-                .and_then(|record| record.parse::<i32>().ok())
-                .map(Pid::from_raw);
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while pid_running(Pid::from_raw(pid)) || descendant.is_some_and(pid_running) {
-                if Instant::now() >= deadline {
-                    failures.push("owned fixture group survived backstop SIGKILL".to_owned());
-                    break;
+        // Independent backstop restricted to the recorded, positive group.
+        let failures = self.cleanup_with(
+            |group| killpg(group, Signal::SIGKILL),
+            |group, descendant| {
+                if wait_until(Duration::from_secs(3), || {
+                    !pid_running(group) && !descendant.is_some_and(pid_running)
+                }) {
+                    Ok(())
+                } else {
+                    Err("owned fixture group survived backstop SIGKILL".to_owned())
                 }
-                thread::sleep(Duration::from_millis(10));
-            }
-        }
-        if let Ok(record) = fs::read_to_string(self.dir.path().join("profile"))
-            && let Err(e) = fs::remove_dir_all(record)
-            && e.kind() != ErrorKind::NotFound
-        {
-            failures.push(format!("remove fixture profile: {e}"));
-        }
+            },
+            |profile| fs::remove_dir_all(profile),
+        );
         if !failures.is_empty() {
             cleanup_failed(&failures.join("; "));
         }
     }
 }
 
-fn cleanup_failed(message: &str) {
+pub(crate) fn wait_until(budget: Duration, mut complete: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + budget;
+    while !complete() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+pub(crate) fn cleanup_failed(message: &str) {
     // Never double-panic during a failed assertion, but preserve the evidence
     // that the backstop itself failed. On an otherwise passing path, fail it.
     if thread::panicking() {
@@ -180,15 +211,67 @@ fn cleanup_failed(message: &str) {
     }
 }
 
-fn pid_running(pid: Pid) -> bool {
-    let output = Command::new("ps")
+pub(crate) fn pid_running(pid: Pid) -> bool {
+    pid_running_with(pid, query_pid)
+}
+
+pub(crate) fn pid_running_with(pid: Pid, query: impl FnOnce(Pid) -> io::Result<Output>) -> bool {
+    // Absence must be observed before cleanup can complete.
+    pid_state_with(pid, query) != PidState::Stopped
+}
+
+fn query_pid(pid: Pid) -> io::Result<Output> {
+    Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
-        .expect("query owned PID");
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PidState {
+    Running,
+    Stopped,
+    Unobserved,
+}
+
+pub(crate) fn assert_pid_running_with(pid: Pid, query: impl FnOnce(Pid) -> io::Result<Output>) {
+    // The conservative cleanup predicate cannot establish positive readiness.
+    assert_eq!(
+        pid_state_with(pid, query),
+        PidState::Running,
+        "descendant must be observed alive"
+    );
+}
+
+pub(crate) fn pid_state_with(pid: Pid, query: impl FnOnce(Pid) -> io::Result<Output>) -> PidState {
+    let output = match query(pid) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("cannot observe fixture PID {pid}: {error}");
+            // Conservatively keep waiting; the bounded caller reports failure.
+            return PidState::Unobserved;
+        }
+    };
     let state = String::from_utf8_lossy(&output.stdout);
+    // ps may exit 1 with no output when the selected PID is absent. A
+    // diagnostic, another exit code, or signal termination is not absence.
+    if !output.stderr.is_empty()
+        || !(output.status.success()
+            || (output.status.code() == Some(1) && state.trim().is_empty()))
+    {
+        eprintln!(
+            "cannot observe fixture PID {pid}: ps {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return PidState::Unobserved;
+    }
     // An orphan zombie cannot execute or write profiles; its reaping belongs
     // to the OS, unlike the directly owned browser parent reaped by scout.
-    !state.trim().is_empty() && !state.trim().starts_with('Z')
+    if state.trim().is_empty() || state.trim().starts_with('Z') {
+        PidState::Stopped
+    } else {
+        PidState::Running
+    }
 }
 
 pub(crate) struct OwnedScout(pub(crate) Child);
@@ -201,12 +284,13 @@ impl Drop for OwnedScout {
 }
 
 pub(crate) fn wait_scout(child: &mut Child) -> ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(status) = child.try_wait().expect("scout wait") {
-            return status;
-        }
-        assert!(Instant::now() < deadline, "scout exceeded bounded shutdown");
-        thread::sleep(Duration::from_millis(10));
-    }
+    let mut status = None;
+    assert!(
+        wait_until(Duration::from_secs(15), || {
+            status = child.try_wait().expect("scout wait");
+            status.is_some()
+        }),
+        "scout exceeded bounded shutdown"
+    );
+    status.expect("completed scout status")
 }

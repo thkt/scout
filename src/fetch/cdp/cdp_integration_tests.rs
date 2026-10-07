@@ -185,3 +185,24 @@ exec '{browser}' "$@"
         "fetch left its chromium profile behind: {profile:?}"
     );
 }
+
+/// [T-BGC011] A DevTools endpoint that cannot connect still requires group
+/// cleanup; discovery success alone must not release ownership.
+#[tokio::test]
+async fn devtools_connect_failure_cleans_browser_group_and_profile() {
+    let browser =
+        FakeBrowser::with_devtools(false, Some("ws://127.0.0.1:0/devtools/browser/fixture"));
+    let (cancel, _rx) = watch::channel(false);
+    let error = fetch_with_cdp_with(
+        &ValidatedUrl::for_test("https://example.com"),
+        &browser.binary,
+        Arc::new(TokioDnsResolver),
+        &cancel,
+    )
+    .await
+    .expect_err("port zero cannot serve a DevTools endpoint");
+    assert!(
+        matches!(error, BrowserError::ProcessFailed(ref message) if message.contains("browser connect:"))
+    );
+    browser.assert_clean();
+}

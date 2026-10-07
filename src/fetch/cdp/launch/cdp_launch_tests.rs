@@ -1,6 +1,10 @@
 use super::*;
 use crate::test_support::browser_fixture::FakeBrowser;
 use futures::poll;
+use std::cell::Cell;
+use std::future::{pending, ready};
+use std::io;
+use tokio::time::Instant;
 use tokio::time::pause;
 
 /// [T-BGC001] Drop during TERM grace must stop resistant descendants.
@@ -79,4 +83,81 @@ fn t201_8_launch_args_contain_ssrf_proxy_flags() {
     for flag in ["--proxy-bypass-list=<-loopback>", "--disable-quic"] {
         assert!(args.iter().any(|a| a == flag), "missing proxy flag: {flag}");
     }
+}
+
+/// [T-BGC007] A TERM failure must not skip KILL or parent wait; failed KILL
+/// retains the Drop retry, while success/ESRCH prevents stale-group signals.
+#[tokio::test(start_paused = true)]
+#[tracing_test::traced_test]
+async fn reap_preserves_fallback_on_os_errors() {
+    use nix::errno::Errno;
+    use nix::sys::signal::Signal;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    let pgid = Pid::from_raw(42);
+    for kill_result in [Ok(()), Err(Errno::ESRCH), Err(Errno::EPERM)] {
+        let mut armed = true;
+        let mut sent = Vec::new();
+        let waited = Cell::new(false);
+        reap_group(
+            pgid,
+            &mut armed,
+            async {
+                waited.set(true);
+                Err(io::Error::other("injected wait failure"))
+            },
+            |pid, signal| {
+                assert_eq!(pid, pgid);
+                sent.push(signal);
+                if signal == Signal::SIGTERM {
+                    Err(Errno::EPERM)
+                } else {
+                    kill_result
+                }
+            },
+        )
+        .await;
+        assert_eq!(sent, [Signal::SIGTERM, Signal::SIGKILL]);
+        assert!(waited.get(), "wait must follow signal failure");
+        assert_eq!(armed, kill_result == Err(Errno::EPERM));
+        if armed {
+            kill_group_with(pgid, &mut armed, |_, signal| {
+                assert_eq!(signal, Signal::SIGKILL);
+                Ok(())
+            });
+            assert!(!armed, "successful fallback must disarm");
+        }
+    }
+    assert!(logs_contain("killpg SIGTERM failed"));
+    assert!(logs_contain("killpg SIGKILL failed"));
+    assert!(logs_contain("chromium child.wait() failed during reap"));
+
+    let mut armed = true;
+    let mut sent = Vec::new();
+    reap_group(
+        pgid,
+        &mut armed,
+        ready(Ok(ExitStatus::from_raw(0))),
+        |_, signal| {
+            sent.push(signal);
+            Err(Errno::ESRCH)
+        },
+    )
+    .await;
+    assert_eq!(sent, [Signal::SIGTERM], "gone group must not receive KILL");
+    assert!(!armed);
+
+    armed = true;
+    let started = Instant::now();
+    reap_group(pgid, &mut armed, pending(), |_, _| Ok(())).await;
+    assert!(
+        !armed,
+        "bounded wait must not rearm an already killed group"
+    );
+    assert_eq!(
+        started.elapsed(),
+        PGROUP_SIGTERM_GRACE + Duration::from_secs(2)
+    );
+    assert!(logs_contain("chromium child did not exit within timeout"));
 }

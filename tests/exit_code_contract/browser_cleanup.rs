@@ -20,8 +20,14 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     };
     let browser = FakeBrowser::new(false);
     let path = env::join_paths(
-        once(browser.path().to_path_buf())
-            .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+        once(
+            browser
+                .binary
+                .parent()
+                .expect("fixture browser directory")
+                .to_path_buf(),
+        )
+        .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
     )
     .expect("fixture PATH");
     let mut command = common::scout_with_clean_env();

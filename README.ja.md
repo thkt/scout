@@ -102,7 +102,8 @@ fetchのtimeout（終了コード124）や、scoutが処理したSIGINT/SIGTERM�
 起動したブラウザのprocess groupと一時profileを清掃します。signal時は最大7秒の
 graceful drainを行い、fetchのFutureが破棄される場合は、別の非同期タスクを待たずに
 所有groupへSIGKILLを送ります。scout自体へのSIGKILLや、所有groupから離れた
-ブラウザプロセスは対象外です。
+ブラウザプロセスは対象外です。OSのsignal送信・profile削除エラーや、
+割込み不能なkernel待機により清掃が完了しない場合があります。
 
 ### Claude Code連携
 
