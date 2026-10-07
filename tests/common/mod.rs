@@ -178,11 +178,12 @@ pub(crate) fn spawn_mock_proxy(
 /// `bind_loopback` above skips for an unavailable loopback bind, matching
 /// `spawn_mock_proxy`.
 pub(crate) fn spawn_mock_proxy_raw_response(
-    raw_response: &'static [u8],
+    raw_response: &[u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
     let listener = bind_loopback("spawn_mock_proxy_raw_response")?;
     let (addr, connection_count) = addr_and_counter(&listener);
     let counter = Arc::clone(&connection_count);
+    let raw_response = raw_response.to_vec();
     let handle = thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
             // Loopback bind unavailable races aside, a failed accept here is a
@@ -194,7 +195,7 @@ pub(crate) fn spawn_mock_proxy_raw_response(
         // unread request buffer, matching `spawn_mock_proxy`'s rationale.
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let _ = stream.write_all(raw_response);
+        let _ = stream.write_all(&raw_response);
     });
     Some((format!("http://{addr}"), connection_count, handle))
 }

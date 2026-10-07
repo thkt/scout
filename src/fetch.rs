@@ -30,8 +30,8 @@ use crate::envelope::ErrorCode;
 
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
-use converter::{FetchResult, to_fetch_result};
-use download::{DownloadedPage, download};
+use converter::{FetchResult, plain_text_result, to_fetch_result};
+use download::{DownloadedPage, MediaType, download};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
@@ -206,6 +206,7 @@ pub(crate) async fn fetch_page(
         url: final_url,
         text: mut html,
         mut decode_uncertain,
+        media_type,
     } = download(
         client,
         &validated,
@@ -219,6 +220,7 @@ pub(crate) async fn fetch_page(
         url: final_url,
         text: html,
         decode_uncertain,
+        media_type,
     } = download(
         client,
         &validated,
@@ -228,10 +230,20 @@ pub(crate) async fn fetch_page(
     )
     .await?;
 
+    // An explicit --js still requests browser output. Otherwise plain text
+    // is source content, not markup, even when it contains HTML-looking bytes.
+    if media_type == MediaType::PlainText && !opts.js {
+        return Ok(plain_text_result(
+            &html,
+            final_url.as_str().to_owned(),
+            decode_uncertain,
+        ));
+    }
+    let html_heuristics = matches!(media_type, MediaType::Unknown | MediaType::Html);
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
         true
-    } else if is_js_dependent(&html) {
+    } else if html_heuristics && is_js_dependent(&html) {
         warn!("JS-dependent page detected, trying JS rendering fallback");
         true
     } else {
@@ -269,7 +281,7 @@ pub(crate) async fn fetch_page(
         extract_article(&html, Some(final_url.as_str()))
     };
 
-    let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
+    let need_thin_fallback = html_heuristics && !opts.raw && !need_js && is_thin_extract(&article);
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");

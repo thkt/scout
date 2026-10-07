@@ -11,7 +11,7 @@ use crate::body_limit::read_body_capped;
 use crate::charset::is_reliable_detection;
 
 /// A page as it came off the wire: which URL actually served it, the decoded
-/// body, and whether that decode was a best-effort fallback.
+/// body, declared media type, and whether decoding was a best-effort fallback.
 ///
 /// `url` is the last hop, not the one the caller asked for, and every hop in
 /// between passed `ssrf_check` — so it is the URL that later stages resolve
@@ -23,6 +23,17 @@ pub(super) struct DownloadedPage {
     pub(super) url: ValidatedUrl,
     pub(super) text: String,
     pub(super) decode_uncertain: bool,
+    pub(super) media_type: MediaType,
+}
+
+/// Unknown headers retain the historical HTML path; only an explicit media
+/// type can suppress HTML's automatic rendering heuristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MediaType {
+    Unknown,
+    Html,
+    PlainText,
+    OtherText,
 }
 
 /// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
@@ -76,13 +87,14 @@ pub(super) async fn download(
         }
 
         let mut charset = None;
+        let mut media_type = MediaType::Unknown;
         match response.headers().get(CONTENT_TYPE) {
             None => {
                 debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
             }
             Some(ct) => match ct.to_str() {
                 Ok(ct_str) => {
-                    check_content_type(ct_str)?;
+                    media_type = check_content_type(ct_str)?;
                     charset = extract_charset(ct_str);
                 }
                 Err(_) => {
@@ -103,6 +115,7 @@ pub(super) async fn download(
             url: current_url,
             text: decoded.text,
             decode_uncertain: decoded.uncertain,
+            media_type,
         });
     }
 
@@ -220,7 +233,7 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
 ///
 /// An empty mime (a bare `; charset=utf-8`) passes. The server declared nothing
 /// about the type, so there is nothing to reject on.
-fn check_content_type(content_type: &str) -> Result<(), FetchError> {
+fn check_content_type(content_type: &str) -> Result<MediaType, FetchError> {
     let mime = content_type
         .split_once(';')
         .map_or(content_type, |(mime, _params)| mime)
@@ -235,7 +248,12 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
     if !accepted {
         return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
-    Ok(())
+    Ok(match normalized.as_str() {
+        "" => MediaType::Unknown,
+        "text/html" | "application/xhtml+xml" => MediaType::Html,
+        "text/plain" => MediaType::PlainText,
+        _ => MediaType::OtherText,
+    })
 }
 
 #[cfg(test)]

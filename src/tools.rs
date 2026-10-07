@@ -12,6 +12,7 @@ pub(crate) use params::Command;
 use builder::ScoutBuilder;
 use config::RuntimeConfig;
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::io::{IsTerminal, stdin};
 use std::sync::Arc;
@@ -31,7 +32,6 @@ use crate::envelope::CommandOutput;
 use crate::fetch::converter::{DECODE_UNCERTAIN_NOTE, FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
-use crate::markdown::shift_headings;
 use crate::rng::Rng;
 use crate::slack::SlackClient;
 use crate::token_source::TokenSource;
@@ -307,16 +307,25 @@ impl Scout {
 /// The order matches `format_fetched_pages`: what produced the text, then what
 /// the text may suffer from.
 fn format_fetch_output(result: &FetchResult) -> String {
-    let mut output = String::new();
-    if result.used_raw_fallback() {
-        output.push_str(RAW_FALLBACK_NOTE);
-    }
-    if result.decode_uncertain() {
-        output.push_str(DECODE_UNCERTAIN_NOTE);
-    }
-    output.push_str(&shift_headings(result.markdown(), 2));
+    let body = result.with_heading_offset(2);
+    let output = if !result.used_raw_fallback() && !result.decode_uncertain() {
+        body.into_owned()
+    } else {
+        let mut output = String::new();
+        if result.used_raw_fallback() {
+            output.push_str(RAW_FALLBACK_NOTE);
+        }
+        if result.decode_uncertain() {
+            output.push_str(DECODE_UNCERTAIN_NOTE);
+        }
+        output.push_str(&body);
+        output
+    };
 
-    truncate_and_reneutralize(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
+    match truncate_and_reneutralize(&output, MAX_FETCH_OUTPUT_BYTES) {
+        Cow::Borrowed(_) => output,
+        Cow::Owned(truncated) => truncated,
+    }
 }
 
 #[cfg(test)]

@@ -9,17 +9,20 @@ use serde::Serialize;
 
 use super::FetchError;
 use super::extractor::ExtractedArticle;
-use crate::markdown::fence_delimiter;
+use crate::markdown::{fence_delimiter, shift_headings};
 use crate::yaml::{neutralize_yaml_markers_outside_fences, write_yaml_str};
 
 /// Fetched page content converted to Markdown. Fields are private so the only
-/// construction paths are [`to_fetch_result`] (production) and
+/// construction paths are [`to_fetch_result`], [`plain_text_result`] and
 /// [`FetchResult::for_test`] (test fixtures); callers cannot build a result
-/// that bypasses Readability extraction or skips frontmatter rendering.
+/// that skips the output boundary's frontmatter and YAML neutralization.
 #[derive(Debug, Serialize)]
 pub(crate) struct FetchResult {
     url: String,
     markdown: String,
+    /// Plain-text literals must bypass Markdown heading interpretation.
+    #[serde(skip_serializing)]
+    is_plain_text: bool,
     /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
     #[serde(skip_serializing)]
     used_raw_fallback: bool,
@@ -39,6 +42,15 @@ impl FetchResult {
         &self.markdown
     }
 
+    /// Shift converted HTML headings while preserving plain-text syntax and whitespace.
+    pub(crate) fn with_heading_offset(&self, offset: usize) -> Cow<'_, str> {
+        if self.is_plain_text {
+            Cow::Borrowed(self.markdown())
+        } else {
+            Cow::Owned(shift_headings(self.markdown(), offset))
+        }
+    }
+
     pub(crate) fn used_raw_fallback(&self) -> bool {
         self.used_raw_fallback
     }
@@ -47,12 +59,13 @@ impl FetchResult {
         self.decode_uncertain
     }
 
-    /// Test-only constructor. Production code goes through [`to_fetch_result`].
+    /// Test-only constructor. Production uses the media-specific constructors.
     #[cfg(test)]
     pub(crate) fn for_test(url: String, markdown: String, used_raw_fallback: bool) -> Self {
         Self {
             url,
             markdown,
+            is_plain_text: false,
             used_raw_fallback,
             decode_uncertain: false,
         }
@@ -943,18 +956,28 @@ pub(super) fn to_fetch_result(
     Ok(FetchResult {
         url,
         markdown: output,
+        is_plain_text: false,
         used_raw_fallback: article.used_raw_fallback,
         decode_uncertain,
     })
 }
 
+/// Preserve decoded plain text without interpreting tags, entities or Markdown
+/// syntax. It has no HTML metadata or Readability failure, but shares the same
+/// YAML boundary defense and the caller's output cap as converted HTML.
+pub(crate) fn plain_text_result(text: &str, url: String, decode_uncertain: bool) -> FetchResult {
+    FetchResult {
+        url,
+        markdown: format_body("", text),
+        is_plain_text: true,
+        used_raw_fallback: false,
+        decode_uncertain,
+    }
+}
+
 /// Wraps `markdown` in a `---`-delimited YAML frontmatter block carrying
-/// whichever of title/author/date the article provides. When the article
-/// carries none of the three, the wrapper is skipped entirely rather than
-/// emitting an empty `---\n---\n\n` shell: that shell holds no information
-/// and would otherwise put a bare `---` line ahead of the article's own
-/// content, which a caller scanning the body line-by-line (e.g. by leading
-/// `-`) cannot distinguish from content that starts with a dash.
+/// whichever of title/author/date the article provides. The wrapper remains
+/// present when there are no metadata fields.
 fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
     let mut fields = String::new();
 
@@ -969,6 +992,10 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
         write_yaml_str(&mut fields, "date", date);
     }
 
+    format_body(&fields, markdown)
+}
+
+fn format_body(fields: &str, markdown: &str) -> String {
     // The body is untrusted page content appended after the frontmatter, so a
     // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
     // A marker inside a closed fence is quoted sample output, not an attempt to
@@ -977,7 +1004,7 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
     let body = neutralize_yaml_markers_outside_fences(markdown);
 
     let mut fm = String::from("---\n");
-    fm.push_str(&fields);
+    fm.push_str(fields);
     fm.push_str("---\n\n");
     fm.push_str(&body);
     fm

@@ -1,3 +1,4 @@
+use crate::fetch::converter::plain_text_result;
 use serde::ser::Error as _;
 
 use super::query::to_data_value;
@@ -645,5 +646,19 @@ fn insert_preamble_notes_prepends_when_frontmatter_absent() {
     assert!(
         out.contains("a body with no frontmatter"),
         "the original body must be preserved after the prepended note, got: {out}"
+    );
+}
+
+/// [T-TS039] Plain-text headings and trailing blank lines survive the output boundary.
+#[test]
+fn fetch_output_preserves_plain_text_literals() {
+    let result = plain_text_result(
+        "Title\n=====\n# comment\nbody\n\n",
+        "https://example.com".into(),
+        false,
+    );
+    assert_eq!(
+        format_fetch_output(&result),
+        "---\n---\n\nTitle\n=====\n# comment\nbody\n\n"
     );
 }

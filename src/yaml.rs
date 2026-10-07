@@ -104,15 +104,18 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
     }
 }
 
-/// [`truncate_with_note`] followed by [`reneutralize_dangling_fence`].
+/// Truncate already fence-neutralized output, re-neutralizing only after a cut.
 ///
 /// Every caller that truncates already fence-neutralized markdown needs both
 /// steps, so they are not offered separately: chaining them at each call site
 /// is how one site ends up with only the first half.
 pub(crate) fn truncate_and_reneutralize(s: &str, max_bytes: usize) -> Cow<'_, str> {
-    let truncated = truncate_with_note(s, max_bytes);
+    let truncated = match truncate_with_note(s, max_bytes) {
+        unchanged @ Cow::Borrowed(_) => return unchanged,
+        Cow::Owned(truncated) => truncated,
+    };
     match reneutralize_dangling_fence(&truncated) {
-        Cow::Borrowed(_) => truncated,
+        Cow::Borrowed(_) => Cow::Owned(truncated),
         Cow::Owned(rewritten) => Cow::Owned(rewritten),
     }
 }
@@ -198,6 +201,15 @@ fn escape_yaml(s: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [T-FC105] An unchanged, already-neutralized dangling fence needs no copy.
+    #[test]
+    fn truncation_borrows_uncut_neutralized_body() {
+        let body = "---\n---\n\n```yaml\n***\nbody\n\n";
+        let output = truncate_and_reneutralize(body, body.len());
+        assert!(matches!(output, Cow::Borrowed(_)));
+        assert_eq!(output, body);
+    }
 
     /// [T-FC003]
     #[test]

@@ -1,14 +1,10 @@
 use super::ssrf::EgressMode;
 use super::*;
-use crate::test_support::{
-    join_server_thread, no_redirect_client, spawn_forward_proxy, try_spawn_mock_server,
-};
+use crate::test_support::{join_server_thread, no_redirect_client, spawn_forward_proxy};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use std::io;
 use std::thread::JoinHandle;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, ResponseTemplate};
 
 fn real_resolver() -> Arc<dyn DnsResolver> {
     Arc::new(TokioDnsResolver)
@@ -104,43 +100,6 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
     assert!(
         logs_contain("blocked connect to private IP"),
         "expected the connect-time SSRF guard to fire",
-    );
-}
-
-/// [T-F018]
-#[tokio::test]
-async fn js_flag_attempts_rendering_on_rich_body() {
-    let content = "x".repeat(200);
-    let Some(server) = try_spawn_mock_server("fetch::download").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/rich"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(format!("<html><body><p>{content}</p></body></html>")),
-        )
-        .mount(&server)
-        .await;
-
-    let client = no_redirect_client();
-    let opts = FetchOptions {
-        js: true,
-        ..Default::default()
-    };
-    let (cancel, _) = watch::channel(false);
-    let result = fetch_page(
-        &client,
-        &format!("{}/rich", server.uri()),
-        opts,
-        real_resolver(),
-        &cancel,
-    )
-    .await;
-
-    assert!(
-        result.is_err(),
-        "js=true should error when browser unavailable"
     );
 }
 

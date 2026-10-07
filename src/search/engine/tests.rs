@@ -608,3 +608,21 @@ fn failed_url_line_escapes_url_and_reason_alike() {
         "url and reason must escape `|` the same way, got: {line}"
     );
 }
+
+/// [T-SE021] Research must not reinterpret plain-text headings or consume blank lines.
+#[test]
+fn format_report_preserves_plain_text_literals() {
+    let report = ResearchReport {
+        fetched_pages: vec![fetch::converter::plain_text_result(
+            "Title\n=====\n# comment\nbody\n\n",
+            "https://example.com".into(),
+            false,
+        )],
+        ..Default::default()
+    };
+    let text = format_report(&report, "test");
+    assert!(
+        text.contains("---\n---\n\nTitle\n=====\n# comment\nbody\n\n\n\n## Sources"),
+        "{text}"
+    );
+}

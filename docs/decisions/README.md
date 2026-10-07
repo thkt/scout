@@ -34,8 +34,13 @@ This directory contains important decisions about the project.
 | [0026](0026-pre-body-rebuilt-from-dom.md) | Pre Body Rebuilt from DOM, Not Reverse-Escaped from htmd's Walked Text | accepted | 2026-08-14 |
 | [0027](0027-fetch-body-line-break-handling.md) | Fetch Body Line-Break Handling: Paragraph Folding as Contract, `<br>`/`<pre>` as the Named Exceptions | accepted | 2026-08-14 |
 | [0028](0028-dr-code-refs-by-symbol-name.md) | DR のコード参照はシンボル名で指す | accepted | 2026-08-18 |
+| [0029](0029-explicit-plain-text-fetch.md) | 明示的な text/plain を HTML として解釈しない | proposed | 2026-10-08 |
 
 ## By Status
+
+### Proposed
+
+- **0029**: 明示的な text/plain を HTML として解釈しない
 
 ### Accepted
 

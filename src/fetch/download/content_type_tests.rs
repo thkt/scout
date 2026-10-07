@@ -3,14 +3,14 @@ use super::*;
 /// [T-F007]
 #[test]
 fn accepts_textual_content_types() {
-    for ct in [
-        "text/html; charset=utf-8",
-        "text/plain",
-        "application/xhtml+xml",
-        "application/xml",
-        "; charset=utf-8", // edge: empty mime before semicolon → permissive
+    for (ct, expected) in [
+        ("text/html; charset=utf-8", MediaType::Html),
+        ("text/plain", MediaType::PlainText),
+        ("application/xhtml+xml", MediaType::Html),
+        ("application/xml", MediaType::OtherText),
+        ("; charset=utf-8", MediaType::Unknown),
     ] {
-        assert!(check_content_type(ct).is_ok(), "should accept: {ct}");
+        assert_eq!(check_content_type(ct).unwrap(), expected, "{ct}");
     }
 }
 
