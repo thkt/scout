@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use serde::ser::Error as _;
 
 use super::query::to_data_value;
@@ -218,46 +220,86 @@ async fn research_json_schema_includes_required_keys() {
     );
 }
 
-/// [T-TS029]
-/// Setup: wiremock always returns HTTP 503 (still fails after retry).
-/// Action: `Scout::research(...)` is invoked.
-/// Expected: returns `Ok(CommandOutput)` (no hard-fail);
-/// `degraded_reasons` contains `BraveSearchFailed`; `data.sources` is empty.
-/// The cascade does not propagate `BraveError`; failure is absorbed into the
-/// degraded report envelope.
+/// [T-TS029] Persistent 503 and successful zero results must differ in the
+/// default Markdown body, even though both return Ok with empty data arrays.
+/// Also covers the empty-array contract formerly checked separately by T-TS031.
+/// JSON must retain the typed failure and notes without changing the data shape.
 #[tokio::test]
-async fn research_brave_failure_returns_degraded_report() {
-    let Some(server) = try_spawn_mock_server("tools::integration").await else {
+async fn research_search_failure_is_distinct_from_successful_zero_results() {
+    let Some(server) = try_spawn_mock_server("tools::research_search_failure").await else {
         return;
     };
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&server)
-        .await;
-
     let s = scout_with_brave(&server.uri());
-    let result = s
-        .research(ResearchParams {
-            query: Some("foo".into()),
-            depth: 1,
-            lang: Lang::Auto,
-        })
-        .await
-        .expect("research should yield Ok(degraded) on Brave failure, not propagate error");
-
-    assert!(
-        result
-            .degraded_reasons()
-            .contains(&DegradedReason::BraveSearchFailed),
-        "degraded_reasons must contain BraveSearchFailed; got: {:?}",
-        result.degraded_reasons()
-    );
-    let data = result.data();
+    let mut markdowns = Vec::new();
+    let mut envelopes = Vec::new();
+    for status in [503, 200] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                    "web": {"results": []}
+                })),
+            )
+            .expect(1..)
+            .mount(&server)
+            .await;
+        let result = s
+            .research(ResearchParams {
+                query: Some("foo".into()),
+                depth: 1,
+                lang: Lang::Auto,
+            })
+            .await
+            .expect("both degraded search and successful zero results must return Ok");
+        // Output mode is selected after acquisition; reuse this fixed response
+        // to exercise both consuming writers without repeating HTTP retries.
+        for json_mode in [false, true] {
+            let mut stdout = Vec::new();
+            assert_eq!(
+                crate::emit_success(result.clone(), json_mode, &mut stdout),
+                ExitCode::SUCCESS,
+                "both output modes must preserve exit code 0"
+            );
+            let text = String::from_utf8(stdout).unwrap();
+            if json_mode {
+                envelopes.push(serde_json::from_str::<serde_json::Value>(&text).unwrap());
+            } else {
+                markdowns.push(text);
+            }
+        }
+    }
+    let failed = &envelopes[0];
+    let empty = &envelopes[1];
+    assert_ne!(markdowns[0], markdowns[1]);
+    assert!(markdowns[0].starts_with(
+        "> Warning: Brave search failed; this is a degraded report, not a successful search with no results.\n\n"
+    ));
+    assert!(markdowns[1].starts_with("# Research: foo\n\n"));
+    assert!(!markdowns[1].contains("Warning:"));
+    for markdown in &markdowns {
+        assert!(markdown.contains("## Sources"));
+        assert!(markdown.contains("(no results)"));
+    }
+    assert_eq!(failed["degraded"], true);
     assert_eq!(
-        data["sources"].as_array().unwrap().len(),
-        0,
-        "data.sources must be empty when Brave failed"
+        failed["degraded_reasons"],
+        serde_json::json!(["BRAVE_SEARCH_FAILED"])
     );
+    assert_eq!(failed["notes"].as_array().unwrap().len(), 1);
+    assert!(
+        failed["notes"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Brave search failed:")
+    );
+    assert_eq!(empty["degraded"], false);
+    assert!(empty.get("degraded_reasons").is_none());
+    assert_eq!(empty["notes"], serde_json::json!([]));
+    assert_eq!(failed["data"], empty["data"]);
+    assert_eq!(empty["data"]["query"], "foo");
+    for key in ["sources", "fetched_pages", "failed_urls"] {
+        assert_eq!(empty["data"][key], serde_json::json!([]));
+    }
 }
 
 /// [T-TS030]
@@ -286,50 +328,13 @@ async fn research_unauthorized_propagates_as_error() {
         })
         .await;
 
-    assert!(
-        result.is_err(),
-        "Unauthorized must propagate as Err, not be degraded; got: {result:?}"
-    );
-}
-
-/// [T-TS031] zero results yield empty arrays, not null
-#[tokio::test]
-async fn research_json_zero_results_returns_empty_arrays() {
-    let Some(server) = try_spawn_mock_server("tools::integration").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "web": {"results": []}
-        })))
-        .mount(&server)
-        .await;
-
-    let s = scout_with_brave(&server.uri());
-    let params = ResearchParams {
-        query: Some("foo".into()),
-        depth: 1,
-        lang: Lang::Auto,
-    };
-    let result = s.research(params).await.unwrap();
-    let data = result.data();
-
-    assert_eq!(
-        data["sources"].as_array().unwrap().len(),
-        0,
-        "data.sources must be an empty array (not null)"
-    );
-    assert_eq!(
-        data["fetched_pages"].as_array().unwrap().len(),
-        0,
-        "data.fetched_pages must be an empty array"
-    );
-    assert_eq!(
-        data["failed_urls"].as_array().unwrap().len(),
-        0,
-        "data.failed_urls must be an empty array"
-    );
+    let err = result.expect_err("Unauthorized must propagate as Err, not be degraded");
+    assert_eq!(err.exit_code(), 64);
+    assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    let json: serde_json::Value = serde_json::from_str(&crate::render_json_error(&err)).unwrap();
+    assert_eq!(json["error"]["code"], "USAGE_ERROR");
+    assert_eq!(json["error"]["retryable"], false);
+    assert!(json.get("data").is_none());
 }
 
 /// [T-F070] collect_research_degradations pushes DecodeUncertain for an uncertain

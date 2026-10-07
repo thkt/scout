@@ -96,6 +96,7 @@ impl Degradation {
 /// invariant: a literal `degraded: false` paired with non-empty `notes`
 /// cannot be constructed. Use [`Self::ok`] or [`Self::with_degradation`].
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct CommandOutput {
     markdown: String,
     data: serde_json::Value,

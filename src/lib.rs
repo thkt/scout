@@ -176,26 +176,30 @@ pub async fn run() -> ExitCode {
     let cancel = scout.cancel_handle();
     let outcome = drive(scout.run(cli.command), wait_for_signal(), &cancel).await;
     match outcome {
-        Outcome::Completed(Ok(output)) => {
-            let rendered = if json_mode {
-                render_json_success(output)
-            } else {
-                output.into_markdown()
-            };
-            let mut handle = stdout().lock();
-            match write_output(&mut handle, &rendered) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("{}", write_failure_line(&e, json_mode));
-                    ExitCode::from(ErrorCode::IoError.exit_code())
-                }
-            }
-        }
+        Outcome::Completed(Ok(output)) => emit_success(output, json_mode, &mut stdout().lock()),
         Outcome::Completed(Err(e)) => emit_error(&e, json_mode),
         Outcome::Interrupted(sig) => {
             eprintln!("{}", interrupted_line(sig, json_mode));
             ExitCode::from(sig.exit_code())
+        }
+    }
+}
+
+/// Write a successful command through the CLI's output and exit-code path.
+/// Taking the writer as an argument lets HTTP mock tests observe stdout without
+/// replacing process-wide streams or adding a production endpoint override.
+fn emit_success<W: Write>(output: CommandOutput, json_mode: bool, writer: &mut W) -> ExitCode {
+    let rendered = if json_mode {
+        render_json_success(output)
+    } else {
+        output.into_markdown()
+    };
+    match write_output(writer, &rendered) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{}", write_failure_line(&e, json_mode));
+            ExitCode::from(ErrorCode::IoError.exit_code())
         }
     }
 }

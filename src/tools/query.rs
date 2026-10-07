@@ -236,6 +236,15 @@ impl Scout {
         );
 
         let markdown = engine::format_report(&report, &query);
+        // Only a Brave search failure has populated degradation at this point.
+        // Use fixed text so backend error details cannot inject Markdown here.
+        let markdown = if degradation.is_empty() {
+            markdown
+        } else {
+            format!(
+                "> Warning: Brave search failed; this is a degraded report, not a successful search with no results.\n\n{markdown}"
+            )
+        };
         let mut data = to_data_value(&report, "research report")?;
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query));
