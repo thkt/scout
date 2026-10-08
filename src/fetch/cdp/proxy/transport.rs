@@ -1,12 +1,10 @@
 //! OS-dependent transport for the SOCKS5 proxy: the listener accept loop, the
 //! upstream dial, and the bidirectional byte tunnel.
 //!
-//! The error arms here fire only under real socket faults — an `accept` failure
-//! (EMFILE/ENFILE/ECONNABORTED), an upstream dial that black-holes past the
-//! timeout, or a tunnel copy that resets mid-stream. None can be forced by an
-//! offline unit test without flaky timing or a socket-injection mock, so this
-//! file is held to its own coverage rather than the global diff gate. The
-//! testable SOCKS5 protocol logic lives in the parent module.
+//! T-201-13 covers the failure reply for a refused loopback dial. Accept faults,
+//! black-hole dial timeouts, and mid-stream tunnel resets require other real
+//! socket faults and are not covered by that test. This layer is excluded from
+//! the global diff coverage gate; the parent protocol layer remains on it.
 
 use std::io;
 use std::net::SocketAddr;

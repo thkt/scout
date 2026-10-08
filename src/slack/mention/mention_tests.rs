@@ -87,7 +87,6 @@ fn t006_multibyte_characters_correct_offsets() {
     assert_eq!(spans[0].start, 15);
     assert_eq!(&text[spans[0].start..spans[0].end], "<@UCJK>");
 
-    // Emoji (4-byte) surrounding a mention
     let emoji_text = "\u{1F600}<@UEMJ>\u{1F600}";
     let spans2 = parse_mentions(emoji_text);
     assert_eq!(spans2.len(), 1);

@@ -1,73 +1,26 @@
-//! Pins `neutralize_yaml_markers_outside_fences` (src/yaml.rs) end to end
-//! through `scout fetch`: a page body containing a column-0 `---`/`...` line
-//! must not reach stdout as a bare YAML document marker after the
-//! frontmatter block `format_with_frontmatter` opens, because that would let
-//! page content forge a document boundary or inject a second frontmatter
-//! block into output a caller parses as YAML-fenced Markdown.
+//! End-to-end YAML-boundary defense through `scout fetch` (src/yaml.rs).
+//! Outside closed fences, column-0 `---`/`...` markers become `***`; an
+//! unclosed conservative fence makes the entire body subject to rewriting.
+//! Both htmd's pre/code fences (T-C032) and scout's bare-pre fences
+//! (T-C039, T-FC019) must preserve quoted markers when closed.
 //!
-//! A column-0 marker inside a closed fence is left as ordinary content: it
-//! reads as the page quoting sample output, not as an attempt to forge a
-//! document boundary. Outside any fence, or inside one that never closes
-//! before the body ends, it is still rewritten to `***`.
-//!
-//! Closed-fence preservation is pinned through both code paths
-//! `markdown_converter` can take to a fence, since only one of them is htmd's
-//! own: a `<pre><code>` pair, and a bare `<pre>` that this crate's `pre`
-//! handler fences (T-FC019).
-//!
-//! Every scenario's fixture is a Readability-friendly article (title, byline,
-//! several sentences of filler prose, `<nav>`/`<footer>` noise) so extraction
-//! succeeds; `fetch_markdown` asserts `RAW_FALLBACK_NOTE`'s text is absent
-//! from stdout before returning, so a scenario whose fixture accidentally
-//! trips the raw-fallback path (and thus never reaches
-//! `neutralize_yaml_markers_outside_fences` through the extracted-content
-//! path this file targets) fails loudly instead of silently proving a
-//! different contract.
-//!
-//! `T-C033`/`T-C034` pin the sibling contract `write_yaml_str`
-//! (src/yaml.rs) owns: a frontmatter *field value* (the article
-//! title, here) is wrapped in double quotes and escaped through
-//! `escape_yaml` as one contract, not two independent steps, so a title
-//! carrying `"` or a `---`-shaped substring is written back out as ordinary
-//! text on the single `title: "..."` line rather than breaking out of the
-//! quotes into a new line. The fixture titles below are proven, empirically
-//! (a throwaway `dom_smoothie` probe, not read off crate docs), to survive
-//! `dom_smoothie::Readability::get_article_title`'s separator-driven
-//! cleanup unchanged: their word count after that cleanup's split-on-`-`
-//! step is still <= 4, so `get_article_title` reverts to the original
-//! `<title>` text verbatim before `to_fetch_result` ever sees it.
-//!
-//! A title containing a literal newline is out of reach through this
-//! HTML-driven, end-to-end path on purpose: `get_article_title` runs
-//! `normalize_spaces` (collapsing any whitespace run, including a
-//! newline, to a single space) on every title it does not revert
-//! verbatim, and the revert-to-original branch these fixtures take can only
-//! be reached by a `<title>` text node, which an HTML parser never lets
-//! contain a raw `\n` byte in the first place. `escape_yaml`'s `'\n' =>
-//! "\\n"` arm therefore stays pinned only by the crate-internal tests in
-//! `src/yaml.rs` (`escapes_yaml_special_chars`,
-//! `escapes_combined_special_chars`), not by anything in this file.
+//! Fixtures need enough article prose for Readability extraction. The helper
+//! rejects RAW_FALLBACK_NOTE so fallback cannot silently satisfy these checks.
+//! T-C033/T-C034 exercise quoted title values through write_yaml_str. Their
+//! short titles rely on Readability's separator-cleanup fallback retaining the
+//! original title; neither fixture tests literal title newlines. Newline
+//! escaping is covered by escapes_yaml_special_chars and
+//! escapes_combined_special_chars in src/yaml.rs.
 
 mod common;
 
 use std::process::Output;
 use std::time::Duration;
 
-/// Runs `scout fetch http://example.com/` (Markdown stdout, not `--json`)
-/// against a mock forward proxy serving `html` as the upstream page body.
-/// `HTTP_PROXY` points at the mock proxy so `fetch` takes its
-/// `EgressMode::Proxied` path (`src/fetch/ssrf.rs::detect_egress_mode`), and
-/// the target is a domain name rather than an IP literal so `ssrf_check`
-/// clears it without the mock proxy's own loopback address ever being the
-/// dialed target.
-///
-/// Returns `None` when `spawn_mock_proxy` reports an unavailable loopback
-/// bind, which `guard_loopback_bind` (tests/common/mod.rs) defines as a skip
-/// unless `SCOUT_NETWORK_TESTS` forces a panic — the same
-/// `else { return; }` treatment `assert_proxy_status_maps_to`
-/// (`tests/exit_code_contract.rs`) gives it, so a bind-restricted environment
-/// skips this file the way it skips the other two `tests/*.rs` binaries
-/// instead of reddening the suite here alone.
+/// Fetch fixture HTML through a forward proxy in Markdown mode. A domain
+/// target avoids IP-literal SSRF rejection; the proxy owns DNS and dialing.
+/// Returns None on unavailable loopback bind unless SCOUT_NETWORK_TESTS
+/// requires assertions, matching tests/common/mod.rs's shared policy.
 fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
     let (proxy_url, connection_count, _handle) =
         common::spawn_mock_proxy(200, Duration::ZERO, html.as_bytes())?;
@@ -85,15 +38,9 @@ fn run_scout_fetch_via_proxy(html: &str, context: &str) -> Option<Output> {
     Some(output)
 }
 
-/// Runs the fixture through `scout fetch` and returns stdout as Markdown,
-/// after asserting the run succeeded and Readability extraction did not fall
-/// back to raw HTML. The fallback note's text is duplicated here rather than
-/// imported: `RAW_FALLBACK_NOTE` (src/fetch/converter.rs) is `pub(crate)`,
-/// which scopes to the `scout` library crate and does not reach this
-/// separately-compiled integration-test binary.
-///
-/// `None` carries `run_scout_fetch_via_proxy`'s skip decision, which every
-/// caller below turns into an early `return`.
+/// Require successful Readability extraction and return Markdown stdout.
+/// The fallback-note text is repeated because its pub(crate) constant is
+/// inaccessible to this integration binary. None preserves the bind skip.
 fn fetch_markdown(html: &str, context: &str) -> Option<String> {
     let output = run_scout_fetch_via_proxy(html, context)?;
     assert!(
@@ -112,28 +59,10 @@ fn fetch_markdown(html: &str, context: &str) -> Option<String> {
     Some(stdout)
 }
 
-/// Splits the output at its first frontmatter block into that block's
-/// interior lines (neither delimiter included) and every byte after its
-/// closing `"---\n\n"` — the latter being what `format_with_frontmatter`
-/// (src/fetch/converter.rs) appended from
-/// `neutralize_yaml_markers_outside_fences`'s output.
-///
-/// Both slices are located rather than assumed:
-///
-/// - The opening `"---\n"` is searched for at a line start instead of
-///   required at byte 0, so output carrying a preamble ahead of the block
-///   (`RAW_FALLBACK_NOTE`, which `fetch_markdown` rejects, is the one this
-///   file could hit) still splits into the same two slices rather than
-///   panicking on an absent prefix.
-/// - The body slice runs to the end of the output rather than to the next
-///   `"---\n\n"`, so a marker that survived rewriting and opened a second
-///   block cannot push the text behind it outside what `T-C034` inspects.
-///   Reading only up to a second delimiter would assume the very property
-///   these tests exist to falsify.
-///
-/// Finding the closing delimiter as a literal is safe against a field value
-/// containing a `-`-only run followed by non-`\n` text (`T-C033`'s title
-/// does), because `escape_yaml` never lets a field value carry a raw `\n`.
+/// Split the first frontmatter block, allowing a preamble before its opener.
+/// Inspect the entire remaining body: stopping at a second delimiter could
+/// hide the very injected boundary T-C034 detects. Literal closing-delimiter
+/// matching is safe because escaped field values cannot contain raw newlines.
 fn split_frontmatter<'a>(markdown: &'a str, context: &str) -> (&'a str, &'a str) {
     let open_at = if markdown.starts_with("---\n") {
         0
@@ -151,16 +80,9 @@ fn split_frontmatter<'a>(markdown: &'a str, context: &str) -> (&'a str, &'a str)
     })
 }
 
-/// Wraps `injected` inside a `<nav>`/`<article>`/`<footer>` shell with a
-/// caller-supplied `<title>`, byline, and several sentences of filler prose
-/// on either side — the same shape `src/fetch/extractor.rs`'s own
-/// `BLOG_HTML` test fixture uses — so `dom_smoothie::Readability` scores the
-/// article region high enough to extract it rather than falling back to raw
-/// HTML. `title` lands verbatim in the `<title>` element, which
-/// `get_article_title` (`dom_smoothie`) reads to produce `article.title`,
-/// the value `format_with_frontmatter` (src/fetch/converter.rs) passes to
-/// `write_yaml_str` — the module doc above records why `title` must stay
-/// free of raw newlines for that value to round-trip unchanged.
+/// Article prose, byline and surrounding chrome make Readability select the
+/// injected region. Title fixtures must survive its title cleanup unchanged
+/// to exercise write_yaml_str; see the module-level fixture constraints.
 fn article_html_with_title(title: &str, injected: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -268,13 +190,8 @@ fn pre_code_column_zero_marker_survives_verbatim_inside_closed_fence() {
 
 // T-C039: bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence
 //
-// T-C032 pins the <pre><code> case, which htmd's built-in `code_handler`
-// already wraps in a fence before `neutralize_yaml_markers_outside_fences`
-// ever sees the converted Markdown. This scenario swaps in a bare <pre> with
-// no <code> child instead, which only gets fenced because the `pre` handler
-// `to_fetch_result` registers on top of htmd's defaults (T-FC019) wraps it.
-// The two run on different code paths inside the same `markdown_converter`
-// pipeline, and both land on the same closed-fence preservation contract.
+// Unlike T-C032's htmd pre/code path, this exercises scout's bare-pre
+// handler (T-FC019) through Readability and the CLI.
 #[test]
 fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "bare pre element marker";
@@ -301,9 +218,7 @@ fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
 // T-C033: title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line
 #[test]
 fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() {
-    // The module doc's `T-C033`/`T-C034` paragraph records why this exact
-    // string survives `get_article_title`'s separator cleanup unchanged, and
-    // that the source is a throwaway probe rather than crate docs.
+    // Keep the short title so Readability retains it verbatim; see module docs.
     let title = r#"Report --- "Special" Edition"#;
     let context = "quoted-dash title";
     let Some(markdown) = fetch_markdown(
@@ -333,20 +248,9 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
 
 // T-C045: row_heading_label_survives_and_column_alignment_padding_is_absent
 //
-// Exercises the same `table_handler` (src/fetch/converter.rs) the unit tests
-// build and check directly (T-FC060 for mixed th/td row extraction,
-// T-FC061/T-FC062 for the unpadded row/separator format), but through the
-// real `scout fetch` pipeline: HTML over the mock proxy -> Readability
-// extraction -> `markdown_converter` -> frontmatter wrapping -> stdout. A
-// unit test calling `to_fetch_result` directly cannot prove the handler is
-// actually reachable from a fetched page; this scenario is the seam that
-// does.
-//
-// The fixture is a row-heading table (`<th>` first cell, `<td>` second cell
-// on every row, no `<thead>`) with one short row and one long row. The width
-// gap is what makes the padding assertion discriminating: the built-in pads
-// every cell out to the longest one, so a fixture of evenly sized cells would
-// pass whichever handler ran.
+// Exercises table_handler through Readability and the CLI, beyond the direct
+// T-FC060/T-FC061/T-FC062 converter checks. Unequal cell widths distinguish
+// scout's unpadded rows from htmd's column-alignment padding.
 #[test]
 fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     let context = "row heading table with column alignment";
@@ -399,19 +303,9 @@ fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
 
 // T-C041: unclosed_fence_body_falls_back_to_asterisks
 //
-// `<code>` content of three backticks forces htmd's inline-code delimiter to
-// four (`get_inline_code_delimiter`), so the paragraph's rendered line opens
-// with four backticks at column 0 while its own matching close sits mid-line,
-// not at the start of any later line. `fence_marker` only reads a line's
-// leading run, so it reads this line as opening a fenced block that never
-// closes through the rest of the body — the "closes never" shape
-// `neutralize_yaml_markers_outside_fences`'s (src/yaml.rs) EOF fallback
-// exists for.
-//
-// Four backticks rather than three: a fence closes on a run at least as long
-// as the opener, so a 3-backtick opener would be closed by any later
-// 3-backtick line the page happens to carry. A 4-backtick opener needs four,
-// which no line here produces.
+// Three content backticks force a four-backtick inline delimiter. Its opener
+// is at column 0, but its close is mid-line; the conservative YAML tracker
+// therefore sees an unclosed fence. No later line has four closing backticks.
 #[test]
 fn unclosed_fence_body_falls_back_to_asterisks() {
     let context = "inline code opens an unmatched fence-looking line before a marker";
@@ -481,32 +375,10 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 
 // T-C043: on a page whose pre holds one span per line, no fetch output line carries a backslash
 //
-// Exercises the same syntax-highlighter shape `pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line`
-// (T-FC053, src/fetch/converter.rs) pins by calling `to_fetch_result`
-// directly, but through the real `scout fetch` pipeline: HTML over the mock
-// proxy -> `dom_smoothie::Readability` extraction -> `markdown_converter` ->
-// frontmatter wrapping -> stdout. Readability's own DOM cleanup runs ahead of
-// `raw_pre_content`/`span_handler` here, where the unit test's direct call
-// never exercises it, so this is the seam that proves Readability does not
-// unwrap or flatten the per-line `<span>`s into direct `<pre>` text children
-// before the converter ever sees them.
-//
-// That distinction matters because `raw_pre_content` only reads a `<pre>`
-// direct Text child's `contents` straight off the DOM (bypassing htmd's own
-// `escape_pre_text_if_needed`, module doc above), while a `<span>` child goes
-// through `Handlers::handle` -> `span_handler` -> `Handlers::walk_children`,
-// whose own Text nodes carry `parent_tag == "span"`, a shape
-// `escape_pre_text_if_needed` never escapes either (it only escapes a Text
-// node whose immediate parent is literally `<pre>`, htmd's dom_walker.rs
-// `walk_node` / `escape_pre_text_if_needed`). If Readability's cleanup
-// unwrapped the line spans, the same
-// leading `~`/`` ` `` bytes below would land as direct `<pre>` text instead
-// and take the escape-prone path this file's `T-C032` fixtures also cover.
-//
-// Two of the three lines below open with `~` and `` ` `` respectively — the
-// two characters `escape_pre_text_if_needed` targets — specifically so a
-// regression that let either path add its escape would fail this test's
-// no-backslash assertion instead of passing it vacuously.
+// Extends T-FC053 through Readability and the CLI. Direct pre text and span
+// children use different converter paths; extraction must preserve the final
+// code text across that seam. Leading tilde/backtick bytes expose htmd escapes
+// that plain text would not, so the no-backslash assertion is discriminating.
 #[test]
 fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     let context = "syntax-highlighted pre with one span per line";
@@ -534,15 +406,9 @@ fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
 
 // T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
 //
-// Fence state is one running value over the whole body, so an unclosed fence
-// anywhere invalidates the document's fence context rather than only its own
-// tail. A fixture carrying one shape cannot show that. Here a fence that
-// closes properly sits ahead of one that never does, and loses its own marker
-// protection because of it.
-//
-// The unclosed fence goes last so each earlier shape is unambiguous on its
-// own: a closed `<pre>` fence carrying markers, then a bare paragraph marker
-// outside any fence, then T-C041's inline-code trick.
+// A later unclosed fence removes marker protection from the whole body,
+// including the earlier closed pre fence (T-C032/T-C039). Put the unclosed
+// T-C041 trick last to distinguish global fallback from a tail-only rewrite.
 #[test]
 fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output() {
     let context = "closed fence, paragraph, and unclosed fence combined";
@@ -555,41 +421,27 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
-    // The fence's own delimiter syntax (the ``` wrapping the <pre> content)
-    // still comes through as a literal code fence in the rendered Markdown:
-    // the fallback only rewrites bare --- / ... marker lines, it never
-    // touches a ``` line, so the block still reads as fenced code.
     assert!(
         body.contains("```\n***\nevil: true\n***\n```"),
         "the <pre> block must still render as a fenced code block, got body:\n{body}"
     );
-    // But unlike T-C032/T-C039 (no unclosed fence anywhere in those
-    // pages), this fence's own --- and ... lines are NOT left verbatim here:
-    // the later unclosed fence invalidates fence-aware protection for the
-    // whole body, so these are rewritten to *** the same as every other
-    // marker in this page.
     assert!(
         !body.contains("```\n---\nevil: true\n...\n```"),
         "the closed fence's own markers must not survive verbatim once a \
          later fence in the same page never closes, got body:\n{body}"
     );
-    // The bare paragraph marker outside any fence is rewritten, the same
-    // contract T-C031 pins alone.
+    // T-C031's outside-fence marker must still be rewritten.
     assert!(
         body.lines().any(|l| l == "*** evil: true"),
         "the outside-fence paragraph marker must be rewritten to \
          *** evil: true, got body:\n{body}"
     );
-    // The marker following the unclosed fence-looking line is rewritten,
-    // the same contract T-C041 pins alone.
+    // T-C041's post-opener marker must also be rewritten.
     assert!(
         body.lines().any(|l| l == "*** evil: unclosed"),
         "the marker following the unclosed fence-looking line must be \
          rewritten to *** evil: unclosed, got body:\n{body}"
     );
-    // No bare --- or ... line survives anywhere in the page: the three
-    // sources converge into one uniformly neutralized output with no gap
-    // left by the closed fence's now-invalidated protection.
     assert!(
         !body
             .lines()
@@ -601,18 +453,9 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
 
 // T-C044: a page mixing paragraphs, a table and a list shows folding, hard breaks and the counter-examples in one output
 //
-// DR-0027 splits fetch's line-break handling into a 3-form contract (a
-// paragraph's own wrapped newline folds to one space; a paragraph's `<br>`
-// survives as a hard break) and a named counter-example (the same `<br>`
-// loses that hard-break form inside a table cell or a list item).
-// `src/fetch/converter.rs`'s `mod tests` pins each form in isolation by
-// calling `to_fetch_result` directly (T-FC041/T-FC042 for the contract,
-// T-FC045/T-FC046 for the counter-example); this scenario is the seam
-// proving all four survive together through the real pipeline this file's
-// other scenarios exercise (mock proxy -> Readability extraction ->
-// `markdown_converter` -> frontmatter wrapping), on one page that carries a
-// paragraph, a table, and a list at once, the shape none of the unit tests
-// combine.
+// Compose DR-0027's line-break cases through Readability and the CLI:
+// paragraph folding/hard breaks (T-FC041/T-FC042), and table/list exceptions
+// (T-FC045/T-FC046). Direct converter tests do not exercise this seam.
 #[test]
 fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one_output() {
     let context = "paragraph fold, hard break, and table/list counter-examples combined";
@@ -684,18 +527,9 @@ fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one
 
 // T-C046: a page holding both an empty anchor and a titled link shows the suppression and the removal in one output
 //
-// Both fixtures below are proven individually at the `to_fetch_result` level
-// by `src/fetch/converter.rs`'s own unit tests
-// (`empty_anchor_inside_pre_disappears_leaving_the_original_line_and_indentation`,
-// T-FC048; `title_disappears_from_the_output_of_a_link_that_has_link_text`,
-// T-FC073). Neither proves the other reachable: a suite where `a_handler`
-// were only wired for one call shape (e.g. only the empty-fragment branch
-// registered, or only reachable outside a `<pre>`) could still pass both of
-// those in isolation while never converging on a real page. This scenario
-// puts a `pymdownx.highlight`-style per-line code anchor and a title-bearing
-// prose link in the same fetched page, so the seam from `scout fetch`'s real
-// HTTP/extraction/conversion pipeline down to the single `a_handler`
-// (src/fetch/converter.rs) both scenarios share is exercised once, together.
+// Compose empty highlighter anchors and titled prose links through the fetched
+// page pipeline. T-FC048/T-FC073 test the converter directly; this catches
+// extraction or registration changes that leave those isolated checks passing.
 #[test]
 fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output() {
     let context = "empty per-line code anchor and titled prose link combined";
@@ -709,8 +543,6 @@ fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output
     };
     let (_, body) = split_frontmatter(&markdown, context);
 
-    // Suppression: the per-line empty fragment anchors leave no trace of
-    // their href, and the original code lines survive with indentation.
     assert!(
         !body.contains("__codelineno"),
         "an empty anchor pointing only at a fragment must leave no trace of its href, \
@@ -727,8 +559,6 @@ fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output
          removed, got body:\n{body}"
     );
 
-    // Deletion: the titled link with link text keeps its destination and
-    // text but loses its title.
     assert!(
         body.contains("[link text](https://example.com/target)"),
         "a titled link with link text must lose its title, leaving a bare [text](url), \
@@ -742,17 +572,10 @@ fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output
 
 // T-C048: fetch_output_truncated_at_the_cap_leaves_no_live_yaml_document_marker
 //
-// `neutralize_yaml_markers_outside_fences` (src/yaml.rs) runs once, during
-// conversion, over the whole page body: a marker inside a fence that closes
-// before the body ends is left verbatim (T-C032). `format_fetch_output`
-// (src/tools.rs) then truncates that already-neutralized body at its byte
-// cap (100,000 bytes; duplicated here rather than imported for the same
-// reason `RAW_FALLBACK_NOTE`'s text is above). The `<pre>` below becomes one
-// fenced code block spanning a marker line, filler, and its own close, so
-// neutralization sees the fence closed and leaves `---` raw. The filler
-// alone is well over the byte cap, so truncation cuts long before the
-// `</pre>`-derived closing fence delimiter is ever reached, leaving that
-// fence open in the truncated output and the marker inside it exposed.
+// Conversion preserves the marker inside a closed pre fence (T-C032). Filler
+// exceeds the 100,000-byte output cap, removing that fence's close; truncation
+// must re-neutralize the now-exposed marker. The private output cap cannot be
+// imported by this integration binary.
 #[test]
 fn fetch_output_truncated_at_the_cap_leaves_no_live_yaml_document_marker() {
     let context = "marker inside a fence whose close falls past the truncation cap";

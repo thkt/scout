@@ -55,12 +55,8 @@ pub(crate) fn parse_slack_url(url: &str) -> Option<SlackUrl> {
     // Slack timestamps: p{epoch_secs}{6-digit micros} → "{epoch_secs}.{micros}"
     const TS_MICROS_DIGITS: usize = 6;
     let ts_raw = segments[2].strip_prefix('p')?;
-    // Digits, not just length: a length-only check splits `pabcdefgh` into
-    // `ab.cdefgh` and lets it travel on as a timestamp. Returning `None` says
-    // "not a Slack permalink", which is what a `p` segment that is not a Slack
-    // timestamp means, and lets
-    // the caller fall back to an ordinary fetch instead of asking Slack about an
-    // id it cannot have issued.
+    // A length-only check would accept pabcdefgh. Reject it as a non-permalink
+    // so callers can fall back to ordinary fetch instead of sending a bogus ts.
     if ts_raw.len() <= TS_MICROS_DIGITS || !ts_raw.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }

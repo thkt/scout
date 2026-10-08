@@ -14,14 +14,8 @@ fn ok_body() -> serde_json::Value {
     })
 }
 
-/// [T-BC-LOG001]
-/// Setup: wiremock returns a 1-result Brave payload.
-/// Action: `client.search("foo", None)` is invoked under `traced_test`.
-/// Expected: an INFO-level `Brave search dispatching` event fires before
-/// dispatch, and an INFO-level `Brave search complete` event fires after,
-/// carrying `result_count` and `elapsed_ms` structured fields. Operators
-/// at the default `info` log level can attribute latency without enabling
-/// `RUST_LOG=debug`.
+/// [T-BC-LOG001] INFO dispatch/completion events expose count and latency
+/// at the default log level without requiring RUST_LOG=debug.
 #[tracing_test::traced_test]
 #[tokio::test]
 async fn search_emits_info_dispatch_and_complete_events() {
@@ -151,14 +145,13 @@ async fn search_retries_after_429_then_succeeds() {
         return;
     };
 
-    // First call: 429 with short Retry-After to keep test fast
+    // A short Retry-After keeps the retry test fast.
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
         .up_to_n_times(1)
         .mount(&server)
         .await;
 
-    // Subsequent calls: 200
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(ok_body()))
         .mount(&server)
@@ -208,11 +201,7 @@ async fn search_401_returns_unauthorized() {
     );
 }
 
-/// [T-BC026]
-/// Setup: wiremock always returns HTTP 403.
-/// Action: `client.search("foo", None)` is invoked.
-/// Expected: returns `BraveError::Unauthorized`; no retry (mock call count = 1)
-/// because 403/401 are auth-class failures and not retriable.
+/// [T-BC026] HTTP 403 is Unauthorized with one request and no retry.
 #[tokio::test]
 async fn search_403_returns_unauthorized() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -251,13 +240,8 @@ async fn search_503_persistent_returns_server_error() {
     );
 }
 
-/// [T-BC-CAP001]
-/// Setup: wiremock returns a 2xx whose body exceeds `MAX_API_RESPONSE_BYTES`
-/// (1 MiB), simulating an upstream Brave deployment returning unbounded
-/// JSON.
-/// Action: `client.search("foo", None)` is invoked.
-/// Expected: returns `BraveError::ResponseTooLarge`; no retry (mock call
-/// count = 1) because the variant is not retriable.
+/// [T-BC-CAP001] An oversized successful payload returns ResponseTooLarge
+/// after one request; retry cannot shrink a contract-violating response.
 #[tokio::test]
 async fn search_oversized_body_returns_too_large() {
     let Some(server) = try_spawn_mock_server("brave::http").await else {
@@ -305,12 +289,8 @@ async fn search_malformed_json_returns_parse_error() {
     }
 }
 
-/// [T-BC-LOG002]
-/// Setup: wiremock returns a 200 with a malformed JSON body.
-/// Action: `client.search("foobar", None)` is invoked under `traced_test`.
-/// Expected: a WARN-level `Brave search response parse failed` event fires,
-/// carrying `query_len=6` and the serde `error` field, so operators can see a
-/// schema-drift fallback without the raw query text leaking.
+/// [T-BC-LOG002] Malformed JSON warns with query length and parse error,
+/// without exposing the raw query.
 #[tracing_test::traced_test]
 #[tokio::test]
 async fn search_logs_warn_on_parse_failure() {
@@ -355,8 +335,7 @@ fn from_env_with_returns_api_key_not_set_when_closure_errs() {
     );
 }
 
-/// [T-RC002] whitespace-only keys stay rejected — parity with the previous
-/// `trim().is_empty()` check in `from_env`.
+/// [T-RC002] Whitespace-only keys are rejected by the injected env reader.
 #[test]
 fn from_env_with_rejects_whitespace_only_key() {
     let result =

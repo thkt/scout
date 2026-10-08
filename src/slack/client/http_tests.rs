@@ -197,10 +197,10 @@ async fn api_get_once_oversized_body_returns_decode() {
     }
 }
 
-/// [T-SK030] Mid-stream body drop on 2xx routes through SlackError::Network
-/// (transient, retry path) rather than SlackError::Decode (terminal). reqwest
-/// 0.13 reports the drop as `is_decode() == true`; `is_transient_decode`
-/// distinguishes it from a schema fail via the io::Error source chain.
+/// [T-SK030] A mid-stream body-read failure maps to SlackError::Network;
+/// JSON parse failures after successful reads map to Decode. The separate
+/// transient check recognizes reqwest's io::Error source (T-R004), while
+/// T-SK080 checks the resulting classification.
 #[tokio::test]
 async fn api_get_once_2xx_mid_stream_drop_returns_network() {
     let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
@@ -287,7 +287,6 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
     };
     let parent_ts = "1000.000001";
     let target_ts = "1000.000500";
-    // Page 1: parent + filler, has_more with a cursor. Target is NOT here.
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
         .and(query_param_is_missing("cursor"))
@@ -302,7 +301,6 @@ async fn fetch_replies_paginates_to_find_target_on_page_two() {
         })))
         .mount(&server)
         .await;
-    // Page 2: contains the target message, no further pages.
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
         .and(query_param("cursor", "PAGE2"))
@@ -345,7 +343,6 @@ async fn fetch_message_caps_users_info_lookups_on_mass_mentions() {
         .map(|i| format!("<@U{i}>"))
         .collect::<Vec<_>>()
         .join(" ");
-    // Single message (no thread): conversations.history returns it directly.
     mount_get(
         &server,
         "/conversations.history",
@@ -398,7 +395,6 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
         .map(|i| format!("<@U{i}>"))
         .collect::<Vec<_>>()
         .join(" ");
-    // Thread probe: the root has replies, so fetch_replies is used.
     mount_get(
         &server,
         "/conversations.history",
@@ -453,7 +449,6 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
         return;
     };
     let parent_ts = "1000.000001";
-    // Page 1: parent + first reply, more pages follow.
     mount_get(
         &server,
         "/conversations.history",
@@ -477,7 +472,7 @@ async fn fetch_replies_dedups_parent_repeated_across_pages() {
         })))
         .mount(&server)
         .await;
-    // Page 2: parent repeats as messages[0], plus the second reply.
+    // Slack repeats the parent on each page; only one copy should survive.
     Mock::given(method("GET"))
         .and(path("/conversations.replies"))
         .and(query_param("cursor", "PAGE2"))
@@ -632,7 +627,6 @@ async fn fetch_message_link_with_replies_fetches_thread() {
         return;
     };
     let parent_ts = "1000.000001";
-    // The probe reports the target has one reply, so fetch_replies runs next.
     mount_get(
         &server,
         "/conversations.history",

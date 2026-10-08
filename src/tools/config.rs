@@ -10,18 +10,9 @@ use super::errors::ScoutError;
 const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 95;
 const DEFAULT_RESEARCH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_SLACK_TIMEOUT_SECS: u64 = 60;
-/// Outer cap for a single GitHub command (`repo-tree` / `repo-read` /
-/// `repo-overview`). Fail-fast bias by design. 180s clears the
-/// happy path of the most complex command — `repo-overview` runs a sequential
-/// `get_repo`, four parallel calls, and a conditional README blob fetch, ~30s
-/// `HTTP_TIMEOUT` each, so well under 180s when calls succeed — and clears every
-/// cheap-retry path (5xx / rate-limit retries return in seconds) plus a typical
-/// retried run where only some calls hit the 30s timeout. It sits *below* the
-/// all-timeouts retry budget (~279s: three serial phases each retried 3× at the
-/// 30s HTTP timeout), so a command whose upstream repeatedly hangs is cut rather
-/// than waited out. Trade-off: a command where every phase exhausts its retries
-/// on full 30s timeouts (~186s even without the blob fetch) is still cut.
-/// Calibration is the operator's via `SCOUT_GITHUB_TIMEOUT_SECS`.
+/// Outer GitHub-command budget, intentionally shorter than repeated inner
+/// HTTP timeouts and retries. A slow upstream may be cut off before exhausting
+/// all phases; operators can tune SCOUT_GITHUB_TIMEOUT_SECS.
 const DEFAULT_GITHUB_TIMEOUT_SECS: u64 = 180;
 
 const ENV_FETCH_TIMEOUT: &str = "SCOUT_FETCH_TIMEOUT_SECS";
@@ -336,12 +327,8 @@ mod tests {
         assert_eq!(err.error_kind(), ErrorCode::UsageError);
     }
 
-    /// [T-CFG-LOG001]
-    /// Setup: env reader returns a non-default `SCOUT_FETCH_TIMEOUT_SECS`.
-    /// Action: `RuntimeConfig::from_env_with(...)` runs under `traced_test`.
-    /// Expected: an INFO event `SCOUT_FETCH_TIMEOUT_SECS override applied`
-    /// fires with the structured `fetch_timeout_secs` field. The remaining
-    /// `SCOUT_*` events stay silent because their fields are still on default.
+    /// [T-CFG-LOG001] A fetch-timeout override emits its INFO event and field;
+    /// other fields at default stay silent.
     #[tracing_test::traced_test]
     #[test]
     fn fetch_timeout_override_surfaces_info_event() {

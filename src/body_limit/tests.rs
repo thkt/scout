@@ -7,17 +7,9 @@ use crate::test_support::{
 use wiremock::matchers::method;
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-R013] Every existing `too_large` test drives wiremock's
-/// `set_body_bytes`, which always emits an honest Content-Length, so they
-/// exercise only `read_body_capped`'s Content-Length pre-check. Its chunk
-/// loop, the `body.len() > cap` arm, is the defense-in-depth guard for
-/// upstreams that omit Content-Length (compression → `content_length() ==
-/// None`, chunked or close-delimited transfer). A close-delimited response
-/// (no Content-Length, EOF-terminated
-/// body) forces `content_length() == None`, so the chunk loop — not the
-/// pre-check — must be what rejects the oversized body. CAP is tiny to keep
-/// the transfer cheap; the branch under test is identical regardless of cap
-/// size.
+/// [T-R013] Reject an oversized close-delimited body through the chunk loop.
+/// No Content-Length means the header pre-check cannot satisfy the assertion.
+/// A tiny cap exercises the same guard without a large transfer.
 #[tokio::test]
 async fn read_body_capped_rejects_close_delimited_oversized_body() {
     const CAP: usize = 16;
@@ -47,15 +39,9 @@ async fn read_body_capped_rejects_close_delimited_oversized_body() {
     join_server_thread(handle);
 }
 
-/// [T-BL001] A header-only response whose Content-Length exceeds the cap becomes
-/// too_large without the body being read
-///
-/// The server writes only a `Content-Length: cap+1` header,
-/// then closes without a single body byte. If `read_body_capped` reached the
-/// chunk loop before rejecting, the premature close would surface as a
-/// `network` error (declared length vs. zero actual bytes mismatch), not
-/// `too_large`. Observing `too_large` is therefore direct evidence the
-/// pre-check rejected before any `chunk()` call — the body was never read.
+/// [T-BL001] Reject an oversized Content-Length before reading body bytes.
+/// The header-only server closes early: reading would yield a network error,
+/// not too_large. This distinguishes the pre-check from the chunk-loop guard.
 #[tokio::test]
 async fn content_length_over_cap_with_no_body_rejects_too_large_without_reading_body() {
     const CAP: usize = 16;
@@ -112,12 +98,9 @@ async fn body_of_exactly_cap_bytes_returns_in_full() {
     );
 }
 
-/// [T-R016] read_body_snippet stops at the limit instead of draining the body
-///
-/// `Response::text()` reads everything, so the error paths in `brave::client`
-/// and `github` could spend on a failed response what `read_body_capped` refuses
-/// to spend on a successful one. The server here sends far more than the limit
-/// with no Content-Length, so only the chunk loop can stop it.
+/// [T-R016] A close-delimited response returns only the diagnostic prefix.
+/// This checks returned length, not bytes consumed; the uncapped-read lint
+/// separately prevents replacing the bounded reader with Response::text().
 #[tokio::test]
 async fn read_body_snippet_stops_at_the_limit() {
     const LIMIT: usize = 32;

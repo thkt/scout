@@ -37,10 +37,9 @@ impl fmt::Display for InterruptSignal {
 /// On Unix: races SIGINT and SIGTERM. The first to fire wins.
 /// On non-Unix: only SIGINT (via `ctrl_c()`).
 ///
-/// If installing the SIGTERM handler fails, falls back to SIGINT-only
-/// and logs a warning. SIGTERM in that case is handled by the runtime's
-/// default disposition (immediate termination), which still triggers
-/// `kill_on_drop` for the CDP child but skips the structured exit code.
+/// If installing the SIGTERM handler fails, falls back to SIGINT-only and warns.
+/// That path provides no structured SIGTERM exit or Drop-based browser cleanup
+/// guarantee.
 pub(crate) async fn wait_for_signal() -> InterruptSignal {
     use tokio::signal::ctrl_c;
 

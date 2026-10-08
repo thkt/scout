@@ -36,8 +36,7 @@ mod tests {
     use super::*;
 
     /// [T-CLOCK002] SystemClock returns a unix epoch second that is plausibly
-    /// "now" (after 2020-01-01). Guards against an accidental `Duration::ZERO`
-    /// regression in the unwrap_or branch.
+    /// "now" (after 2020-01-01), rather than always returning zero.
     #[test]
     fn system_clock_returns_post_2020_epoch_seconds() {
         let c = SystemClock;

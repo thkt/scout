@@ -283,12 +283,11 @@ async fn get_json_403_with_ratelimit_reset_carries_delay() {
     );
 }
 
-/// [T-GH012] 2xx response with malformed JSON classifies as Decode.
+/// [T-GH012] A 2xx response with malformed JSON returns GitHubError::Decode.
 ///
-/// A bare `Ok(response.json().await?)` routes schema failures through
-/// `#[from] reqwest::Error` to `GitHubError::Network`, surfacing as TempFailure(75)
-/// retryable=true. Schema fail is a scout-side invariant violation that retry
-/// cannot resolve — must classify as Decode → Internal(70) retryable=false.
+/// `get_json_once` maps serde parse failures explicitly to Decode, so they
+/// surface as Internal(70), non-retryable, rather than an unclassified
+/// reqwest decode error routed through Network (Unknown).
 #[tokio::test]
 async fn get_json_2xx_malformed_body_returns_decode() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -309,20 +308,10 @@ async fn get_json_2xx_malformed_body_returns_decode() {
     );
 }
 
-/// [T-GH013] 2xx mid-stream body drop is treated as transient and the
-/// retry loop exhausts the configured max_retries attempts before failing.
-/// The test uses the client default (3); production callers override the
-/// budget via `SCOUT_MAX_RETRIES`.
-///
-/// reqwest 0.13 surfaces a mid-stream drop as `is_decode() == true` with
-/// an io::Error in the source chain. Without `is_transient_decode`,
-/// every attempt would route to `GitHubError::Decode` → Internal(70)
-/// retryable=false. With it, attempts route to `GitHubError::Network` →
-/// TempFailure(75) and the retry loop kicks in.
-///
-/// `start_paused = true` advances the tokio runtime past `retry_with`'s
-/// `sleep` calls as soon as the task parks; the std::thread-driven
-/// TcpListener is unaffected. Total wall time stays under 100 ms.
+/// [T-GH013] A mid-stream body drop exhausts the default retry budget.
+/// Body-read failures map to Network; recognizing the io::Error source in
+/// reqwest's decode error makes classification retryable. Paused tokio time
+/// advances backoff without delaying the std::thread-driven server.
 #[tokio::test(start_paused = true)]
 async fn get_json_2xx_mid_stream_drop_exhausts_retries() {
     // Total attempts = 1 (initial) + DEFAULT_MAX_RETRIES (retries).

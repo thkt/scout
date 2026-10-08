@@ -73,9 +73,7 @@ pub(super) struct ScoutBuilder {
 /// private/loopback targets per hop, so dropping the guard does not open SSRF to
 /// a caller-supplied URL.
 fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutError> {
-    // The User-Agent rides on the client rather than on each request: attaching
-    // it per call site is how Slack ended up sending none at all. A call site
-    // that needs a different value can still override the default per request.
+    // Set a shared User-Agent so a new API call cannot silently omit it.
     let http = Client::builder()
         .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -84,20 +82,14 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         .build()
         .map_err(|e| ScoutError::io_error(format!("HTTP client init failed: {e}")))?;
 
-    // `Policy::none()` is load-bearing, not a default: `fetch::download` walks
-    // the redirect chain itself so it can run `ssrf_check` on every hop
-    // (ADR-0001). Letting reqwest follow them would land on the final URL with
-    // only the first one validated, and nothing in the type system says so —
-    // `download` states the requirement in prose and this is the call site that
-    // has to keep it.
+    // Automatic redirects would bypass download's per-hop SSRF validation
+    // (ADR-0001); the client must leave redirect handling to scout.
     let fetch_builder = Client::builder()
         .user_agent(crate::USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
         .redirect(Policy::none());
     let fetch_builder = match egress {
-        // `Proxy::all`: route every scheme through the forward proxy.
-        // https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all
         EgressMode::Proxied(url) => fetch_builder.proxy(
             Proxy::all(url).map_err(|e| ScoutError::io_error(format!("proxy init failed: {e}")))?,
         ),
@@ -232,7 +224,7 @@ impl ScoutBuilder {
 
     /// The `fetch_slack` counterpart of `with_github_timeout`: a test forces the
     /// `tokio::time::timeout` around `fetch_message` to trip against a delayed
-    /// wiremock response instead of waiting the production 30s.
+    /// wiremock response instead of waiting the production 60s.
     #[cfg(test)]
     pub(super) fn with_slack_timeout(mut self, timeout: Duration) -> Self {
         self.config.slack_timeout = timeout;

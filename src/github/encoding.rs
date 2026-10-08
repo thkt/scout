@@ -34,12 +34,8 @@ pub(crate) struct DecodeResult {
 ///
 /// Encoding detection is handled separately by `decode_bytes`.
 pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
-    // GitHub wraps base64 at 60 chars, but base64 v0.22 has no whitespace-tolerant
-    // decode (GeneralPurposeConfig exposes only padding/trailing-bit options), so the
-    // newlines must be stripped into a contiguous buffer first. This transient copy
-    // is accepted over a streaming DecoderReader: decode_base64 runs once per file
-    // fetch (network-bound, not a hot path) and `clean` is freed immediately after
-    // decode.
+    // GitHub inserts base64 line breaks; STANDARD rejects whitespace.
+    // Use one short-lived buffer on this network-bound path instead of a streaming decoder.
     let clean: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
     STANDARD
         .decode(&clean)
@@ -51,7 +47,7 @@ pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
 /// Detection priority (highest first; see ADR-0013 for rationale):
 /// 1. If `hint` is Some, use the explicit encoding
 /// 2. If a BOM is found, use the BOM-identified encoding
-/// 3. Run chardetng on full content; if decode succeeds, use detected encoding
+/// 3. Run chardetng; accept a clean decode only through the reliability gate
 /// 4. Fall back to strict UTF-8 validation (AssumedUtf8)
 /// 5. If all fail, return NonUtf8 error with retry hint
 pub(super) fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
@@ -121,8 +117,7 @@ fn is_likely_binary(bytes: &[u8]) -> bool {
 }
 
 fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
-    // Binary heuristic: null bytes appear in binary files but not in any text encoding
-    // (UTF-16 with BOM is already handled by decode_bom before reaching here)
+    // Treat NUL as binary after BOM handling; BOM-less UTF-16 needs an explicit hint.
     if is_likely_binary(bytes) {
         return Err(GitHubError::NonUtf8(
             "File appears to be binary (contains null bytes). \
@@ -136,11 +131,8 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
     detector.feed(bytes, true);
     let encoding = detector.guess(None, Utf8Detection::Allow);
 
-    // Only trust chardetng for multi-byte encodings that have strict byte-pattern constraints
-    // (Shift_JIS, EUC-JP, GBK, etc.) or UTF-8. Single-byte encodings (windows-1252,
-    // windows-1251, iso-8859-*, etc.) accept nearly every byte without errors, so
-    // `had_errors == false` carries no reliability signal for them. Fall through to the
-    // UTF-8 check for those; if UTF-8 also fails, return a NonUtf8 error.
+    // Single-byte guesses accept almost any bytes, so a clean decode is not
+    // evidence of correct detection. Share the reliability gate with fetch.
     if is_reliable_detection(encoding) {
         let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
         if !had_errors {
@@ -164,7 +156,6 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         });
     }
 
-    // All paths failed; include retry hint with chardetng's best guess (ADR-0013)
     Err(GitHubError::NonUtf8(format!(
         "File encoding could not be decoded. Retry with --encoding {}. \
         Use --encoding to specify the encoding (e.g., --encoding shift_jis, --encoding euc-jp).",

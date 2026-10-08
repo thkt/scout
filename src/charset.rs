@@ -23,14 +23,9 @@ pub(crate) fn is_reliable_detection(encoding: &'static encoding_rs::Encoding) ->
 mod tests {
     use super::is_reliable_detection;
 
-    /// [T-CS001] every encoding the gate trusts, named one by one
-    ///
-    /// ADR-0013 calls this list the single source of truth and says the two
-    /// decode paths pin it indirectly. They pin part of it: `ISO_2022_JP`,
-    /// `BIG5` and `GB18030` appear in no test on either path, so dropping them
-    /// here would silently turn a clean Japanese, Traditional Chinese or
-    /// Simplified Chinese decode into a `DECODE_UNCERTAIN` body without a
-    /// single failure.
+    /// [T-CS001] Accept each trusted encoding directly (ADR-0013); the decode
+    /// fixtures exercise only part of this list, so they cannot catch every
+    /// accidental removal from the shared reliability gate.
     #[test]
     fn trusts_exactly_the_eight_multi_byte_encodings() {
         for encoding in [

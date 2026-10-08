@@ -23,7 +23,7 @@ pub(crate) const MAX_PAGE_BYTES: usize = 4_500;
 /// Per-source timeout; exposed for the config invariant test.
 pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Research hits and fetched bodies. Default is the empty degraded report.
+/// Research hits and fetched bodies. Default is an empty report; callers add degradation.
 #[derive(Debug, Default, serde::Serialize)]
 pub(crate) struct ResearchReport {
     pub(crate) fetched_pages: Vec<FetchResult>,

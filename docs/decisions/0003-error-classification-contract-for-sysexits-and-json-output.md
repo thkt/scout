@@ -115,6 +115,8 @@ Chosen option: Option A, because public CLI contract として一貫した class
 - `DegradedReason` の variants は `repo_overview` 等の現実の failure mode を反映 (実装後 12 variants、上記 Note 2026-06-17 post-issue-#222 update を参照)
 - ADR-0011 §Classification Priority Table の 5 段ルール (USAGE → DATA → NOT_FOUND → TEMP_FAILURE → INTERNAL → UNKNOWN 退避) を各 error type の `classify()` メソッド (`src/slack.rs` の `SlackError::classify`、`src/github/errors.rs` の `GitHubError::classify`) の match arm 順序と `// Priority N` コメントで明示する。各 `From<...>` 実装は `e.classify()` に委譲する (`src/tools/errors.rs` の `From<GitHubError>` / `From<FetchError>` / `From<SlackError>` / `From<BraveError> for ScoutError`)。`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する。Priority 5 (INTERNAL) 以下は 3 つの sibling constructor に分離する: `internal_bug()` は scout-side invariant violation (例: deserialize 想定外 schema) を `ErrorCode::Internal` (exit 70 EX_SOFTWARE) で表し、`io_error()` は scout の不変条件外にある external tool/IO failure (例: headless browser CDP error) を `ErrorCode::IoError` (exit 74 EX_IOERR) で表し、`unknown()` は priority 1-5 のどれにも該当しない unclassifiable failure を `ErrorCode::Unknown` (exit 104 PJ extension) で退避する。3 つの分離により caller script/agent は scout 側 bug (70) と外部要因 (74) と分類欠落 (104) を programmatic 判別できる
 
+> **訂正注記 (2026-10-08, Implementation Guidelines の API 4xx 条件)**: 上の「`*Error::Api { code }` の 4xx は priority 2 (DataError) に集約する」は、共有 HTTP status 表の例外を省略している。priority 2 の対象は 401/403/404/408/429 を除く 4xx。`Classification::from_http_status` (`src/classify.rs`) は 401/403 を `UsageError`、404 を `NotFound`、408/429 を `TempFailure` (75、retryable) に分類する。現行の GitHub / Brave の `Api` はこの共有表へ委譲し、GitHub の 401 専用 arm は分類 code を変えず認証 hint を保持する。ADR-0011 の 2026-10-08 訂正注記に現行の検証範囲を記す。既存の分類方針と実行動作は変更しない。
+
 ### Reassessment Triggers
 
 | Trigger                                                 | アクション                                     |
@@ -140,6 +142,10 @@ Chosen option: Option A, because public CLI contract として一貫した class
 `Classification::from_http_status` (`src/classify.rs`) を呼ぶのは `SlackError`、`GitHubError`、`FetchError::Status` (`src/fetch/download.rs`)、`BraveError::Api` / `BraveError::Server` (`src/brave/client.rs`) の 4 source。Confirmation と Reassessment Triggers はこの 4 source を指すよう更新済み。
 
 Reassessment Triggers が `Gemini` を挙げていた間、Brave または Fetch の 4xx 分岐が増えても trigger が発火しなかった。source 名を trigger に直書きする形はこの取りこぼしを生むので、backend を追加または削除する変更では本 ADR の Confirmation と Reassessment Triggers を同じ変更単位で見直す。
+
+> **訂正注記 (2026-10-08, 共有 HTTP status 表の呼出元と検証範囲)**: 上の 2026-08-17 Addendum が `SlackError` を `Classification::from_http_status` の呼出元に含めたのは誤り。現行の呼出元は `GitHubError::Api` (`src/github/errors.rs` の `classify`)、`FetchError::Status` (`src/fetch.rs` の `classify`)、`BraveError::Api` / `BraveError::Server` (`src/brave/client.rs` の `classify`)。`SlackError::Server` (`src/slack.rs` の `classify`) は 2026-08-02 の Slack 例外に従い、status を問わず `TempFailure` を返す。
+>
+> 2026-08-02 の table single-sourced Note にある「`[T-ER034]` が 4 backend 横断で pin する」という記述も訂正する。`[T-ER034]` (`src/tools/errors/classification_tests.rs`) は共有表と GitHub / Brave の `Api`、Fetch の `Status` の写像を検証し、Slack の例外は `[T-SLC016]` (`src/slack/classify_tests.rs`) が別に検証する。4 source を確認するという Confirmation の範囲は、この異なる保証を合わせたもの。分類方針や実行動作は変更しない。
 
 ## Addendum (2026-08-18): degraded の形と発火条件を実装へ揃える
 

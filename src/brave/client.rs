@@ -82,9 +82,8 @@ impl BraveError {
 
     /// Map each variant to its ADR-0011 priority-table [`Classification`].
     ///
-    /// Arm order is load-bearing: `Api { code: 4xx }` precedes the bare
-    /// `Api { .. }` fallback so a reorder cannot silently demote a 4xx
-    /// response from DataError to Unknown.
+    /// `Api` and `Server` delegate HTTP status mapping to the shared
+    /// ADR-0003 table, including its `Unknown` fallback.
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR / config
@@ -100,13 +99,8 @@ impl BraveError {
             Self::Server(code) => Classification::from_http_status(*code),
             // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
-            // Priority 5: INTERNAL — schema drift is a scout-side invariant;
-            // peer to `GitHubError::Decode` / `SlackError::Decode`. Oversized
-            // body is an upstream invariant violation (Brave returning >1 MiB
-            // on `web/search`), classified the same as schema drift because
-            // it signals the API surface drifted and retry will not recover.
+            // Priority 5: INTERNAL — schema drift and oversized payloads are terminal.
             Self::ParseJson(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Every remaining status follows the ADR-0003 table.
             Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }
@@ -225,9 +219,7 @@ impl BraveClient {
         let url = build_url(&self.base_url, query, search_lang)?;
         let query_len = query.len();
 
-        // Bracket the call with info events so operators can attribute
-        // latency from the default log level. `query_len` (not `query`)
-        // keeps the user term out of logs.
+        // Log latency at INFO without exposing the search query.
         info!(query_len, "Brave search dispatching");
         let started = Instant::now();
 
@@ -267,9 +259,7 @@ fn build_url(
     query: &str,
     search_lang: Option<&str>,
 ) -> Result<reqwest::Url, BraveError> {
-    // Intentionally omit count/offset/safesearch/freshness/country/ui_lang —
-    // accept Brave defaults (safesearch=moderate, count=20). Adding params is
-    // additive; introduce them only when a caller surfaces a concrete need.
+    // Keep Brave defaults (safesearch=moderate, count=20); no caller exposes overrides.
     let mut params = vec![("q", query)];
     if let Some(lang) = search_lang {
         params.push(("search_lang", lang));

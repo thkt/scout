@@ -89,16 +89,13 @@ const USER_TOKEN_PREFIX: &str = "xoxp-";
 /// memory.
 const SLACK_REPLIES_LIMIT: &str = "200";
 
-/// Concurrent in-flight `users.info` requests during `prefetch_users`.
-/// Slack Tier-4 allows ~50 req/min; capping at 5 keeps the burst well below
-/// that even for threads with hundreds of unique participants, instead of
-/// firing every request simultaneously and tripping the per-minute cap.
+/// Limit concurrent `users.info` lookups instead of starting all at once.
+/// This does not enforce a per-minute request rate.
 const SLACK_USERS_CONCURRENCY: usize = 5;
 
 /// Upper bound on `conversations.replies` pages fetched per thread. At
 /// `SLACK_REPLIES_LIMIT` (200) messages per page this covers threads up to
-/// ~10k replies; the cap stops an unbounded paging loop from re-introducing
-/// the rate-limit exhaustion that claim 3 bounds.
+/// ~10k replies; the cap bounds traffic even if Slack keeps returning cursors.
 const SLACK_MAX_REPLY_PAGES: usize = 50;
 
 /// Upper bound on distinct user IDs resolved via `users.info` per message.
@@ -354,11 +351,8 @@ impl SlackClient {
         }
     }
 
-    /// Slack `users.info` per-ID fetch capped at `SLACK_USERS_CONCURRENCY`
-    /// concurrent requests via `buffer_unordered`. The cap bounds the burst
-    /// rate so a thread with hundreds of participants cannot fire that many
-    /// simultaneous requests and trip Slack's per-minute rate limit. Matches
-    /// the same idiom used in `search/engine.rs::fetch_sources`.
+    /// Bound concurrent lookups with `buffer_unordered`; each completion can
+    /// start another lookup, so the cap does not enforce a request rate.
     async fn prefetch_users(&self, ids: &HashSet<String>) -> (HashMap<String, String>, bool) {
         let id_list: Vec<String> = ids.iter().cloned().collect();
         let results: Vec<(String, String, bool)> = stream::iter(id_list)
@@ -426,8 +420,6 @@ impl SlackClient {
         let mut seen: HashSet<String> = HashSet::new();
         let mut cursor: Option<String> = None;
         for _ in 0..SLACK_MAX_REPLY_PAGES {
-            // Scope `params` so its borrow of `cursor` ends before the
-            // reassignment below.
             let body: MessagesBody = {
                 let mut params = vec![
                     ("channel", channel),
@@ -514,13 +506,9 @@ impl SlackClient {
             });
         }
 
-        // Authors render on every message, so when distinct IDs exceed the
-        // lookup cap they take priority over mentions: an unresolved author
-        // degrades visible output more than an unresolved mention. The keep set
-        // is fixed to first-occurrence (thread chronological) order so which IDs
-        // resolve is reproducible across runs. Two passes over the
-        // messages — all authors first, then mentions — share one `seen` set, so
-        // a dual-role ID is kept as an author and consumes one slot, not two.
+        // Authors appear on every message, so preserve them before mentions when
+        // capped. First-occurrence order makes selection reproducible; one shared
+        // seen set gives dual-role IDs a single author slot.
         let mut authors: Vec<String> = Vec::new();
         let mut mentions: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -544,8 +532,6 @@ impl SlackClient {
                 "too many distinct user IDs; capping users.info lookups, excess IDs render as raw IDs (authors kept first)"
             );
         }
-        // `take` is a no-op under the cap, so the capped and uncapped cases
-        // collapse to one chained collect: authors first, then mention top-up.
         let user_ids: HashSet<String> = authors
             .into_iter()
             .chain(mentions)

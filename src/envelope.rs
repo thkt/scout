@@ -23,7 +23,7 @@ pub(crate) enum DegradedReason {
 }
 
 impl DegradedReason {
-    /// Labels for [`crate::tools::errors::unwrap_or_degraded`]. Only the three
+    /// Labels for `crate::tools::errors::unwrap_or_degraded`. Only the three
     /// GitHub list-fetch failures use this helper; other reasons build notes at
     /// call sites. The generic arm keeps the match exhaustive.
     pub(crate) fn label(self) -> &'static str {

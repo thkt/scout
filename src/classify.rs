@@ -49,17 +49,9 @@ impl Classification {
         Self::new(ErrorCode::Timeout).with_hint(HINT_RETRY_DELAY)
     }
 
-    /// The ADR-0003 HTTP-status table, in one place.
-    ///
-    /// Three backends re-deriving it from raw status integers drift apart: a
-    /// GitHub 408 answers DataError instead of TempFailure, a Brave 404 answers
-    /// DataError instead of NotFound. A backend that needs a
-    /// different code for a status — not just a different hint — adds its own arm
-    /// ahead of the delegating one, which makes the deviation visible; ADR-0003
-    /// requires such a reclassification to say so in a doc comment.
-    ///
-    /// Hints stay with the caller: the table decides the code, and only the
-    /// backend knows what to tell the user about its own service.
+    /// The shared ADR-0003 HTTP-status table prevents backend drift.
+    /// Backends may override hints; a different code needs an earlier arm with
+    /// a doc comment explaining the deviation. Hints stay at the call site.
     pub(crate) fn from_http_status(status: u16) -> Self {
         match status {
             500..=599 | 408 | 429 => Self::transient_retry(),
@@ -93,7 +85,6 @@ impl Classification {
         if is_transient_network(e) {
             return Self::transient_network();
         }
-        // Retreat: unclassifiable transport failure
         Self::new(ErrorCode::Unknown)
     }
 }

@@ -123,7 +123,6 @@ impl Scout {
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
 
         // Add the preamble after truncation so it survives the body cap.
-        // The truncator already reports output truncation at the body end.
         let truncated = truncate_slack_output(&outcome.markdown, MAX_FETCH_OUTPUT_BYTES);
         let output_truncated = matches!(truncated, Cow::Owned(_));
 
@@ -152,7 +151,6 @@ impl Scout {
             );
         }
 
-        // Under the cap, move the borrowed source instead of cloning it.
         let body = match truncated {
             Cow::Owned(s) => s,
             Cow::Borrowed(_) => outcome.markdown,
