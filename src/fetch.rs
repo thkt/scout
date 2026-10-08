@@ -88,7 +88,7 @@ pub(crate) enum FetchError {
     TooLarge,
 
     /// Payload names the operation and budget without repeating this error prefix.
-    /// T-C027 and T-SE015 cover the fetch and research call sites.
+    /// T-C024 and T-SE015 cover the fetch and research call sites.
     #[error("fetch timed out: {0}")]
     Timeout(String),
 

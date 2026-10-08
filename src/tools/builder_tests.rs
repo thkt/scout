@@ -773,7 +773,7 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
 
 /// [T-SK072] Pins the payload rule stated on `SlackError::Timeout`
 /// (src/slack.rs) for the `fetch_slack` call site, where the wrapper can double
-/// the payload. The `fetch` side is pinned by `T-C027`
+/// the payload. The `fetch` side is pinned by `T-C024`
 /// (tests/exit_code_contract.rs).
 ///
 /// Driving a real timed-out call is what makes the assertion non-tautological:
