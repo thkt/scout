@@ -1,7 +1,6 @@
 //! CLI exit-code and JSON error.code contracts for proxy responses (DR-0003).
 //! HTTP-status cases and T-C024/025 require a proxy connection to rule out
-//! coincidental SSRF or DNS failures. T-C026 fails during client construction;
-//! T-C027 checks timeout wording without asserting a connection count.
+//! coincidental SSRF or DNS failures. T-C026 fails during client construction.
 //!
 //! Fetch has no retry-helper calls, so SCOUT_MAX_RETRIES is irrelevant here.
 //! Exit 70 has no construction path through this fetch-only harness.
@@ -31,7 +30,7 @@ fn assert_exits_with(
     expected_exit_code: i32,
     expected_error_code: &str,
     context: &str,
-) {
+) -> serde_json::Value {
     assert_eq!(
         output.status.code(),
         Some(expected_exit_code),
@@ -44,6 +43,7 @@ fn assert_exits_with(
         value["error"]["code"], expected_error_code,
         "{context} should classify as {expected_error_code}, got: {value}"
     );
+    value
 }
 
 fn assert_proxy_was_dialed_for_exit_code(connection_count: &AtomicUsize, context: &str) {
@@ -98,7 +98,8 @@ fn proxied_500_exits_75_temp_failure() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
 }
 
-// T-C024: A 2s proxy delay exceeds the minimum 1s outer fetch timeout.
+/// [T-C024] A 2s proxy delay exceeds the minimum 1s outer fetch timeout:
+/// exit 124, TIMEOUT, a proxy connection, and "timed out" exactly once.
 #[test]
 fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     let Some((proxy_url, connection_count, _handle)) =
@@ -112,13 +113,22 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
         ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
     ]);
 
-    assert_exits_with(
+    let envelope = assert_exits_with(
         &output,
         124,
         "TIMEOUT",
         "a proxy response slower than the fetch timeout",
     );
     assert_proxy_was_dialed_for_exit_code(&connection_count, "slow proxy response");
+
+    let message = envelope["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
+    assert_eq!(
+        message.matches("timed out").count(),
+        1,
+        "error.message should state the timeout once, got: {message}"
+    );
 }
 
 // T-C025: Malformed proxy bytes yield 104/UNKNOWN. This fixture classification
@@ -148,31 +158,6 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
         74,
         "IO_ERROR",
         "an HTTP_PROXY value reqwest::Proxy::all cannot parse",
-    );
-}
-
-// T-C027: Actual outer timeout message contains "timed out" exactly once.
-#[test]
-fn fetch_timeout_message_states_the_timeout_once() {
-    let Some((proxy_url, _connection_count, _handle)) =
-        common::spawn_mock_proxy(200, Duration::from_secs(2), b"too slow to matter")
-    else {
-        return;
-    };
-
-    let output = run_scout_fetch(&[
-        ("HTTP_PROXY", &proxy_url),
-        ("SCOUT_FETCH_TIMEOUT_SECS", "1"),
-    ]);
-
-    let envelope = parse_envelope(&output, "a proxy response slower than the fetch timeout");
-    let message = envelope["error"]["message"]
-        .as_str()
-        .unwrap_or_else(|| panic!("error.message should be a string, got: {envelope}"));
-    assert_eq!(
-        message.matches("timed out").count(),
-        1,
-        "error.message should state the timeout once, got: {message}"
     );
 }
 
