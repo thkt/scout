@@ -219,13 +219,8 @@ async fn research_json_schema_includes_required_keys() {
     );
 }
 
-/// [T-TS029]
-/// Setup: wiremock always returns HTTP 503 (still fails after retry).
-/// Action: `Scout::research(...)` is invoked.
-/// Expected: returns `Ok(CommandOutput)` (no hard-fail);
-/// `degraded_reasons` contains `BraveSearchFailed`; `data.sources` is empty.
-/// The cascade does not propagate `BraveError`; failure is absorbed into the
-/// degraded report envelope.
+/// [T-TS029] Transient Brave failure degrades research to a successful empty
+/// report carrying BraveSearchFailed instead of propagating a hard error.
 #[tokio::test]
 async fn research_brave_failure_returns_degraded_report() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -261,13 +256,8 @@ async fn research_brave_failure_returns_degraded_report() {
     );
 }
 
-/// [T-TS030]
-/// Setup: wiremock always returns HTTP 401.
-/// Action: `Scout::research(...)` is invoked.
-/// Expected: returns `Err(ScoutError)` (not a degraded `Ok`), because
-/// `BraveError::Unauthorized` is a configuration error and must surface to
-/// the user instead of being silently absorbed into the degraded envelope.
-/// Companion to T-TS029 which covers the transient (503) degradable path.
+/// [T-TS030] Authentication failure must remain a hard configuration error,
+/// unlike the degradable transient failure in T-TS029.
 #[tokio::test]
 async fn research_unauthorized_propagates_as_error() {
     let Some(server) = try_spawn_mock_server("tools::integration").await else {
@@ -403,11 +393,8 @@ fn fetch_output_shifts_headings_with_raw_fallback() {
     assert!(output.contains("### Raw Title"), "h1 should shift to h3");
 }
 
-/// [T-TS034] A body scout could not confidently decode says so in the Markdown
-/// itself. Without `--json` the envelope's `degraded_reasons` never reach the
-/// caller (src/lib.rs writes `into_markdown()` alone), so the note in the body
-/// is the only place a default-mode reader learns the text may be garbled.
-/// `research` already labels such a page in `format_fetched_pages`.
+/// [T-TS034] Non-JSON callers see only Markdown, so decoding uncertainty
+/// must appear in the body as well as the envelope.
 #[test]
 fn fetch_output_marks_an_uncertain_decode() {
     let result = FetchResult::for_test("https://example.com".into(), "# Title\nBody".into(), false)
@@ -419,9 +406,8 @@ fn fetch_output_marks_an_uncertain_decode() {
     );
 }
 
-/// [T-TS035] Both notes fire together in the order `research` uses: what
-/// produced the text (raw fallback) before what the text may suffer from
-/// (garbled decode).
+/// [T-TS035] Simultaneous notes must match research ordering: raw fallback
+/// before decoding uncertainty.
 #[test]
 fn fetch_output_orders_the_fallback_note_before_the_decode_note() {
     let result = FetchResult::for_test("https://example.com".into(), "# Title\nBody".into(), true)
@@ -462,20 +448,9 @@ fn fetch_output_truncates_long_content() {
     );
 }
 
-/// [T-FC087]
-///
-/// `neutralize_yaml_markers_outside_fences` (src/yaml.rs) runs once, during
-/// fetch conversion, over the whole body: a marker inside a fence that closes
-/// before the body ends is left verbatim (fence-protected sample output, not
-/// a forged document boundary). This fixture stands in for that already-
-/// neutralized text directly, the way `FetchResult::for_test` always does,
-/// with its own closing ``` placed far past `MAX_FETCH_OUTPUT_BYTES` so the
-/// cut lands inside the fence body instead of at or after its close.
-///
-/// Once `format_fetch_output` truncates there, the fence that was genuinely
-/// closed at neutralization time is left open in the truncated output, and
-/// the `---` line inside it — raw only because its fence looked closed — is
-/// exposed as a live, unprotected column-0 marker.
+/// [T-FC087] The fixture represents already-neutralized text whose YAML marker
+/// was protected by a closed fence. The output cap removes that close; the
+/// newly dangling fence must not expose a live column-zero marker.
 #[test]
 fn fetch_output_truncated_inside_a_closed_fence_leaves_no_live_marker() {
     let filler = "x".repeat(80) + "\n";
@@ -500,9 +475,8 @@ fn fetch_output_truncated_inside_a_closed_fence_leaves_no_live_marker() {
     );
 }
 
-/// A type whose `Serialize` impl always errors. Needed because the values scout
-/// actually serializes never fail (`f64::NAN` serializes to `null`, it does not
-/// error), so the error arm of `to_data_value` requires a forced failure.
+/// Force a serialization error: ordinary scout values do not reach this arm
+/// (even NaN serializes as null).
 struct FailingSerialize;
 
 impl serde::Serialize for FailingSerialize {
@@ -521,9 +495,7 @@ fn to_data_value_serializes_owned_value() {
     assert_eq!(value, serde_json::json!({"k": "v"}));
 }
 
-/// [T-TDV002] to_data_value maps a serialize failure to an Internal (exit 70)
-/// ScoutError naming the value, so a handler serde failure surfaces through the
-/// JSON error envelope via `?` instead of `.expect()` panicking.
+/// [T-TDV002] Serialization failure must return Internal (exit 70), not panic.
 #[test]
 fn to_data_value_maps_serialize_failure_to_internal_bug() {
     let err = to_data_value(&FailingSerialize, "fetch result").unwrap_err();
@@ -536,11 +508,9 @@ fn to_data_value_maps_serialize_failure_to_internal_bug() {
     );
 }
 
-/// [T-FETCH-OK] fetch handler returns Ok for a reachable page, exercising the
-/// success path end-to-end: page download, markdown render, and `data`
-/// serialize (query.rs `to_data_value` delegation). The guard-free `fetch_http`
-/// paired with a public-IP `with_dns` is the seam `ScoutBuilder::with_fetch_http`
-/// documents; production keeps the connect-time guard.
+/// [T-FETCH-OK] Exercise fetch success through download, conversion and JSON
+/// serialization. The loopback client plus public pre-flight resolver is the
+/// documented test seam; production retains the connect-time guard.
 #[tokio::test]
 async fn fetch_returns_ok_for_reachable_page() {
     let Some(server) = try_spawn_mock_server("query::fetch_ok").await else {
@@ -587,10 +557,9 @@ async fn fetch_returns_ok_for_reachable_page() {
     );
 }
 
-/// [T-F071] fetch end-to-end flags `DegradedReason::DecodeUncertain` (exit 0) when
-/// the page is an undecodable windows-1252 body mislabeled `charset=utf-8`.
-/// Same guard-free `fetch_http` + public-IP `with_dns` seam as T-F017 keeps SSRF
-/// intact; the body reuses the smart-quote bytes pinned by T-F067.
+/// [T-F071] Undecodable mislabeled bytes must reach fetch as DecodeUncertain
+/// at exit 0. The loopback client/public pre-flight resolver is a test seam;
+/// the fixture reuses T-F067's smart-quote bytes.
 #[tokio::test]
 async fn fetch_flags_decode_uncertain_for_undecodable_body() {
     let Some(server) = try_spawn_mock_server("query::fetch_decode_uncertain").await else {
@@ -628,11 +597,8 @@ async fn fetch_flags_decode_uncertain_for_undecodable_body() {
     );
 }
 
-/// [T-SK057] `insert_preamble_notes` prepends the note at the very top when the
-/// input carries no `---\n\n` frontmatter terminator. `format_slack_output`
-/// always emits that terminator, so this path is unreachable in production, but
-/// the fallback prepends rather than silently dropping the cap notes if that
-/// shape ever changes.
+/// [T-SK057] Without the frontmatter terminator, preamble notes must still be
+/// prepended. Current Slack formatting always supplies that terminator.
 #[test]
 fn insert_preamble_notes_prepends_when_frontmatter_absent() {
     let out = super::query::insert_preamble_notes(

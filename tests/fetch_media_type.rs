@@ -38,8 +38,8 @@ fn plain_text_survives_normal_raw_markdown_and_json() {
     }
 }
 
-/// [T-C050] The media-type branch must retain HTML conversion, while explicit
-/// non-HTML types accepted before this change must not trigger HTML JS heuristics.
+/// [T-C050] Retain HTML conversion while suppressing automatic HTML JS
+/// heuristics for accepted explicit non-HTML media types.
 #[test]
 fn html_still_converts_and_non_html_does_not_auto_render() {
     for content_type in ["text/html", "application/xhtml+xml"] {
