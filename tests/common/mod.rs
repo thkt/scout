@@ -1,21 +1,9 @@
-//! Shared test scaffolding for integration test binaries under `tests/`.
+//! Shared integration-test scaffolding. These binaries cannot use the private
+//! `src/test_support.rs` module without exposing test helpers as public API.
 //!
-//! `tests/*.rs` binaries compile as separate crates from `src/`, so they
-//! cannot see `src/test_support.rs`'s items even where that module marks them
-//! `pub(crate)` — the `pub(crate)` visibility scopes to the `scout` crate
-//! itself, not to a downstream integration-test crate that merely links
-//! against it. That module also stays private on purpose (making it `pub`
-//! would put a test-only server on the library's public API), so it cannot be
-//! re-exported either. A helper `tests/` needs has to live here instead, even
-//! where it mirrors something `src/test_support.rs` already does.
-//!
-//! `mod common;` recompiles this file separately per `tests/*.rs` binary, so
-//! an item only one binary calls reads as dead code in every other binary
-//! that also includes the module. `dead_code` is silenced at module level
-//! rather than per item so a helper added for a future binary doesn't need
-//! its own suppression. Helper contract tests live in `common/tests.rs` and
-//! are registered only by `exit_code_contract`, so adding another binary with
-//! `mod common` does not duplicate them.
+//! `mod common` recompiles this file for each binary, so helpers used only by
+//! other binaries need the module-level dead-code suppression. Helper contract
+//! tests in `common/tests.rs` are registered only by `exit_code_contract`.
 #![allow(dead_code)]
 
 use std::env;
@@ -27,22 +15,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Mirrors `guard_loopback_bind` / `bind_loopback` in `src/test_support.rs`:
-/// one bind-failure decision for every loopback-binding helper here, so a
-/// restricted environment produces the same outcome across both crates —
-/// skip (`None` + warn), or a panic when `SCOUT_NETWORK_TESTS` asserts the
-/// network must exist. Without this, a caller's
-/// `let Some(..) = spawn_mock_proxy(..) else { return; }` turns a lost bind
-/// into a file full of tests that pass while asserting nothing.
-///
-/// The warn goes to `eprintln!` rather than `tracing::warn!` as the mirrored
-/// original does: these `tests/*.rs` binaries install no tracing subscriber,
-/// so a `tracing` record would be dropped instead of reaching the operator
-/// deciding whether the skip was expected.
-///
-/// `bind_result` and `force` arrive as parameters, matching
-/// `try_spawn_with_bind` in the original, so a test can drive the skip-vs-panic
-/// decision without an environment that actually refuses to bind.
+/// Keep unavailable-loopback policy consistent with `src/test_support.rs`: warn
+/// and skip, or panic when SCOUT_NETWORK_TESTS requires actual assertions.
+/// Use stderr because integration tests install no tracing subscriber.
+/// Explicit parameters allow testing the guard without a real bind failure.
 pub(crate) fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -62,18 +38,13 @@ pub(crate) fn guard_loopback_bind(
     }
 }
 
-/// Bind a loopback listener under the guard policy above.
 fn bind_loopback(test_name: &str) -> Option<TcpListener> {
     let force = env::var("SCOUT_NETWORK_TESTS").is_ok();
     guard_loopback_bind(test_name, TcpListener::bind("127.0.0.1:0"), force)
 }
 
-/// The address to hand back and the dial counter, for every proxy mock below.
-///
-/// Panicking rather than returning `None`: [`bind_loopback`] already decided
-/// skip-vs-panic for this test run, and a bound listener that cannot report its
-/// own address is not that decision. Skipping here would drop the scenario even
-/// under `SCOUT_NETWORK_TESTS`, which exists to stop exactly that.
+/// After binding, address lookup failure must panic even under
+/// SCOUT_NETWORK_TESTS; it is not an unavailable-bind skip.
 fn addr_and_counter(listener: &TcpListener) -> (SocketAddr, Arc<AtomicUsize>) {
     let addr = listener
         .local_addr()
@@ -81,17 +52,11 @@ fn addr_and_counter(listener: &TcpListener) -> (SocketAddr, Arc<AtomicUsize>) {
     (addr, Arc::new(AtomicUsize::new(0)))
 }
 
-/// Launches the built `scout` binary. Shared by every `tests/*.rs` binary so
-/// the lookup rule (`CARGO_BIN_EXE_scout`, set by Cargo for integration
-/// tests) lives in one place instead of once per test binary.
 pub(crate) fn scout() -> Command {
     Command::new(env!("CARGO_BIN_EXE_scout"))
 }
 
-/// Every `--json` error test needs the envelope line before it can assert
-/// anything, so the rule for finding it — scan stderr line by line for the
-/// first line that parses as JSON, because `init_tracing`'s WARN/INFO lines
-/// share stderr with the envelope — lives here once.
+/// Find the JSON envelope among tracing lines sharing stderr.
 pub(crate) fn parse_envelope(output: &Output, context: &str) -> serde_json::Value {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
@@ -104,27 +69,10 @@ pub(crate) fn parse_envelope(output: &Output, context: &str) -> serde_json::Valu
         .unwrap_or_else(|e| panic!("{context} envelope must be valid JSON ({e}): {line}"))
 }
 
-/// Forward proxy mock that loops `accept` instead of serving one connection,
-/// so a client that re-dials (retry after failure, connection churn, ...)
-/// keeps getting served instead of hitting a closed listener.
-///
-/// Mirrors `spawn_forward_proxy` in `src/test_support.rs` with two deviations:
-/// the single `listener.accept()` becomes a loop, and the fixed
-/// 200/no-delay/text-body response becomes caller-supplied. `delay` is slept
-/// through after the request is drained and before the response is written. The
-/// reason phrase stays `OK` whatever `status` says, so a test asserting on the
-/// phrase itself needs a different helper. The body is taken as bytes rather
-/// than `spawn_forward_proxy`'s `&str`, so a non-UTF-8 payload survives.
-///
-/// `None` means `bind_loopback` skipped for an unavailable loopback bind,
-/// matching `spawn_forward_proxy`'s early return. The returned counter
-/// increments once per accepted connection, so a test driving several requests
-/// (a proxy retry, several keep-alive-less calls, ...) through the base URL can
-/// assert how many dials actually reached the proxy.
-///
-/// The accept loop has no exit condition other than a fatal `accept` error
-/// (e.g. the OS closing the socket), so the returned handle is not for a caller
-/// to `.join()` and wait on, which would hang until the test process exits.
+/// Serve caller-supplied bytes after `delay`, counting each accepted connection.
+/// Keep accepting so retries can re-dial; the reason phrase is always OK.
+/// Returns None under the shared bind-skip policy. The loop has no normal exit,
+/// so joining its handle would hang until process exit.
 pub(crate) fn spawn_mock_proxy(
     status: u16,
     delay: Duration,
@@ -137,14 +85,10 @@ pub(crate) fn spawn_mock_proxy(
     let handle = thread::spawn(move || {
         loop {
             let Ok((mut stream, _)) = listener.accept() else {
-                // Fatal accept error (e.g. listener torn down): stop looping
-                // rather than spin.
                 return;
             };
             counter.fetch_add(1, Ordering::SeqCst);
-            // Drain the request so the write below is the response, not
-            // racing an unread request buffer, matching
-            // `spawn_forward_proxy`'s rationale.
+            // Drain the request before replying to avoid racing unread request data.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             if !delay.is_zero() {
@@ -157,97 +101,63 @@ pub(crate) fn spawn_mock_proxy(
             .into_bytes();
             response.extend_from_slice(&body);
             let _ = stream.write_all(&response);
-            // Dropping the stream per iteration is what forces a
-            // keep-alive-unaware client to re-dial for its next request and
-            // exercise the accept loop again.
         }
     });
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
-/// One-shot forward proxy mock that answers the single connection it accepts
-/// with `raw_response` written verbatim — no status line, no
-/// `Content-Length` framing added by this helper, unlike `spawn_mock_proxy`.
-/// Exercises the non-HTTP-bytes response path `spawn_mock_proxy` cannot
-/// reach, since that helper always writes a well-formed `HTTP/1.1 ...`
-/// status line ahead of `body`.
-///
-/// Single-shot rather than looping (unlike `spawn_mock_proxy`): the `fetch`
-/// path this proves calls nothing from `src/retry.rs` at all, so a caller of
-/// this helper never dials the mock proxy more than once.
-///
-/// Returns `(base_url, connection_count, join_handle)`, or `None` when
-/// `bind_loopback` above skips for an unavailable loopback bind, matching
-/// `spawn_mock_proxy`.
+/// One-shot proxy writing response bytes verbatim, including framing or
+/// malformed status lines. Returns None under the shared bind-skip policy.
+/// Join only after a request; callers must not expect retries to be served.
 pub(crate) fn spawn_mock_proxy_raw_response(
-    raw_response: &'static [u8],
+    raw_response: &[u8],
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
     let listener = bind_loopback("spawn_mock_proxy_raw_response")?;
     let (addr, connection_count) = addr_and_counter(&listener);
     let counter = Arc::clone(&connection_count);
+    let raw_response = raw_response.to_vec();
     let handle = thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
-            // Loopback bind unavailable races aside, a failed accept here is a
-            // test-environment fault; return rather than hang the caller.
             return;
         };
         counter.fetch_add(1, Ordering::SeqCst);
-        // Drain the request so the write below is the response, not racing an
-        // unread request buffer, matching `spawn_mock_proxy`'s rationale.
+        // Drain the request before replying.
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let _ = stream.write_all(raw_response);
+        let _ = stream.write_all(&raw_response);
     });
     Some((format!("http://{addr}"), connection_count, handle))
 }
 
-/// `PATH` is restored so the OS proxy lookup still resolves. Everything else
-/// from the invoking shell stays cleared so it cannot leak into the contract
-/// under test, except the coverage output `forward_coverage_profile` carries
-/// across for the reason stated there.
-///
-/// `HOME` is deliberately not restored: neither `src/` nor any crate in
-/// `Cargo.lock` reads it. The macOS proxy lookup goes through
-/// `system-configuration` and the Linux one reads proxy env vars only.
+/// Restore PATH for OS proxy lookup and forward coverage; other shell state stays cleared.
 pub(crate) fn scout_with_clean_env() -> Command {
     let mut cmd = scout_with_env(&env::var("PATH").unwrap_or_default());
     forward_coverage_profile(&mut cmd);
     cmd
 }
 
-/// Carries the parent's coverage output path across an `env_clear()`. An
-/// instrumented child that loses it writes no `.profraw`, so every line it
-/// drives disappears from the report. It is separate from
-/// `scout_with_clean_env` because `tests/cli_integration.rs` clears the
-/// environment without restoring `PATH`, and so cannot use that builder.
+/// Forward coverage output across env_clear so instrumented child execution
+/// is included. Also used by tests that do not restore PATH.
 pub(crate) fn forward_coverage_profile(cmd: &mut Command) {
     set_coverage_profile(cmd, env::var("LLVM_PROFILE_FILE").ok().as_deref());
 }
 
-/// Testable core `forward_coverage_profile` wraps. The value arrives as a
-/// parameter rather than being read here because `unsafe_code = "forbid"`
-/// (Cargo.toml) blocks a test from mutating the real process env, which would
-/// otherwise be the only way to reach either branch.
+/// Take the value explicitly: unsafe_code forbids process-env mutation in tests.
 pub(crate) fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
     if let Some(profile) = profile {
         cmd.env("LLVM_PROFILE_FILE", profile);
     }
 }
 
-/// Testable core `scout_with_clean_env` wraps. `path` arrives as a parameter
-/// rather than being read here because `unsafe_code = "forbid"` (Cargo.toml)
-/// blocks a test from mutating the real process env.
+/// Take PATH explicitly so tests need no forbidden process-env mutation.
 pub(crate) fn scout_with_env(path: &str) -> Command {
     let mut cmd = scout();
     cmd.env_clear().env("PATH", path);
     cmd
 }
 
-/// Assert the mock proxy was dialed at least once, so a run that reached its
-/// expected outcome without ever leaving scout (a DNS or SSRF short-circuit
-/// landing on the same result by coincidence) fails instead of passing as a
-/// false positive. `consequence` stays a parameter so the panic names what
-/// the caller's own assertions rest on, which differs per call site.
+/// Require a proxy dial so a DNS/SSRF short-circuit cannot satisfy an assertion
+/// that is supposed to exercise HTTP response handling.
 pub(crate) fn assert_proxy_was_dialed(
     connection_count: &AtomicUsize,
     context: &str,

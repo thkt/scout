@@ -12,6 +12,7 @@ pub(crate) use params::Command;
 use builder::ScoutBuilder;
 use config::RuntimeConfig;
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::io::{IsTerminal, stdin};
 use std::sync::Arc;
@@ -31,14 +32,11 @@ use crate::envelope::CommandOutput;
 use crate::fetch::converter::{DECODE_UNCERTAIN_NOTE, FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
-use crate::markdown::shift_headings;
 use crate::rng::Rng;
 use crate::slack::SlackClient;
 use crate::token_source::TokenSource;
 use crate::yaml::truncate_and_reneutralize;
 
-// Production code here does not use these; the in-module test files reach them
-// through `use super::*`, so the import stays under `cfg(test)`.
 #[cfg(test)]
 use crate::envelope::DegradedReason;
 #[cfg(test)]
@@ -83,8 +81,6 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
     })
 }
 
-/// Lifecycle of the once-readable stdin buffer. Variants are mutually
-/// exclusive so `Available` and `Consumed` cannot coexist.
 enum StdinState {
     /// stdin was a TTY, or read_stdin returned empty after trim.
     NotPiped,
@@ -130,9 +126,6 @@ impl StdinResolver {
         Ok(result)
     }
 
-    /// The one place `Option<String>` maps onto [`StdinState`]. Keeping it here
-    /// rather than at the call site means adding or renaming a variant touches a
-    /// single mapping.
     fn with_content(is_terminal: bool, content: Option<String>) -> Self {
         Self {
             is_terminal,
@@ -170,12 +163,8 @@ pub(crate) struct Scout {
     /// non-Slack commands never read `SLACK_TOKEN`. Tests pre-set the cell via
     /// `ScoutBuilder::with_slack_endpoint`.
     slack: OnceCell<SlackClient>,
-    /// Sticky shutdown flag. `lib::run` flips this to `true` on SIGINT or
-    /// SIGTERM. Each `fetch_with_cdp` invocation subscribes a fresh receiver
-    /// so the cancellation is delivered to fetches that start after the
-    /// signal arrives (e.g. queued slots in `research --depth N` once an
-    /// earlier slot finishes). `Notify` was tried first but loses wakeups
-    /// when no waiter is registered at signal time.
+    /// Sticky shutdown flag delivered even to fetches queued after SIGINT/SIGTERM.
+    /// Each CDP invocation subscribes afresh; a Notify would lose earlier wakeups.
     cancel: watch::Sender<bool>,
     /// Tunables overridable via `SCOUT_*` env vars.
     config: RuntimeConfig,
@@ -183,8 +172,7 @@ pub(crate) struct Scout {
     /// rather than constructed inside `github()` so tests can inject before
     /// the `OnceCell` initializes.
     clock: Arc<dyn Clock>,
-    /// Forwarded into `GitHubClient` on first `github()` call. Same plumbing
-    /// rationale as `clock`.
+    /// Injected retry randomness for lazy GitHub initialization.
     rng: Arc<dyn Rng>,
     /// GitHub bearer token resolver, awaited inside `github()` lazy init.
     /// Held on `Scout` so tests can swap in a `StaticTokenSource` before any
@@ -202,16 +190,12 @@ pub(crate) struct Scout {
 }
 
 impl Scout {
-    /// Production entry point. Sugar for `ScoutBuilder::from_env()?.build()`;
-    /// kept async so existing `Scout::new().await` callsites compile unchanged.
+    /// Production entry point; async for existing `Scout::new().await` callers.
     pub(crate) async fn new() -> Result<Self, ScoutError> {
         Ok(ScoutBuilder::from_env()?.build())
     }
 
-    /// Hand back a cloned `watch::Sender` so `lib::run` can flip the
-    /// cancellation flag without keeping a reference to `Scout`. The clone
-    /// shares state with every receiver subscribed from the underlying
-    /// fetch paths.
+    /// Share shutdown state with `lib::run` without borrowing `Scout`.
     pub(crate) fn cancel_handle(&self) -> watch::Sender<bool> {
         self.cancel.clone()
     }
@@ -240,9 +224,8 @@ impl Scout {
             .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
     }
 
-    /// Lazy Slack client, mirroring `github()`. `get_or_try_init` defers the
-    /// fallible `from_env` (token read) to the first Slack fetch; tests inject a
-    /// wiremock-backed client by pre-setting the `OnceCell` in `build()`.
+    /// Defer the fallible Slack token read until the first Slack fetch.
+    /// Tests can pre-set the client via ScoutBuilder.
     async fn slack(&self) -> Result<&SlackClient, ScoutError> {
         self.slack
             .get_or_try_init(|| async {
@@ -253,12 +236,8 @@ impl Scout {
             .await
     }
 
-    /// Wrap a GitHub command future in the outer `github_timeout`. The inner
-    /// `repo_*` handlers chain several per-request HTTP calls (each with its own
-    /// 30s `HTTP_TIMEOUT`); a persistent 5xx makes those calls each run their
-    /// full retry budget, so without this outer cap a single command could hang
-    /// for minutes. Mirrors the `fetch`/`research`/`slack` timeout wrapping in
-    /// `query`.
+    /// Cap the whole GitHub command: several calls can each exhaust their
+    /// HTTP timeout and retry budget, otherwise taking minutes in total.
     async fn with_github_timeout<F>(&self, label: &str, fut: F) -> Result<CommandOutput, ScoutError>
     where
         F: Future<Output = Result<CommandOutput, ScoutError>>,
@@ -299,24 +278,28 @@ impl Scout {
     }
 }
 
-/// Both notes ride in the body, not in the envelope alone: without `--json` the
-/// caller receives `into_markdown()` and nothing else (`src/lib.rs`), so a
-/// degradation recorded only in `degraded_reasons` leaves a default-mode reader
-/// holding a possibly garbled page with no sign of it.
-///
-/// The order matches `format_fetched_pages`: what produced the text, then what
-/// the text may suffer from.
+/// Put degradation notes in the body so non-JSON callers also see them.
+/// Match research ordering: raw fallback before decoding uncertainty.
 fn format_fetch_output(result: &FetchResult) -> String {
-    let mut output = String::new();
-    if result.used_raw_fallback() {
-        output.push_str(RAW_FALLBACK_NOTE);
-    }
-    if result.decode_uncertain() {
-        output.push_str(DECODE_UNCERTAIN_NOTE);
-    }
-    output.push_str(&shift_headings(result.markdown(), 2));
+    let body = result.with_heading_offset(2);
+    let output = if !result.used_raw_fallback() && !result.decode_uncertain() {
+        body.into_owned()
+    } else {
+        let mut output = String::new();
+        if result.used_raw_fallback() {
+            output.push_str(RAW_FALLBACK_NOTE);
+        }
+        if result.decode_uncertain() {
+            output.push_str(DECODE_UNCERTAIN_NOTE);
+        }
+        output.push_str(&body);
+        output
+    };
 
-    truncate_and_reneutralize(&output, MAX_FETCH_OUTPUT_BYTES).into_owned()
+    match truncate_and_reneutralize(&output, MAX_FETCH_OUTPUT_BYTES) {
+        Cow::Borrowed(_) => output,
+        Cow::Owned(truncated) => truncated,
+    }
 }
 
 #[cfg(test)]

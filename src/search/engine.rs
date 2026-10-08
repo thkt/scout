@@ -13,23 +13,17 @@ use crate::brave::types::SearchResult;
 use crate::fetch;
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{DnsResolver, EgressMode};
-use crate::markdown::{escape_md_inline, md_link, sanitize_heading, shift_headings};
+use crate::markdown::{escape_md_inline, md_link, sanitize_heading};
 use crate::search::Lang;
 use crate::yaml::truncate_and_reneutralize;
 
 /// `pub(crate)` because `yaml::MAX_FIELD_BYTES` derives the per-field
 /// frontmatter cap from this same page budget.
 pub(crate) const MAX_PAGE_BYTES: usize = 4_500;
-/// Per-source cap inside one research run. `pub(crate)` for the same config
-/// invariant test that reads `brave::client::REQUEST_TIMEOUT`.
+/// Per-source timeout; exposed for the config invariant test.
 pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Aggregated output of a research session: search hits + their fetched bodies.
-///
-/// `Default` is the empty report — a real state, and the one `research` returns
-/// when a degradable Brave failure leaves nothing to report. It also lets a test
-/// name only the field it is about instead of spelling out the other two as
-/// `vec![]`.
+/// Research hits and fetched bodies. Default is the empty degraded report.
 #[derive(Debug, Default, serde::Serialize)]
 pub(crate) struct ResearchReport {
     pub(crate) fetched_pages: Vec<FetchResult>,
@@ -47,10 +41,8 @@ pub(crate) struct ResearchRequest<'a> {
     pub(crate) query: &'a str,
     pub(crate) depth: u8,
     pub(crate) lang: Lang,
-    /// Carried for the same reason `fetch` carries it (ADR-0023): under a proxy
-    /// the local DNS pre-check validates addresses scout never connects to, and
-    /// rejects hosts only the proxy can resolve. A `Direct` default here fails
-    /// every research source behind a proxy that `fetch` handles fine.
+    /// Forward proxy egress (ADR-0023) so the pre-check does not reject domains
+    /// that only the proxy can resolve.
     pub(crate) egress: EgressMode,
 }
 
@@ -82,9 +74,7 @@ pub(crate) async fn research(
     })
 }
 
-/// `research` passes `FETCH_TIMEOUT` as `source_timeout`; taking the per-source
-/// budget as an argument is what lets `T-SE015` reach the timeout arm below
-/// without waiting those 15s.
+/// Inject the source timeout so T-SE015 need not wait the production budget.
 async fn fetch_sources(
     http: &Client,
     sources: &[SearchResult],
@@ -133,13 +123,8 @@ async fn fetch_sources(
     (fetched_pages, failed_urls)
 }
 
-/// Split fetch outcomes into the report's two sections, restoring search
-/// ranking order in both.
-///
-/// `buffer_unordered` yields in completion order, so the index captured at
-/// dispatch is the only remaining record of where a URL ranked. Both lists are
-/// sorted, not just the successes: leaving the failures in completion order
-/// makes two runs over the same sources print them differently.
+/// Restore search rank after unordered completion, for successes and failures
+/// alike, so timing cannot reorder report sections.
 fn partition_by_rank(
     outcomes: Vec<(usize, &str, Result<FetchResult, fetch::FetchError>)>,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
@@ -196,19 +181,14 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         }
         // h1->h4, h2->h5, ...: unshifted, a page's own headings would collide
         // with the report's hierarchy.
-        let content = shift_headings(page.markdown(), 3);
+        let content = page.with_heading_offset(3);
         out.push_str(&truncate_and_reneutralize(&content, MAX_PAGE_BYTES));
         out.push_str("\n\n");
     }
 }
 
-/// Unlike `## Sources`, these URLs are rendered as text rather than through
-/// [`md_link`]: the fetch behind each one already failed, so offering it as
-/// something to follow points the reader at the failure again.
-///
-/// Both halves take the same escape. `escape_md_link` does not fit the URL
-/// here: it leaves `|` alone because a link target has no column to break, and
-/// nothing on this line sits inside a link.
+/// Failed URLs are text, not link targets; both URL and reason require inline
+/// escaping. Link-destination escaping would leave `|` untouched.
 fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     if failed.is_empty() {
         return;
@@ -225,11 +205,9 @@ fn format_failed_urls(failed: &[FailedUrl], out: &mut String) {
     out.push('\n');
 }
 
-/// Unlike the two sections above, this one is emitted even when empty: a
-/// report that found nothing has to be distinguishable from one whose sections
-/// went missing, so ADR-0005 marks the zero-result case explicitly rather than
-/// dropping the heading. `search` takes the opposite contract (ADR-0020 pins it
-/// to true empty output) because its consumers read it line by line.
+/// Always emit the zero-result marker (ADR-0005), distinguishing an empty
+/// report from missing sections. Search has a different empty-output contract
+/// (ADR-0020).
 fn format_sources(sources: &[SearchResult], out: &mut String) {
     out.push_str("## Sources\n\n");
     if sources.is_empty() {

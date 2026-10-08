@@ -186,6 +186,8 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
+An explicit `Content-Type: text/plain` response bypasses HTML extraction and conversion in both normal and `--raw` fetch. Its decoded body preserves literal `< > &`, heading-like text, and line breaks (including trailing blank lines) in Markdown and JSON (`data.markdown`), with an empty frontmatter block. Existing YAML marker neutralization and output limits still apply. Explicit non-HTML responses do not trigger automatic JS rendering; `--js` still explicitly requests browser output. Missing or unreadable Content-Type retains the HTML path. Other accepted text/XML types retain their existing conversion behavior.
+
 **Slack permalinks** — `fetch` detects `*.slack.com/archives/{channel}/p{ts}` URLs and routes them to the Slack Web API instead of HTML scraping. Thread parent + replies are preserved with author/timestamp metadata. Requires `SLACK_TOKEN` (User OAuth token, `xoxp-…`).
 
 ### `scout repo-tree` — Remote file listing
@@ -331,7 +333,7 @@ Sources are now the actual destination URLs (not Google redirect URLs).
 
 The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content), `## Sources` (URL list), and `## Failed URLs` (shown only when a source could not be fetched).
 
-`research` no longer hard-fails when Brave Search itself errors after retry. Instead it returns a degraded report (`data.sources: []`, no fetched pages) and adds `BraveSearchFailed` to `degraded_reasons` so callers can detect the search-tier failure without parsing error messages.
+When a degradable Brave Search error (such as HTTP 503) persists after retry, `research` returns a degraded empty report with exit code 0. The default Markdown begins with `> Warning: Brave search failed; this is a degraded report, not a successful search with no results.` A successful search with zero results has no such warning. JSON retains `degraded: true`, `notes`, and `degraded_reasons: ["BRAVE_SEARCH_FAILED"]`, with empty `sources`, `fetched_pages`, and `failed_urls` arrays. Authentication failures remain errors (exit code 64), rather than degraded reports.
 
 **`--json` schema**
 

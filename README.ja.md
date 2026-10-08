@@ -174,6 +174,8 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 
 ページのメタデータ（タイトル/著者/日付）は YAML フロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
+明示的な `Content-Type: text/plain` 応答では、通常・`--raw` とも HTML 抽出・変換を省きます。デコード済みの本文は、リテラルの `< > &`、見出し風の文字列、末尾空行を含む改行を保持し、空のフロントマター付きで Markdown または JSON（`data.markdown`）へ届きます。既存の YAML マーカー中和と出力上限は適用されます。明示的な非HTML応答では JS レンダリングを自動実行しません。`--js` は引き続きブラウザー出力を明示的に要求します。Content-Type が欠落・読取り不能なら従来の HTML 経路を使い、その他の受理済み text/XML 型も従来の変換処理を維持します。
+
 **Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式の URL を検出し、HTML スクレイピングではなく Slack Web API へルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuth トークン、`xoxp-…`）が必要です。
 
 ### `scout repo-tree` — リモートファイル一覧
@@ -320,7 +322,7 @@ Sources は実際の到達先 URL（Google のリダイレクト経由ではな�
 
 `## Search Result` セクション（Gemini が生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）、`## Sources`（URL リスト）、および `## Failed URLs`（取得に失敗した source があるときだけ出ます）は維持されます。
 
-`research` は Brave Search 自体が retry 後も失敗した場合に hard-fail しなくなりました。代わりに degraded report（`data.sources: []`、fetched pages なし）を返し、`degraded_reasons` に `BraveSearchFailed` を追加するため、呼び出し側はエラーメッセージを parse せずに検索段階の失敗を検知できます。
+HTTP 503 などの縮退可能な Brave Search エラーが再試行後も続くと、`research` は空の縮退レポートを終了コード 0 で返します。既定の Markdown は `> Warning: Brave search failed; this is a degraded report, not a successful search with no results.` で始まり、検索に成功した 0 件にはこの注意書きが付きません。JSON は `degraded: true`、`notes`、`degraded_reasons: ["BRAVE_SEARCH_FAILED"]` を維持し、`sources`、`fetched_pages`、`failed_urls` は空配列です。認証失敗は縮退レポートにならず、従来どおりエラー（終了コード 64）を返します。
 
 **`--json` スキーマ**
 

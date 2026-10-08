@@ -223,11 +223,8 @@ fn error_code_serializes_screaming_snake_case() {
     }
 }
 
-/// [T-EN014] ErrorCode → exit-code mapping per ADR-0002 (exit values),
-/// ADR-0010 (`error.code` value set), ADR-0017 (130 / 143).
-/// Drift on any listed variant fails this test. A new variant has to be added
-/// to the array by hand: omitting its `exit_code()` arm fails compile, but
-/// leaving it out of the array below does not.
+/// [T-EN014] Listed variants map to DR-0002/0010/0017 exit codes.
+/// New variants require manual additions to this table.
 #[test]
 fn error_code_exit_code_table() {
     let pairs = [

@@ -146,11 +146,7 @@ fn format_report_includes_sections() {
     assert!(text.contains("[A](https://a.com)"));
 }
 
-/// [T-SE014] partition_by_rank restores search ranking in both report sections
-///
-/// Fetches resolve in completion order, so the outcomes arrive shuffled. Sorting
-/// only the successes left `## Failed URLs` in timeout-return order, printing the
-/// same two failures in a different order on each run.
+/// [T-SE014] Hand-built out-of-order outcomes are partitioned in source rank order.
 #[test]
 fn partition_by_rank_orders_failures_like_pages() {
     let timeout = || fetch::FetchError::DnsResolution("no such host".into());
@@ -176,12 +172,8 @@ fn partition_by_rank_orders_failures_like_pages() {
     );
 }
 
-/// [T-SE013] a zero-result run still emits the Sources section, marked `(no results)`
-///
-/// DR-0005 fixes this as the zero-result contract: without the marker, a report
-/// with nothing found is byte-identical to one whose sections were dropped by a
-/// formatting fault, so a markdown reader cannot tell the two apart. This is
-/// deliberately the opposite of `search`, which DR-0020 pins to true empty output.
+/// [T-SE013] The empty report needs its explicit Sources marker (DR-0005);
+/// search's empty-output contract is different (DR-0020).
 #[test]
 fn format_report_marks_zero_results_in_sources() {
     let report = ResearchReport::default();
@@ -257,7 +249,7 @@ fn format_report_includes_fetched_pages() {
     );
 }
 
-/// [T-SE011] format_report prepends the decode-uncertain note for a flagged page
+/// [T-SE011] One flagged page emits exactly one decode-uncertain note.
 #[test]
 fn format_report_prepends_decode_uncertain_note() {
     let report = ResearchReport {
@@ -441,15 +433,9 @@ async fn research_search_failure_returns_error() {
     assert!(matches!(err, BraveError::RateLimited { .. }));
 }
 
-/// [T-SE015] Pins the payload rule stated on `FetchError::Timeout`
-/// (src/fetch.rs) for the research call site, which reported a source that
-/// can otherwise double the payload into "fetch timed out: page fetch timed
-/// out after 15s".
-///
-/// The client reaches the loopback wiremock the way `scout_reaching`
-/// (src/tools/test_helpers.rs) does — a `.resolve()` client paired with a
-/// public-address pre-flight resolver — because the SSRF guard would otherwise
-/// reject the loopback address before the budget ever elapsed.
+/// [T-SE015] Research timeouts must not repeat the error prefix.
+/// A public pre-flight resolver and loopback HTTP client bypass only the mock
+/// connection guard; otherwise SSRF rejection would mask the timeout.
 #[tokio::test]
 async fn source_fetch_timeout_states_the_timeout_once() {
     let Some(server) = try_spawn_mock_server("engine::source_timeout").await else {
@@ -498,14 +484,8 @@ async fn source_fetch_timeout_states_the_timeout_once() {
     );
 }
 
-/// [T-SE019]
-///
-/// Each page's Markdown is independently well-formed (every fence it opens,
-/// it also closes), so `format_fetched_pages` concatenating several such
-/// pages — with `shift_headings` run fresh per page rather than over the
-/// combined string — must not let one page's fence swallow the next page's
-/// heading or code content when the combined report is read as one Markdown
-/// document.
+/// [T-SE019] Two hand-built pages retain eight fence delimiters, their code text,
+/// and the second page URL heading. Fence pairing and heading position are not asserted.
 #[test]
 fn combined_research_output_keeps_each_pages_code_fences_independent() {
     let page1 = FetchResult::for_test(
@@ -545,13 +525,8 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
     }
 }
 
-/// [T-SE020]
-///
-/// `format_fetched_pages` runs `shift_headings` per page, so the fence-length
-/// tracking has to hold on the path the report takes, not only on a direct
-/// `shift_headings` call: a heading-syntax line inside the 4-backtick fence
-/// stays literal, and only the line after the matching 4-backtick close takes
-/// the page-level shift.
+/// [T-SE020] A shorter backtick line cannot close the report page's fence;
+/// only headings after the matching close may be shifted.
 #[test]
 fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     let page = FetchResult::for_test(
@@ -578,16 +553,9 @@ fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     );
 }
 
-/// [T-FC088]
-///
-/// The fixture stands in for text `neutralize_yaml_markers_outside_fences`
-/// (src/yaml.rs) already ran over: `---` survived verbatim because, at
-/// neutralization time, its 4-backtick fence was closed later on. Between
-/// the marker and that real close sits a 3-backtick line, which a fence
-/// tracker keyed on run length alone (not `markdown::track_fence`'s
-/// length-matching rule) could mistake for the close. Truncation then cuts
-/// well past that 3-backtick decoy but well before the real 4-backtick
-/// close, so the fence is genuinely still open at the cut.
+/// [T-FC088] A hand-built unclosed four-backtick fence with a shorter decoy
+/// is truncated and contains no bare YAML marker afterward.
+/// The fixture bypasses initial neutralization and has no matching close.
 #[test]
 fn combined_research_output_reneutralizes_a_marker_past_a_decoy_close_inside_a_longer_fence() {
     let filler = "y".repeat(80) + "\n";
@@ -613,12 +581,8 @@ fn combined_research_output_reneutralizes_a_marker_past_a_decoy_close_inside_a_l
     );
 }
 
-/// [T-SE018] both halves of a failed-URL line take the same escape
-///
-/// The URL went through `escape_md_link` and the reason through
-/// `escape_md_inline`, which differ on `|`: the first leaves it, since a link
-/// target has no table column to break out of. Nothing on this line is a link
-/// target, so one line could carry `a|b` beside `err \| msg`.
+/// [T-SE018] Failed URL and reason both require inline escaping; neither is
+/// a link target where `|` could safely remain unescaped.
 #[test]
 fn failed_url_line_escapes_url_and_reason_alike() {
     let report = ResearchReport {
@@ -639,5 +603,23 @@ fn failed_url_line_escapes_url_and_reason_alike() {
         line.matches(r"\|").count(),
         2,
         "url and reason must escape `|` the same way, got: {line}"
+    );
+}
+
+/// [T-SE021] Research must not reinterpret plain-text headings or consume blank lines.
+#[test]
+fn format_report_preserves_plain_text_literals() {
+    let report = ResearchReport {
+        fetched_pages: vec![fetch::converter::plain_text_result(
+            "Title\n=====\n# comment\nbody\n\n",
+            "https://example.com".into(),
+            false,
+        )],
+        ..Default::default()
+    };
+    let text = format_report(&report, "test");
+    assert!(
+        text.contains("---\n---\n\nTitle\n=====\n# comment\nbody\n\n\n\n## Sources"),
+        "{text}"
     );
 }

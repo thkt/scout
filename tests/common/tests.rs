@@ -10,24 +10,20 @@ fn bind_refused() -> io::Result<TcpListener> {
     Err(io::Error::other("bind refused"))
 }
 
-// T-C047: forced_run_panics_when_loopback_bind_fails
-//
-// The branch the callers cannot reach on their own: every `spawn_mock_proxy`
-// caller turns `None` into an early return, so without this the guard could
-// stop panicking and the suite would still be green while asserting nothing.
+// T-C047: Forced bind failure panics; callers returning on None could otherwise skip assertions.
 #[test]
 #[should_panic(expected = "SCOUT_NETWORK_TESTS is set")]
 fn forced_run_panics_when_loopback_bind_fails() {
     guard_loopback_bind("forced_run", bind_refused(), true);
 }
 
-// T-C028: unforced_run_skips_when_loopback_bind_fails
+// T-C028
 #[test]
 fn unforced_run_skips_when_loopback_bind_fails() {
     assert!(guard_loopback_bind("unforced_run", bind_refused(), false).is_none());
 }
 
-// T-C035: command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given
+// T-C035
 #[test]
 fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() {
     let mut cmd = scout_with_env("/usr/bin");
@@ -45,7 +41,7 @@ fn command_sets_llvm_profile_file_to_same_value_when_coverage_output_is_given() 
     );
 }
 
-// T-C036: command_does_not_set_llvm_profile_file_when_coverage_output_is_absent
+// T-C036
 #[test]
 fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
     let mut cmd = scout_with_env("/usr/bin");
@@ -61,7 +57,7 @@ fn command_does_not_set_llvm_profile_file_when_coverage_output_is_absent() {
     );
 }
 
-// T-C037: zero_connections_panics_with_the_given_consequence
+// T-C037
 #[test]
 #[should_panic(expected = "stdout asserted below did not come from the fixture")]
 fn zero_connections_panics_with_the_given_consequence() {
