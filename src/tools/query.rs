@@ -9,9 +9,8 @@ use crate::brave::client::SearchClient as _;
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_page};
-use crate::markdown::truncate_with_note;
 use crate::search::engine;
-use crate::slack::{SlackError, SlackUrl, parse_slack_url};
+use crate::slack::{SlackError, SlackUrl, parse_slack_url, truncate_slack_output};
 
 use super::params::{FetchParams, ResearchParams, SearchParams};
 use super::{MAX_FETCH_OUTPUT_BYTES, Scout, ScoutError, format_fetch_output, resolve_stdin_arg};
@@ -125,7 +124,7 @@ impl Scout {
 
         // Add the preamble after truncation so it survives the body cap.
         // The truncator already reports output truncation at the body end.
-        let truncated = truncate_with_note(&outcome.markdown, MAX_FETCH_OUTPUT_BYTES);
+        let truncated = truncate_slack_output(&outcome.markdown, MAX_FETCH_OUTPUT_BYTES);
         let output_truncated = matches!(truncated, Cow::Owned(_));
 
         let mut degradation = Degradation::default();

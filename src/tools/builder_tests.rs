@@ -5,6 +5,7 @@ use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
 use crate::rng::SeededRng;
 use crate::test_support::{join_server_thread, spawn_forward_proxy, try_spawn_mock_server};
 use crate::token_source::StaticTokenSource;
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
@@ -427,7 +428,7 @@ async fn fetch_slack_users_info_success_omits_lookup_failed_reason() {
 
 /// [T-SK052] A message body over `MAX_FETCH_OUTPUT_BYTES` (100KB) is truncated,
 /// and `fetch_slack` reports it via `SLACK_OUTPUT_TRUNCATED` plus the inline
-/// byte-count note that `truncate_with_note` appends at the body end. A cut
+/// byte-count note appended at the body end. A cut
 /// without the note is a silent one.
 #[tokio::test]
 async fn fetch_slack_output_truncation_sets_degraded_reason() {
@@ -480,7 +481,7 @@ async fn fetch_slack_thread_cap_note_survives_output_truncation() {
         return;
     };
     let parent_ts = "1000.000001";
-    let huge = "x".repeat(150_000);
+    let huge = format!("```rust\n{}\n```", "let x = 1;\n".repeat(15_000));
     // Every page advertises another (page cap) and the parent body is oversized
     // (output cap), so both degradations fire on one fetch.
     Mock::given(method("GET"))
@@ -513,6 +514,22 @@ async fn fetch_slack_thread_cap_note_survives_output_truncation() {
         .await
         .expect("an oversized truncated thread still resolves");
 
+    let mut in_code = false;
+    for event in Parser::new(output.markdown()) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(text)
+                if text.contains("Thread truncated") || text.contains("(truncated:") =>
+            {
+                assert!(!in_code, "generated notes must remain outside code");
+            }
+            _ => {}
+        }
+    }
+    assert!(output.markdown().contains("(truncated: showing"));
+    assert!(output.markdown().contains("let x = 1;"));
+    assert_eq!(output.data()["markdown"], output.markdown());
     let reasons = output.degraded_reasons();
     assert!(
         reasons.contains(&DegradedReason::SlackThreadTruncated)

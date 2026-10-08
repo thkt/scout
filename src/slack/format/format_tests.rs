@@ -175,3 +175,181 @@ fn extract_target_rejects_a_neighbour_returned_for_a_missing_ts() {
         "a message with a different ts is not the requested one"
     );
 }
+
+/// [T-SK091] Message fences cannot absorb reply labels or subsequent bodies.
+#[test]
+fn message_fences_preserve_reply_boundaries() {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let url = parse_slack_url("https://team.slack.com/archives/C123/p1111111111222222")
+        .expect("URL fixture should parse");
+    for text in [
+        "```rust\nlet x = 1;",
+        "~~~~\nlet x = 1;\n~~~",
+        "`````rust\nlet x = 1;\n```",
+        "```rust\nlet x = 1;\n```",
+        "~~~rust\nlet x = 1;\n~~~",
+        "```rust\nlet x = 1;\n\tdata\t\n```\t",
+        "```rust\nlet x = 1;\r```\t",
+        "~~~rust\rlet x = 1;\r---\r...\r~~~\t\rafter close",
+        "```rust\r\nlet x = 1;\r\n```\t\r\nafter close",
+        "````rust\nlet x = 1;\n```\t\n````\t\nafter close\t",
+        "~~~~rust\nlet x = 1;\n\tdata\t\n ~~~~~\t \t\nafter close",
+    ] {
+        for author in ["reply-author", "```", "~~~", "evil\n```\n---"] {
+            let first = ResolvedMessage {
+                author: "parent".into(),
+                text: text.into(),
+                ts: "1111111111.222222".into(),
+            };
+            let replies = [
+                ResolvedMessage {
+                    author: author.into(),
+                    text: "reply body\n~~~\nreply code".into(),
+                    ts: "2.000001".into(),
+                },
+                ResolvedMessage {
+                    author: "last-author".into(),
+                    text: "last body".into(),
+                    ts: "3.000001".into(),
+                },
+            ];
+            let output = format_slack_output(&url, "#general", &first, &replies);
+            let body = output.split_once("---\n\n").unwrap().1;
+            let mut in_code = false;
+            let mut prose = String::new();
+            let mut code = String::new();
+            for event in Parser::new(body) {
+                match event {
+                    Event::Start(Tag::CodeBlock(_)) => in_code = true,
+                    Event::End(TagEnd::CodeBlock) => in_code = false,
+                    Event::Text(text) if in_code => code.push_str(&text),
+                    Event::Text(text) => prose.push_str(&text),
+                    _ => {}
+                }
+            }
+            assert!(
+                prose.contains("reply body"),
+                "reply body must be outside code: {author:?}, {text:?}"
+            );
+            assert!(prose.contains("last-author (3.000001):") && prose.contains("last body"));
+            assert!(
+                prose.contains("(2.000001):"),
+                "timestamp must remain outside code"
+            );
+            let expected_author = if author == "evil\n```\n---" {
+                "evil ``` ***"
+            } else {
+                author
+            };
+            assert!(
+                prose.contains(expected_author),
+                "display name must remain visible"
+            );
+            assert!(code.contains("let x = 1;"));
+            if text.contains("data") {
+                assert!(code.contains("\tdata\t\n"), "code tabs must be preserved");
+                assert!(!code.contains("```\t") && !code.contains("~~~~~\t"));
+            }
+            if text.starts_with("````rust\n") {
+                assert!(
+                    code.contains("```\t\n"),
+                    "a short decoy close must retain its tab"
+                );
+                assert!(
+                    body.contains("after close\t"),
+                    "prose tabs must be preserved"
+                );
+            }
+            if text.contains("after close") {
+                assert!(
+                    prose.contains("after close"),
+                    "prose after a close must stay prose"
+                );
+            }
+            assert!(
+                !body.lines().any(|line| line == "..."),
+                "normalization must not expose YAML end markers"
+            );
+            if text.contains("\r---\r") {
+                assert!(
+                    code.contains("***"),
+                    "CR-delimited YAML markers must be neutralized"
+                );
+                assert!(!code.contains("---"));
+            }
+            assert!(!code.contains("reply body") && !code.contains("last-author"));
+            if text.ends_with("```") || text.ends_with("~~~rust\nlet x = 1;\n~~~") {
+                assert!(body.starts_with(text), "closed source must be preserved");
+            }
+        }
+    }
+}
+
+/// [T-SK090] Truncation closes code before the note within the source byte cap.
+#[test]
+fn truncated_slack_fences_keep_note_outside_code_and_bound_closure() {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let closed = "```rust\nlet x = 1;\n```\n";
+    assert!(matches!(
+        truncate_slack_output(closed, closed.len()),
+        Cow::Borrowed(_)
+    ));
+    assert_eq!(truncate_slack_output(closed, closed.len()), closed);
+    for (marker, width) in [('`', 3), ('~', 5), ('`', 90_000), ('~', 100_001)] {
+        let fence = marker.to_string().repeat(width);
+        for source in [
+            format!("metadata\n\n{fence}\n{}\n{fence}\n", "éé\n".repeat(32_000)),
+            format!(
+                "metadata\n\n{fence}\n\tlet x = 1;\t\n{fence}\t \t\n{}\n",
+                "outside ".repeat(20_000)
+            ),
+            format!(
+                "metadata\n\n{fence}\n\tlet x = 1;\t\r{fence}\t\n{}\n",
+                "outside ".repeat(20_000)
+            ),
+        ] {
+            let output = truncate_slack_output(&source, 100_000);
+            let (retained, note) = output.split_once("\n\n(truncated: showing").unwrap();
+            assert!(
+                retained.len() <= 100_000,
+                "closure must fit in the original byte cap"
+            );
+            assert!(note.contains(&format!(" / {} bytes)", source.len())));
+            let mut in_code = false;
+            let mut note_in_prose = false;
+            let mut code = String::new();
+            for event in Parser::new(&output) {
+                match event {
+                    Event::Start(Tag::CodeBlock(_)) => in_code = true,
+                    Event::End(TagEnd::CodeBlock) => in_code = false,
+                    Event::Text(text) if text.contains("(truncated:") => {
+                        assert!(!in_code, "truncation note must not become code");
+                        note_in_prose = true;
+                    }
+                    Event::Text(text) if in_code => code.push_str(&text),
+                    _ => {}
+                }
+            }
+            assert!(note_in_prose);
+            if width < 10 && source.contains("let x = 1;") {
+                assert_eq!(
+                    code, "\tlet x = 1;\t\n",
+                    "only source code belongs in the block"
+                );
+            }
+            if width < 10 {
+                assert!(
+                    retained.contains("éé") || retained.contains("let x = 1;"),
+                    "retain primary-source code when closure fits"
+                );
+            } else {
+                assert!(
+                    !retained.contains(&fence),
+                    "drop an opener whose closure cannot fit"
+                );
+            }
+        }
+    }
+}

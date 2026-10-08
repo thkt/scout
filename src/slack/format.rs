@@ -1,13 +1,18 @@
 //! Slack message resolution (mention substitution, author/ts lookup) and the
 //! YAML-frontmatter + body rendering of a resolved permalink.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::iter::repeat_n;
+use std::ops::Range;
 
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use super::{SlackUrl, resolved_display_name, substitute_mentions};
+use crate::markdown::{report_parser_input, truncation_note};
 use crate::yaml::{neutralize_yaml_markers, write_yaml_str};
 
 #[derive(Deserialize)]
@@ -94,26 +99,24 @@ pub(in crate::slack) fn format_slack_output(
     write_yaml_str(&mut out, "author", &first.author);
     write_yaml_str(&mut out, "ts", &slack_url.ts);
     if !replies.is_empty() {
-        // Numeric, so it is written unquoted — the one key here that is not a
-        // string scalar, rather than a fifth look-alike.
         let _ = writeln!(out, "context_messages: {}", replies.len());
     }
     write_yaml_str(&mut out, "url", &slack_url.raw_url);
     out.push_str("---\n\n");
 
-    out.push_str(&neutralize_yaml_markers(&first.text));
+    out.push_str(&finish_message(&first.text));
 
     for msg in replies {
         let ts_suffix = if msg.ts.is_empty() {
             String::new()
         } else {
-            format!(" ({})", msg.ts)
+            format!(" ({})", reply_label(&msg.ts))
         };
         out.push_str(&format!(
             "\n\n---\n\n{}{}:\n{}",
-            neutralize_yaml_markers(&msg.author),
+            reply_label(&msg.author),
             ts_suffix,
-            neutralize_yaml_markers(&msg.text)
+            finish_message(&msg.text)
         ));
     }
 
@@ -122,6 +125,165 @@ pub(in crate::slack) fn format_slack_output(
     }
 
     out
+}
+
+fn finish_message(text: &str) -> String {
+    // Normalize line boundaries before YAML defense so CR cannot expose a marker.
+    let text = slack_line_endings(text);
+    let mut out = neutralize_yaml_markers(&text);
+    let fences = observe_slack_fences(&out);
+    out = normalize_closing_tabs(out, &fences.closes);
+    if let Some((_, marker, width)) = fences.dangling {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.extend(repeat_n(marker, width));
+    }
+    out
+}
+
+fn slack_line_endings(text: &str) -> Cow<'_, str> {
+    let has_lone_cr = text
+        .bytes()
+        .enumerate()
+        .any(|(i, b)| b == b'\r' && text.as_bytes().get(i + 1) != Some(&b'\n'));
+    if !has_lone_cr {
+        return Cow::Borrowed(text);
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
+            bytes[i] = b'\n';
+        }
+    }
+    Cow::Owned(String::from_utf8(bytes).expect("ASCII replacements preserve UTF-8"))
+}
+
+struct SlackFences {
+    closes: Vec<Range<usize>>,
+    dangling: Option<(usize, char, usize)>,
+}
+
+/// Observe closes and the dangling opener together on the normalized input.
+/// Offsets remain valid when lone CR and closing tabs are emitted as spaces/LF.
+fn observe_slack_fences(body: &str) -> SlackFences {
+    let parsed = report_parser_input(body);
+    let mut fences = SlackFences {
+        closes: Vec::new(),
+        dangling: None,
+    };
+    let mut depth = 0;
+    for (event, range) in Parser::new(&parsed).into_offset_iter() {
+        match event {
+            Event::Start(tag) => {
+                if depth == 0 && matches!(tag, Tag::CodeBlock(CodeBlockKind::Fenced(_))) {
+                    let block = &parsed[range.clone()];
+                    let opener = block.trim_start_matches(' ');
+                    let marker = opener.as_bytes()[0];
+                    let width = opener.bytes().take_while(|&b| b == marker).count();
+                    let close = block.split_once('\n').and_then(|(_, rest)| {
+                        let line = rest.lines().last()?;
+                        let indent = line.bytes().take_while(|&b| b == b' ').count();
+                        let trimmed = &line[indent..];
+                        let close_width = trimmed.bytes().take_while(|&b| b == marker).count();
+                        if indent > 3
+                            || close_width < width
+                            || !trimmed[close_width..].trim_matches([' ', '\r']).is_empty()
+                        {
+                            return None;
+                        }
+                        let end = range.end
+                            - usize::from(block.ends_with('\n'))
+                            - usize::from(block.ends_with("\r\n"));
+                        Some(end - line.len()..end)
+                    });
+                    if let Some(close) = close {
+                        if body[close.clone()].contains('\t') {
+                            fences.closes.push(close);
+                        }
+                    } else {
+                        let start = parsed[..range.start].rfind('\n').map_or(0, |p| p + 1);
+                        fences.dangling = Some((start, char::from(marker), width));
+                        break;
+                    }
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    fences
+}
+
+/// Rewrite observed closing delimiters only, preserving code and prose tabs.
+fn normalize_closing_tabs(body: String, closes: &[Range<usize>]) -> String {
+    if closes.is_empty() {
+        return body;
+    }
+    let mut bytes = body.into_bytes();
+    for range in closes {
+        for byte in &mut bytes[range.clone()] {
+            if *byte == b'\t' {
+                *byte = b' ';
+            }
+        }
+    }
+    String::from_utf8(bytes).expect("ASCII replacements preserve UTF-8")
+}
+
+/// Keep reply labels on one line and prevent delimiter runs from opening code.
+fn reply_label(text: &str) -> String {
+    let mut out = String::new();
+    for c in neutralize_yaml_markers(text).chars() {
+        match c {
+            '\n' | '\r' => out.push(' '),
+            '\\' | '`' | '~' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Complete a cut Slack body before its note. Synthetic delimiters consume the
+/// source budget; if an opener and its close cannot fit, omit that block.
+/// Notes and degradation preambles retain their existing overhead allowance.
+pub(crate) fn truncate_slack_output(source: &str, max_bytes: usize) -> Cow<'_, str> {
+    if source.len() <= max_bytes {
+        return Cow::Borrowed(source);
+    }
+    let mut end = slack_cut_boundary(source, max_bytes);
+    let fences = loop {
+        let fences = observe_slack_fences(&source[..end]);
+        let Some((start, _, width)) = fences.dangling else {
+            break fences;
+        };
+        let overhead = width.saturating_add(2);
+        if overhead <= max_bytes.saturating_sub(end) {
+            break fences;
+        }
+        let reduced = slack_cut_boundary(source, max_bytes.saturating_sub(overhead));
+        end = if reduced <= start { start } else { reduced };
+    };
+    let mut out = normalize_closing_tabs(
+        slack_line_endings(&source[..end]).into_owned(),
+        &fences.closes,
+    );
+    if let Some((_, marker, width)) = fences.dangling {
+        out.push('\n');
+        out.extend(repeat_n(marker, width));
+        out.push('\n');
+    }
+    out.push_str(&truncation_note(end, source.len()));
+    Cow::Owned(out)
+}
+
+fn slack_cut_boundary(source: &str, budget: usize) -> usize {
+    let boundary = source.floor_char_boundary(budget);
+    source[..boundary].rfind('\n').map_or(boundary, |p| p + 1)
 }
 
 #[cfg(test)]
