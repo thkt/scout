@@ -42,7 +42,7 @@ fn format_overview_minimal() {
     assert!(!output.contains("## Recent Issues"));
 }
 
-/// [T-GF007] format_overview renders language, license, topics, and description rows
+/// [T-GF007] Language, license, topics and description appear in the output.
 #[test]
 fn format_overview_with_metadata() {
     let repo = sample_repo();
@@ -259,7 +259,7 @@ fn parse_shown_bytes(output: &str) -> usize {
         .expect("shown bytes should be a number")
 }
 
-/// [T-GF020] README passes through intact when below MAX_README_BYTES
+/// [T-GF020] A below-cap README emits no truncation note.
 #[test]
 fn readme_no_truncation_under_limit() {
     let repo = sample_repo();
@@ -270,7 +270,7 @@ fn readme_no_truncation_under_limit() {
     assert!(!output.contains("truncated"));
 }
 
-/// [T-GF021] README passes through intact at exactly MAX_README_BYTES
+/// [T-GF021] A README at the byte cap emits no truncation note.
 #[test]
 fn readme_no_truncation_at_exact_limit() {
     let repo = sample_repo();
@@ -356,7 +356,7 @@ fn readme_truncation_multibyte_with_newlines() {
     );
 }
 
-/// [T-GF036] README truncation note is appended after heading shift so it is not rewritten
+/// [T-GF036] The truncation note has no h2/h3 prefix.
 #[test]
 fn readme_truncation_note_not_heading_shifted() {
     let repo = sample_repo();
@@ -427,4 +427,96 @@ fn readme_closed_fence_dashes_stay_verbatim() {
         output.contains("```\n---\n```"),
         "a --- inside a closed fence is source code, not a YAML marker, and should not be rewritten"
     );
+}
+
+/// [T-GF048] Literal boundaries after cut fences; normal container blocks
+/// must not gain a fence. Keep the conservative whole-body YAML fallback.
+#[test]
+fn truncated_fences_keep_overview_sections_independent() {
+    let issues = [IssueInfo {
+        number: 1,
+        title: "Issue".into(),
+        html_url: "https://example.com/issue".into(),
+        labels: vec![],
+        user: None,
+        pull_request: None,
+    }];
+    let pulls = [PullInfo {
+        number: 2,
+        title: "Pull".into(),
+        html_url: "https://example.com/pull".into(),
+        draft: Some(false),
+        user: None,
+    }];
+    let releases = [ReleaseInfo {
+        tag_name: "v1".into(),
+        name: None,
+        html_url: "https://example.com/release".into(),
+        published_at: None,
+        prerelease: false,
+    }];
+    // Normal HTML/container fences must not trigger completion.
+    for prefix in [
+        "<!--\n```\n-->\n",
+        "- ```rust\n  let x = 1;\n  ```\n",
+        "<pre>\n```\n</pre>\n",
+        "<![CDATA[\n```\n]]>\n",
+        "```\rcode\r```\n",
+        "```\ncode\n```\t\nprose\n",
+    ] {
+        for padding in [String::new(), "ordinary text\n".repeat(2500)] {
+            let readme = format!("{prefix}\n{padding}");
+            let output = format_overview(&sample_repo(), Some(&readme), &issues, &pulls, &releases);
+            let retained = output
+                .split("## README\n\n")
+                .nth(1)
+                .unwrap()
+                .split("\n\n## Recent Issues\n")
+                .next()
+                .unwrap();
+            if padding.is_empty() {
+                assert_eq!(
+                    retained.trim_end(),
+                    prefix.trim_end(),
+                    "false completion: {prefix:?}"
+                );
+            } else {
+                assert!(retained.ends_with(')'), "false completion: {prefix:?}");
+            }
+            assert!(retained.starts_with(prefix.trim_end()));
+            assert_eq!(output.contains("(truncated: showing"), !padding.is_empty());
+            assert!(output.contains("\n\n## Recent Issues\n"));
+            assert!(output.contains("\n\n## Recent Pull Requests\n"));
+            assert!(output.contains("\n\n## Recent Releases\n"));
+        }
+    }
+    // Invalid Markdown fence syntax still triggers conservative YAML defense.
+    let readme = "```\n---\n```\n\n```` ``` ```` before marker\n... tail";
+    let output = format_overview(&sample_repo(), Some(readme), &issues, &pulls, &releases);
+    assert!(output.contains("```\n***\n```"));
+    assert!(output.contains("*** tail\n\n## Recent Issues\n"));
+    for (opening, decoy, closing) in [
+        ("```rust", "~~~", "```"),
+        ("~~~~rust", "~~~", "~~~~"),
+        ("`````rust", "````", "`````"),
+        ("   ```rust", "``` not a close", "```"),
+    ] {
+        let readme = format!(
+            "{opening}\n{decoy}\n---\n...\n{}\n{closing}\n",
+            "let x = 1;\n".repeat(2500)
+        );
+        let output = format_overview(&sample_repo(), Some(&readme), &issues, &pulls, &releases);
+        let shown = parse_shown_bytes(&output);
+        assert!(shown > 0 && shown <= MAX_README_BYTES);
+        assert!(!output.lines().any(|line| matches!(line, "---" | "...")));
+        assert!(
+            output.contains(&format!(")\n{closing}\n\n## Recent Issues\n")),
+            "README must close before issues: {opening:?}"
+        );
+        assert!(output.contains("\n## Recent Pull Requests\n"));
+        assert!(output.contains("\n## Recent Releases\n"));
+        assert!(output.contains("[#1](https://example.com/issue) Issue"));
+        assert!(output.contains("[#2](https://example.com/pull) Pull"));
+        assert!(output.contains("[v1](https://example.com/release)"));
+    }
 }

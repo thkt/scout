@@ -1,8 +1,6 @@
-//! Headless Chrome rendering via the Chrome DevTools Protocol (CDP).
+//! Headless Chrome rendering via CDP, with SSRF-checked navigation.
 //!
-//! Extracted from fetch.rs: browser discovery, launch, SSRF-checked CDP
-//! navigation. Most items are gated behind the `js-rendering` feature; the
-//! error type and request gate compile in both modes (dead in default).
+//! The error type and request gate also compile without `js-rendering`.
 
 mod launch;
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
@@ -31,8 +29,7 @@ use super::FetchError;
 use super::ssrf::{self, RedactedLogUrl, ValidatedUrl};
 #[cfg(feature = "js-rendering")]
 use launch::{
-    check_browser_request, parse_ws_url_from_lines, reap_pgroup, resolve_browser_binary,
-    spawn_chromium_pgroup,
+    check_browser_request, parse_ws_url_from_lines, resolve_browser_binary, spawn_chromium_pgroup,
 };
 
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
@@ -61,12 +58,8 @@ impl From<BrowserError> for FetchError {
     }
 }
 
-/// Reasons the CDP request-pause interceptor aborts.
-///
-/// Surfaces a failure inside the spawned interceptor task to the navigation
-/// task via a `oneshot` channel — without this, an `execute()` failure on the
-/// Continue/Fail command would be silently dropped and the subrequest would
-/// hang until the CDP timeout fires.
+/// Forwards interceptor failures to navigation instead of leaving a paused
+/// subrequest waiting until the CDP timeout.
 #[cfg(feature = "js-rendering")]
 #[derive(Debug, thiserror::Error)]
 enum CdpInterceptError {
@@ -81,24 +74,13 @@ impl From<CdpInterceptError> for BrowserError {
     }
 }
 
-/// Per-stage cap inside a `--js` fetch: once on the wait for chromium's
-/// DevTools URL, once on the navigation. `pub(crate)` so the config invariant
-/// test can assert the outer `fetch_timeout` exceeds one stage, mirroring what
-/// `HTTP_TIMEOUT` does for `github_timeout`; `mod cdp` stays
-/// private, so the only way in is `fetch`'s re-export.
-///
-/// The two stages are serial, so their sum (120s) exceeds the `fetch_timeout`
-/// default (95s) and the outer budget cuts a run that spends the full cap on
-/// both. That is deliberate — the outer value is the per-URL wall-clock the
-/// caller was promised — but it means the second stage's own timeout is not
-/// reachable on the default configuration.
+/// Each DevTools URL wait and navigation has a separate 60s cap (DR-0019).
+/// Their combined budget can exceed the default 95s outer fetch timeout.
+/// Exposed within the crate for the timeout hierarchy check.
 #[cfg(feature = "js-rendering")]
 pub(crate) const CDP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Aborts the wrapped task when dropped, so the SSRF proxy is torn down on every
-/// exit path of `fetch_with_cdp` (early `return`s included). Awaiting the task to
-/// observe a panic is not possible from `Drop`; an abort is sufficient because the
-/// proxy holds no state that must be flushed.
+/// Aborts tasks on Future destruction; browser cleanup has a synchronous owner.
 #[cfg(feature = "js-rendering")]
 struct AbortOnDrop(JoinHandle<()>);
 
@@ -109,8 +91,7 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Resolve the browser binary, then render via CDP. Binary discovery runs per
-/// call (no process-global cache) so the path stays injectable for tests.
+/// Resolves the binary per fetch so PATH injection remains isolated.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp(
     url: &ValidatedUrl,
@@ -121,12 +102,7 @@ pub(super) async fn fetch_with_cdp(
     fetch_with_cdp_with(url, &browser_path, resolver, cancel).await
 }
 
-/// Render `url` with headless chromium at `browser_path` via CDP.
-///
-/// Seam for testing: the browser binary path is injected, so a test can drive
-/// the launch path with a bogus path (asserting `ProcessFailed`) without a real
-/// Chrome on the host. `fetch_with_cdp` is the production caller that resolves
-/// the path first.
+/// Renders via an injected browser path, including the production launch path.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn fetch_with_cdp_with(
     url: &ValidatedUrl,
@@ -137,35 +113,26 @@ pub(super) async fn fetch_with_cdp_with(
     use chromiumoxide::Browser;
     use futures::StreamExt;
 
-    // Launch the loopback SSRF proxy before chromium so its port can be wired
-    // into the proxy flags. chromium routes every TCP egress through it and the
-    // proxy re-validates connect-time IPs, closing the DNS-rebind gap that the
-    // resolve-time `check_browser_request` pre-flight cannot reach.
+    // Start the proxy first to supply its port to chromium. Connect-time IP
+    // validation closes the DNS-rebinding gap left by subrequest pre-checks.
     let (proxy_port, proxy_task) =
         proxy::spawn_ssrf_proxy(Arc::clone(&resolver), cancel.subscribe())
             .await
             .map_err(|e| BrowserError::ProcessFailed(format!("spawn SSRF proxy: {e}")))?;
 
-    // Abort the proxy on every exit path (early `return`s included) via RAII.
-    // Declared before the chromium locals so it drops last — after `reap_pgroup`
-    // below — so no late subrequest can reach the proxy once chromium is gone and
-    // its validation context with it. On the SIGINT path the `cancel` flag already
-    // ended the accept loop, so the abort is a no-op there and a stop otherwise.
+    // Declared before chromium so group termination precedes proxy abort.
     let _proxy_guard = AbortOnDrop(proxy_task);
 
-    // `_profile_dir` guards the chromium `--user-data-dir`. Held until this
-    // function returns — i.e. after every `reap_pgroup` path below — so its
-    // `Drop` removes the dir only once chromium has exited.
-    let (mut child, pgid, reader, _profile_dir) = spawn_chromium_pgroup(browser_path, proxy_port)?;
+    let (mut process, reader) = spawn_chromium_pgroup(browser_path, proxy_port)?;
 
     let ws_url = match timeout(CDP_TIMEOUT, parse_ws_url_from_lines(reader)).await {
         Ok(Ok(url)) => url,
         Ok(Err(e)) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(e);
         }
         Err(_) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(BrowserError::TimedOut);
         }
     };
@@ -176,29 +143,22 @@ pub(super) async fn fetch_with_cdp_with(
     let (mut browser, mut handler) = match connect_result {
         Ok(pair) => pair,
         Err(e) => {
-            reap_pgroup(pgid, &mut child).await;
+            process.reap().await;
             return Err(e);
         }
     };
 
-    let handler_task = tokio::spawn(async move {
+    let mut handler_task = AbortOnDrop(tokio::spawn(async move {
         while let Some(h) = handler.next().await {
             if let Err(e) = h {
                 debug!(error = ?e, "CDP handler stream ended with error");
                 break;
             }
         }
-    });
+    }));
 
-    // Race navigate against cancellation so SIGINT/SIGTERM still reaches the
-    // graceful close path below. Without this branch the future would be
-    // dropped by the outer select! in lib::run and chromium subprocesses
-    // would orphan to ppid=1.
-    //
-    // `wait_for` is sticky: if the flag was already `true` at subscribe time
-    // (e.g. SIGINT arrived while reqwest was still downloading the initial
-    // HTML), the closure runs against the current value and returns
-    // immediately. `Notify` would have silently dropped that wakeup.
+    // Cancellation reaches graceful close; outer timeout/drain cutoff uses Drop.
+    // `wait_for` also sees cancellation sent before subscription.
     let mut rx = cancel.subscribe();
     let result = tokio::select! {
         biased;
@@ -208,41 +168,31 @@ pub(super) async fn fetch_with_cdp_with(
         }
     };
 
-    // Drive the CDP graceful close first so chromium runs its own teardown
-    // sequence (flush IPC, write profile state, etc). Surface both arms:
-    // an `Err` from close() means CDP refused the teardown, an `Elapsed`
-    // means chromium hung past the budget; either way `reap_pgroup` below
-    // will SIGTERM/SIGKILL but operators need to see why the graceful path
-    // failed.
+    // Close before group termination so chromium can flush profile state.
     match timeout(Duration::from_secs(5), browser.close()).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => warn!(error = ?e, "CDP browser.close() returned error"),
         Err(_) => warn!(
             timeout_secs = 5,
-            "CDP browser.close() exceeded timeout; falling back to reap_pgroup"
+            "CDP browser.close() exceeded timeout; falling back to process group cleanup"
         ),
     }
-    handler_task.abort();
-    match handler_task.await {
+    handler_task.0.abort();
+    match (&mut handler_task.0).await {
         Ok(()) => {}
         Err(e) if e.is_cancelled() => {}
         Err(e) => error!(error = ?e, "CDP handler task panicked"),
     }
 
-    // macOS has no PR_SET_PDEATHSIG, so Helper Renderer / GPU / Network service
-    // would otherwise reparent to ppid=1 after browser.close() returns.
-    // chrome_crashpad_handler may also outlive its parent by design.
-    reap_pgroup(pgid, &mut child).await;
+    // Browser helpers and crashpad may outlive browser.close(), especially on
+    // macOS where there is no PR_SET_PDEATHSIG.
+    process.reap().await;
 
     result
 }
 
-/// Open a page, navigate to `url`, and return the rendered HTML.
-///
-/// Every subrequest the page issues is intercepted through `Fetch.RequestPaused`
-/// and run past `resolver` before it is allowed to continue, so a page cannot
-/// reach an internal address by way of a resource it loads. Borrows the browser
-/// so the caller keeps ownership and can still tear it down after a timeout.
+/// Intercepts subrequests for SSRF validation before navigation.
+/// Borrows the browser so the caller retains timeout cleanup ownership.
 #[cfg(feature = "js-rendering")]
 async fn cdp_navigate(
     browser: &mut chromiumoxide::Browser,
@@ -272,7 +222,7 @@ async fn cdp_navigate(
 
     let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
     let intercept_page = page.clone();
-    let interceptor = tokio::spawn(async move {
+    let mut interceptor = AbortOnDrop(tokio::spawn(async move {
         while let Some(event) = events.next().await {
             let req_url = &event.request.url;
             let allowed = check_browser_request(req_url, resolver.as_ref()).await;
@@ -297,7 +247,7 @@ async fn cdp_navigate(
                 break;
             }
         }
-    });
+    }));
 
     let navigation = async {
         page.goto(url.as_str())
@@ -309,8 +259,7 @@ async fn cdp_navigate(
     };
     tokio::pin!(navigation);
     let mut intercept_err_rx = intercept_err_rx;
-    // `biased;` so a fast-completing navigation cannot race past an
-    // already-sent intercept error.
+    // An already-sent intercept error must win over completed navigation.
     let result = tokio::select! {
         biased;
         intercept_err = &mut intercept_err_rx => Err(intercept_err
@@ -321,8 +270,8 @@ async fn cdp_navigate(
         nav_result = &mut navigation => nav_result,
     };
 
-    interceptor.abort();
-    match interceptor.await {
+    interceptor.0.abort();
+    match (&mut interceptor.0).await {
         Ok(()) => {}
         Err(e) if e.is_cancelled() => {}
         Err(e) => error!(error = ?e, "CDP intercept task panicked"),

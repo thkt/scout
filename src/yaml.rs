@@ -1,11 +1,10 @@
 //! Frontmatter YAML neutralization helpers shared by the fetch and Slack paths.
-//!
-//! Limited to frontmatter neutralization; this module does not parse or serialize YAML.
 
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::iter::repeat_n;
 
-use crate::markdown::{track_fence, truncate_with_note};
+use crate::markdown::{dangling_report_fence, track_fence, truncate_with_note};
 use crate::search::engine::MAX_PAGE_BYTES;
 
 /// Neutralize YAML document markers in untrusted body text appended after a
@@ -36,17 +35,9 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
     }
 }
 
-/// Apply [`neutralize_yaml_markers`]'s rewrite rule only outside a fenced code
-/// block, so a marker quoted inside a closed fence stays as written.
-///
-/// A body ending with a fence still open falls back to the whole-body rewrite
-/// rather than keeping the partial result: an unclosed fence is more likely a
-/// stray backtick run than a real code block, and the partial result would
-/// leave every line after it unprotected.
-///
-/// `src/slack/format.rs` does not use this variant. Slack message text reaches
-/// the leaf nearly raw, so one attacker-authored unclosed fence would turn off
-/// neutralization for everything after it.
+/// Preserve markers inside closed conservative fences; rewrite the whole body
+/// if a fence remains open so its tail cannot bypass YAML defense.
+/// Slack uses unconditional rewriting because its input is nearly raw.
 pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fence: Option<(char, usize)> = None;
@@ -66,18 +57,22 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     out
 }
 
-/// Re-neutralize the tail of already-truncated output that a byte-cap cut left
-/// with a fenced code block open.
-///
-/// [`neutralize_yaml_markers_outside_fences`] leaves a marker verbatim when a
-/// fence closes around it. A byte cap applied later can cut past that marker
-/// but before the closing delimiter, exposing it at column 0.
-///
-/// The scan runs forward rather than backward: read from the end, a line that
-/// looks like a fence delimiter could be the dangling block's own opening line
-/// or an inner line resembling one, and only a forward pass carries the
-/// open/close state that separates the two.
+/// Rewrite the dangling tail exposed by truncation of fence-neutralized text.
+/// A forward scan distinguishes opening fences from inner delimiter-like lines.
 pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
+    let dangling_start = conservative_dangling_start(truncated);
+    match dangling_start {
+        Some(start) => {
+            let mut out = String::with_capacity(truncated.len());
+            out.push_str(&truncated[..start]);
+            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(truncated),
+    }
+}
+
+fn conservative_dangling_start(truncated: &str) -> Option<usize> {
     let mut fence: Option<(char, usize)> = None;
     let mut dangling_start: Option<usize> = None;
     let mut offset = 0usize;
@@ -91,15 +86,58 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
         }
         offset += line.len() + 1;
     }
-    match dangling_start {
-        Some(start) => {
-            let mut out = String::with_capacity(truncated.len());
-            out.push_str(&truncated[..start]);
-            out.push_str(&neutralize_yaml_markers(&truncated[start..]));
-            Cow::Owned(out)
-        }
-        None => Cow::Borrowed(truncated),
+    dangling_start
+}
+
+/// The two report inputs have different preexisting YAML guarantees.
+#[derive(Clone, Copy)]
+pub(crate) enum ReportBody {
+    /// Fetch output is already neutralized; only exposed tails need rewriting.
+    Fetched,
+    /// Raw README needs outside-fence rewriting and whole-body fallback.
+    Readme,
+}
+
+/// Select the union of required YAML ranges before rewriting each line once,
+/// then close the actual top-level fence. Never let a synthetic close hide
+/// the source's dangling fence from either defense.
+pub(crate) fn finish_report_body(body: &str, kind: ReportBody) -> Cow<'_, str> {
+    let actual = dangling_report_fence(body);
+    let conservative = conservative_dangling_start(body);
+    let fetched = matches!(kind, ReportBody::Fetched);
+    let rewrite_from = match (conservative, actual) {
+        (Some(_), _) if !fetched => Some(0),
+        (Some(start), Some((actual_start, _, _))) => Some(start.min(actual_start)),
+        (Some(start), None) => Some(start),
+        (None, Some((start, _, _))) => Some(start),
+        (None, None) => None,
+    };
+    if fetched && rewrite_from.is_none() {
+        return Cow::Borrowed(body);
     }
+    let mut out = String::with_capacity(body.len() + 8);
+    let mut fence = None;
+    let mut offset = 0;
+    for (i, line) in body.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if rewrite_from.is_some_and(|start| offset >= start)
+            || (!fetched && !track_fence(&mut fence, line))
+        {
+            append_marker_rewritten(&mut out, line);
+        } else {
+            out.push_str(line);
+        }
+        offset += line.len() + 1;
+    }
+    if let Some((_, marker, width)) = actual {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.extend(repeat_n(marker, width));
+    }
+    Cow::Owned(out)
 }
 
 /// Truncate already fence-neutralized output; a cut must also re-neutralize
@@ -153,12 +191,9 @@ pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
     let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(&truncate_field(value)));
 }
 
-/// Escape a string for use inside a double-quoted YAML scalar.
-///
-/// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
-/// frontmatter field reaches for that function instead.
+/// Escape a double-quoted scalar; callers use [`write_yaml_str`] to add the key
+/// and quotes together.
 fn escape_yaml(s: &str) -> Cow<'_, str> {
-    // Borrow ordinary text instead of allocating an identical escaped copy.
     if !s
         .bytes()
         .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
@@ -269,6 +304,13 @@ mod tests {
         assert_eq!(
             neutralize_yaml_markers_outside_fences("```yaml\n---\nfoo"),
             "```yaml\n***\nfoo"
+        );
+        // T-C042's inline-code shape must trigger the conservative YAML fallback.
+        assert_eq!(
+            neutralize_yaml_markers_outside_fences(
+                "```\n---\n...\n```\n--- outside\n```` ``` ```` before marker\n... tail"
+            ),
+            "```\n***\n***\n```\n*** outside\n```` ``` ```` before marker\n*** tail"
         );
     }
 

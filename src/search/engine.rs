@@ -13,9 +13,9 @@ use crate::brave::types::SearchResult;
 use crate::fetch;
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{DnsResolver, EgressMode};
-use crate::markdown::{escape_md_inline, md_link, sanitize_heading};
+use crate::markdown::{escape_md_inline, md_link, sanitize_heading, truncate_with_note};
 use crate::search::Lang;
-use crate::yaml::truncate_and_reneutralize;
+use crate::yaml::{ReportBody, finish_report_body};
 
 /// `pub(crate)` because `yaml::MAX_FIELD_BYTES` derives the per-field
 /// frontmatter cap from this same page budget.
@@ -108,8 +108,7 @@ async fn fetch_sources(
                 (idx, url, result)
             }
         })
-        // Concurrency cap = 5: balances fetch parallelism (faster overall research)
-        // against per-host rate limits (multiple URLs in one query may share an origin).
+        // Bound concurrency because several results may share an origin.
         .buffer_unordered(5)
         .collect()
         .await;
@@ -168,8 +167,7 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
     if pages.is_empty() {
         return;
     }
-    // `***` renders the same thematic break without being a YAML document
-    // marker, so scout's own divider cannot forge one (ADR-0014).
+    // Use a thematic break that cannot forge a YAML boundary (DR-0014).
     out.push_str("***\n\n## Fetched Pages\n\n");
     for page in pages {
         let _ = writeln!(out, "### {}\n", sanitize_heading(page.url()));
@@ -179,10 +177,10 @@ fn format_fetched_pages(pages: &[FetchResult], out: &mut String) {
         if page.decode_uncertain() {
             out.push_str(fetch::converter::DECODE_UNCERTAIN_NOTE);
         }
-        // h1->h4, h2->h5, ...: unshifted, a page's own headings would collide
-        // with the report's hierarchy.
+        // Nest HTML headings under the page heading; preserve plain-text literals.
         let content = page.with_heading_offset(3);
-        out.push_str(&truncate_and_reneutralize(&content, MAX_PAGE_BYTES));
+        let body = truncate_with_note(&content, MAX_PAGE_BYTES);
+        out.push_str(&finish_report_body(&body, ReportBody::Fetched));
         out.push_str("\n\n");
     }
 }

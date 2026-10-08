@@ -110,6 +110,14 @@ Prebuilt binaries (Homebrew, GitHub Releases) ship with the `js-rendering` featu
 cargo install --path . --features js-rendering
 ```
 
+On fetch timeout (exit 124) or handled SIGINT/SIGTERM (130/143), scout cleans up
+its browser process group and temporary profile. Signals allow up to 7 seconds
+for graceful drain; if the fetch future is dropped, cleanup sends SIGKILL to the
+owned group without waiting for another async task. This does not cover killing
+scout with SIGKILL or browser processes that leave the owned process group.
+OS signal/profile deletion errors and uninterruptible kernel waits can prevent
+cleanup from completing.
+
 ### Claude Code integration
 
 Add to your project's `CLAUDE.md`:
@@ -158,7 +166,9 @@ JSON envelope: `data = {query, sources}`, where each `sources[i] = {url, title, 
 
 ### `scout research` — Multi-source deep research
 
-Searches the web via Brave, fetches the top N source pages, and compiles a report — full page content plus the URL list. Unlike `search` which returns URLs only, `research` actually reads those pages so you (or your AI agent) can verify claims against primary sources.
+Searches the web via Brave, fetches the top N source pages, and compiles a report — fetched page content plus the URL list. Unlike `search` which returns URLs only, `research` actually reads those pages so you (or your AI agent) can verify claims against primary sources.
+
+Each page body in the Markdown report is limited to 4,500 bytes, cut at a UTF-8/line boundary where possible, with a `(truncated: showing … / … bytes)` note. An open code fence is closed after YAML marker neutralization so the next page, Failed URLs, and Sources remain separate sections.
 
 ```sh
 scout research "Rust async runtime comparison" --depth 5 --lang ja
@@ -240,6 +250,8 @@ scout repo-overview denoland/deno
 ```
 
 Repo metadata, README, the 5 open issues and 5 open pull requests GitHub returns first, and the 3 most recent releases. Verifies the repo exists first, then fetches the rest in parallel.
+
+In Markdown output, the README body is limited to 24,000 bytes before heading shifts, with the same UTF-8/line-boundary truncation note. After YAML marker neutralization, an open code fence is closed so Recent Issues, Pull Requests, and Releases remain separate sections.
 
 The lists are not paginated. Each shows one page — at most 5 issues, 5 pull requests, and 3 releases — so a busier repository holds more than the overview shows.
 
