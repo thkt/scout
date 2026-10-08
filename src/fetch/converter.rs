@@ -18,7 +18,7 @@ use crate::yaml::{neutralize_yaml_markers_outside_fences, write_yaml_str};
 pub(crate) struct FetchResult {
     url: String,
     markdown: String,
-    /// Plain-text literals must bypass Markdown heading interpretation.
+    /// Non-HTML source literals must bypass Markdown heading interpretation.
     #[serde(skip_serializing)]
     is_plain_text: bool,
     /// Internal flag: surfaced as a `notes` entry in scout's JSON output, not as data.
@@ -40,7 +40,7 @@ impl FetchResult {
         &self.markdown
     }
 
-    /// Shift converted HTML headings while preserving plain-text syntax and whitespace.
+    /// Shift converted HTML headings while preserving non-HTML source syntax and whitespace.
     pub(crate) fn with_heading_offset(&self, offset: usize) -> Cow<'_, str> {
         if self.is_plain_text {
             Cow::Borrowed(self.markdown())
@@ -736,7 +736,7 @@ pub(super) fn to_fetch_result(
     })
 }
 
-/// Preserve decoded plain text without interpreting tags, entities or Markdown
+/// Preserve decoded non-HTML text without interpreting tags, entities or Markdown
 /// syntax. It has no HTML metadata or Readability failure, but shares the same
 /// YAML boundary defense and the caller's output cap as converted HTML.
 pub(crate) fn plain_text_result(text: &str, url: String, decode_uncertain: bool) -> FetchResult {

@@ -13,7 +13,17 @@ date: 2026-10-08
 
 Issueの引き継ぎは、返信authorがバッククォートまたはチルダ3個だけでもtimestampとの連結で開始フェンスになること、幅90,000の閉鎖を上限外追加すると出力が約190,000 byteになり得ることを指摘している。本文補完のみ、または無制限な閉鎖追加では要求を満たさない。
 
-[先行PR #494](https://github.com/thkt/scout/pull/494)は別のIssue #491の修正である。Issue #492の実装開始時の指示に従い、予約済みDR-0034を使わずDR-0035を使用する。DR-0034はこの基準版に存在せず、今回の対象文書・実装に含めない。初回実装時の先行PR取得はsandboxのDNS失敗と代替取得のcache missで未確認だった。後続のR1-2調査で、下記の固定headの文書差分を照合した。今回の共有文書変更はSlack節とDR-0035の索引追加に限定し、先行PRのコードを取り込まない。
+[先行PR #494](https://github.com/thkt/scout/pull/494)は別のIssue #491の修正である。Issue #492の実装開始時の指示に従い、予約済みDR-0034を使わずDR-0035を使用する。初回実装時の基準版にはDR-0034が存在せず、当時の対象文書・実装に含めなかった。初回実装時の先行PR取得はsandboxのDNS失敗と代替取得のcache missで未確認だった。後続のR1-2調査で、下記の固定headの文書差分を照合した。初回の共有文書変更はSlack節とDR-0035の索引追加に限定し、未マージの先行PRコードは取り込まなかった。
+
+## #494マージ後の統合（2026-10-08）
+
+ユーザーの競合解消依頼に従い、[mainのマージcommit](https://github.com/thkt/scout/commit/e48677eb1ec2b253d82ccbca2fe7368b30b51942)を履歴を改変しないmergeで取り込む。現在の対象には[DR-0034](0034-explicit-non-html-text-xml-fetch.md)が存在する。以下にあるR1-2の外部文書照合と未取り込みの説明は、初回実装時点の履歴である。
+
+README英日版は自動統合でき、Git競合はDR索引の状態別項目と生成履歴で、番号表は自動統合された。索引の番号表と状態別索引の両方に0034・0035を残し、手動追加の範囲を0035までに更新する。DR-0034の本文とmain由来の製品・テスト変更は維持し、Slackの製品・テストは変更しない。通常fetchはMarkdownだけに出力上限を適用し、SlackはJSONも切断後のmarkdownを使うため、それぞれの契約を区別する。
+
+初回の競合解消でDR-0034の状態別項目を落とし、番号表だけの確認では欠落を検出できなかった。統合後の独立評価で欠落が判明したため、DR-0034の既存項目を復元した。両索引の番号・表題・状態を各DRの本文と照合し、番号表だけで保持を判断しない。この修正後の全checkと独立評価は未完了であり、修正前のcheck成功を流用しない。
+
+統合のための重複テストは追加しない。検出条件の削除はなく、実Slack API・別Markdown実装・任意Markdownへの適合、速度や不安定さの改善は未確認のままである。ホストは取得mainの識別値、未commitのmergeと競合解消、main由来の差分と今回の解消差分を証拠へ保存する。統合後の全checkと独立評価は新しいrunで行い、初回実装の成功を統合版の成功として流用しない。
 
 ## Considered Options
 
@@ -40,7 +50,7 @@ T-SK091はformatterから出た本文をpulldown-cmarkのイベントで読み�
 
 Rust 1.99.0、cargo-nextest 0.9.146で`cargo fmt -- --check`と`cargo clippy --offline --all-targets -- -D warnings`、同じClippyの`--all-features`構成が成功した。`cargo nextest run --offline --lib -E 'test(slack::format::) | test(markdown::) | test(yaml::)' --profile ci`はdefaultで69件成功・738件除外、同じコマンドの`--all-features`では69件成功・756件除外だった。ignoredテストは実行していない。最終テストを基準commitの一時コピーへ適用し、既存切断関数を接続した比較でも、追加2件が同じ取り込み理由で失敗した。formatter境界と打ち切り境界の静的独立評価ではコードの必須指摘はなく、DR索引の表と先行PRのIssue番号の指摘を修正した。文書を含む再評価で両指摘の解消が確認された。
 
-ローカルのfocused検証を全体検証の成功とは扱わない。ホストはfmt、default/all-featuresのClippy、SCOUT_NETWORK_TESTS=1のdefault nextestとall-featuresのignoredを含むnextestを契約どおり実行する。実Slack APIの資格情報・実応答は未検証であり、Issueの条件では不要。captureは不要。文書の対象はこのDR、DR索引、README英日版のSlack節のみで、DR-0034は外部の番号予約参照である。
+ローカルのfocused検証を全体検証の成功とは扱わない。ホストはfmt、default/all-featuresのClippy、SCOUT_NETWORK_TESTS=1のdefault nextestとall-featuresのignoredを含むnextestを契約どおり実行する。実Slack APIの資格情報・実応答は未検証であり、Issueの条件では不要。captureは不要。初回実装の文書更新はこのDR、DR索引、README英日版のSlack節のみで、当時のDR-0034は外部の番号予約参照だった。マージ後の現行関係は上記の統合節に記す。
 
 ### ホストcheck失敗後の修正（2026-10-08）
 

@@ -8,6 +8,8 @@ fn accepts_textual_content_types() {
         ("text/plain", MediaType::PlainText),
         ("application/xhtml+xml", MediaType::Html),
         ("application/xml", MediaType::OtherText),
+        ("text/markdown", MediaType::OtherText),
+        ("text/xml", MediaType::OtherText),
         ("; charset=utf-8", MediaType::Unknown),
     ] {
         assert_eq!(check_content_type(ct).unwrap(), expected, "{ct}");

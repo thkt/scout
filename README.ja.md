@@ -183,7 +183,7 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 
 ページのメタデータ（タイトル/著者/日付）は YAML フロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
-明示的な `Content-Type: text/plain` 応答では、通常・`--raw` とも HTML 抽出・変換を省きます。デコード済みの本文は、リテラルの `< > &`、見出し風の文字列、末尾空行を含む改行を保持し、空のフロントマター付きで Markdown または JSON（`data.markdown`）へ届きます。既存の YAML マーカー中和と出力上限は適用されます。明示的な非HTML応答では JS レンダリングを自動実行しません。`--js` は引き続きブラウザー出力を明示的に要求します。Content-Type が欠落・読取り不能なら従来の HTML 経路を使い、その他の受理済み text/XML 型も従来の変換処理を維持します。
+明示的な受理済み非HTML text/XML 応答（`text/html` を除く `text/*`、`application/xml`、`application/xhtml+xml` を除く `application/*+xml`）では、通常・`--raw` とも HTML 抽出・変換を省きます。デコード済みの本文は、タグ・属性・文字参照のリテラル・コード・見出し風の文字列、末尾空行を含む改行を保持し、空のフロントマター付きで Markdown または JSON（`data.markdown`）へ届きます。初期の YAML マーカー中和は両形式に適用されます。既存の100,000バイトの出力上限と、切断後の YAML マーカー再中和は Markdown 出力だけに適用されます。JSON の `data.markdown` は、既存のレスポンス取得上限内の、出力切断前の本文を含みます。明示的な非HTML応答では JS レンダリングを自動実行しません。`--js` は引き続きブラウザー出力を明示的に要求します。HTML・XHTML、および Content-Type が欠落・空・読取り不能の場合は従来の HTML 経路を使います。`application/json` などの未対応媒体は引き続き拒否します。
 
 **Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式の URL を検出し、HTML スクレイピングではなく Slack Web API へルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuth トークン、`xoxp-…`）が必要です。 各メッセージの未閉鎖コードフェンスを次のリプライの前で閉じます。単独CR改行はLFへ、閉鎖行の終端tabは空白へ変換し、本文中のtabとCRLFは保持します。著者の表示行はフェンス文字をエスケープして改行を空白へ畳みます。100,000 byteでの出力打ち切り時は、追加の閉鎖フェンスも本文予算内に収め、打ち切り注記の前に置きます。開始・閉鎖フェンスを一緒に収められないコードブロックは開始行から省略します。注記とdegradationの前置きは従来どおり本文予算外です。SlackのYAMLマーカーはコード内も中和します。[DR-0035](docs/decisions/0035-close-slack-message-and-truncation-fences.md)を参照してください。
 
