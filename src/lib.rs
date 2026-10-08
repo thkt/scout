@@ -33,10 +33,7 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
 
-/// Maximum time the runtime waits for the in-flight command to wind down
-/// after a SIGINT/SIGTERM. Long enough for CDP `browser.close()` (5s) plus
-/// chromium's own subprocess cleanup margin; short enough not to feel like
-/// a hang to the caller.
+/// Allow CDP close (5s) and subprocess cleanup, with a bounded interrupt delay.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7);
 
 enum Outcome<T> {
@@ -46,8 +43,7 @@ enum Outcome<T> {
 
 fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
     if output.is_empty() {
-        // Preserve true empty output (e.g., `scout search` with 0 results)
-        // so line-oriented downstream callers don't see a phantom empty line.
+        // Zero search results must not create a phantom line in URL pipelines.
         return Ok(());
     }
     w.write_all(output.as_bytes())?;
@@ -103,31 +99,21 @@ struct Cli {
     command: Command,
 }
 
-/// Install the tracing subscriber. `try_init` tolerates a second invocation
-/// (e.g., integration tests that exercise `lib::run` more than once) — the
-/// installed subscriber from the first call is reused.
+/// Reuse an installed tracing subscriber when run is invoked again.
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                // `expect`, not a fallback: a fallback that drops the target
-                // widens the filter from scout to every crate at INFO, and a
-                // future edit breaking the syntax would do so silently.
+                // A parse fallback could silently widen INFO logging to all crates.
                 "scout=info".parse().expect("static directive is valid"),
             ),
         )
         .try_init();
 }
 
-/// Race the in-flight command against signal arrival, returning the resulting
-/// `Outcome`. On interrupt, notify the cancel handle so `fetch_with_cdp` can run
-/// `browser.close()`, then await the command for a bounded window
-/// before returning the interrupt outcome.
-///
-/// Extracted from `run` with the signal source injected so the
-/// signal-vs-command wiring (select → cancel notify → drain → `Interrupted`) is
-/// unit-testable without spawning the real OS signal handlers.
+/// On interrupt, notify CDP cancellation and drain before dropping the command.
+/// Injected futures let tests check this ordering without OS signal handlers.
 async fn drive<C, S>(
     cmd_fut: C,
     signal_fut: S,
@@ -157,10 +143,8 @@ where
 pub async fn run() -> ExitCode {
     init_tracing();
 
-    // Pre-scan argv so a clap parse error (which exits before `cli.json` is
-    // populated) still routes through the JSON envelope path when requested.
-    // `args_os` rather than `args`: the latter panics on a non-UTF-8 argument,
-    // which would abort with 101 before clap can classify it as a usage error.
+    // Clap errors precede Cli construction, so detect JSON mode from argv.
+    // args_os lets clap classify non-UTF-8 input instead of panicking first.
     let json_mode_pre = env::args_os().any(|a| a == "--json");
 
     let cli = match Cli::try_parse() {
@@ -185,9 +169,8 @@ pub async fn run() -> ExitCode {
     }
 }
 
-/// Write a successful command through the CLI's output and exit-code path.
-/// Taking the writer as an argument lets HTTP mock tests observe stdout without
-/// replacing process-wide streams or adding a production endpoint override.
+/// Inject the writer to test CLI rendering and exit codes without replacing
+/// process streams or exposing a production endpoint override.
 fn emit_success<W: Write>(output: CommandOutput, json_mode: bool, writer: &mut W) -> ExitCode {
     let rendered = if json_mode {
         render_json_success(output)
@@ -204,15 +187,12 @@ fn emit_success<W: Write>(output: CommandOutput, json_mode: bool, writer: &mut W
     }
 }
 
-/// Serialize a successful `CommandOutput` as a one-line JSON envelope per ADR-0010.
-/// Takes `CommandOutput` by value so `data` and `notes` move into the envelope
-/// instead of being deep-cloned.
+/// Consume the output to move data and notes into the JSON envelope.
 fn render_json_success(output: CommandOutput) -> String {
     to_json_line(&output.into_envelope())
 }
 
-/// Serialize a `ScoutError` as a one-line JSON envelope per ADR-0010.
-/// Uses `err.message()` (bare) so `next_step` is not duplicated in `message`.
+/// Use the bare message so next_step is not duplicated in JSON.
 fn render_json_error(err: &ScoutError) -> String {
     to_json_line(&ErrorEnvelope {
         error: ErrorPayload {
@@ -225,18 +205,12 @@ fn render_json_error(err: &ScoutError) -> String {
     })
 }
 
-/// Points a coding agent at scout's own help output. An agent often runs
-/// `--version` and nothing else before invoking a command, so the version
-/// output is where the pointer has to live for it to be seen at all. Emitted
-/// through the same tracing path as every other scout log, which puts it on
-/// stderr and leaves the version line on stdout parseable. `init_tracing`
-/// pins `scout=info` last, so no `RUST_LOG` value silences it; a caller that
-/// wants it gone redirects stderr.
+/// Version-only discovery must still point agents to help. Log on stderr to
+/// keep stdout parseable; init_tracing forces scout INFO even under RUST_LOG.
 const AGENT_HELP_HINT: &str = "If you are a coding agent, run `scout --help` and `scout <command> --help` before answering questions about scout or troubleshooting its errors. The help output is authoritative for the installed version.";
 
-/// One-line JSON envelope for a failure with no `ScoutError` behind it — a clap
-/// parse error, or an stdout write that failed. `retryable` comes from the code
-/// rather than being restated here, so the mapping lives only in [`ErrorCode`].
+/// Clap and write failures have no ScoutError; derive retryability from the
+/// code rather than duplicating its mapping.
 fn bare_error_line(code: ErrorCode, message: String) -> String {
     to_json_line(&ErrorEnvelope {
         error: ErrorPayload {
@@ -249,9 +223,7 @@ fn bare_error_line(code: ErrorCode, message: String) -> String {
     })
 }
 
-/// Render an stdout write failure for stderr. Under `--json` it has to be an
-/// envelope: the flag tells callers every error on stderr is parseable, and a
-/// bare line here would be the one place that promise breaks.
+/// Write failures must obey the JSON stderr contract when requested.
 fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
     if json_mode {
         bare_error_line(ErrorCode::IoError, err.to_string())
@@ -260,11 +232,8 @@ fn write_failure_line(err: &io::Error, json_mode: bool) -> String {
     }
 }
 
-/// Render a signal interruption for stderr.
-///
-/// `retryable` is false even though ADR-0017 has the shell retry on exit 130:
-/// that is the caller's strategy keyed off the exit code, not a claim that
-/// rerunning scout would succeed.
+/// ADR-0017's caller retry on exit 130 is a strategy, not a claim of transient
+/// failure; the JSON retryable flag remains false.
 fn interrupted_line(sig: InterruptSignal, json_mode: bool) -> String {
     let message = format!("interrupted ({sig})");
     if json_mode {
@@ -274,9 +243,7 @@ fn interrupted_line(sig: InterruptSignal, json_mode: bool) -> String {
     }
 }
 
-/// Map a signal to the `error.code` its envelope carries. Separate from
-/// [`InterruptSignal::exit_code`] because `error.code` enumerates the same set
-/// on every platform while `Sigterm` is `#[cfg(unix)]`.
+/// JSON codes are platform-independent, unlike the cfg-gated signal variants.
 fn interrupt_code(sig: InterruptSignal) -> ErrorCode {
     match sig {
         InterruptSignal::Sigint => ErrorCode::InterruptedSigint,
@@ -285,9 +252,7 @@ fn interrupt_code(sig: InterruptSignal) -> ErrorCode {
     }
 }
 
-/// Handle a `clap::Error` from `Cli::try_parse()`. Help/version display
-/// stay on stdout per clap convention; usage errors route through the JSON
-/// envelope when `--json` was passed in argv.
+/// Keep clap help/version on stdout and honor JSON mode for usage errors.
 fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     use clap::error::ErrorKind;
     match err.kind() {
@@ -338,12 +303,8 @@ mod tests {
         write_output,
     };
 
-    /// [T-DRV001] drive returns `Interrupted` carrying the firing signal, and that
-    /// signal maps to its POSIX exit code, when the signal future resolves before
-    /// the command. The signal → exit code wiring is exercised without the real
-    /// OS signal handler.
-    /// `start_paused` auto-advances the 7s drain timer so the pending command does
-    /// not block for wall-clock time.
+    /// [T-DRV001] A ready SIGINT beats a pending command and maps to exit 130.
+    /// Paused time avoids waiting for the drain timeout.
     #[tokio::test(start_paused = true)]
     async fn drive_interrupt_yields_signal_exit_code() {
         let (cancel, _rx) = watch::channel(false);
@@ -360,8 +321,7 @@ mod tests {
         assert_eq!(code, 130);
     }
 
-    /// [T-DRV002] On interrupt, drive notifies the cancel handle so `fetch_with_cdp`
-    /// can run `browser.close()` for graceful shutdown.
+    /// [T-DRV002] Interrupting a pending command sets the cancellation flag.
     #[tokio::test(start_paused = true)]
     async fn drive_interrupt_notifies_cancel_handle() {
         let (cancel, rx) = watch::channel(false);
@@ -377,8 +337,7 @@ mod tests {
         );
     }
 
-    /// [T-DRV003] When the command completes before any signal, drive returns
-    /// `Completed` and leaves the cancel handle untouched (no spurious shutdown).
+    /// [T-DRV003] A ready command beats a pending signal without setting cancellation.
     #[tokio::test]
     async fn drive_command_completion_wins_over_pending_signal() {
         let (cancel, rx) = watch::channel(false);
@@ -396,10 +355,8 @@ mod tests {
         );
     }
 
-    /// [T-RJS001] render_json_success serializes a `CommandOutput` as a one-line
-    /// success envelope per ADR-0010: `data` payload preserved, `degraded:false`,
-    /// no embedded newline. Pins the `--json` happy-path boundary so a regression
-    /// in `into_envelope` / `to_json_line` wiring fails here.
+    /// [T-RJS001] Success JSON retains the fixture payload and degraded=false
+    /// without literal newlines.
     #[test]
     fn render_json_success_emits_one_line_success_envelope() {
         let output = CommandOutput::ok(
@@ -416,10 +373,7 @@ mod tests {
         );
     }
 
-    /// [T-INIT001] init_tracing tolerates a second invocation.
-    /// `.init()` would panic on the duplicate; `.try_init()` returns Err which
-    /// init_tracing silently ignores so callers (integration tests reusing
-    /// `lib::run`) survive.
+    /// [T-INIT001] A second tracing initialization must not panic.
     #[test]
     fn init_tracing_is_idempotent() {
         init_tracing();
@@ -442,9 +396,8 @@ mod tests {
         assert_eq!(&buf, b"hello\n");
     }
 
-    /// [T-W003] The shared CLI output path treats a closed pipe as success but
-    /// reports other write failures with exit 74 in both Markdown and JSON modes.
-    /// Testing only write_output would miss a regression in the exit-code mapping.
+    /// [T-W003] BrokenPipe returns 0 and StorageFull returns 74 through the CLI
+    /// success writer in both output modes.
     #[test]
     fn emit_success_preserves_write_failure_exit_codes() {
         struct FailingWriter(io::ErrorKind);
@@ -474,10 +427,7 @@ mod tests {
         }
     }
 
-    /// [T-W004] under `--json` a stdout write failure is reported as an envelope
-    ///
-    /// The flag promises every error on stderr is a JSON envelope, so a caller
-    /// parsing stderr must not receive a bare line for this path.
+    /// [T-W004] Write-failure rendering produces JSON IO_ERROR, retryable=false.
     #[test]
     fn write_failure_is_an_envelope_under_json() {
         let err = io::Error::from(io::ErrorKind::StorageFull);
@@ -499,10 +449,8 @@ mod tests {
         );
     }
 
-    /// [T-W007] under `--json` a signal interruption is reported as an envelope
-    ///
-    /// A caller parsing stderr as JSON drops a bare line silently, so this path
-    /// cannot be the one exception to that promise.
+    /// [T-W007] Interruption JSON names the fixture signal and its error code,
+    /// with retryable=false.
     #[test]
     fn interruption_is_an_envelope_under_json() {
         for (sig, code) in interrupt_signal_codes() {
@@ -529,11 +477,7 @@ mod tests {
         }
     }
 
-    /// [T-W009] the interruption `ErrorCode` exits with the signal's own code
-    ///
-    /// 130/143 live in two places that the compiler cannot tie together, and
-    /// ADR-0010 maps `error.code` to the exit code 1:1. Nothing but this holds
-    /// the copies equal.
+    /// [T-W009] Separately defined signal and JSON exit codes must agree.
     #[test]
     fn the_interruption_code_matches_the_signal_exit_code() {
         for (sig, code) in interrupt_signal_codes() {
@@ -554,10 +498,8 @@ mod tests {
         ]
     }
 
-    /// [T-W006] the bare-error envelope derives `retryable` from the code
-    ///
-    /// Restating it at the call site is how the two drift: `TempFailure` is
-    /// retryable and `UsageError` is not, and only `ErrorCode` should say so.
+    /// [T-W006] Usage/IO failures are non-retryable; temporary failures/timeouts
+    /// are retryable in the bare-error envelope.
     #[test]
     fn bare_error_line_derives_retryable_from_the_code() {
         for (code, expected) in [
@@ -634,9 +576,7 @@ mod tests {
         );
     }
 
-    /// [T-H010] root --help exposes SCOUT_* tuning env vars.
-    /// AI agents discover override knobs by reading --help; missing entries
-    /// would force agents to read the source.
+    /// [T-H010] Root help names the tuning variables and Slack token.
     #[test]
     fn root_help_lists_scout_tuning_env_vars() {
         let help = super::Cli::command().render_long_help().to_string();

@@ -1,15 +1,8 @@
-//! Output envelopes per ADR-0010 (scout-local JSON envelope contract) and
-//! ADR-0003 (degraded_reasons typed enum).
-//!
-//! `CommandOutput` is the internal shape produced by each command handler;
-//! `lib::run` then serializes it as Markdown (default) or as a `SuccessEnvelope`
-//! JSON line (when `--json` is set).
+//! Output envelopes governed by ADR-0010 and typed degradation reasons by ADR-0003.
 
 use serde::Serialize;
 
-/// Typed reason for a degraded command output (partial failure) per ADR-0003.
-/// Exposed under `degraded_reasons` in JSON output so callers can detect
-/// specific failure modes programmatically rather than parsing free-form notes.
+/// Typed JSON degradation reasons; callers need not parse free-form notes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum DegradedReason {
@@ -30,15 +23,9 @@ pub(crate) enum DegradedReason {
 }
 
 impl DegradedReason {
-    /// Human-readable label used by [`crate::tools::errors::unwrap_or_degraded`]
-    /// to build the `"Could not fetch {label} ({e})"` message.
-    ///
-    /// Only the three GitHub `*FetchFailed` variants reach it: the helper takes
-    /// a `Result<_, GitHubError>`, so a failure from any other backend cannot be
-    /// passed to it. Every other variant builds its note text at the call site —
-    /// `BraveSearchFailed` included, which pushes `"Brave search failed: {e}"`
-    /// from `tools::query` — and lands on the generic `"resource"` arm, which
-    /// exists only to keep the match exhaustive.
+    /// Labels for [`crate::tools::errors::unwrap_or_degraded`]. Only the three
+    /// GitHub list-fetch failures use this helper; other reasons build notes at
+    /// call sites. The generic arm keeps the match exhaustive.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::IssuesFetchFailed => "issues",
@@ -59,10 +46,7 @@ impl DegradedReason {
     }
 }
 
-/// Bundle of human-readable notes and typed reasons collected during a
-/// degraded command path. The `(notes[i], reasons[i])` pairing invariant is
-/// enforced by making the fields private and exposing [`Degradation::push`]
-/// as the sole mutator.
+/// Private fields and [`Degradation::push`] keep notes paired with reasons.
 #[derive(Debug, Default)]
 pub(crate) struct Degradation {
     notes: Vec<String>,
@@ -88,13 +72,8 @@ impl Degradation {
     }
 }
 
-/// Internal command output: holds both the Markdown rendering and the
-/// structured `data` payload, plus degradation signals. Each handler builds
-/// one of these; `lib::run` picks the path (Markdown or JSON) at the boundary.
-///
-/// Fields are private to enforce the `(degraded, notes, degraded_reasons)`
-/// invariant: a literal `degraded: false` paired with non-empty `notes`
-/// cannot be constructed. Use [`Self::ok`] or [`Self::with_degradation`].
+/// Handler output for Markdown or JSON. Private fields keep the degraded flag
+/// consistent with notes and reasons through [`Self::with_degradation`].
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct CommandOutput {
@@ -146,9 +125,7 @@ impl CommandOutput {
     }
 }
 
-/// Test-only accessors. Production paths consume via [`CommandOutput::into_markdown`]
-/// or [`CommandOutput::into_envelope`]; tests need to assert multiple fields
-/// without consuming the value.
+/// Borrowing accessors for tests; production consumes the output.
 #[cfg(test)]
 impl CommandOutput {
     pub(crate) fn markdown(&self) -> &str {
@@ -164,16 +141,9 @@ impl CommandOutput {
     }
 }
 
-/// JSON-serializable error classification per ADR-0010.
-///
-/// `Internal` is reserved for scout-side invariant violations (e.g. unexpected
-/// API schema during deserialize). `Timeout` splits from `TempFailure` so
-/// callers can apply a longer retry backoff than for rate limits / 5xx.
-/// `Unknown` is the explicit escape hatch for inputs that no priority rule
-/// classified; a rising rate of `Unknown` signals the classification design
-/// needs revisiting. The two `Interrupted*` variants carry a signal
-/// interruption (ADR-0017) into the same envelope, so `--json` has no stderr
-/// path that emits a bare line.
+/// JSON error classification (ADR-0010). `Internal` denotes scout invariants;
+/// `Unknown` denotes unclassified failures (ADR-0011). `Timeout` is separate
+/// from temporary failures so callers can choose a longer backoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
@@ -190,11 +160,7 @@ pub(crate) enum ErrorCode {
 }
 
 impl ErrorCode {
-    /// sysexits.h exit code mapped 1:1 from `error.code`. Exit-code values are
-    /// governed by ADR-0002 (scout-local). The `error.code` JSON tag itself is
-    /// governed by ADR-0010 (scout-local). `Timeout` (124) follows GNU coreutils
-    /// `timeout` and `Unknown` (104) is the PJ extension for unclassifiable
-    /// failures (the fall-through slot of ADR-0011's Classification Priority Table).
+    /// Exit codes governed by ADR-0002 and ADR-0017; JSON tags by ADR-0010.
     pub(crate) fn exit_code(self) -> u8 {
         match self {
             Self::UsageError => 64,  // EX_USAGE
@@ -205,17 +171,14 @@ impl ErrorCode {
             Self::TempFailure => 75, // EX_TEMPFAIL
             Self::Timeout => 124,    // GNU coreutils `timeout` convention
             Self::Unknown => 104,    // PJ extension per ADR-0002, retreat slot per ADR-0011
-            // POSIX 128 + signo per ADR-0017. Not delegated to
-            // `InterruptSignal::exit_code`: `Sigterm` there is `#[cfg(unix)]`,
-            // and `error.code` must enumerate the same set on every platform.
-            // T-W009 pins the two copies equal.
+            // Kept separate from the platform-gated InterruptSignal variants:
+            // JSON codes must be platform-independent. T-W009 checks agreement.
             Self::InterruptedSigint => 130,
             Self::InterruptedSigterm => 143,
         }
     }
 
-    /// Determined structurally from `kind` so `ScoutError` cannot drift out of
-    /// sync with the JSON `error.retryable` contract.
+    /// Derive retryability from the code to keep ScoutError and JSON in sync.
     pub(crate) fn is_retryable(self) -> bool {
         matches!(self, Self::TempFailure | Self::Timeout)
     }
@@ -238,10 +201,8 @@ pub(crate) struct ErrorEnvelope {
     pub(crate) error: ErrorPayload,
 }
 
-/// Serialize an output envelope as its one-line JSON form per ADR-0010. The
-/// single serialize point for both `SuccessEnvelope` and `ErrorEnvelope`: these
-/// crate-owned types serialize infallibly, so the `expect` is unreachable and
-/// callers stay free of a `Result` they could only `.expect()` themselves.
+/// Envelope serialization is infallible for these crate-owned payloads;
+/// an error would be an invariant violation.
 pub(crate) fn to_json_line<T: Serialize>(envelope: &T) -> String {
     serde_json::to_string(envelope).expect("envelope is Serialize")
 }
