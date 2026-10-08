@@ -13,8 +13,15 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
-    let Some((proxy, connections, _handle)) =
-        common::spawn_mock_proxy(200, Duration::ZERO, b"<html><body>fixture</body></html>")
+    // Explicit --js must launch the browser even for source-preserving media.
+    let body = b"<catalog><item id=\"42\">fixture</item></catalog>";
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    let Some((proxy, connections, _handle)) = common::spawn_mock_proxy_raw_response(&response)
     else {
         return;
     };
@@ -39,7 +46,7 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
             "SCOUT_FETCH_TIMEOUT_SECS",
             if signal.is_some() { "600" } else { "2" },
         )
-        .args(["fetch", "--js", "http://scout-audit.example/html"])
+        .args(["fetch", "--js", "http://scout-audit.example/catalog.xml"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let mut scout = OwnedScout(command.spawn().expect("start scout"));
@@ -47,7 +54,7 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     common::assert_proxy_was_dialed(
         &connections,
         "browser cleanup",
-        "fetch never reached HTML fixture",
+        "fetch never reached the explicit XML fixture",
     );
     let started = Instant::now();
     if let Some(signal) = signal {
@@ -58,7 +65,11 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
         .expect("send interrupt to scout");
     }
     let status = wait_scout(&mut scout.0);
-    assert_eq!(status.code(), Some(expected_code));
+    assert_eq!(
+        status.code(),
+        Some(expected_code),
+        "explicit --js must not return the XML source as a successful fetch"
+    );
     if signal.is_some() {
         // No DevTools URL means signal drain must reach its 7s cutoff.
         assert!(
@@ -69,13 +80,15 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     browser.assert_clean();
 }
 
-/// [T-BGC005] CLI outer fetch timeout returns 124 and cleans owned PIDs/profile.
+/// [T-BGC005] Explicit --js on XML launches the browser; outer timeout returns
+/// 124 and cleans owned PIDs/profile.
 #[test]
 fn outer_fetch_timeout_reaps_browser_descendant_and_profile() {
     run_cleanup(None, 124);
 }
 
-/// [T-BGC006] Both OS signals clean owned PIDs/profile after the 7s drain cutoff.
+/// [T-BGC006] Explicit --js on XML launches the browser; both OS signals clean
+/// owned PIDs/profile after the 7s drain cutoff.
 #[test]
 fn signal_drain_cutoff_reaps_browser_descendant_and_profile() {
     for (signal, code) in [(Signal::SIGINT, 130), (Signal::SIGTERM, 143)] {
