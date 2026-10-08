@@ -1,4 +1,4 @@
-//! Shared test scaffolding and test-ID conventions.
+//! Shared test scaffolding and test-id conventions.
 //!
 //! Each test doc starts with `[T-<PREFIX><NNN>]`. Prefixes identify subjects;
 //! numbers are unique within each prefix across files. DRs cite these IDs.
@@ -43,7 +43,7 @@ pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest:
     )
 }
 
-/// Resolve all users.info lookups to the same name.
+/// Mounts the minimal users.info response accepted by UserBody/UserDetail.
 pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
     mount_get(
         server,
@@ -56,7 +56,7 @@ pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
     .await;
 }
 
-/// Query matching and call-count expectations belong at the test call site.
+/// GET/path responder; keep query matching and call-count assertions at call sites.
 pub(crate) async fn mount_get(server: &MockServer, path: &str, template: ResponseTemplate) {
     use wiremock::Mock;
     use wiremock::matchers::{method, path as path_matcher};
@@ -68,7 +68,7 @@ pub(crate) async fn mount_get(server: &MockServer, path: &str, template: Respons
         .await;
 }
 
-/// Warn and skip unavailable loopback, or panic when SCOUT_NETWORK_TESTS is set.
+/// Bind failure skips locally but panics when SCOUT_NETWORK_TESTS is set.
 fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -98,7 +98,6 @@ pub(crate) async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer>
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
 }
 
-/// Testable core: inject bind result and force flag to control skip-vs-panic.
 async fn try_spawn_with_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -108,8 +107,8 @@ async fn try_spawn_with_bind(
     Some(MockServer::builder().listener(listener).start().await)
 }
 
-/// Count all accept_count connections despite response failures, then return
-/// the first response error so retry-budget assertions remain meaningful.
+/// Accepts and counts every requested connection even if responses fail,
+/// then returns the first response error.
 fn spawn_accept_loop<F>(
     test_name: &str,
     accept_count: usize,
@@ -130,7 +129,7 @@ where
         for _ in 0..accept_count {
             let (mut stream, _) = listener.accept()?;
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            // Drain before replying to avoid racing an unread request buffer.
+            // Drain the request so unread bytes do not race the response.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             if let Err(e) = respond(&mut stream) {
@@ -142,13 +141,13 @@ where
     Some((format!("http://{addr}"), counter, handle))
 }
 
-/// Diagnose thread panic, response failure, or a stalled accept within 5s,
-/// before nextest's 120s slow timeout.
+/// Joins within 5s and surfaces thread/response failures before nextest
+/// reaches its 120s slow timeout.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
     join_server_thread_with_deadline(handle, Duration::from_secs(5));
 }
 
-/// Drop a stalled handle at the deadline; joining it would block again.
+/// Drops an unfinished handle at the deadline; joining it would block again.
 fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline: Duration) {
     let started = Instant::now();
     while !handle.is_finished() {
@@ -168,9 +167,9 @@ fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline
         .expect("server thread should not fail while writing the response");
 }
 
-/// Declare 1000 body bytes but send only hello, inducing a mid-stream close.
-/// accept_count must match client connections or the thread blocks in accept.
-/// Returns None if the bind guard permits skipping; the counter records accepts.
+/// Sends only `hello` despite Content-Length: 1000, producing a truncated body.
+/// `accept_count` must match client connections or accept blocks until the
+/// bounded join fails. Bind failure uses the SCOUT_NETWORK_TESTS guard.
 pub(crate) fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
@@ -179,9 +178,8 @@ pub(crate) fn spawn_mid_stream_drop_server(
     })
 }
 
-/// Serve a close-delimited body without Content-Length so the chunk-loop cap,
-/// rather than the declared-length check, handles oversize input.
-/// Returns None if the bind guard permits skipping.
+/// Sends a close-delimited body without Content-Length or Transfer-Encoding,
+/// exercising the streaming body cap. Bind failure uses the network guard.
 pub(crate) fn spawn_close_delimited_body_server(
     body_size: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
@@ -193,9 +191,8 @@ pub(crate) fn spawn_close_delimited_body_server(
     Some((addr, handle))
 }
 
-/// Declare a length but send no body: a missing size pre-check would produce
-/// a decode/network error instead of too_large.
-/// Returns None if the bind guard permits skipping.
+/// Declares `declared_len` then closes without body bytes, distinguishing
+/// oversized-header rejection from a body decode error. Uses the network guard.
 pub(crate) fn spawn_declared_length_no_body_server(
     declared_len: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
@@ -208,8 +205,8 @@ pub(crate) fn spawn_declared_length_no_body_server(
     Some((addr, handle))
 }
 
-/// Serve one Content-Length-framed HTML response regardless of proxy target.
-/// Returns None if the bind guard permits skipping.
+/// Returns the supplied HTML with Content-Length for one forward-proxy request.
+/// Bind failure uses the SCOUT_NETWORK_TESTS guard.
 pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let body = body.to_owned();
     let (addr, _counter, handle) = spawn_accept_loop("spawn_forward_proxy", 1, move |stream| {
@@ -223,14 +220,13 @@ pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::
     Some((addr, handle))
 }
 
-/// A token and its source file, shared by both scans.
 struct ScannedToken {
     file: PathBuf,
     token: String,
 }
 
-/// Preserve cited legacy IDs in DR-0021, DR-0012 and audit records.
-/// The series is closed at 201-16; new tests require subject prefixes.
+/// Preserve cited legacy T-201 IDs (DR-0021/DR-0012). This closed allowlist
+/// does not admit new digit-leading IDs.
 const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
     "201-1", "201-2", "201-3", "201-4", "201-5", "201-6", "201-8", "201-9", "201-10", "201-11",
     "201-12", "201-13", "201-14", "201-15", "201-16",
@@ -249,7 +245,7 @@ fn scan_test_id_violations() -> Vec<String> {
     find_test_id_violations(&occurrences)
 }
 
-/// Requirement citations belong in docs; scan only src and tests (DR-0013).
+/// Scans src/tests only; requirement citations remain allowed in docs (DR-0013).
 fn scan_requirement_code_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
@@ -260,14 +256,13 @@ fn scan_requirement_code_violations() -> Vec<String> {
             &mut occurrences,
         );
     }
-    // Exclude only this full path: its fixtures contain forbidden codes.
-    // A filename-only match would exempt unrelated test_support.rs files.
+    // Exempt only this exact file, which supplies requirement-code fixtures.
+    // A suffix match would also exempt unrelated nested test_support.rs files.
     let this_file = crate_root.join("src").join("test_support.rs");
     occurrences.retain(|o| o.file != this_file);
     find_requirement_code_violations(&occurrences)
 }
 
-/// Validate collected IDs without filesystem access.
 fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     let mut violations = Vec::new();
     let mut first_seen: HashMap<&str, &Path> = HashMap::new();
@@ -280,7 +275,6 @@ fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
             violations.push(format!("{file}: test id [T-{id}] starts with a digit"));
         }
 
-        // A duplicate within one file should not read as two different files.
         match first_seen.get(id) {
             Some(first_file) => violations.push(format!(
                 "{file}: duplicate test id [T-{id}], already defined in {}",
@@ -295,7 +289,6 @@ fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     violations
 }
 
-/// Every requirement-code occurrence is a violation, including duplicates.
 fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     occurrences
         .iter()
@@ -309,7 +302,6 @@ fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String>
         .collect()
 }
 
-/// Collect extracted tokens with their paths from Rust files.
 fn collect_occurrences(
     dir: &Path,
     extract: fn(&str) -> Vec<String>,
@@ -337,8 +329,8 @@ fn collect_occurrences(
     }
 }
 
-/// IDs contain ASCII letters, digits or hyphens inside [T-...] brackets.
-/// The convention placeholder is not a matching ID.
+/// Extracts bracketed IDs containing ASCII letters, digits or hyphens.
+/// The convention placeholder is not an ID.
 fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     let mut ids = Vec::new();
     let mut offset = 0;
@@ -399,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn try_spawn_mock_server_returns_some_in_normal_env() {
         let Some(server) = try_spawn_mock_server("normal_env").await else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let uri = server.uri();
@@ -445,7 +437,7 @@ mod tests {
             1,
             |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
@@ -470,7 +462,7 @@ mod tests {
             accept_count,
             |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
@@ -488,8 +480,8 @@ mod tests {
         );
     }
 
-    /// [T-SUP003] An unserved second connection triggers the accept_count diagnostic.
-    /// The deadline detaches the blocked thread; nextest may report it as leaky.
+    /// [T-SUP003] Too few client connections cause a bounded join panic naming accept_count.
+    /// The blocked thread is detached and may be reported as leaky by nextest.
     #[test]
     #[should_panic(expected = "accept_count")]
     fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
@@ -498,13 +490,12 @@ mod tests {
             2,
             |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
             .strip_prefix("http://")
             .expect("spawn_accept_loop should return an http:// URL");
-        // The second accept has no client; the join deadline must diagnose it.
         let _ = TcpStream::connect(host);
 
         join_server_thread_with_deadline(handle, Duration::from_millis(200));
@@ -527,7 +518,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP005] A directly injected thread error preserves its diagnostic within 500ms.
+    /// [T-SUP005] Thread error retains its diagnostic and panics within 500ms.
     #[test]
     fn server_thread_err_panics_with_existing_message_before_deadline() {
         let handle =
@@ -731,3 +722,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(feature = "js-rendering")]
+pub(crate) mod browser_fixture;
+
+#[cfg(feature = "js-rendering")]
+#[path = "test_support/browser_fixture_tests.rs"]
+mod browser_fixture_tests;

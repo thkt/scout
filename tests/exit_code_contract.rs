@@ -16,7 +16,6 @@ use std::process::Output;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-/// Run JSON fetch with a clean environment plus scenario-specific variables.
 fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
     let mut cmd = common::scout_with_clean_env();
     for (key, value) in extra_env {
@@ -27,7 +26,6 @@ fn run_scout_fetch(extra_env: &[(&str, &str)]) -> Output {
         .expect("scout --json fetch failed to run")
 }
 
-/// Check both process exit and JSON classification; either can drift.
 fn assert_exits_with(
     output: &Output,
     expected_exit_code: i32,
@@ -56,8 +54,8 @@ fn assert_proxy_was_dialed_for_exit_code(connection_count: &AtomicUsize, context
     );
 }
 
-/// A domain target avoids literal-IP rejection; HTTP_PROXY routes it to the
-/// fixture without scout DNS resolution. Require a dial as well as classification.
+/// Uses a domain target so the configured proxy handles resolution instead of
+/// triggering scout's IP-literal preflight rejection.
 fn assert_proxy_status_maps_to(
     proxy_status: u16,
     expected_exit_code: i32,
@@ -100,7 +98,7 @@ fn proxied_500_exits_75_temp_failure() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
 }
 
-// T-C024: A 2s proxy response exceeds the minimum accepted fetch timeout of 1s.
+// T-C024: A 2s proxy delay exceeds the minimum 1s outer fetch timeout.
 #[test]
 fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     let Some((proxy_url, connection_count, _handle)) =
@@ -120,12 +118,11 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
         "TIMEOUT",
         "a proxy response slower than the fetch timeout",
     );
-    // Require the timeout scenario to reach the proxy.
     assert_proxy_was_dialed_for_exit_code(&connection_count, "slow proxy response");
 }
 
-// T-C025: Malformed HTTP produces UNKNOWN (104) on the pinned reqwest version.
-// A dependency upgrade may reclassify this fixture; review that change.
+// T-C025: Malformed proxy bytes yield 104/UNKNOWN. This fixture classification
+// depends on reqwest; dependency upgrades may change the error category.
 #[test]
 fn non_http_proxy_response_exits_104_unknown() {
     let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
@@ -140,8 +137,8 @@ fn non_http_proxy_response_exits_104_unknown() {
     assert_proxy_was_dialed_for_exit_code(&connection_count, "non-HTTP proxy response");
 }
 
-// T-C026: Malformed HTTP_PROXY fails client construction with IO_ERROR (74).
-// No request is sent. The rejected literal is reqwest-version-dependent.
+// T-C026: Invalid proxy configuration yields 74/IO_ERROR before dispatch.
+// Acceptance of this literal depends on reqwest.
 #[test]
 fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);
@@ -154,8 +151,7 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
     );
 }
 
-// T-C027: A CLI timeout message contains "timed out" exactly once.
-// Drive the real timeout wrapper, rather than constructing its payload in-process.
+// T-C027: Actual outer timeout message contains "timed out" exactly once.
 #[test]
 fn fetch_timeout_message_states_the_timeout_once() {
     let Some((proxy_url, _connection_count, _handle)) =
@@ -179,3 +175,7 @@ fn fetch_timeout_message_states_the_timeout_once() {
         "error.message should state the timeout once, got: {message}"
     );
 }
+
+#[cfg(all(unix, feature = "js-rendering"))]
+#[path = "exit_code_contract/browser_cleanup.rs"]
+mod browser_cleanup;

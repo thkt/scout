@@ -1,13 +1,24 @@
 //! Browser binary discovery and Chrome process lifecycle for CDP rendering.
 
 use std::borrow::Cow;
+#[cfg(feature = "js-rendering")]
+use std::future::Future;
+#[cfg(feature = "js-rendering")]
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(feature = "js-rendering")]
+use std::process::ExitStatus;
 #[cfg(feature = "js-rendering")]
 use std::time::Duration;
 
 #[cfg(feature = "js-rendering")]
 use nix::unistd::Pid;
+#[cfg(feature = "js-rendering")]
+use nix::{
+    errno::Errno,
+    sys::signal::{Signal, killpg},
+};
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "js-rendering")]
@@ -21,18 +32,11 @@ use tracing::warn;
 use super::BrowserError;
 use crate::fetch::ssrf::{self, RedactedLogUrl};
 
-/// Discover the chromium/Chrome binary by probing `PATH` then known install
-/// locations. Called once per `--js` fetch rather than cached in a
-/// process-global `OnceLock`, which broke test isolation and pinned the
-/// first result for the process lifetime); the few `which` probes cost ~1-5 ms,
-/// negligible against the ~2 s chromium render that follows.
+/// Probes PATH and known install locations per fetch; caching would pin the
+/// first PATH result across injected browser fixtures.
 #[cfg(feature = "js-rendering")]
 pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
-    // Compile-time `#[cfg]` (not runtime `cfg!`) so each platform's table is the
-    // only one compiled: the other OS's lines never enter `cargo llvm-cov`, so
-    // the diff-coverage gate does not flag the macOS table as uncovered on the
-    // Linux CI runner (where it is unreachable). Mirrors transport.rs's exclusion
-    // of OS-I/O that the offline suite cannot exercise.
+    // Compile only the host platform's discovery table.
     #[cfg(target_os = "macos")]
     let path_commands: &[&str] = &["chromium"];
     #[cfg(not(target_os = "macos"))]
@@ -83,15 +87,9 @@ fn build_launch_args(proxy_port: u16) -> Vec<String> {
     ]
 }
 
-/// SSRF check for a browser-initiated subrequest URL (CDP `Fetch.RequestPaused`).
-///
-/// Scheme handling rationale:
-/// - `http`/`https`: passed directly to `ssrf::ssrf_check`
-/// - `ws`/`wss`: WebSocket can reach internal services; rewritten to http(s) for SSRF allowlist check
-/// - `data:`/`about:`/`chrome:`/`blob:`: synthetic browser schemes with no external egress, allowed without SSRF check
-/// - Unrecognized scheme: blocked (warn + return false) because the scheme cannot be classified
-///
-/// See ADR-0001 for the SSRF defense architecture.
+/// Validates browser subrequests (DR-0001). WebSocket URLs use the HTTP(S)
+/// allowlist; synthetic browser schemes pass without external egress, and
+/// unrecognized schemes are blocked.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -110,44 +108,100 @@ pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsRes
         warn!(url = %RedactedLogUrl(url), "SSRF: blocked browser subrequest with unrecognized scheme");
         return false;
     };
-    // Direct: the CDP path routes chromium egress through scout's loopback
-    // SOCKS5 proxy (ADR-0021), but this subrequest allowlist check runs in
-    // scout's own process, which resolves directly — so the DNS pre-check
-    // applies as in a direct fetch.
+    // This allowlist check resolves in scout, independently of proxy routing.
     ssrf::ssrf_check(&check_url, resolver, &ssrf::EgressMode::Direct)
         .await
         .is_ok()
 }
 
-/// Grace period between SIGTERM and SIGKILL when reaping the chromium pgroup.
-/// 50 ms is enough for chromium subprocess (Helper Renderer, GPU, Network) to
-/// observe the signal after `browser.close()` already drove the graceful path.
+/// TERM grace after CDP close, before forced group termination.
 #[cfg(feature = "js-rendering")]
 const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 
-/// Spawn chromium in a new process group and return (Child, pgid, stderr reader).
-///
-/// Synchronous so the caller captures `pgid` before any timeout can drop the
-/// future and orphan the group. The pgid equals the chromium child's pid (the
-/// call uses `process_group(0)`, which means "make the child the leader of a
-/// new group whose id is its pid"). scout retains the `Child` so the kernel
-/// can reap the parent after we kill the group.
-///
-/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
-/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
-/// hand the resulting WebSocket URL to `Browser::connect` instead.
+/// Holds the group and profile across awaits. Drop sends SIGKILL synchronously
+/// before profile deletion, even during runtime shutdown (DR-0032).
+/// Child kill-on-drop alone cannot stop descendants.
+#[cfg(feature = "js-rendering")]
+pub(super) struct ChromiumProcess {
+    child: TokioChild,
+    pgid: Pid,
+    group_armed: bool,
+    _profile: TempDir,
+}
+
+#[cfg(feature = "js-rendering")]
+impl ChromiumProcess {
+    /// Completed paths retain bounded reap; cancellation invokes the Drop fallback.
+    pub(super) async fn reap(&mut self) {
+        reap_group(self.pgid, &mut self.group_armed, self.child.wait(), killpg).await;
+    }
+
+    fn kill_group(&mut self) {
+        kill_group_with(self.pgid, &mut self.group_armed, killpg);
+    }
+}
+
+#[cfg(feature = "js-rendering")]
+async fn reap_group(
+    pgid: Pid,
+    armed: &mut bool,
+    wait: impl Future<Output = io::Result<ExitStatus>>,
+    mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
+) {
+    match signal(pgid, Signal::SIGTERM) {
+        Err(Errno::ESRCH) => *armed = false,
+        term => {
+            if let Err(e) = term {
+                warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
+            }
+            sleep(PGROUP_SIGTERM_GRACE).await;
+            kill_group_with(pgid, armed, signal);
+        }
+    }
+    // Successful KILL or ESRCH disarms before wait can release the numeric PID.
+    // Failed KILL leaves the Drop retry armed.
+    match timeout(Duration::from_secs(2), wait).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
+        Err(_) => {
+            warn!(timeout_secs = 2, pgid = %pgid, "chromium child did not exit within timeout after SIGKILL")
+        }
+    }
+}
+
+#[cfg(feature = "js-rendering")]
+fn kill_group_with(
+    pgid: Pid,
+    armed: &mut bool,
+    mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
+) {
+    match signal(pgid, Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => *armed = false,
+        Err(e) => warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed"),
+    }
+}
+
+#[cfg(feature = "js-rendering")]
+impl Drop for ChromiumProcess {
+    fn drop(&mut self) {
+        if self.group_armed {
+            self.kill_group();
+        }
+    }
+}
+
+/// Spawns a new group and captures ownership without an intervening await.
+/// chromiumoxide 0.9 hides the Command needed for `process_group(0)`, so scout
+/// self-spawns and connects to the resulting DevTools URL.
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
     proxy_port: u16,
-) -> Result<(TokioChild, Pid, BufReader<ChildStderr>, TempDir), BrowserError> {
+) -> Result<(ChromiumProcess, BufReader<ChildStderr>), BrowserError> {
     use std::process::Stdio;
 
-    // `TempDir` gives each --js fetch a unique profile dir (random suffix avoids
-    // chromium's `SingletonLock` failure when two scout processes run --js
-    // concurrently) and deletes it on `Drop`. The caller must hold the returned
-    // guard until after `reap_pgroup`, because chromium keeps writing profile
-    // state during graceful shutdown.
+    // A unique profile avoids SingletonLock collisions between concurrent fetches.
+    // Its owner must survive group termination because chromium writes on shutdown.
     let user_data_dir = Builder::new()
         .prefix("scout-chromium-")
         .tempdir()
@@ -164,7 +218,7 @@ pub(super) fn spawn_chromium_pgroup(
         .process_group(0)
         .kill_on_drop(true);
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| BrowserError::ProcessFailed(format!("spawn chromium: {e}")))?;
     let pid = child
@@ -175,18 +229,22 @@ pub(super) fn spawn_chromium_pgroup(
             .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
     );
 
-    let stderr = child
+    // Capture the group before fallible stderr extraction, without an await.
+    let mut process = ChromiumProcess {
+        child,
+        pgid,
+        group_armed: true,
+        _profile: user_data_dir,
+    };
+    let stderr = process
+        .child
         .stderr
         .take()
         .ok_or_else(|| BrowserError::ProcessFailed("chromium stderr missing".into()))?;
-    Ok((child, pgid, BufReader::new(stderr), user_data_dir))
+    Ok((process, BufReader::new(stderr)))
 }
 
-/// Read chromium stderr line-by-line until `DevTools listening on ws://...`.
-///
-/// Mirrors chromiumoxide 0.9's `ws_url_from_output` — the marker has been
-/// stable in Chrome/Chromium for years. Generic over `AsyncBufRead` so unit
-/// tests can drive it with an in-memory cursor.
+/// Reads stderr until chromium announces its DevTools WebSocket URL.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn parse_ws_url_from_lines<R>(reader: R) -> Result<String, BrowserError>
 where
@@ -211,48 +269,6 @@ where
         {
             return Ok(ws.trim().to_owned());
         }
-    }
-}
-
-/// Send SIGTERM to the pgroup, wait a short grace, then SIGKILL.
-///
-/// `ESRCH` from the first killpg means the group already exited (the common
-/// case after a successful `browser.close()`); skip the grace + SIGKILL in
-/// that branch to avoid a 50 ms cleanup penalty on every `--js` fetch. The
-/// `Child` is awaited unconditionally so the kernel can reap the parent and
-/// we don't leave a zombie pid behind.
-#[cfg(feature = "js-rendering")]
-pub(super) async fn reap_pgroup(pgid: Pid, child: &mut TokioChild) {
-    use nix::errno::Errno;
-    use nix::sys::signal::{Signal, killpg};
-
-    let term = killpg(pgid, Signal::SIGTERM);
-    let already_gone = matches!(term, Err(Errno::ESRCH));
-    if let Err(e) = term
-        && e != Errno::ESRCH
-    {
-        warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
-    }
-    if !already_gone {
-        sleep(PGROUP_SIGTERM_GRACE).await;
-        if let Err(e) = killpg(pgid, Signal::SIGKILL)
-            && e != Errno::ESRCH
-        {
-            warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed");
-        }
-    }
-    // `Ok(Err)` means waitpid itself failed (rare; e.g. ECHILD if a prior wait already reaped); `Err`
-    // means the 2s budget elapsed before chromium exited, which is the zombie
-    // path scout must surface so SHUTDOWN_DRAIN_TIMEOUT calibration stays
-    // honest.
-    match timeout(Duration::from_secs(2), child.wait()).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
-        Err(_) => warn!(
-            timeout_secs = 2,
-            pgid = %pgid,
-            "chromium child did not exit within timeout after SIGKILL"
-        ),
     }
 }
 

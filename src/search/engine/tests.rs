@@ -172,8 +172,7 @@ fn partition_by_rank_orders_failures_like_pages() {
     );
 }
 
-/// [T-SE013] The empty report needs its explicit Sources marker (DR-0005);
-/// search's empty-output contract is different (DR-0020).
+/// [T-SE013] An empty research report retains Sources and the zero-result marker.
 #[test]
 fn format_report_marks_zero_results_in_sources() {
     let report = ResearchReport::default();
@@ -249,7 +248,7 @@ fn format_report_includes_fetched_pages() {
     );
 }
 
-/// [T-SE011] One flagged page emits exactly one decode-uncertain note.
+/// [T-SE011] Two pages with one uncertainty flag produce exactly one decode note.
 #[test]
 fn format_report_prepends_decode_uncertain_note() {
     let report = ResearchReport {
@@ -525,8 +524,7 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
     }
 }
 
-/// [T-SE020] A shorter backtick line cannot close the report page's fence;
-/// only headings after the matching close may be shifted.
+/// [T-SE020] Preserve a heading inside a wider fence and shift the one after it.
 #[test]
 fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     let page = FetchResult::for_test(
@@ -604,6 +602,38 @@ fn failed_url_line_escapes_url_and_reason_alike() {
         2,
         "url and reason must escape `|` the same way, got: {line}"
     );
+}
+
+/// [T-SE023] Literal close/next-page/Failed URLs/Sources boundaries after a cut;
+/// both fence characters, widths, decoy closes and YAML markers.
+#[test]
+fn truncated_fences_keep_research_sections_independent() {
+    for (opening, decoy, closing) in [
+        ("```rust", "~~~", "```"),
+        ("~~~~rust", "~~~", "~~~~"),
+        ("`````rust", "````", "`````"),
+        ("   ```rust", "``` not a close", "```"),
+    ] {
+        let body = format!(
+            "{opening}\n{decoy}\n---\n...\n{}\n{closing}\n",
+            "let x = 1;\n".repeat(600)
+        );
+        let report = ResearchReport {
+            fetched_pages: vec![
+                FetchResult::for_test("https://first.example".into(), body, false),
+                FetchResult::for_test("https://second.example".into(), "Second body".into(), false),
+            ],
+            failed_urls: vec![FailedUrl {
+                url: "https://failed.example".into(),
+                reason: "failed".into(),
+            }],
+            sources: vec![make_source("https://source.example", "Source")],
+        };
+        let output = format_report(&report, "q");
+        assert!(output.contains("(truncated: showing"));
+        assert!(!output.lines().any(|line| matches!(line, "---" | "...")));
+        assert!(output.contains(&format!(")\n{closing}\n\n### https://second.example\n\nSecond body\n\n## Failed URLs\n\n- https://failed.example (failed)\n\n## Sources\n\n- [Source](https://source.example)")), "sections must follow a standalone closing fence: {opening:?}");
+    }
 }
 
 /// [T-SE021] Research must not reinterpret plain-text headings or consume blank lines.
