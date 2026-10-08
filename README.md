@@ -241,6 +241,8 @@ scout repo-read owner/repo legacy.txt --encoding shift_jis
 | `-l, --lines` | Line range: `1-80`, `50-`, or `100` (first N lines)                                                                                                                                                                                              |
 | `--encoding`  | Character encoding (e.g., `shift_jis`, `euc-jp`, `gbk`). When omitted, auto-detects UTF-8, Shift_JIS, EUC-JP, GBK, EUC-KR, and other multi-byte encodings. Single-byte encodings (windows-1252, ISO-8859-\*, etc.) require explicit `--encoding` |
 
+When a file is not found, `error.candidates` may suggest up to three paths at OSA edit distance ≤3 (including adjacent transpositions). Hints are best-effort: the five-second budget covers tree lookup and matching. Hints are omitted if the tree has more than 4,096 entries (directories included), a target or candidate exceeds 512 Unicode characters, or matching would exceed 1,000,000 distance cells. The original not-found error (exit 66) is preserved; these limits do not restrict successful file reads. See [DR-0033](docs/decisions/0033-bound-repo-candidate-matching.md) for the scheduling and work limits.
+
 ### `scout repo-overview` — Repository at a glance
 
 ```sh
