@@ -146,7 +146,7 @@ fn format_report_includes_sections() {
     assert!(text.contains("[A](https://a.com)"));
 }
 
-/// [T-SE014] Unordered completion must not reorder successes or failures.
+/// [T-SE014] Hand-built out-of-order outcomes are partitioned in source rank order.
 #[test]
 fn partition_by_rank_orders_failures_like_pages() {
     let timeout = || fetch::FetchError::DnsResolution("no such host".into());
@@ -314,12 +314,32 @@ fn format_report_sanitizes_query_newlines() {
     assert!(!text.contains("# Research: line1\n"));
 }
 
-/// [T-SE008] A mock search supplies one source and records one English query.
+/// [T-SE008] research forwards the English query and delivers the fetched source body.
 #[tokio::test]
 async fn research_with_mock_returns_report() {
-    let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
-    let http = Client::new();
-    let resolver = real_resolver();
+    let Some(server) = try_spawn_mock_server("engine::research_report").await else {
+        return;
+    };
+    // A full article avoids automatic JS fallback under all-features.
+    let body = "Primary source fixture describes the research result in detail. ".repeat(30);
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            "<article><h1>Source article</h1><p>{body}</p></article>"
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let addr = *server.address();
+    let url = format!("http://scout-test.example:{}/article", addr.port());
+    let mock = MockSearch::with_results(vec![make_source(&url, "Source article")]);
+    let http = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .resolve("scout-test.example", addr)
+        .build()
+        .expect("test client builds");
+    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
 
     let req = ResearchRequest {
         query: "test",
@@ -333,6 +353,15 @@ async fn research_with_mock_returns_report() {
         .unwrap();
 
     assert_eq!(report.sources.len(), 1);
+    assert_eq!(report.sources[0].url, url);
+    assert_eq!(report.sources[0].title, "Source article");
+    assert!(report.failed_urls.is_empty(), "{:?}", report.failed_urls);
+    assert_eq!(report.fetched_pages.len(), 1);
+    assert_eq!(report.fetched_pages[0].url(), url);
+    assert!(
+        report.fetched_pages[0].markdown().contains(body.trim()),
+        "the report must deliver the fixture body, not merely its source URL"
+    );
 
     let captured = mock.captured();
     assert_eq!(
@@ -351,7 +380,7 @@ async fn research_with_mock_returns_report() {
 /// [T-SE017] Lang::Auto issues exactly one Brave call, with no bilingual expansion
 #[tokio::test]
 async fn research_auto_lang_issues_single_call() {
-    let mock = MockSearch::with_results(vec![make_source("https://a.com", "A")]);
+    let mock = MockSearch::with_results(vec![]);
     let http = Client::new();
     let resolver = real_resolver();
 
@@ -362,9 +391,13 @@ async fn research_auto_lang_issues_single_call() {
         egress: EgressMode::Direct,
     };
     let (cancel, _) = watch::channel(false);
-    let _ = research(&mock, &http, &req, resolver, &cancel)
+    let report = research(&mock, &http, &req, resolver, &cancel)
         .await
         .unwrap();
+
+    assert!(report.sources.is_empty());
+    assert!(report.fetched_pages.is_empty());
+    assert!(report.failed_urls.is_empty());
 
     let captured = mock.captured();
     assert_eq!(
@@ -450,8 +483,8 @@ async fn source_fetch_timeout_states_the_timeout_once() {
     );
 }
 
-/// [T-SE019] Two pages retain eight fence runs, the second URL heading
-/// and one occurrence of each code label.
+/// [T-SE019] Two hand-built pages retain eight fence delimiters, their code text,
+/// and the second page URL heading. Fence pairing and heading position are not asserted.
 #[test]
 fn combined_research_output_keeps_each_pages_code_fences_independent() {
     let page1 = FetchResult::for_test(
@@ -518,8 +551,9 @@ fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     );
 }
 
-/// [T-FC088] A handcrafted unclosed four-backtick body with a shorter decoy
-/// is truncated and leaves no bare YAML start marker; fetch is not exercised.
+/// [T-FC088] A hand-built unclosed four-backtick fence with a shorter decoy
+/// is truncated and contains no bare YAML marker afterward.
+/// The fixture bypasses initial neutralization and has no matching close.
 #[test]
 fn combined_research_output_reneutralizes_a_marker_past_a_decoy_close_inside_a_longer_fence() {
     let filler = "y".repeat(80) + "\n";

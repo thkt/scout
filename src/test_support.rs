@@ -1,9 +1,11 @@
 //! Shared test scaffolding and test-id conventions.
 //!
-//! Each test doc starts with `[T-<PREFIX><NNN>]`: a subject prefix and a number
-//! unique within that prefix across files. DRs cite these identifiers.
-//! Cite other tests without brackets; brackets define an ID.
-//! Test docs describe the failure detected, without repeating implementation rationale.
+//! Each test doc starts with `[T-<PREFIX><NNN>]`. Prefixes identify subjects;
+//! numbers are unique within each prefix across files. DRs cite these IDs.
+//! Cite other tests without brackets: brackets define an ID.
+//!
+//! Test docs name actual detection conditions and necessary fixture premises,
+//! without repeating implementation rationale.
 
 use std::collections::HashMap;
 use std::env;
@@ -20,19 +22,13 @@ use reqwest::Client;
 use reqwest::redirect::Policy;
 use wiremock::{MockServer, ResponseTemplate};
 
-/// Build a reqwest `Client` with redirects disabled. No connect or read
-/// timeouts are set; wrap calls in `tokio::time::timeout` if a bounded test
-/// is needed.
+/// Redirects are disabled; callers must bound requests that need a timeout.
 pub(crate) fn no_redirect_client() -> Client {
     Client::builder().redirect(Policy::none()).build().unwrap()
 }
 
-/// Produce a real "connection refused" `reqwest::Error` deterministically:
-/// reserve a loopback port, then drop the listener so the port closes
-/// synchronously (no async shutdown race, unlike `MockServer`), and GET it.
-///
-/// Returns `None` when loopback bind is unavailable so callers can
-/// early-return in restricted environments, matching `try_spawn_mock_server`.
+/// Reserve and synchronously close a loopback port before requesting it.
+/// Returns None if the bind guard permits skipping; the closed port is not reserved.
 pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest::Error> {
     let listener = bind_loopback(test_name)?;
     let addr = listener.local_addr().expect("local_addr");
@@ -122,7 +118,7 @@ where
     F: Fn(&mut TcpStream) -> io::Result<()> + Send + 'static,
 {
     let listener = bind_loopback(test_name)?;
-    // Address lookup failure must not become a skip under SCOUT_NETWORK_TESTS.
+    // Address lookup failure must not skip a scenario after a successful bind.
     let addr = listener
         .local_addr()
         .expect("a bound listener reports its address");
@@ -353,8 +349,8 @@ fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     ids
 }
 
-/// Matches bare requirement codes with exactly three digits and a token boundary.
-/// Requiring backticks would miss citations in ordinary comments.
+/// Match bare FR/BR/NFR prefixes with exactly three ASCII digits, with no
+/// preceding ASCII letter or following digit; backticks are not required.
 fn extract_requirement_codes(contents: &str) -> Vec<String> {
     const PREFIXES: [&str; 3] = ["NFR-", "FR-", "BR-"];
     let mut codes = Vec::new();
@@ -370,9 +366,7 @@ fn extract_requirement_codes(contents: &str) -> Vec<String> {
                     .chars()
                     .next()
                     .is_none_or(|c| !c.is_ascii_digit());
-            // `FR-` also sits inside `NFR-`. `PREFIXES` lists `NFR-` first, so
-            // a letter-preceded hit was already counted under that prefix and
-            // is skipped here rather than double-counted.
+            // Reject letter-preceded hits, including FR inside NFR.
             let standalone = contents[..start]
                 .chars()
                 .next_back()
@@ -507,7 +501,8 @@ mod tests {
         join_server_thread_with_deadline(handle, Duration::from_millis(200));
     }
 
-    /// [T-SUP004] Successful thread join completes within 500ms, below its 5s deadline.
+    /// [T-SUP004] A successful thread joins within 500ms against a 5s deadline.
+    /// Direct thread creation avoids an unrelated loopback dependency.
     #[test]
     fn finished_server_thread_returns_before_deadline_elapses() {
         let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
@@ -537,8 +532,7 @@ mod tests {
         let elapsed = started.elapsed();
 
         let panic_payload = result.expect_err("respond Err should panic, not return Ok");
-        // `Result::expect` formats its message, so the payload is a String, never
-        // the `&'static str` a bare `panic!("literal")` would produce.
+        // Result::expect produces a formatted String panic payload.
         let message = panic_payload
             .downcast_ref::<String>()
             .expect("expect's panic payload is a formatted String");
@@ -570,7 +564,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP007] An ID in the T-201 family is not reported as a violation
+    /// [T-SUP007] The allow-listed 201-8 ID is accepted.
     #[test]
     fn t201_family_id_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -634,7 +628,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP011] 201-1, added to the allowlist, is not reported as a violation
+    /// [T-SUP011] The allow-listed 201-1 ID is accepted.
     #[test]
     fn t201_1_added_to_allowlist_is_not_reported_as_violation() {
         let occurrences = vec![ScannedToken {
@@ -679,53 +673,42 @@ mod tests {
         );
     }
 
-    /// [T-SUP013] Input carrying FR-018 is reported as a violation
+    /// [T-SUP013] Real extraction respects prefix/digit boundaries and reports file + code.
     #[test]
-    fn fr_requirement_code_in_input_is_reported_as_violation() {
-        let occurrences = vec![ScannedToken {
-            file: PathBuf::from("fake/req_code_tests.rs"),
-            token: "FR-018".to_owned(),
-        }];
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("FR-018")),
-            "FR-018 should be reported by file and code, got: {violations:?}"
-        );
-    }
-
-    /// [T-SUP014] Input carrying BR-001 is reported as a violation
-    #[test]
-    fn br_requirement_code_in_input_is_reported_as_violation() {
-        let occurrences = vec![ScannedToken {
-            file: PathBuf::from("fake/req_code_tests.rs"),
-            token: "BR-001".to_owned(),
-        }];
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("fake/req_code_tests.rs") && v.contains("BR-001")),
-            "BR-001 should be reported by file and code, got: {violations:?}"
-        );
-    }
-
-    /// [T-SUP015] Input carrying no requirement code is not reported as a violation
-    #[test]
-    fn input_without_requirement_code_is_not_reported_as_violation() {
-        let occurrences: Vec<ScannedToken> = Vec::new();
-
-        let violations = find_requirement_code_violations(&occurrences);
-
-        assert!(
-            violations.is_empty(),
-            "input without a requirement code should report no violations, got: {violations:?}"
-        );
+    fn requirement_code_boundaries_and_diagnostics() {
+        for (input, expected) in [
+            (
+                "// FR-018, BR-001; NFR-123",
+                vec!["BR-001", "FR-018", "NFR-123"],
+            ),
+            ("FR-018", vec!["FR-018"]),
+            ("BR-001", vec!["BR-001"]),
+            ("NFR-123", vec!["NFR-123"]),
+            ("// XFR-018 XBR-001 XNFR-123", vec![]),
+            ("// FR-01 BR-00 NFR-12", vec![]),
+            ("// FR-0180 BR-0012 NFR-1234", vec![]),
+            ("// no requirement code", vec![]),
+            ("", vec![]),
+        ] {
+            let mut codes = extract_requirement_codes(input);
+            codes.sort();
+            assert_eq!(codes, expected, "extraction boundary for {input:?}");
+            let occurrences: Vec<_> = codes
+                .into_iter()
+                .map(|token| ScannedToken {
+                    file: PathBuf::from("fake/req_code_tests.rs"),
+                    token,
+                })
+                .collect();
+            let violations = find_requirement_code_violations(&occurrences);
+            assert_eq!(violations.len(), expected.len(), "{input:?}");
+            for (violation, code) in violations.iter().zip(expected) {
+                assert!(
+                    violation.contains("fake/req_code_tests.rs") && violation.contains(code),
+                    "violation must identify file and code: {violation}"
+                );
+            }
+        }
     }
 
     /// [T-SUP016] Scanning the real `src/` and `tests/` finds no requirement-code violations

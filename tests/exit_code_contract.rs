@@ -1,9 +1,15 @@
-//! CLI exit codes and JSON error codes through local proxy fixtures (DR-0003).
-//! Proxy contact assertions distinguish response failures from preflight errors.
-//! Invalid proxy configuration is checked before dispatch; exit 70 is outside
-//! this fetch-only surface. Timeout wording is checked separately.
+//! CLI exit-code and JSON error.code contracts for proxy responses (DR-0003).
+//! HTTP-status cases and T-C024/025 require a proxy connection to rule out
+//! coincidental SSRF or DNS failures. T-C026 fails during client construction;
+//! T-C027 checks timeout wording without asserting a connection count.
+//!
+//! Fetch has no retry-helper calls, so SCOUT_MAX_RETRIES is irrelevant here.
+//! Exit 70 has no construction path through this fetch-only harness.
 
 mod common;
+
+#[path = "common/tests.rs"]
+mod common_tests;
 
 use common::parse_envelope;
 use std::process::Output;
@@ -68,25 +74,25 @@ fn assert_proxy_status_maps_to(
     assert_proxy_was_dialed_for_exit_code(&connection_count, &context);
 }
 
-// T-C020: proxied_404_exits_66_not_found
+// T-C020
 #[test]
 fn proxied_404_exits_66_not_found() {
     assert_proxy_status_maps_to(404, 66, "NOT_FOUND");
 }
 
-// T-C021: proxied_403_exits_64_usage_error
+// T-C021
 #[test]
 fn proxied_403_exits_64_usage_error() {
     assert_proxy_status_maps_to(403, 64, "USAGE_ERROR");
 }
 
-// T-C022: proxied_400_exits_65_data_error
+// T-C022
 #[test]
 fn proxied_400_exits_65_data_error() {
     assert_proxy_status_maps_to(400, 65, "DATA_ERROR");
 }
 
-// T-C023: proxied_500_exits_75_temp_failure
+// T-C023
 #[test]
 fn proxied_500_exits_75_temp_failure() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
@@ -116,7 +122,7 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
 }
 
 // T-C025: Malformed proxy bytes yield 104/UNKNOWN. This fixture classification
-// depends on reqwest 0.13.4; dependency upgrades may change the error category.
+// depends on reqwest; dependency upgrades may change the error category.
 #[test]
 fn non_http_proxy_response_exits_104_unknown() {
     let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
@@ -132,7 +138,7 @@ fn non_http_proxy_response_exits_104_unknown() {
 }
 
 // T-C026: Invalid proxy configuration yields 74/IO_ERROR before dispatch.
-// Acceptance of this literal depends on reqwest 0.13.4.
+// Acceptance of this literal depends on reqwest.
 #[test]
 fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);

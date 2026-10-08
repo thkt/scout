@@ -78,24 +78,36 @@ fn error_envelope_wraps_payload_under_error_key() {
     );
 }
 
-/// [T-EN016] `to_json_line` is the single serialize point per ADR-0010.
+/// [T-EN016] INTERNAL errors remain single-line JSON with escaped message content.
 #[test]
-fn to_json_line_matches_direct_serialize() {
+fn to_json_line_preserves_internal_error_and_escapes_message() {
     let env = ErrorEnvelope {
         error: ErrorPayload {
             code: ErrorCode::Internal,
-            message: String::from("failed to serialize fetch result"),
+            message: String::from("failed to serialize\nfetch \"result\"\r\npath: C:\\tmp"),
             next_step: None,
             candidates: vec![],
             retryable: false,
         },
     };
     let line = to_json_line(&env);
-    assert_eq!(line, serde_json::to_string(&env).unwrap());
-    assert!(line.starts_with(r#"{"error":"#), "got: {line}");
-    assert!(line.contains(r#""code":"INTERNAL""#), "got: {line}");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("valid JSON output");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "error": {
+                "code": "INTERNAL",
+                "message": "failed to serialize\nfetch \"result\"\r\npath: C:\\tmp",
+                "retryable": false
+            }
+        })
+    );
     assert!(
-        !line.contains('\n'),
+        line.contains(r#"serialize\nfetch \"result\"\r\npath: C:\\tmp"#),
+        "got: {line}"
+    );
+    assert!(
+        !line.contains(['\n', '\r']),
         "envelope must be one line, got: {line}"
     );
 }
@@ -211,11 +223,8 @@ fn error_code_serializes_screaming_snake_case() {
     }
 }
 
-/// [T-EN014] ErrorCode → exit-code mapping per ADR-0002 (exit values),
-/// ADR-0010 (`error.code` value set), ADR-0017 (130 / 143).
-/// Drift on any listed variant fails this test. A new variant has to be added
-/// to the array by hand: omitting its `exit_code()` arm fails compile, but
-/// leaving it out of the array below does not.
+/// [T-EN014] Listed variants map to DR-0002/0010/0017 exit codes.
+/// New variants require manual additions to this table.
 #[test]
 fn error_code_exit_code_table() {
     let pairs = [

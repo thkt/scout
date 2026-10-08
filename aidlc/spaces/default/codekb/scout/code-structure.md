@@ -197,3 +197,5 @@ scout/
 | RESULT       | 1    | `to_fetch_result` と `FetchResult`                                                                                                                                                                   |
 
 **このファイルは追加された順に積まれており、関心順ではない。** ファイル順が ID 番号順と一致しない箇所がある (`T-FC083` → `T-FC082` → `T-FC020`、`T-FC068` → `T-FC067`、`T-FC091` → `T-FC078`)。その結果、冒頭の 8 本と末尾の 5 本が「1 関心 1 本ずつ」の散らばりになり、中央部だけが関心ごとの塊になる。切り出しの見通しは `code-quality-assessment.md` の `### E-4` が持つ。
+
+2026-10-08 補足（[Issue #484](https://github.com/thkt/scout/issues/484)、開始版 `67ed30f`）: 上の分類・件数・配置は過去の測定記録として残す。現行コードでは到達不能な Faithful 分岐の専用テスト T-FC068 を削除したため、その並びは現行の配置を示さない。T-FC081 の検証は T-FC020 へ集約した。判断の根拠と過去の対応表の読み方は [code-quality-assessment.md の E-4](code-quality-assessment.md) を参照する。

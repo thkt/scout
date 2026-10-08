@@ -12,10 +12,8 @@ use super::extractor::ExtractedArticle;
 use crate::markdown::{fence_delimiter, shift_headings};
 use crate::yaml::{neutralize_yaml_markers_outside_fences, write_yaml_str};
 
-/// Fetched page content converted to Markdown. Fields are private so the only
-/// construction paths are [`to_fetch_result`], [`plain_text_result`] and
-/// [`FetchResult::for_test`] (test fixtures); callers cannot build a result
-/// that skips the output boundary's frontmatter and YAML neutralization.
+/// Private fields restrict production construction to media-specific output
+/// boundaries. for_test can supply a body directly for formatter fixtures.
 #[derive(Debug, Serialize)]
 pub(crate) struct FetchResult {
     url: String,
@@ -84,9 +82,10 @@ pub(crate) const RAW_FALLBACK_NOTE: &str =
 
 pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could not be determined; the body is a best-effort decode and may be garbled.\n\n";
 
-/// Keep inline-code whitespace with `preformatted_code`; the default mode is Pure.
+/// Pure mode keeps comments out of the body; preformatted_code preserves inline-code whitespace.
 fn markdown_converter() -> HtmlToMarkdown {
     let options = Options {
+        translation_mode: TranslationMode::Pure,
         preformatted_code: true,
         ..Options::default()
     };
@@ -505,13 +504,13 @@ fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
 
 /// Read mixed `<th>`/`<td>` rows positionally; htmd's per-tag extraction loses
 /// cells of the other kind. Keep caption, cell normalization and column-count
-/// behavior, but omit column-width padding. Non-Pure modes delegate to htmd
-/// (T-FC068); production uses Pure.
+/// behavior, but omit column-width padding. Only `markdown_converter` registers
+/// this handler, in Pure mode.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "htmd's ElementHandler blanket impl takes Element by value"
+)]
 fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if handlers.options().translation_mode != TranslationMode::Pure {
-        return handlers.fallback(element);
-    }
-
     let mut captions: Vec<String> = Vec::new();
     let mut headers: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -721,8 +720,7 @@ pub(super) fn to_fetch_result(
     url: String,
     decode_uncertain: bool,
 ) -> Result<FetchResult, FetchError> {
-    // Fail-close: a conversion error must surface as a `FetchError`, not as an
-    // empty or partial markdown body silently returned to the caller.
+    // Fail closed on conversion errors rather than returning a partial body.
     let content_html = close_self_closed_raw_text_tags(&article.content_html);
     let markdown = markdown_converter()
         .convert(&content_html)
@@ -751,9 +749,7 @@ pub(crate) fn plain_text_result(text: &str, url: String, decode_uncertain: bool)
     }
 }
 
-/// Wraps `markdown` in a `---`-delimited YAML frontmatter block carrying
-/// whichever of title/author/date the article provides. The wrapper remains
-/// present when there are no metadata fields.
+/// Always emit frontmatter, including when metadata is absent.
 fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String {
     let mut fields = String::new();
 
@@ -771,11 +767,7 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 }
 
 fn format_body(fields: &str, markdown: &str) -> String {
-    // The body is untrusted page content appended after the frontmatter, so a
-    // column-0 `---`/`...` in it would otherwise open a YAML document boundary.
-    // A marker inside a closed fence is quoted sample output, not an attempt to
-    // forge a document boundary, so it stays verbatim. Outside any fence, or
-    // inside one that never closes, it is still rewritten to `***`.
+    // Neutralize untrusted YAML boundaries; only closed fences preserve literal markers.
     let body = neutralize_yaml_markers_outside_fences(markdown);
 
     let mut fm = String::from("---\n");
@@ -1093,7 +1085,7 @@ mod tests {
         );
     }
 
-    /// [T-FC020] Already-fenced code children must not receive a second fence.
+    /// [T-FC020] Pre/code outside table cells must retain a single fenced block.
     #[test]
     fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
         let article = article("<pre><code>fn main() {}</code></pre>");
@@ -1356,7 +1348,7 @@ mod tests {
         );
     }
 
-    /// [T-FC064] The first thead row keeps mixed cell kinds when promoted.
+    /// [T-FC064] Mixed cells in the first thead row survive on the same line.
     #[test]
     fn header_promoted_row_keeps_its_td_cells() {
         let article = article(
@@ -1432,40 +1424,8 @@ mod tests {
             );
     }
 
-    /// [T-FC068] Non-Pure mode must delegate to htmd. The fixture needs an attribute
-    /// to trigger its `serialize_if_faithful!` gate.
-    #[test]
-    fn faithful_mode_table_with_attributes_delegates_to_the_built_in_handler_and_stays_html() {
-        use htmd::options::{Options, TranslationMode};
-
-        let options = Options {
-            translation_mode: TranslationMode::Faithful,
-            ..Options::default()
-        };
-        let converter = HtmlToMarkdown::builder()
-            .options(options)
-            .add_handler(vec!["pre"], pre_handler)
-            .add_handler(vec!["span"], span_handler)
-            .add_handler(vec!["table"], table_handler)
-            .build();
-
-        let html = r#"<table class="data"><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>"#;
-        let markdown = converter.convert(html).expect("conversion must succeed");
-
-        assert!(
-            markdown.contains("<table"),
-            "a table with attributes under Faithful mode must delegate to htmd's built-in \
-             table handler and come out as raw HTML, not the app's positional Markdown \
-             table:\n{markdown}"
-        );
-        assert!(
-            !markdown.contains("| Name |"),
-            "the app's own pipe-delimited table formatting must not run under Faithful \
-             mode:\n{markdown}"
-        );
-    }
-
-    /// [T-FC067] A mixed label/value row must not fabricate column headers.
+    /// [T-FC067] Mixed label/value rows retain both cells with an empty header
+    /// immediately followed by its separator. Data-row placement is not asserted.
     #[test]
     fn table_with_no_all_th_row_emits_an_empty_header_row_and_separator() {
         let article = article(
@@ -2338,7 +2298,7 @@ mod tests {
         );
     }
 
-    /// [T-FC079] Cell-code delimiters must exceed the longest content backtick run.
+    /// [T-FC079] Three content backticks require a four-backtick cell-code delimiter.
     #[test]
     fn table_cell_code_delimiter_widens_to_four_backticks_when_content_has_a_three_backtick_run() {
         let article = article(
@@ -2371,21 +2331,6 @@ mod tests {
             markdown.contains("| `` `code` `` |"),
             "content starting and ending with a backtick must get a single \
              inner space next to each delimiter:\n{markdown}"
-        );
-    }
-
-    /// [T-FC081] Pre/code outside cells must retain block fencing.
-    #[test]
-    fn pre_outside_a_table_still_renders_as_a_fenced_block() {
-        let article = article("<pre><code>fn main() {}</code></pre>");
-
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
-        let markdown = result.markdown();
-
-        assert!(
-            markdown.contains("```\nfn main() {}\n```"),
-            "a <pre><code> outside any table must still render as a fenced \
-             block:\n{markdown}"
         );
     }
 

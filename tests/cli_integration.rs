@@ -3,7 +3,7 @@ mod common;
 use common::{parse_envelope, scout};
 use std::process::Output;
 
-// T-C001: help_exits_zero_and_contains_app_name
+// T-C001
 #[test]
 fn help_exits_zero_and_contains_app_name() {
     let output = scout().arg("--help").output().expect("scout --help failed");
@@ -21,10 +21,7 @@ fn help_exits_zero_and_contains_app_name() {
         stdout.contains("sysexits.h"),
         "help should reference sysexits.h, got:\n{stdout}"
     );
-    // ADR-0002 — every documented non-zero exit code must surface in --help so
-    // agent/script callers can discover the contract without reading source.
-    // Match the `  CODE  ` table layout to avoid substring collisions (e.g.,
-    // "75" inside a future "175 RPM" mention).
+    // DR-0002: Match the help table layout to avoid incidental number substrings.
     for code in ["64", "65", "66", "70", "74", "75", "104", "124"] {
         let needle = format!("  {code}  ");
         assert!(
@@ -34,7 +31,7 @@ fn help_exits_zero_and_contains_app_name() {
     }
 }
 
-// T-C002: version_exits_zero
+// T-C002
 #[test]
 fn version_exits_zero() {
     let output = scout()
@@ -49,7 +46,7 @@ fn version_exits_zero() {
     );
 }
 
-// T-C013: version_points_coding_agents_at_help
+// T-C013
 #[test]
 fn version_points_coding_agents_at_help() {
     let output = scout()
@@ -68,7 +65,7 @@ fn version_points_coding_agents_at_help() {
     );
 }
 
-// T-C014: non_utf8_argument_is_a_usage_error_not_a_panic
+// T-C014
 #[cfg(unix)]
 #[test]
 fn non_utf8_argument_is_a_usage_error_not_a_panic() {
@@ -89,7 +86,7 @@ fn non_utf8_argument_is_a_usage_error_not_a_panic() {
     );
 }
 
-// T-C003: search_without_api_key_exits_64
+// T-C003
 #[test]
 fn search_without_api_key_exits_64() {
     let output = scout()
@@ -109,12 +106,7 @@ fn search_without_api_key_exits_64() {
     );
 }
 
-// [T-C038]
-// Setup: env `BRAVE_SEARCH_API_KEY="   "` (whitespace only).
-// Action: run `scout search "test query"`.
-// Expected: stderr contains `BRAVE_SEARCH_API_KEY`, exit code 64 (EX_USAGE);
-// whitespace-only key is treated as missing because
-// brave/client.rs::from_env applies `trim().is_empty()`.
+// [T-C038] A whitespace-only Brave key exits 64 with the key name in stderr.
 #[test]
 fn search_with_whitespace_only_api_key_exits_64() {
     let output = scout()
@@ -134,7 +126,7 @@ fn search_with_whitespace_only_api_key_exits_64() {
     );
 }
 
-// T-C004: fetch_invalid_url_exits_65
+// T-C004
 #[test]
 fn fetch_invalid_url_exits_65() {
     let output = scout()
@@ -153,7 +145,7 @@ fn fetch_invalid_url_exits_65() {
     );
 }
 
-// T-C005: repo_tree_bad_format_exits_65
+// T-C005
 #[test]
 fn repo_tree_bad_format_exits_65() {
     let output = scout()
@@ -172,7 +164,7 @@ fn repo_tree_bad_format_exits_65() {
     );
 }
 
-// T-C006: help_advertises_json_flag — --json appears in --help under Options
+// T-C006
 #[test]
 fn help_advertises_json_flag() {
     let output = scout().arg("--help").output().expect("scout --help failed");
@@ -183,7 +175,7 @@ fn help_advertises_json_flag() {
     );
 }
 
-// T-C007: json_emits_envelope_on_error — --json with malformed repo emits a JSON envelope on stderr
+// T-C007
 #[test]
 fn json_emits_envelope_on_error() {
     let output = scout()
@@ -222,7 +214,7 @@ fn json_emits_envelope_on_error() {
     );
 }
 
-// T-C008: json_missing_api_key_emits_usage_error_with_next_step — --json missing API key surfaces a USAGE_ERROR envelope with next_step on stderr
+// T-C008
 #[test]
 fn json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
@@ -248,7 +240,7 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
     );
 }
 
-// T-C010: json_clap_parse_error_emits_envelope — --json with a clap parse error (unknown flag) routes through JSON envelope
+// T-C010
 #[test]
 fn json_clap_parse_error_emits_envelope() {
     let output = scout()
@@ -267,9 +259,8 @@ fn json_clap_parse_error_emits_envelope() {
     );
 }
 
-/// Exit 65 alone cannot distinguish the SSRF rejection from any other
-/// `DataError` variant reachable on these paths, so the code and next_step
-/// asserts below are what pin the contract.
+/// Exit 65 alone cannot distinguish SSRF from other data errors; require
+/// DATA_ERROR and private-IP guidance too.
 fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value {
     assert_eq!(
         output.status.code(),
@@ -291,43 +282,7 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
     value
 }
 
-// T-C015: direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked
-#[test]
-fn direct_egress_literal_loopback_fetch_exits_65_data_error_private_ip_blocked() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        .args(["--json", "fetch", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch failed to run");
-    assert_reject_envelope(&output, "Direct");
-}
-
-// T-C016: http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy
-#[test]
-fn http_proxy_env_set_literal_loopback_fetch_still_exits_65_without_reaching_proxy() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        // Port 1 on loopback has nothing listening, so if the literal-loopback
-        // rejection were skipped under Proxied egress, the process would fail
-        // fast with a connection error instead of hanging.
-        //
-        // Scope: this catches only the rejection moving after the Proxied
-        // branch. It cannot tell which egress mode was selected, because
-        // rejection precedes either branch dialing and both modes therefore
-        // produce the same envelope. Mode selection is pinned by
-        // detect_egress_mode's own tests.
-        .env("HTTP_PROXY", "http://127.0.0.1:1")
-        .args(["--json", "fetch", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch failed to run");
-    assert_reject_envelope(&output, "Proxied");
-}
-
-// T-C017: localhost_hostname_fetch_exits_65_data_error — Host::Domain arm, not the IP-literal one
+// T-C017
 #[test]
 fn localhost_hostname_fetch_exits_65_data_error() {
     let mut cmd = scout();
@@ -340,34 +295,9 @@ fn localhost_hostname_fetch_exits_65_data_error() {
     assert_reject_envelope(&output, "localhost hostname");
 }
 
-// T-C018: js_flag_literal_loopback_fetch_exits_65_data_error — `ssrf_check`
-// (src/fetch.rs) runs before `fetch_page` ever calls `fetch_with_cdp`, so the
-// rejection fires before chromium launches and the SOCKS5 hop the CDP path
-// would otherwise open (ADR-0021) never runs. Gated on `js-rendering` because
-// without the feature `--js` short-circuits to `BrowserNotFound`
-// (USAGE_ERROR) ahead of `ssrf_check`, asserting a different contract than the
-// one under test.
-#[cfg(feature = "js-rendering")]
-#[test]
-fn js_flag_literal_loopback_fetch_exits_65_data_error() {
-    let mut cmd = scout();
-    cmd.env_clear();
-    common::forward_coverage_profile(&mut cmd);
-    let output = cmd
-        .args(["--json", "fetch", "--js", "http://127.0.0.1/"])
-        .output()
-        .expect("scout --json fetch --js failed to run");
-    assert_reject_envelope(&output, "--js");
-}
-
-// T-C019: direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url
-//
-// A launch form that stops sharing the SSRF rejection path fails here even
-// though its own T-C015/T-C016/T-C018 test still passes in isolation. The
-// `--js` row is added only when `js-rendering` is compiled in, for the same
-// `BrowserNotFound` reason as T-C018; Direct vs Proxied still runs in the
-// default job. `cfg!` rather than `#[cfg]` keeps the push in the AST so
-// neither `mut` nor `LaunchForm` reads as unused under the default features.
+// T-C019: Direct/proxied/JS forms reject loopback with identical guidance.
+// Without js-rendering, BrowserNotFound precedes SSRF checking. With it,
+// rejection precedes Chromium launch. cfg! avoids default-build unused-mut.
 struct LaunchForm {
     name: &'static str,
     args: Vec<&'static str>,
@@ -385,7 +315,9 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
         LaunchForm {
             name: "Proxied",
             args: vec![],
-            // Port 1 and the scope caveat that comes with it: see T-C016.
+            // A missed rejection fails fast at port 1 instead of hanging.
+            // Rejection precedes dialing in both modes, so this does not prove
+            // proxy selection; detect_egress_mode's tests cover that contract.
             env: vec![("HTTP_PROXY", "http://127.0.0.1:1")],
         },
     ];
@@ -420,17 +352,13 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
     let (baseline_name, baseline) = &envelopes[0];
     for (name, envelope) in &envelopes[1..] {
         assert_eq!(
-            envelope["error"]["code"], baseline["error"]["code"],
-            "{name} should return the same error.code as {baseline_name}, got: {envelope}"
-        );
-        assert_eq!(
             envelope["error"]["next_step"], baseline["error"]["next_step"],
             "{name} should return the same next_step as {baseline_name}, got: {envelope}"
         );
     }
 }
 
-// T-C009: json_error_envelope_is_single_line — --json error envelope is exactly one line (single-line JSON contract)
+// T-C009
 #[test]
 fn json_error_envelope_is_single_line() {
     let output = scout()
