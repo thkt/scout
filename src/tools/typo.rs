@@ -19,8 +19,6 @@ async fn osa_distance(a: &str, b: &str) -> usize {
     osa_distance_chars(&a, &b).await
 }
 
-/// Compute the OSA distance between two char slices.
-/// Allowed edit operations: insert, delete, substitute, transpose adjacent.
 async fn osa_distance_chars(a: &[char], b: &[char]) -> usize {
     let m = a.len();
     let n = b.len();
@@ -84,7 +82,6 @@ pub(super) async fn closest_matches<'a>(
         if candidate.len() > MAX_PATH_CHARS {
             return Vec::new();
         }
-        // Length alone proves these cannot qualify; no DP needed.
         if target.len().abs_diff(candidate.len()) <= max_distance {
             let cells = target.len() * candidate.len();
             let Some(remaining) = remaining_cells.checked_sub(cells) else {
@@ -114,8 +111,7 @@ mod tests {
     use std::iter::repeat_n;
     use tokio::time::{advance, timeout};
 
-    /// [T-TY010] Long, numerous paths must stop consuming the pool at a work
-    /// limit, rather than computing every distance and returning a partial rank.
+    /// [T-TY010] A 400-character pool stops at entry seven and returns no hints.
     #[tokio::test]
     async fn long_path_pool_stops_at_work_limit() {
         let target = "a".repeat(400);
@@ -171,7 +167,6 @@ mod tests {
             closest_matches("abcd", pool, 3, 6).await,
             ["abcd", "abdc", "abce", "ab", "a"]
         );
-        // Also retain the configurable top-N guarantee from former T-TY009.
         assert_eq!(closest_matches("abcd", pool, 3, 2).await, ["abcd", "abdc"]);
     }
 
@@ -191,8 +186,8 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    /// [T-TY011] Bounds count Unicode characters and every pool entry, including
-    /// entries rejected by length without DP. A cap must not leak prefix hints.
+    /// [T-TY011] Unicode paths at 512/513 characters and empty-entry pools at
+    /// 4,096/4,097 entries check cap boundaries and discard of prefix hints.
     #[tokio::test]
     async fn path_and_pool_limits_omit_hints_only_above_boundary() {
         let path = "猫".repeat(512);
@@ -235,9 +230,8 @@ mod tests {
         assert!(closest_matches("abcd", ["abcd"], 3, 0).await.is_empty());
     }
 
-    /// [T-TY012] Poll a long-path computation, then expire its virtual deadline.
-    /// A synchronous loop would finish in the first poll; an unbounded detached
-    /// worker could keep consuming candidates after timeout returns.
+    /// [T-TY012] Matching yields on its first poll and times out after virtual
+    /// time advances, with only one pool entry consumed.
     #[tokio::test(start_paused = true)]
     async fn timeout_interrupts_matching_in_progress() {
         use std::task::Poll;

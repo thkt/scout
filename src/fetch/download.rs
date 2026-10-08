@@ -10,34 +10,29 @@ use super::{FetchError, MAX_RESPONSE_BYTES};
 use crate::body_limit::read_body_capped;
 use crate::charset::is_reliable_detection;
 
-/// A page as it came off the wire: which URL actually served it, the decoded
-/// body, and whether that decode was a best-effort fallback.
-///
-/// `url` is the last hop, not the one the caller asked for, and every hop in
-/// between passed `ssrf_check` — so it is the URL that later stages resolve
-/// relative links against. `decode_uncertain` travels with the text rather than
-/// beside it because a caller that reads one without the other reports a body it
-/// cannot vouch for as clean.
+/// Decoded final response. Every redirect hop passed `ssrf_check`; `url` is
+/// the base for relative links. Decoding uncertainty travels with the body.
 #[derive(Debug)]
 pub(super) struct DownloadedPage {
     pub(super) url: ValidatedUrl,
     pub(super) text: String,
     pub(super) decode_uncertain: bool,
+    pub(super) media_type: MediaType,
 }
 
-/// Caller MUST pass a [`Client`] with [`reqwest::redirect::Policy::none()`].
-///
-/// `reqwest::redirect::Policy::limited(n)` is not acceptable: it follows
-/// redirects before the application can re-check the resolved URL against
-/// the SSRF allowlist. Manual per-hop validation is the only way to enforce
-/// the SSRF contract. See ADR-0001 for the contract details.
-///
-/// `&ValidatedUrl` here closes that gap at the type level — the manual
-/// redirect loop cannot accept an unchecked URL.
-///
-/// The client is also expected to carry scout's User-Agent as a default header.
-/// `build_default_clients` sets it for both production clients; a hand-built
-/// client passed in by a test will send requests without one.
+/// Unknown headers retain the historical HTML path; only an explicit media
+/// type can suppress HTML's automatic rendering heuristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MediaType {
+    Unknown,
+    Html,
+    PlainText,
+    OtherText,
+}
+
+/// Requires a client with [`reqwest::redirect::Policy::none()`]: automatic
+/// redirects would bypass per-hop SSRF validation (ADR-0001). The starting URL
+/// must also be validated. Production clients supply scout's User-Agent.
 pub(super) async fn download(
     client: &Client,
     url: &ValidatedUrl,
@@ -76,13 +71,14 @@ pub(super) async fn download(
         }
 
         let mut charset = None;
+        let mut media_type = MediaType::Unknown;
         match response.headers().get(CONTENT_TYPE) {
             None => {
                 debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
             }
             Some(ct) => match ct.to_str() {
                 Ok(ct_str) => {
-                    check_content_type(ct_str)?;
+                    media_type = check_content_type(ct_str)?;
                     charset = extract_charset(ct_str);
                 }
                 Err(_) => {
@@ -103,14 +99,12 @@ pub(super) async fn download(
             url: current_url,
             text: decoded.text,
             decode_uncertain: decoded.uncertain,
+            media_type,
         });
     }
 
-    // DataError(65) rather than TempFailure(75): a redirect cap breach is
-    // dominantly a loop or a caller URL mistake, neither of which a retry
-    // clears. The structured fields below let an operator measure the actual
-    // retry-success rate (`RUST_LOG=scout=warn`); past 10% the classification
-    // is wrong and should flip.
+    // Redirect cap breaches are terminal DataError: retrying a loop or incorrect
+    // URL does not fix it. Log the chain length for diagnosis.
     let chain_length = max_redirects + 1;
     warn!(
         redirect_chain_length = chain_length,
@@ -206,21 +200,9 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
     Some(decoded.into_owned())
 }
 
-/// Gate the download on whether the response is text scout can convert.
-///
-/// Outside `text/*`, the rule is the RFC 6839 `+xml` structured syntax suffix
-/// rather than a list of names. A feed is the same document whether the server
-/// labels it `text/xml`, `application/xml`, or `application/rss+xml`, and
-/// listing names accepted the first two while rejecting the third — the label,
-/// not the content, decided. `application/xhtml+xml` needs no arm of its own
-/// under that rule.
-///
-/// The suffix is honoured under `application/` alone, so `image/svg+xml` stays
-/// out: it is an image whose serialization happens to be XML.
-///
-/// An empty mime (a bare `; charset=utf-8`) passes. The server declared nothing
-/// about the type, so there is nothing to reject on.
-fn check_content_type(content_type: &str) -> Result<(), FetchError> {
+/// Accept text and application XML, including RFC 6839 `+xml` suffixes.
+/// `image/svg+xml` remains excluded; an empty media type declares no restriction.
+fn check_content_type(content_type: &str) -> Result<MediaType, FetchError> {
     let mime = content_type
         .split_once(';')
         .map_or(content_type, |(mime, _params)| mime)
@@ -235,7 +217,12 @@ fn check_content_type(content_type: &str) -> Result<(), FetchError> {
     if !accepted {
         return Err(FetchError::UnsupportedContentType(mime.to_owned()));
     }
-    Ok(())
+    Ok(match normalized.as_str() {
+        "" => MediaType::Unknown,
+        "text/html" | "application/xhtml+xml" => MediaType::Html,
+        "text/plain" => MediaType::PlainText,
+        _ => MediaType::OtherText,
+    })
 }
 
 #[cfg(test)]

@@ -28,10 +28,7 @@ impl Scout {
 
         info!(repository = %repository, "repo_tree");
 
-        // Static rejections come first, as in `repo_read`: building the client
-        // pays a `gh auth token` subprocess (DR-0008) and resolving the default
-        // branch is a network round-trip and a rate-limit unit, while a malformed
-        // `--path` or `--ref` is knowable from the argument's shape alone.
+        // Reject invalid arguments before token resolution or network requests.
         if let Some(ref p) = params.path {
             github::validate_path(p)?;
         }
@@ -90,11 +87,7 @@ impl Scout {
         if let Some(ref r) = params.ref_ {
             github::validate_ref(r)?;
         }
-        // Same rule as `repo_tree` above: a rejection that needs nothing from the
-        // network happens before it. Every check inside `parse_line_range` is
-        // about the string's shape, never the file's length, so a malformed
-        // `--lines` should not cost a contents call, the blob call that can
-        // follow, and a decode before it is reported.
+        // Line-range syntax needs no file data; reject it before fetching content.
         let line_range = params
             .lines
             .as_deref()
@@ -196,17 +189,14 @@ impl Scout {
             &releases,
         );
 
-        // `> Note: ` is the prefix every other degradation note in scout's
-        // Markdown carries (RAW_FALLBACK_NOTE, DECODE_UNCERTAIN_NOTE, the Slack
-        // preamble), so a caller matching on it finds this one too.
+        // Use the shared degradation-note prefix for Markdown consumers.
         if !degradation.is_empty() {
             markdown.push_str("\n> Note: ");
             markdown.push_str(&degradation.notes().join(". "));
             markdown.push_str(".\n");
         }
 
-        // GitHub's issues endpoint returns PRs too; filter them out so JSON
-        // consumers don't see PRs duplicated under issues.
+        // GitHub's issues endpoint also returns PRs.
         let real_issues = github::types::real_issues(&issues);
         let data = serde_json::json!({
             "repository": repo_info,
@@ -217,8 +207,7 @@ impl Scout {
         });
 
         info!(
-            // `issues` still holds the PRs GitHub's issues endpoint mixes in, so
-            // logging its length would report a count no output field carries.
+            // Report the filtered count used by both output formats.
             issues = real_issues.len(),
             pulls = pulls.len(),
             releases = releases.len(),
@@ -229,19 +218,14 @@ impl Scout {
     }
 }
 
-/// Maximum time spent on best-effort candidate generation in the NotFound
-/// error path. The user is already waiting on a failure; we'd rather skip
-/// candidates than block them on a slow tree fetch. `pub(crate)` so the config
-/// invariant test can assert the outer `github_timeout` exceeds it.
+/// Budget for best-effort not-found hints, including tree lookup and matching.
+/// Visible to the config test that checks the outer GitHub timeout exceeds it.
 pub(super) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CANDIDATE_MAX_DISTANCE: usize = 3;
 const CANDIDATE_TOP_N: usize = 3;
 
-/// Best-effort: fetch the repo tree and return up to `CANDIDATE_TOP_N` paths
-/// most similar to `target` (OSA distance ≤ `CANDIDATE_MAX_DISTANCE`).
-/// Returns empty on any API failure or if the fetch exceeds
-/// `CANDIDATE_FETCH_TIMEOUT`, or the tree/matching work exceeds its cap.
+/// Omit hints on API failure, timeout, or tree/matching work-cap exhaustion.
 async fn collect_path_candidates(
     github: &GitHubClient,
     owner: &str,
@@ -345,9 +329,8 @@ mod tests {
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
-    /// [T-TS040] The real repo-read error path must keep ranked small-tree hints
-    /// and omit them when long-path DP or raw tree size exceeds the work caps.
-    /// Directory entries count toward the cap even though they are not hints.
+    /// [T-TS040] Repo-read preserves ranked small-tree hints and not-found output;
+    /// long-path work and raw tree limits (including directories) omit hints.
     #[tokio::test]
     async fn repo_read_not_found_preserves_contract_with_bounded_candidates() {
         let Some(server) = try_spawn_mock_server("repo_read_bounded_candidates").await else {
@@ -431,12 +414,7 @@ mod tests {
         }
     }
 
-    /// [T-TS032] For one issue list, the Markdown Recent Issues section and the JSON
-    /// issues array exclude the same entries
-    ///
-    /// Drives the real `Scout::repo_overview` wiring, not the format/types
-    /// functions in isolation, so a change feeding the Markdown and JSON paths
-    /// different issue lists is caught.
+    /// [T-TS032] Repo-overview excludes the PR-backed fixture from Markdown and JSON.
     #[tokio::test]
     async fn repo_overview_markdown_and_json_agree_on_pr_backed_issue_exclusion() {
         let Some(server) = try_spawn_mock_server("tools::repo::t_seam_004").await else {
@@ -526,9 +504,7 @@ mod tests {
         assert_eq!(issues_json[0]["number"], 1);
     }
 
-    /// Run `repo_overview` against a mock GitHub whose issues endpoint fails,
-    /// leaving every other section intact. `None` when the mock server cannot
-    /// be spawned, so callers skip rather than fail.
+    /// Mock a failed issues endpoint and a missing README; return None if binding fails.
     async fn overview_with_failed_issues(label: &str) -> Option<CommandOutput> {
         let server = try_spawn_mock_server(label).await?;
 
@@ -581,14 +557,7 @@ mod tests {
         )
     }
 
-    /// [T-TS037] A section that failed to load says so in the Markdown, with the
-    /// same `> Note: ` prefix the fetch and Slack paths use.
-    ///
-    /// Without `--json` the caller receives the Markdown alone (src/lib.rs), so
-    /// an overview missing its Recent Issues section is indistinguishable from a
-    /// repository that has none unless the note is in the body. The prefix is
-    /// asserted because a caller scanning for degradation reads one form, not
-    /// two.
+    /// [T-TS037] Failed issues produce a Markdown note and a typed degradation reason.
     #[tokio::test]
     async fn repo_overview_states_a_failed_section_in_the_body() {
         let Some(result) = overview_with_failed_issues("tools::repo::degraded_note").await else {
@@ -609,13 +578,7 @@ mod tests {
         );
     }
 
-    /// [T-TS038] A partial failure in `repo_overview` reaches the `--json`
-    /// output as `degraded: true` plus the typed reason.
-    ///
-    /// Not covered by T-TS037 plus T-EN013: the first reads the test-only
-    /// `degraded_reasons()` accessor and never serializes, the second asserts
-    /// the serialized shape on a hand-built envelope `repo_overview` never
-    /// produced. Both pass while the wire format drifts.
+    /// [T-TS038] Serialize repo-overview's issues failure as degraded with its reason.
     #[tokio::test]
     async fn a_partial_failure_reaches_the_json_output_as_degraded() {
         let Some(result) = overview_with_failed_issues("tools::repo::degraded_json").await else {
