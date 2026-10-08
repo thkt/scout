@@ -142,7 +142,7 @@ impl FetchError {
     }
 }
 
-/// ~1 sentence; pages below this almost always need JS rendering.
+/// Visible-text threshold for trying JS fallback on a thin extract.
 const EXTRACT_TEXT_THRESHOLD: usize = 50;
 
 pub(crate) async fn fetch_page(

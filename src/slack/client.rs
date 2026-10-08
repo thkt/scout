@@ -89,10 +89,8 @@ const USER_TOKEN_PREFIX: &str = "xoxp-";
 /// memory.
 const SLACK_REPLIES_LIMIT: &str = "200";
 
-/// Concurrent in-flight `users.info` requests during `prefetch_users`.
-/// Slack Tier-4 allows ~50 req/min; capping at 5 keeps the burst well below
-/// that even for threads with hundreds of unique participants, instead of
-/// firing every request simultaneously and tripping the per-minute cap.
+/// Limit concurrent `users.info` lookups instead of starting all at once.
+/// This does not enforce a per-minute request rate.
 const SLACK_USERS_CONCURRENCY: usize = 5;
 
 /// Upper bound on `conversations.replies` pages fetched per thread. At
@@ -353,11 +351,8 @@ impl SlackClient {
         }
     }
 
-    /// Slack `users.info` per-ID fetch capped at `SLACK_USERS_CONCURRENCY`
-    /// concurrent requests via `buffer_unordered`. The cap bounds the burst
-    /// rate so a thread with hundreds of participants cannot fire that many
-    /// simultaneous requests and trip Slack's per-minute rate limit. Matches
-    /// the same idiom used in `search/engine.rs::fetch_sources`.
+    /// Bound concurrent lookups with `buffer_unordered`; each completion can
+    /// start another lookup, so the cap does not enforce a request rate.
     async fn prefetch_users(&self, ids: &HashSet<String>) -> (HashMap<String, String>, bool) {
         let id_list: Vec<String> = ids.iter().cloned().collect();
         let results: Vec<(String, String, bool)> = stream::iter(id_list)

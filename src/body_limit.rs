@@ -11,15 +11,15 @@
 /// structured data, not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
-/// Cap diagnostic reads so failed responses cannot consume unbounded memory.
+/// Limit the returned diagnostic prefix of a failed response.
 pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 /// Read a diagnostic prefix; reaching `limit` is not an error.
 /// `Response::text()` would buffer the entire failed response.
 ///
-/// Reads at most `limit + one chunk` bytes. Vec growth may reserve beyond the
-/// limit, and truncation reduces length without releasing capacity. Neither
-/// bound depends on the full response size.
+/// Returns at most `limit` bytes, reading through the chunk that reaches it
+/// (or EOF). This helper does not cap chunk size. Vec capacity may exceed
+/// `limit`; truncation reduces length without releasing capacity.
 pub(crate) async fn read_body_snippet(
     mut response: reqwest::Response,
     limit: usize,

@@ -13,11 +13,10 @@
 //! as method X).
 //!
 //! This file is the SOCKS5 protocol layer: greeting/request parsing, fail-closed
-//! IP validation, and reply encoding. It is generic over the client byte stream
-//! (`AsyncRead + AsyncWrite`) and owns no sockets, so every branch is covered by
-//! offline unit tests (T-201-*). The OS-dependent transport — the listener accept
-//! loop, the upstream dial, and the byte tunnel, whose error arms fire only under
-//! real socket faults — lives in `transport`.
+//! IP validation, and reply encoding. Generic client streams allow offline
+//! parse/reject tests (T-201-*); full-tunnel success is exercised by the Chromium
+//! integration test, which requires a browser and real upstream access.
+//! The listener accept loop, upstream dial, and byte tunnel live in `transport`.
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -69,9 +68,8 @@ enum Target {
 /// tunnels and handled policy rejections (a reply was sent, then the connection
 /// closed); returns `Err` only on a transport/protocol read-write failure.
 ///
-/// Generic over the client stream so the full parse/validate/reply path can be
-/// driven by offline unit tests; the accept loop instantiates it with a
-/// `TcpStream`.
+/// Generic over the client stream for offline parse/reject tests; the accept
+/// loop instantiates it with a `TcpStream`.
 async fn handle_conn<S>(mut stream: S, resolver: &dyn DnsResolver) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,

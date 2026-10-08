@@ -21,10 +21,8 @@ impl Rng for FastrandRng {
     }
 }
 
-/// Test RNG seeded with a fixed value. `Mutex` is required because `Rng` is
-/// `&self` but `fastrand::Rng::u64` mutates internal state; the bare value
-/// would have to be `.clone()`d each call, which discards sequence progress
-/// and produces the same sample every time.
+/// Fixed-seed test RNG. The mutex lets `&self` calls advance the same
+/// mutable `fastrand::Rng` state.
 #[cfg(test)]
 pub(crate) struct SeededRng(Mutex<fastrand::Rng>);
 
@@ -50,7 +48,6 @@ mod tests {
     use super::*;
 
     /// [T-RNG001] FastrandRng draws within the requested half-open range.
-    /// 100 samples is enough to catch an off-by-one in the upper bound.
     #[test]
     fn fastrand_rng_stays_below_upper_bound() {
         let rng = FastrandRng;
@@ -60,9 +57,8 @@ mod tests {
         }
     }
 
-    /// [T-RNG003] Repeated calls on the same SeededRng advance the internal
-    /// state — guards against the earlier `self.0.clone()` bug where every
-    /// call returned the seed's first sample.
+    /// [T-RNG003] Calls through `&self` advance the same SeededRng state
+    /// rather than returning a constant sequence.
     #[test]
     fn seeded_rng_advances_state_across_calls() {
         use std::collections::HashSet;
