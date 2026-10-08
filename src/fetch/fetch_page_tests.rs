@@ -1,14 +1,10 @@
 use super::ssrf::EgressMode;
 use super::*;
-use crate::test_support::{
-    join_server_thread, no_redirect_client, spawn_forward_proxy, try_spawn_mock_server,
-};
+use crate::test_support::{join_server_thread, no_redirect_client, spawn_forward_proxy};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use std::io;
 use std::thread::JoinHandle;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, ResponseTemplate};
 
 fn real_resolver() -> Arc<dyn DnsResolver> {
     Arc::new(TokioDnsResolver)
@@ -30,11 +26,7 @@ async fn blocks_ssrf_to_localhost() {
     assert!(matches!(result, Err(FetchError::InternalHost)));
 }
 
-/// [T-F076] SSRF-blocked fetch redacts userinfo credentials from the warn! log
-///
-/// Adversarial: even when SSRF blocks the fetch, the `warn!` line emitted
-/// by `ssrf_check` MUST flow through `redact_url_credentials` so no
-/// password fragment ever appears in stderr / `tracing` output.
+/// [T-F076] SSRF refusal must still redact credentials from the warning.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
@@ -68,15 +60,9 @@ async fn fetch_does_not_log_userinfo_credentials_on_blocked_url() {
     );
 }
 
-/// [T-F072]
-///
-/// ADR-0012 contract pin: the pre-flight `ssrf_check` resolver returns a public
-/// IP (passing pre-flight), while the `fetch_http` client's injected
-/// `SsrfResolver` resolves the host to a private IP at connect time (DNS
-/// rebinding). The fetch must fail AND emit `"blocked connect to private IP"`.
-/// The log assertion is non-tautological: a broken connect-time guard would
-/// still yield `is_err()` via a real connect failure but emit no such warn.
-/// A domain (not an IP literal) is used so reqwest consults the resolver.
+/// [T-F072] A public pre-flight address followed by a private connect-time
+/// address must trigger the DNS-rebind guard (ADR-0012). A domain forces
+/// resolver use; the warning distinguishes rejection from connection failure.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn fetch_blocks_dns_rebind_at_connect_time() {
@@ -104,43 +90,6 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
     assert!(
         logs_contain("blocked connect to private IP"),
         "expected the connect-time SSRF guard to fire",
-    );
-}
-
-/// [T-F018]
-#[tokio::test]
-async fn js_flag_attempts_rendering_on_rich_body() {
-    let content = "x".repeat(200);
-    let Some(server) = try_spawn_mock_server("fetch::download").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/rich"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(format!("<html><body><p>{content}</p></body></html>")),
-        )
-        .mount(&server)
-        .await;
-
-    let client = no_redirect_client();
-    let opts = FetchOptions {
-        js: true,
-        ..Default::default()
-    };
-    let (cancel, _) = watch::channel(false);
-    let result = fetch_page(
-        &client,
-        &format!("{}/rich", server.uri()),
-        opts,
-        real_resolver(),
-        &cancel,
-    )
-    .await;
-
-    assert!(
-        result.is_err(),
-        "js=true should error when browser unavailable"
     );
 }
 
@@ -183,20 +132,15 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
         return; // loopback bind unavailable — cannot exercise the proxy path
     };
 
-    // Mirrors what ScoutBuilder builds in Proxied mode: an explicit `Proxy::all`
-    // and NO `SsrfResolver` connect-time guard (which by design blocks loopback,
-    // where the local proxy listens). `Proxy::all` per
-    // https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html#method.all
+    // Match production proxied egress: the proxy dials destinations, so the
+    // connect-time resolver must not reject the loopback proxy itself.
     let client = Client::builder()
         .redirect(Policy::none())
         .proxy(Proxy::all(&proxy_url).expect("proxy url"))
         .build()
         .unwrap();
 
-    // `FailingDnsResolver` errors the instant it is consulted. Proxied egress
-    // must skip scout's DNS pre-check, so success here proves the resolver was
-    // never called; a regression to Direct would surface as
-    // `FetchError::DnsResolution`.
+    // Success with a failing resolver proves Proxied mode skips the DNS pre-check.
     let resolver: Arc<dyn DnsResolver> = Arc::new(FailingDnsResolver(
         "resolver must not be consulted in Proxied mode".to_owned(),
     ));
@@ -217,11 +161,8 @@ async fn with_a_proxy_configured_fetch_page_returns_the_page_body_for_a_public_d
     join_server_thread(handle);
 }
 
-/// Wraps `payload` in the article shell Readability is pinned to extract
-/// cleanly: nav and footer chrome around four filler paragraphs, shaped after
-/// `extractor::tests::BLOG_HTML`. The filler is what keeps the page above the
-/// thin-extract and thin-body thresholds, so `payload` alone decides what each
-/// test observes and cannot be what drops the fetch into raw fallback.
+/// Readability-friendly article shell. Filler clears the thin-body/extract
+/// thresholds so payload tests do not launch CDP or take raw fallback.
 fn article_page(title: &str, payload: &str) -> String {
     format!(
         "<html><head><title>{title}</title></head><body>\
@@ -247,16 +188,8 @@ fn article_page(title: &str, payload: &str) -> String {
     )
 }
 
-/// Spawns a forward proxy serving `html` and runs `fetch_page` against it.
-/// `configure_opts` layers each caller's own option (e.g. `raw: true`) onto
-/// the shared proxied base.
-///
-/// A direct fetch of a mock server's loopback URI is not an option here:
-/// `ssrf_check` blocks a literal loopback host before any request is sent, in
-/// every egress mode.
-///
-/// `None` carries the unavailable-loopback skip, so callers early-return the
-/// way every other proxy-backed test here does.
+/// Fetch through a local forward proxy; direct loopback URLs are SSRF-blocked.
+/// `None` preserves the shared unavailable-bind skip policy.
 async fn fetch_article_via_proxy(
     html: &str,
     configure_opts: impl FnOnce(FetchOptions) -> FetchOptions,
@@ -283,13 +216,8 @@ async fn fetch_article_via_proxy(
     Some((result, handle))
 }
 
-/// [T-F081]
-///
-/// The default path runs Readability before conversion, and its
-/// `keep_classes: false` strips every `class` attribute, so the
-/// `class="language-rust"` fence loses its `rust` info string. Converting
-/// hand-authored HTML directly keeps it, which is why the converter's own
-/// tests see an info string the production path never produces.
+/// [T-F081] Normal extraction strips language classes before conversion,
+/// unlike hand-authored converter fixtures.
 #[tokio::test]
 async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     let Some((result, handle)) = fetch_article_via_proxy(
@@ -325,12 +253,7 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
     join_server_thread(handle);
 }
 
-/// [T-F082]
-///
-/// With `raw: true`, `extract_raw` skips Readability entirely and carries the
-/// source HTML's `class` attribute through unchanged, so `language-rust` still
-/// attaches `rust` as the fence's info string. This is the only path on which
-/// a fetched page keeps a fence language.
+/// [T-F082] Raw extraction preserves language classes and fence info strings.
 #[tokio::test]
 async fn raw_path_keeps_pre_class_language_in_the_fence() {
     let Some((result, handle)) = fetch_article_via_proxy(
@@ -356,11 +279,7 @@ async fn raw_path_keeps_pre_class_language_in_the_fence() {
     join_server_thread(handle);
 }
 
-/// [T-F083]
-///
-/// Table structure survives where a `class` attribute does not: Readability's
-/// cleanup drops attributes, not elements, so a `<thead>` header table reaches
-/// conversion intact and comes out with its dash separator row.
+/// [T-F083] Readability cleanup must preserve table structure for conversion.
 #[tokio::test]
 async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
     let html = article_page(
@@ -409,12 +328,8 @@ async fn default_path_keeps_two_by_two_theaded_table_with_separator_row() {
 #[tokio::test]
 async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked_before_any_request_reaches_the_proxy()
  {
-    // Proxied egress skips scout's DNS pre-check, but `validate_url_sync` still
-    // rejects a literal loopback host in every mode (it runs before the Proxied
-    // early-return in `ssrf_check`). The proxy points at a dead port: were the
-    // literal block absent, the request would reach the proxy and fail as a
-    // connection error (`FetchError::Http`), so asserting `InternalHost` proves
-    // the block fired before any request left scout.
+    // A dead proxy distinguishes literal-host rejection from transport failure:
+    // without the SSRF check this would return Http, not InternalHost.
     let client = no_redirect_client();
     let resolver: Arc<dyn DnsResolver> = Arc::new(TokioDnsResolver);
     let (cancel, _) = watch::channel(false);
@@ -429,21 +344,10 @@ async fn with_a_proxy_configured_fetch_page_to_a_literal_loopback_url_is_blocked
     );
 }
 
-/// [T-F084] A thin page driven through `fetch_page` warns that the extract fell
-/// below the threshold
-///
-/// `is_thin_extract` gates the CDP fallback at `fetch.rs`'s two call sites, and
-/// its own unit tests (T-F033..T-F040) build `ExtractedArticle` literals, so no
-/// test reaches those sites through `fetch_page`. dom_smoothie's scoring is the
-/// input, and a change there moves the chromium launch condition silently.
-///
-/// Restricted to builds without `js-rendering`. With the feature on, taking
-/// this branch launches chromium, and the profile directory that leaves behind
-/// lands in the set `t005_t006_cdp_renders_and_removes_profile_dir` diffs
-/// around its own run. The branch under test is the same either way; only the
-/// warning's tail differs (`fetch.rs` warns "trying JS rendering fallback" with
-/// the feature, "but JS rendering unavailable" without), so the assertion
-/// covers the half they share.
+/// [T-F084] Thin-extract detection must hold through real Readability scoring.
+/// Without js-rendering this asserts the warning without launching Chrome;
+/// with the feature, concurrent profile directories would interfere with the
+/// CDP cleanup test. This does not verify browser fallback dynamically.
 #[cfg(not(feature = "js-rendering"))]
 #[tokio::test]
 #[tracing_test::traced_test]

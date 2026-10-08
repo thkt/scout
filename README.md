@@ -186,6 +186,8 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
+An explicit `Content-Type: text/plain` response bypasses HTML extraction and conversion in both normal and `--raw` fetch. Its decoded body preserves literal `< > &`, heading-like text, and line breaks (including trailing blank lines) in Markdown and JSON (`data.markdown`), with an empty frontmatter block. Existing YAML marker neutralization and output limits still apply. Explicit non-HTML responses do not trigger automatic JS rendering; `--js` still explicitly requests browser output. Missing or unreadable Content-Type retains the HTML path. Other accepted text/XML types retain their existing conversion behavior.
+
 **Slack permalinks** — `fetch` detects `*.slack.com/archives/{channel}/p{ts}` URLs and routes them to the Slack Web API instead of HTML scraping. Thread parent + replies are preserved with author/timestamp metadata. Requires `SLACK_TOKEN` (User OAuth token, `xoxp-…`).
 
 ### `scout repo-tree` — Remote file listing
