@@ -313,3 +313,32 @@ existing writable `CARGO_TARGET_DIR=/private/tmp/scout-481-target` and Rust
 confirm the local composition regressions, not the full host contract, CI,
 current remote mergeability or a new independent acceptance. No runtime or
 maintenance improvement is inferred from comment cleanup or these timings.
+
+### Integration after #486 merged (2026-10-08)
+
+This repair starts at published head `c47abd36bac2b310ed9d2072ab8b9467cf17ac9d`
+and integrates main `9e56d9aeb429f4efb89b227be2f55076eb58a156` through the
+authorized host merge. The only conflict is the decision index: DR-0029,
+DR-0030 and DR-0031 now coexist with their existing proposed status. The README
+retains both #481's body-budget/completion explanation and main's #480 warning,
+JSON and exit-code explanation. No accepted decision text changes.
+
+Main supplies #485's plain-text path and #486's degraded-search and writer-exit
+regressions, including the mock verification before reset. These are existing
+main behavior, not additional #481 implementation. The diff against this main
+retains only #481's report completion, its regressions, dependency, related
+documentation and comment cleanup. The six reviewed Rust files retain all
+fixtures, assertions, IDs and registrations; comparison against the saved
+post-merge baseline confirms identical non-doc tokens, including string and
+raw-string literals. No behavior correction after that baseline was needed.
+
+On this working tree, `cargo fmt -- --check` and `git diff --check` passed using
+Rust 1.99.0. The default focused nextest command above, with the same writable
+target directory, stopped before compilation or test execution: offline Cargo
+metadata required uncached `adler2` 2.0.1. There is no new default/all-features
+test result, Clippy result, CI result or independent acceptance here. Earlier
+successes remain evidence only for their recorded versions. The unchanged
+host check includes the existing structure, plain-text, degraded-search,
+writer-exit and ignored Chrome regressions in the required feature sets; no
+extra acceptance command or capture is needed. Current remote mergeability
+and the final commit's main ancestry remain for the host's publication checks.

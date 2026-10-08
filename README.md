@@ -337,7 +337,7 @@ Sources are now the actual destination URLs (not Google redirect URLs).
 
 The `## Search Result` section (which carried the Gemini-generated answer) is removed. The report keeps `## Fetched Pages` (page content), `## Sources` (URL list), and `## Failed URLs` (shown only when a source could not be fetched).
 
-`research` no longer hard-fails when Brave Search itself errors after retry. Instead it returns a degraded report (`data.sources: []`, no fetched pages) and adds `BraveSearchFailed` to `degraded_reasons` so callers can detect the search-tier failure without parsing error messages.
+When a degradable Brave Search error (such as HTTP 503) persists after retry, `research` returns a degraded empty report with exit code 0. The default Markdown begins with `> Warning: Brave search failed; this is a degraded report, not a successful search with no results.` A successful search with zero results has no such warning. JSON retains `degraded: true`, `notes`, and `degraded_reasons: ["BRAVE_SEARCH_FAILED"]`, with empty `sources`, `fetched_pages`, and `failed_urls` arrays. Authentication failures remain errors (exit code 64), rather than degraded reports.
 
 **`--json` schema**
 

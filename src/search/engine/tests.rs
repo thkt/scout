@@ -172,8 +172,7 @@ fn partition_by_rank_orders_failures_like_pages() {
     );
 }
 
-/// [T-SE013] The empty report needs its explicit Sources marker (DR-0005);
-/// search's empty-output contract is different (DR-0020).
+/// [T-SE013] An empty research report retains Sources and the zero-result marker.
 #[test]
 fn format_report_marks_zero_results_in_sources() {
     let report = ResearchReport::default();
@@ -492,8 +491,7 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
     }
 }
 
-/// [T-SE020] A shorter backtick line cannot close the report page's fence;
-/// only headings after the matching close may be shifted.
+/// [T-SE020] Preserve a heading inside a wider fence and shift the one after it.
 #[test]
 fn combined_research_output_keeps_a_longer_fence_open_across_a_shorter_run() {
     let page = FetchResult::for_test(

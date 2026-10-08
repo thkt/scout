@@ -1,6 +1,4 @@
 //! Frontmatter YAML neutralization helpers shared by the fetch and Slack paths.
-//!
-//! Limited to frontmatter neutralization; this module does not parse or serialize YAML.
 
 use std::borrow::Cow;
 use std::fmt::Write;
@@ -74,7 +72,6 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
     }
 }
 
-/// Locate a dangling tail using the YAML defense's conservative fence tracker.
 fn conservative_dangling_start(truncated: &str) -> Option<usize> {
     let mut fence: Option<(char, usize)> = None;
     let mut dangling_start: Option<usize> = None;

@@ -326,7 +326,7 @@ Sources は実際の到達先 URL（Google のリダイレクト経由ではな�
 
 `## Search Result` セクション（Gemini が生成した回答を載せていた箇所）は削除されました。`## Fetched Pages`（ページ本文）、`## Sources`（URL リスト）、および `## Failed URLs`（取得に失敗した source があるときだけ出ます）は維持されます。
 
-`research` は Brave Search 自体が retry 後も失敗した場合に hard-fail しなくなりました。代わりに degraded report（`data.sources: []`、fetched pages なし）を返し、`degraded_reasons` に `BraveSearchFailed` を追加するため、呼び出し側はエラーメッセージを parse せずに検索段階の失敗を検知できます。
+HTTP 503 などの縮退可能な Brave Search エラーが再試行後も続くと、`research` は空の縮退レポートを終了コード 0 で返します。既定の Markdown は `> Warning: Brave search failed; this is a degraded report, not a successful search with no results.` で始まり、検索に成功した 0 件にはこの注意書きが付きません。JSON は `degraded: true`、`notes`、`degraded_reasons: ["BRAVE_SEARCH_FAILED"]` を維持し、`sources`、`fetched_pages`、`failed_urls` は空配列です。認証失敗は縮退レポートにならず、従来どおりエラー（終了コード 64）を返します。
 
 **`--json` スキーマ**
 

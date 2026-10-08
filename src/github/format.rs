@@ -23,7 +23,6 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Infer a Markdown language identifier from a file path's extension.
 fn lang_for_path(path: &str) -> &'static str {
     let ext = path.rsplit_once('.').map_or("", |(_, e)| e);
     match ext {

@@ -34,8 +34,7 @@ pub(crate) fn md_link(text: &str, url: &str) -> String {
     }
 }
 
-/// Sanitize untrusted input for embedding in Markdown table cells and inline text.
-/// Prevents column breaks (`|`), row breaks (newlines), and link injection (`[]()`).
+/// Prevent table column/row breaks and link injection in untrusted inline text.
 pub(crate) fn escape_md_inline(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -106,7 +105,6 @@ fn setext_heading_level(text: &str, underline: &str) -> Option<usize> {
         return None;
     }
     let underline = underline.trim_end();
-    // Recognize underlines only at column 0.
     let mut chars = underline.chars();
     let first = chars.next()?;
     if !matches!(first, '=' | '-') || !chars.all(|c| c == first) {
