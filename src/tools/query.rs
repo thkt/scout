@@ -28,8 +28,6 @@ impl Scout {
 
         info!(sources = sources.len(), "search complete");
 
-        // Default output: one URL per line, no markdown decoration.
-        // OUTCOME.md: AI agents receive raw source URLs without intermediate summary.
         let markdown = sources
             .iter()
             .map(|s| s.url.as_str())
@@ -125,11 +123,8 @@ impl Scout {
             })?;
         info!(workspace = %slack_url.workspace(), channel = %slack_url.channel(), "fetch (slack) complete");
 
-        // The preamble must survive the 100KB cut, so it is added after
-        // truncation rather than counted toward the limit. The inline byte-count
-        // note from `truncate_with_note` lands at the body end and covers the
-        // output-truncation case on the Markdown side, so only thread/users caps
-        // go into the preamble to avoid double-reporting truncation.
+        // Add the preamble after truncation so it survives the body cap.
+        // The truncator already reports output truncation at the body end.
         let truncated = truncate_with_note(&outcome.markdown, MAX_FETCH_OUTPUT_BYTES);
         let output_truncated = matches!(truncated, Cow::Owned(_));
 
@@ -158,9 +153,7 @@ impl Scout {
             );
         }
 
-        // `truncate_with_note` borrows `outcome.markdown` when the body is under
-        // the cap (the common case), so move it out rather than clone; only the
-        // over-cap path owns a freshly truncated copy.
+        // Under the cap, move the borrowed source instead of cloning it.
         let body = match truncated {
             Cow::Owned(s) => s,
             Cow::Borrowed(_) => outcome.markdown,
@@ -236,6 +229,15 @@ impl Scout {
         );
 
         let markdown = engine::format_report(&report, &query);
+        // Only a Brave search failure has populated degradation at this point.
+        // Use fixed text so backend error details cannot inject Markdown here.
+        let markdown = if degradation.is_empty() {
+            markdown
+        } else {
+            format!(
+                "> Warning: Brave search failed; this is a degraded report, not a successful search with no results.\n\n{markdown}"
+            )
+        };
         let mut data = to_data_value(&report, "research report")?;
         if let Some(map) = data.as_object_mut() {
             map.insert("query".to_owned(), serde_json::Value::String(query));
@@ -245,12 +247,8 @@ impl Scout {
     }
 }
 
-/// Serialize a handler's scout-owned result into the envelope `data` value,
-/// mapping a `serde_json` failure to `ScoutError::internal_bug` (exit 70) so it
-/// flows through the JSON error envelope via `?` instead of `.expect()`
-/// panicking and bypassing it. `what` names the value for the
-/// error message. The single serialize-to-`data` point shared by `fetch` and
-/// `research`.
+/// Map serialization failure to Internal (exit 70) rather than panicking
+/// outside the error-envelope path. `what` identifies the failed value.
 pub(super) fn to_data_value<T: serde::Serialize>(
     value: &T,
     what: &str,
@@ -259,14 +257,9 @@ pub(super) fn to_data_value<T: serde::Serialize>(
         .map_err(|e| ScoutError::internal_bug(format!("failed to serialize {what}: {e}")))
 }
 
-/// Insert cap notes as a Markdown blockquote right after the Slack frontmatter
-/// so they reach the agent even when the body is truncated. `format_slack_output`
-/// opens with `---\n` then frontmatter then `---\n\n`, so the frontmatter
-/// terminator is the FIRST `---\n\n`; reply separators (`\n\n---\n\n`) come later
-/// in the body. Inserting after the first occurrence keeps the preamble ahead of
-/// any reply and above the truncation point. A reply-less single message has only
-/// one `---\n\n`, which is still the terminator, so this stays correct. Returns
-/// the input unchanged when there are no notes (no cap fired).
+/// Place Slack cap notes after frontmatter. Its first `---\n\n` terminates
+/// frontmatter; later occurrences are reply separators. Call after truncation
+/// so notes survive the cap.
 pub(super) fn insert_preamble_notes(markdown: String, notes: &[&str]) -> String {
     const FRONTMATTER_END: &str = "---\n\n";
     if notes.is_empty() {

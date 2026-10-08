@@ -57,7 +57,7 @@ touch "$record/ready"
         )
         .expect("write fake browser");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("executable");
-        // Resolve every Linux discovery candidate to this fixture too.
+        // Cover all Linux PATH discovery candidates.
         for name in ["google-chrome-stable", "google-chrome", "chromium-browser"] {
             symlink(&binary, dir.path().join(name)).expect("browser alias");
         }
@@ -127,8 +127,7 @@ touch "$record/ready"
         self.cleaned.set(true);
     }
 
-    // Inject only destructive OS operations and the bounded liveness wait.
-    // Keep record parsing and failure aggregation on the actual Drop path.
+    // Inject OS cleanup while retaining record validation and failure aggregation.
     pub(crate) fn cleanup_with(
         &self,
         mut kill: impl FnMut(Pid) -> Result<(), Errno>,
@@ -202,8 +201,7 @@ pub(crate) fn wait_until(budget: Duration, mut complete: impl FnMut() -> bool) -
 }
 
 pub(crate) fn cleanup_failed(message: &str) {
-    // Never double-panic during a failed assertion, but preserve the evidence
-    // that the backstop itself failed. On an otherwise passing path, fail it.
+    // Report cleanup failure without masking an existing assertion panic.
     if thread::panicking() {
         eprintln!("fixture cleanup failed: {message}");
     } else {
@@ -247,7 +245,6 @@ pub(crate) fn pid_state_with(pid: Pid, query: impl FnOnce(Pid) -> io::Result<Out
         Ok(output) => output,
         Err(error) => {
             eprintln!("cannot observe fixture PID {pid}: {error}");
-            // Conservatively keep waiting; the bounded caller reports failure.
             return PidState::Unobserved;
         }
     };

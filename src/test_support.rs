@@ -1,34 +1,9 @@
-//! Shared test scaffolding, and the test-id convention every test module follows.
+//! Shared test scaffolding and test-id conventions.
 //!
-//! # Test ids
-//!
-//! A test carries `[T-<PREFIX><NNN>]` as the first thing in its doc comment. DRs
-//! cite those ids to name the test that pins a decision, so an id has to resolve
-//! to exactly one test:
-//!
-//! - The prefix names the subject under test (`FS` = fetch/ssrf, `SK` = slack,
-//!   `TOK` = token_source, ...), so one prefix covers several files when they
-//!   test the same thing — `SK` spans `slack/` and the `fetch <slack-url>` tests
-//!   in `tools/`. What a prefix must not do is cover two unrelated subjects:
-//!   `R` once meant both retry and the stdin resolver, which left the id
-//!   ambiguous even where the numbers differed.
-//! - Numbers are unique within their prefix, not per file.
-//!
-//! Cite another test **without** brackets: `Companion to T-TS020`. Brackets mark a
-//! definition, so a bracketed citation is indistinguishable from a second
-//! definition — by grep, and by a reader scanning for where an id lives.
-//!
-//! # What the prose under an id carries
-//!
-//! It says what breaks if the test is deleted: the edit that would otherwise
-//! pass. Where naming that needs a premise the code's own doc already states,
-//! restate the premise and go on — someone reading a failure should not have to
-//! open the implementation to see what the test defends, and the two audiences
-//! are different enough that the overlap earns its keep.
-//!
-//! What does not belong is the implementation's rationale retold whole. If the
-//! prose says nothing the code's doc does not, name the item and cut it: two
-//! copies of one rationale is one that a later change can leave behind.
+//! Each test doc starts with `[T-<PREFIX><NNN>]`: a subject prefix and a number
+//! unique within that prefix across files. DRs cite these identifiers.
+//! Cite other tests without brackets; brackets define an ID.
+//! Test docs describe the failure detected, without repeating implementation rationale.
 
 use std::collections::HashMap;
 use std::env;
@@ -72,11 +47,7 @@ pub(crate) async fn connection_refused_error(test_name: &str) -> Option<reqwest:
     )
 }
 
-/// Mount a `users.info` responder that resolves every lookup to a name.
-///
-/// The body is the one shape `UserBody` / `UserDetail` accept, so it lives in
-/// one place: a change to that deserializer has to change this fixture, and
-/// twelve copies of it would each have to be found.
+/// Mounts the minimal users.info response accepted by UserBody/UserDetail.
 pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
     mount_get(
         server,
@@ -89,10 +60,7 @@ pub(crate) async fn mount_users_info_resolving(server: &MockServer) {
     .await;
 }
 
-/// Covers the plain `method(GET) + path + respond_with + mount` shape only.
-/// A mock that also matches on query params or asserts a call count encodes
-/// that condition as part of what the test verifies, so those stay
-/// hand-written at the call site.
+/// GET/path responder; keep query matching and call-count assertions at call sites.
 pub(crate) async fn mount_get(server: &MockServer, path: &str, template: ResponseTemplate) {
     use wiremock::Mock;
     use wiremock::matchers::{method, path as path_matcher};
@@ -104,10 +72,7 @@ pub(crate) async fn mount_get(server: &MockServer, path: &str, template: Respons
         .await;
 }
 
-/// The single bind-failure decision every loopback-binding helper routes
-/// through, so a restricted environment produces one uniform outcome across
-/// the suite: skip (`None` + warn), or a panic when `SCOUT_NETWORK_TESTS`
-/// asserts the network must exist.
+/// Bind failure skips locally but panics when SCOUT_NETWORK_TESTS is set.
 fn guard_loopback_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -137,7 +102,6 @@ pub(crate) async fn try_spawn_mock_server(test_name: &str) -> Option<MockServer>
     try_spawn_with_bind(test_name, TcpListener::bind("127.0.0.1:0"), force).await
 }
 
-/// Testable core: inject bind result and force flag to control skip-vs-panic.
 async fn try_spawn_with_bind(
     test_name: &str,
     bind_result: io::Result<TcpListener>,
@@ -147,14 +111,8 @@ async fn try_spawn_with_bind(
     Some(MockServer::builder().listener(listener).start().await)
 }
 
-/// The one primitive every one-shot test server routes through.
-///
-/// `respond` runs once per accepted connection, so `Fn` rather than
-/// `FnOnce`/`FnMut`. Its failure does not cut the accept loop short: a
-/// caller asserting on the counter (a retry-budget test) needs every one of
-/// `accept_count` connections accepted and counted even when a mid-loop
-/// write fails, so the loop runs to completion and the *first* error
-/// surfaces afterwards.
+/// Accepts and counts every requested connection even if responses fail,
+/// then returns the first response error.
 fn spawn_accept_loop<F>(
     test_name: &str,
     accept_count: usize,
@@ -164,10 +122,7 @@ where
     F: Fn(&mut TcpStream) -> io::Result<()> + Send + 'static,
 {
     let listener = bind_loopback(test_name)?;
-    // `bind_loopback` already decided skip-vs-panic for this test run. A bound
-    // listener that cannot report its own address is not that decision, and
-    // returning `None` here would skip the scenario even under
-    // SCOUT_NETWORK_TESTS, which exists to stop exactly that.
+    // Address lookup failure must not become a skip under SCOUT_NETWORK_TESTS.
     let addr = listener
         .local_addr()
         .expect("a bound listener reports its address");
@@ -178,9 +133,7 @@ where
         for _ in 0..accept_count {
             let (mut stream, _) = listener.accept()?;
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            // Drain the request before replying so reqwest observes
-            // whatever `respond` writes as the response, not racing an
-            // unread request buffer.
+            // Drain the request so unread bytes do not race the response.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             if let Err(e) = respond(&mut stream) {
@@ -192,23 +145,13 @@ where
     Some((format!("http://{addr}"), counter, handle))
 }
 
-/// Joins a server thread under a 5s deadline and asserts neither the thread
-/// panicked nor its result was an `Err`. Discarding the join result instead
-/// would leave an accept or write failure entirely silent, which is what this
-/// replaces.
-///
-/// 5s sits far under `.config/nextest.toml`'s 120s `slow-timeout`, so a thread
-/// that never finishes loses the race to the diagnosis below rather than to an
-/// opaque kill.
+/// Joins within 5s and surfaces thread/response failures before nextest
+/// reaches its 120s slow timeout.
 pub(crate) fn join_server_thread(handle: JoinHandle<io::Result<()>>) {
     join_server_thread_with_deadline(handle, Duration::from_secs(5));
 }
 
-/// Testable core: inject a deadline to control how long a join waits on a
-/// server thread that never finishes.
-///
-/// The elapsed handle is dropped, not joined: joining a still-running thread
-/// blocks again, which is the hang this guards against.
+/// Drops an unfinished handle at the deadline; joining it would block again.
 fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline: Duration) {
     let started = Instant::now();
     while !handle.is_finished() {
@@ -228,21 +171,9 @@ fn join_server_thread_with_deadline(handle: JoinHandle<io::Result<()>>, deadline
         .expect("server thread should not fail while writing the response");
 }
 
-/// One-shot server that accepts up to `accept_count` connections and replies
-/// with an HTTP/1.1 response declaring `Content-Length: 1000` but writing
-/// only `hello` before dropping the socket. reqwest surfaces the resulting
-/// mid-stream close as `is_decode() == true` with an `io::Error` of kind
-/// `UnexpectedEof` in the source chain.
-///
-/// Returns `None` when loopback bind is unavailable so callers can early-return
-/// in restricted environments, matching the `try_spawn_mock_server` pattern.
-/// The returned `AtomicUsize` counts how many connections were accepted so
-/// callers can confirm the retry loop kicked in.
-///
-/// `accept_count` must equal the number of connections the client will make;
-/// passing a larger value blocks the spawned thread on `listener.accept()`.
-/// `join_server_thread` does not hang on that: it panics naming `accept_count`
-/// once its deadline elapses (`join_server_thread_with_deadline`).
+/// Sends only `hello` despite Content-Length: 1000, producing a truncated body.
+/// `accept_count` must match client connections or accept blocks until the
+/// bounded join fails. Bind failure uses the SCOUT_NETWORK_TESTS guard.
 pub(crate) fn spawn_mid_stream_drop_server(
     accept_count: usize,
 ) -> Option<(String, Arc<AtomicUsize>, JoinHandle<io::Result<()>>)> {
@@ -251,17 +182,8 @@ pub(crate) fn spawn_mid_stream_drop_server(
     })
 }
 
-/// One-shot server that accepts one connection and replies with a
-/// close-delimited HTTP/1.1 response: no `Content-Length`, no
-/// `Transfer-Encoding`, `Connection: close`, then `body_size` body bytes
-/// before dropping the socket (EOF delimits the body). reqwest sees
-/// `content_length() == None`, so `read_body_capped`'s pre-check goes inert
-/// and the chunk loop becomes the live cap guard — the path a compressed or
-/// Content-Length-absent upstream drives.
-///
-/// Returns `None` when loopback bind is unavailable so callers can
-/// early-return in restricted environments, matching
-/// `spawn_mid_stream_drop_server`.
+/// Sends a close-delimited body without Content-Length or Transfer-Encoding,
+/// exercising the streaming body cap. Bind failure uses the network guard.
 pub(crate) fn spawn_close_delimited_body_server(
     body_size: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
@@ -273,22 +195,8 @@ pub(crate) fn spawn_close_delimited_body_server(
     Some((addr, handle))
 }
 
-/// One-shot server that declares `Content-Length: declared_len` in the
-/// response head and then closes the connection without writing a single
-/// body byte. Mirrors `spawn_close_delimited_body_server`'s shape (bind,
-/// accept once, drain the request, write the response, drop the stream) but
-/// controls the header instead of the framing.
-///
-/// Proves `read_body_capped`'s pre-check rejects an oversized declared
-/// length before it reads any body byte: since zero body bytes are ever
-/// written, an implementation that tried to read past the pre-check would
-/// see the connection close before satisfying `declared_len`, which reqwest
-/// surfaces as a decode/network error — not `too_large`. Observing
-/// `too_large` therefore is itself the proof that the body was never read.
-///
-/// Returns `None` when loopback bind is unavailable so callers can
-/// early-return in restricted environments, matching
-/// `spawn_close_delimited_body_server`.
+/// Declares `declared_len` then closes without body bytes, distinguishing
+/// oversized-header rejection from a body decode error. Uses the network guard.
 pub(crate) fn spawn_declared_length_no_body_server(
     declared_len: usize,
 ) -> Option<(String, JoinHandle<io::Result<()>>)> {
@@ -301,16 +209,8 @@ pub(crate) fn spawn_declared_length_no_body_server(
     Some((addr, handle))
 }
 
-/// One-shot forward proxy: binds loopback, accepts exactly one connection,
-/// drains the absolute-form request line reqwest sends an HTTP proxy
-/// (`GET http://example.com/... HTTP/1.1`), and replies with a canned
-/// `200 OK` HTML body regardless of the requested target. Mirrors
-/// `spawn_close_delimited_body_server`; used to prove `fetch_page` in Proxied
-/// egress mode routes through the proxy without consulting scout's DNS
-/// resolver. `body` is returned verbatim, Content-Length framed.
-///
-/// Returns `None` when loopback bind is unavailable so callers can early-return
-/// in restricted environments, matching `spawn_close_delimited_body_server`.
+/// Returns the supplied HTML with Content-Length for one forward-proxy request.
+/// Bind failure uses the SCOUT_NETWORK_TESTS guard.
 pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::Result<()>>)> {
     let body = body.to_owned();
     let (addr, _counter, handle) = spawn_accept_loop("spawn_forward_proxy", 1, move |stream| {
@@ -324,21 +224,13 @@ pub(crate) fn spawn_forward_proxy(body: &str) -> Option<(String, JoinHandle<io::
     Some((addr, handle))
 }
 
-/// One token a scan found: the file it lives in and the token text. Shared by
-/// the test-id scan and the requirement-code scan, so the field is `token`
-/// rather than either scan's own word for it.
 struct ScannedToken {
     file: PathBuf,
     token: String,
 }
 
-/// The T-201 ids in `src/fetch/cdp/proxy/proxy_tests.rs` and
-/// `src/fetch/cdp/launch/cdp_launch_tests.rs` number after the proxy work, not
-/// after a subject prefix, so they start with a digit. Renumbering them would
-/// break the citations in ADR-0021, ADR-0012 and two audit records, so they are
-/// allow-listed
-/// instead. The series is closed at 201-16: a new test in either file takes a
-/// prefixed id and does not get an entry here.
+/// Preserve cited legacy T-201 IDs (DR-0021/DR-0012). This closed allowlist
+/// does not admit new digit-leading IDs.
 const DIGIT_LEADING_ALLOWLIST: &[&str] = &[
     "201-1", "201-2", "201-3", "201-4", "201-5", "201-6", "201-8", "201-9", "201-10", "201-11",
     "201-12", "201-13", "201-14", "201-15", "201-16",
@@ -357,10 +249,7 @@ fn scan_test_id_violations() -> Vec<String> {
     find_test_id_violations(&occurrences)
 }
 
-/// Sibling of `scan_test_id_violations`: same crate-root + `src`/`tests` walk,
-/// but collecting requirement-code citations instead of test ids. `docs/` is
-/// out of scope — ADR-0013 and audit records cite `FR-`/`BR-`/`NFR-` codes
-/// there legitimately.
+/// Scans src/tests only; requirement citations remain allowed in docs (DR-0013).
 fn scan_requirement_code_violations() -> Vec<String> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut occurrences = Vec::new();
@@ -371,19 +260,13 @@ fn scan_requirement_code_violations() -> Vec<String> {
             &mut occurrences,
         );
     }
-    // This file names the codes to test the check, so scanning it would make
-    // the guard cite itself. The exclusion is one file wide and is the reason
-    // the check can match the bare form everywhere else. Compared as a full
-    // path, not by file name: `ends_with` matches whole components, so any
-    // future `*/test_support.rs` would inherit the exemption.
+    // Exempt only this exact file, which supplies requirement-code fixtures.
+    // A suffix match would also exempt unrelated nested test_support.rs files.
     let this_file = crate_root.join("src").join("test_support.rs");
     occurrences.retain(|o| o.file != this_file);
     find_requirement_code_violations(&occurrences)
 }
 
-/// Testable core: inject already-collected (file, id) occurrences to control
-/// which violations `scan_test_id_violations` reports, without touching the
-/// filesystem.
 fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     let mut violations = Vec::new();
     let mut first_seen: HashMap<&str, &Path> = HashMap::new();
@@ -396,9 +279,6 @@ fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
             violations.push(format!("{file}: test id [T-{id}] starts with a digit"));
         }
 
-        // "already defined in", not "defined in X and Y": the same id twice in
-        // one file is the shape this guards against (classify_tests.rs carried
-        // T-002 three times), and naming that one file twice reads as two.
         match first_seen.get(id) {
             Some(first_file) => violations.push(format!(
                 "{file}: duplicate test id [T-{id}], already defined in {}",
@@ -413,14 +293,6 @@ fn find_test_id_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     violations
 }
 
-/// Testable core: inject already-collected (file, code) occurrences to control
-/// which violations `scan_requirement_code_violations` reports, without
-/// touching the filesystem.
-///
-/// Unlike `find_test_id_violations`, this checks only whether an occurrence
-/// exists — a requirement code has no digit-leading or duplicate shape to
-/// judge, presence in `src`/`tests` is itself the violation — so that
-/// judgment does not belong here.
 fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String> {
     occurrences
         .iter()
@@ -434,9 +306,6 @@ fn find_requirement_code_violations(occurrences: &[ScannedToken]) -> Vec<String>
         .collect()
 }
 
-/// Shared by `scan_test_id_violations` and `scan_requirement_code_violations`:
-/// walk `dir`'s `.rs` files and push every match `extract` finds, tagged with
-/// its file. The two callers differ only in which `extract` they pass.
 fn collect_occurrences(
     dir: &Path,
     extract: fn(&str) -> Vec<String>,
@@ -464,10 +333,8 @@ fn collect_occurrences(
     }
 }
 
-/// Extract the id text from every `[T-<id>]` bracket in `contents`, in the
-/// order they appear. An id is ASCII letters, digits, or hyphens closed by
-/// `]`; this module's own `[T-<PREFIX><NNN>]` doc mention fails that shape and
-/// contributes nothing.
+/// Extracts bracketed IDs containing ASCII letters, digits or hyphens.
+/// The convention placeholder is not an ID.
 fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     let mut ids = Vec::new();
     let mut offset = 0;
@@ -486,13 +353,8 @@ fn extract_bracketed_test_ids(contents: &str) -> Vec<String> {
     ids
 }
 
-/// Extract every requirement code — `FR-NNN`, `BR-NNN`, `NFR-NNN` — from
-/// `contents`: one of those prefixes followed by exactly 3 digits, not run on
-/// into a longer token.
-///
-/// Deliberately matches the bare form (`// FR-002, BR-003` sitting in a test
-/// body). Restricting the match to a backtick-wrapped spelling would let that
-/// shape back in.
+/// Matches bare requirement codes with exactly three digits and a token boundary.
+/// Requiring backticks would miss citations in ordinary comments.
 fn extract_requirement_codes(contents: &str) -> Vec<String> {
     const PREFIXES: [&str; 3] = ["NFR-", "FR-", "BR-"];
     let mut codes = Vec::new();
@@ -535,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn try_spawn_mock_server_returns_some_in_normal_env() {
         let Some(server) = try_spawn_mock_server("normal_env").await else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let uri = server.uri();
@@ -581,7 +443,7 @@ mod tests {
             1,
             |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
@@ -606,7 +468,7 @@ mod tests {
             accept_count,
             |_stream: &mut TcpStream| -> io::Result<()> { Err(io::Error::other("respond failed")) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
@@ -624,13 +486,8 @@ mod tests {
         );
     }
 
-    /// [T-SUP003] A server thread whose accept_count exceeds the client's connection
-    /// count panics naming accept_count once the deadline elapses
-    ///
-    /// The deadline detaches the thread, so the listener stays open until just
-    /// after the test ends. nextest sometimes cannot close it within the
-    /// leak-timeout (100ms by default) and reports the test as leaky, which does
-    /// not change the pass verdict.
+    /// [T-SUP003] Too few client connections cause a bounded join panic naming accept_count.
+    /// The blocked thread is detached and may be reported as leaky by nextest.
     #[test]
     #[should_panic(expected = "accept_count")]
     fn accept_count_exceeding_client_connections_panics_naming_accept_count_after_deadline() {
@@ -639,25 +496,18 @@ mod tests {
             2,
             |_stream: &mut TcpStream| -> io::Result<()> { Ok(()) },
         ) else {
-            return; // bind unavailable — can't verify happy path
+            return;
         };
 
         let host = addr
             .strip_prefix("http://")
             .expect("spawn_accept_loop should return an http:// URL");
-        // One connection against accept_count = 2: the thread serves this one,
-        // then blocks in listener.accept() for a second that never comes.
         let _ = TcpStream::connect(host);
 
         join_server_thread_with_deadline(handle, Duration::from_millis(200));
     }
 
-    /// [T-SUP004] A finished server thread returns from join without waiting out the deadline
-    ///
-    /// The thread is spawned directly rather than through `spawn_accept_loop`.
-    /// Only the handle's state decides how long the join waits, so no loopback
-    /// is needed; routing through the helper would leave its early return for
-    /// bind-less environments in the diff as a branch that never executes.
+    /// [T-SUP004] Successful thread join completes within 500ms, below its 5s deadline.
     #[test]
     fn finished_server_thread_returns_before_deadline_elapses() {
         let handle = thread::spawn(|| -> io::Result<()> { Ok(()) });
@@ -673,12 +523,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP005] A server thread that returned Err panics with the existing message
-    /// before the deadline
-    ///
-    /// An `Err` from respond reaches the caller only as the thread's return
-    /// value, so placing that return value directly leaves the propagation path
-    /// unchanged. T-SUP004 states why the thread is spawned directly.
+    /// [T-SUP005] Thread error retains its diagnostic and panics within 500ms.
     #[test]
     fn server_thread_err_panics_with_existing_message_before_deadline() {
         let handle =
@@ -765,11 +610,7 @@ mod tests {
         );
     }
 
-    /// [T-SUP010] The same ID appearing twice inside one file is reported as a duplicate
-    ///
-    /// The shape `src/slack/classify_tests.rs` had before renumbering, where
-    /// T-002 appeared three times. T-SUP008's across-files case alone cannot
-    /// settle whether this path is reported.
+    /// [T-SUP010] Duplicate IDs within one file are reported.
     #[test]
     fn duplicate_id_within_one_file_is_reported_as_violation() {
         let occurrences = vec![

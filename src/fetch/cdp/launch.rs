@@ -32,18 +32,11 @@ use tracing::warn;
 use super::BrowserError;
 use crate::fetch::ssrf::{self, RedactedLogUrl};
 
-/// Discover the chromium/Chrome binary by probing `PATH` then known install
-/// locations. Called once per `--js` fetch rather than cached in a
-/// process-global `OnceLock`, which broke test isolation and pinned the
-/// first result for the process lifetime); the few `which` probes cost ~1-5 ms,
-/// negligible against the ~2 s chromium render that follows.
+/// Probes PATH and known install locations per fetch; caching would pin the
+/// first PATH result across injected browser fixtures.
 #[cfg(feature = "js-rendering")]
 pub(super) fn resolve_browser_binary() -> Result<PathBuf, BrowserError> {
-    // Compile-time `#[cfg]` (not runtime `cfg!`) so each platform's table is the
-    // only one compiled: the other OS's lines never enter `cargo llvm-cov`, so
-    // the diff-coverage gate does not flag the macOS table as uncovered on the
-    // Linux CI runner (where it is unreachable). Mirrors transport.rs's exclusion
-    // of OS-I/O that the offline suite cannot exercise.
+    // Compile only the host platform's discovery table.
     #[cfg(target_os = "macos")]
     let path_commands: &[&str] = &["chromium"];
     #[cfg(not(target_os = "macos"))]
@@ -94,15 +87,9 @@ fn build_launch_args(proxy_port: u16) -> Vec<String> {
     ]
 }
 
-/// SSRF check for a browser-initiated subrequest URL (CDP `Fetch.RequestPaused`).
-///
-/// Scheme handling rationale:
-/// - `http`/`https`: passed directly to `ssrf::ssrf_check`
-/// - `ws`/`wss`: WebSocket can reach internal services; rewritten to http(s) for SSRF allowlist check
-/// - `data:`/`about:`/`chrome:`/`blob:`: synthetic browser schemes with no external egress, allowed without SSRF check
-/// - Unrecognized scheme: blocked (warn + return false) because the scheme cannot be classified
-///
-/// See ADR-0001 for the SSRF defense architecture.
+/// Validates browser subrequests (DR-0001). WebSocket URLs use the HTTP(S)
+/// allowlist; synthetic browser schemes pass without external egress, and
+/// unrecognized schemes are blocked.
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsResolver) -> bool {
     let check_url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -121,27 +108,19 @@ pub(super) async fn check_browser_request(url: &str, resolver: &dyn ssrf::DnsRes
         warn!(url = %RedactedLogUrl(url), "SSRF: blocked browser subrequest with unrecognized scheme");
         return false;
     };
-    // Direct: the CDP path routes chromium egress through scout's loopback
-    // SOCKS5 proxy (ADR-0021), but this subrequest allowlist check runs in
-    // scout's own process, which resolves directly — so the DNS pre-check
-    // applies as in a direct fetch.
+    // This allowlist check resolves in scout, independently of proxy routing.
     ssrf::ssrf_check(&check_url, resolver, &ssrf::EgressMode::Direct)
         .await
         .is_ok()
 }
 
-/// Grace period between SIGTERM and SIGKILL when reaping the chromium pgroup.
-/// 50 ms is enough for chromium subprocess (Helper Renderer, GPU, Network) to
-/// observe the signal after `browser.close()` already drove the graceful path.
+/// TERM grace after CDP close, before forced group termination.
 #[cfg(feature = "js-rendering")]
 const PGROUP_SIGTERM_GRACE: Duration = Duration::from_millis(50);
 
-/// Own the entire browser group and its profile across every await point.
-///
-/// Drop must work even when the runtime is shutting down: send SIGKILL
-/// synchronously, before TempDir removes the profile. The Child's existing
-/// kill-on-drop handles the directly owned parent; it cannot kill descendants.
-/// No asynchronous cleanup task may carry this responsibility (DR-0032).
+/// Holds the group and profile across awaits. Drop sends SIGKILL synchronously
+/// before profile deletion, even during runtime shutdown (DR-0032).
+/// Child kill-on-drop alone cannot stop descendants.
 #[cfg(feature = "js-rendering")]
 pub(super) struct ChromiumProcess {
     child: TokioChild,
@@ -152,8 +131,7 @@ pub(super) struct ChromiumProcess {
 
 #[cfg(feature = "js-rendering")]
 impl ChromiumProcess {
-    /// Preserve TERM grace and bounded parent reaping on completed paths.
-    /// Cancellation during the grace period still invokes the Drop fallback.
+    /// Completed paths retain bounded reap; cancellation invokes the Drop fallback.
     pub(super) async fn reap(&mut self) {
         reap_group(self.pgid, &mut self.group_armed, self.child.wait(), killpg).await;
     }
@@ -163,7 +141,6 @@ impl ChromiumProcess {
     }
 }
 
-// Keep the OS boundary injectable without changing the ownership or timing.
 #[cfg(feature = "js-rendering")]
 async fn reap_group(
     pgid: Pid,
@@ -181,7 +158,8 @@ async fn reap_group(
             kill_group_with(pgid, armed, signal);
         }
     }
-    // Disarm before parent wait can make its numeric PID available for reuse.
+    // Successful KILL or ESRCH disarms before wait can release the numeric PID.
+    // Failed KILL leaves the Drop retry armed.
     match timeout(Duration::from_secs(2), wait).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => warn!(error = %e, pgid = %pgid, "chromium child.wait() failed during reap"),
@@ -212,17 +190,9 @@ impl Drop for ChromiumProcess {
     }
 }
 
-/// Spawn chromium in a new process group and return its owner and stderr reader.
-///
-/// Synchronous so the caller captures `pgid` before any timeout can drop the
-/// future and orphan the group. The pgid equals the chromium child's pid (the
-/// call uses `process_group(0)`, which means "make the child the leader of a
-/// new group whose id is its pid"). scout retains the `Child` so the kernel
-/// can reap the parent after we kill the group.
-///
-/// chromiumoxide 0.9 hides `tokio::process::Command` behind a private wrapper,
-/// so `BrowserConfig::launch` cannot set `process_group(0)`. We self-spawn and
-/// hand the resulting WebSocket URL to `Browser::connect` instead.
+/// Spawns a new group and captures ownership without an intervening await.
+/// chromiumoxide 0.9 hides the Command needed for `process_group(0)`, so scout
+/// self-spawns and connects to the resulting DevTools URL.
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
@@ -230,11 +200,8 @@ pub(super) fn spawn_chromium_pgroup(
 ) -> Result<(ChromiumProcess, BufReader<ChildStderr>), BrowserError> {
     use std::process::Stdio;
 
-    // `TempDir` gives each --js fetch a unique profile dir (random suffix avoids
-    // chromium's `SingletonLock` failure when two scout processes run --js
-    // concurrently) and deletes it on `Drop`. The caller must hold the returned
-    // owner until after group termination, because chromium keeps writing
-    // profile state during graceful shutdown.
+    // A unique profile avoids SingletonLock collisions between concurrent fetches.
+    // Its owner must survive group termination because chromium writes on shutdown.
     let user_data_dir = Builder::new()
         .prefix("scout-chromium-")
         .tempdir()
@@ -262,8 +229,7 @@ pub(super) fn spawn_chromium_pgroup(
             .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
     );
 
-    // Establish group ownership before the next fallible step, with no await
-    // between spawn and this guard. Even a missing stderr cleans up the group.
+    // Capture the group before fallible stderr extraction, without an await.
     let mut process = ChromiumProcess {
         child,
         pgid,
@@ -278,11 +244,7 @@ pub(super) fn spawn_chromium_pgroup(
     Ok((process, BufReader::new(stderr)))
 }
 
-/// Read chromium stderr line-by-line until `DevTools listening on ws://...`.
-///
-/// Mirrors chromiumoxide 0.9's `ws_url_from_output` — the marker has been
-/// stable in Chrome/Chromium for years. Generic over `AsyncBufRead` so unit
-/// tests can drive it with an in-memory cursor.
+/// Reads stderr until chromium announces its DevTools WebSocket URL.
 #[cfg(feature = "js-rendering")]
 pub(super) async fn parse_ws_url_from_lines<R>(reader: R) -> Result<String, BrowserError>
 where

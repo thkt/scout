@@ -14,8 +14,7 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use tempfile::tempdir;
 
-/// [T-BGC008] Invalid/absent group records must never signal unrelated groups;
-/// a signal/wait failure must not suppress profile deletion or its diagnostic.
+/// [T-BGC008] Invalid group records cannot signal; cleanup aggregates OS failures.
 #[test]
 fn fixture_cleanup_preserves_scope_and_collects_failures() {
     let browser = FakeBrowser::new(false);
@@ -43,7 +42,7 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
     }
     fs::write(browser.path().join("group"), "42").unwrap();
     fs::write(browser.path().join("descendant"), "43").unwrap();
-    // Use an owned path, even though removal is injected for this test.
+    // Keep a safe owned path even if injected removal unexpectedly changes.
     let profile = tempdir().unwrap();
     fs::write(
         browser.path().join("profile"),
@@ -77,7 +76,6 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
     assert!(failures[0].contains("kill owned fixture group 42"));
     assert!(failures[1].contains("survived backstop"));
     assert!(failures[2].contains("remove fixture profile"));
-    // ESRCH and an already-removed profile are successful cleanup conditions.
     assert!(
         browser
             .cleanup_with(
@@ -91,8 +89,7 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
     fs::remove_file(browser.path().join("group")).unwrap();
 }
 
-/// [T-BGC009] On an assertion unwind the fixture, not scout's owner, must
-/// kill the recorded group, remove its profile, and preserve the original panic.
+/// [T-BGC009] Fixture Drop stops its group, removes its profile and preserves the panic.
 #[test]
 fn fixture_backstop_cleans_on_unwind() {
     let browser = FakeBrowser::new(false);
@@ -136,8 +133,7 @@ fn fixture_backstop_cleans_on_unwind() {
     assert!(!wait_scout(&mut parent.0).success());
 }
 
-/// [T-BGC012] Failed ps observations must certify neither readiness nor cleanup;
-/// only observed live descendants are ready, while absence/zombies allow cleanup.
+/// [T-BGC012] ps failures establish neither readiness nor cleanup; absence/zombies stop waiting.
 #[test]
 fn fixture_liveness_distinguishes_absence_from_observation_failure() {
     let pid = Pid::from_raw(42);
@@ -161,7 +157,6 @@ fn fixture_liveness_distinguishes_absence_from_observation_failure() {
         };
         assert_eq!(pid_state_with(pid, query), expected);
         assert_eq!(pid_running_with(pid, query), expected != PidState::Stopped);
-        // Exercise the assertion used by wait_ready, not just output parsing.
         let readiness = catch_unwind(|| assert_pid_running_with(pid, query));
         assert_eq!(
             readiness.is_ok(),
@@ -175,8 +170,8 @@ fn fixture_liveness_distinguishes_absence_from_observation_failure() {
     assert!(catch_unwind(|| assert_pid_running_with(pid, failed_query)).is_err());
 }
 
-/// [T-BGC010] Polling must stop at its deadline and cleanup diagnostics must
-/// fail a passing test without causing a double panic during an existing failure.
+/// [T-BGC010] Polling expires; cleanup failure panics without masking an existing panic.
+/// CLI wait preserves exit 23.
 #[test]
 fn fixture_wait_and_diagnostics_are_bounded() {
     assert!(!wait_until(Duration::ZERO, || false));

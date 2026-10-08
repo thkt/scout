@@ -13,7 +13,7 @@ async fn browser_owner_cleans_interrupted_reap() {
     let browser = FakeBrowser::new(false);
     let (mut process, _reader) = spawn_chromium_pgroup(&browser.binary, 0).expect("fake launch");
     browser.wait_ready();
-    // Poll reap through TERM into its pending grace, then destroy it.
+    // Keep TERM grace pending so owner destruction exercises the fallback.
     pause();
     {
         let reap = process.reap();
@@ -42,11 +42,7 @@ fn t009_launch_args_contain_security_flags() {
     }
 }
 
-/// [T-F085] the hardening flag set is exactly these 9, in this order.
-///
-/// DR-0021 treats this set as the guard against chromium re-enabling a feature
-/// or a bypass across versions. Matching the whole set, rather than probing for
-/// individual members, is what makes a 10th flag arrive with its own assertion.
+/// [T-F085] The nine non-proxy hardening flags match exactly, including order.
 #[test]
 fn t085_launch_args_hardening_set_matches_exactly() {
     let args = build_launch_args(0);
@@ -71,7 +67,7 @@ fn t085_launch_args_hardening_set_matches_exactly() {
     );
 }
 
-/// [T-201-8] proxy flags route every chromium TCP egress through the SSRF proxy.
+/// [T-201-8] Launch includes the SOCKS5 port, loopback bypass override and QUIC disable flag.
 #[test]
 fn t201_8_launch_args_contain_ssrf_proxy_flags() {
     let args = build_launch_args(54321);
@@ -85,8 +81,7 @@ fn t201_8_launch_args_contain_ssrf_proxy_flags() {
     }
 }
 
-/// [T-BGC007] A TERM failure must not skip KILL or parent wait; failed KILL
-/// retains the Drop retry, while success/ESRCH prevents stale-group signals.
+/// [T-BGC007] Injected OS failures preserve KILL/wait, retry state and bounded wait.
 #[tokio::test(start_paused = true)]
 #[tracing_test::traced_test]
 async fn reap_preserves_fallback_on_os_errors() {

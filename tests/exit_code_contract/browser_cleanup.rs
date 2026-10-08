@@ -60,8 +60,7 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     let status = wait_scout(&mut scout.0);
     assert_eq!(status.code(), Some(expected_code));
     if signal.is_some() {
-        // A silent fake browser is still awaiting DevTools, so cancellation
-        // cannot complete CDP's close path: this must exhaust the 7s drain.
+        // No DevTools URL means signal drain must reach its 7s cutoff.
         assert!(
             started.elapsed() >= Duration::from_secs(7),
             "signal skipped bounded drain"
@@ -70,13 +69,13 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     browser.assert_clean();
 }
 
-/// [T-BGC005] Actual Scout::fetch outer timeout, rather than a local wrapper.
+/// [T-BGC005] CLI outer fetch timeout returns 124 and cleans owned PIDs/profile.
 #[test]
 fn outer_fetch_timeout_reaps_browser_descendant_and_profile() {
     run_cleanup(None, 124);
 }
 
-/// [T-BGC006] Both OS signals retain their codes after drain cuts CDP off.
+/// [T-BGC006] Both OS signals clean owned PIDs/profile after the 7s drain cutoff.
 #[test]
 fn signal_drain_cutoff_reaps_browser_descendant_and_profile() {
     for (signal, code) in [(Signal::SIGINT, 130), (Signal::SIGTERM, 143)] {

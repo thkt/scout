@@ -11,8 +11,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tokio::time::{Instant, advance, pause, sleep};
 
-/// [T-BGC004] The production driver keeps ownership during a drain that
-/// completes normally, complementing actual CLI drain cutoff checks.
+/// [T-BGC004] Injected reap command completes signal drain and cleans its group/profile.
 #[tokio::test]
 async fn signal_drain_completion_cleans_browser_group_and_profile() {
     for (signal, code) in [
@@ -54,7 +53,7 @@ async fn signal_drain_completion_cleans_browser_group_and_profile() {
     }
 }
 
-/// [T-BGC002] Internal DevTools timeout owns the same cleanup as outer drop.
+/// [T-BGC002] DevTools URL timeout cleans the owned group and profile.
 #[tokio::test]
 async fn internal_devtools_timeout_cleans_browser_group_and_profile() {
     let browser = FakeBrowser::new(false);
@@ -80,7 +79,7 @@ async fn internal_devtools_timeout_cleans_browser_group_and_profile() {
     browser.assert_clean();
 }
 
-/// [T-BGC003] Stderr EOF is a completed error path, not Future destruction.
+/// [T-BGC003] Stderr EOF cleans the owned group and profile.
 #[tokio::test]
 async fn devtools_eof_cleans_browser_group_and_profile() {
     let browser = FakeBrowser::new(true);
@@ -97,14 +96,7 @@ async fn devtools_eof_cleans_browser_group_and_profile() {
     browser.assert_clean();
 }
 
-/// [T-F060] `fetch_with_cdp_with` honors the injected browser binary path.
-///
-/// The binary path is an explicit parameter rather than a process-global
-/// `OnceLock` cache, so a test can drive the launch path
-/// without a real Chrome on the host. Injecting a path that is not an
-/// executable makes `spawn_chromium_pgroup` fail at spawn time, surfacing
-/// `BrowserError::ProcessFailed`. This exercises the injection seam
-/// host-independently — no Chrome required, unlike the Chrome-gated test below.
+/// [T-F060] A nonexistent injected browser path reports a chromium spawn failure.
 #[tokio::test]
 async fn t007_fetch_with_cdp_with_injects_browser_path() {
     let (cancel, _) = watch::channel(false);
@@ -117,9 +109,7 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
     )
     .await
     .expect_err("spawning a nonexistent browser binary must fail");
-    // Pin the failure to the chromium spawn (launch.rs), not the SSRF proxy or
-    // profile-dir setup that also surface as `ProcessFailed` — otherwise the
-    // test could pass without the injected path being the cause.
+    // Distinguish spawn failure from proxy/profile setup errors.
     let BrowserError::ProcessFailed(msg) = &err else {
         panic!("expected ProcessFailed for a nonexistent binary, got {err:?}");
     };
@@ -129,15 +119,8 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
     );
 }
 
-/// [T-F051] cdp renders public url + [T-F057] cdp removes profile dir after fetch
-///
-/// Reuse one real render for content and profile cleanup. Record this launch's
-/// exact profile through the existing browser-path injection seam, so concurrent
-/// fake-browser regressions cannot be mistaken for residual profiles.
-///
-/// Without `#[ignore]` a host with no chromium binary would fail here at
-/// `resolve_browser_binary`'s `BrowserError::NotFound`. Run it explicitly with
-/// `cargo nextest run --features js-rendering --run-ignored all --profile ci`.
+/// [T-F051] Rendered content; [T-F057] deletion of this launch's recorded profile.
+/// Requires real chromium; recording only this profile avoids concurrent fixtures.
 #[tokio::test]
 #[ignore = "requires chromium"]
 async fn t005_t006_cdp_renders_and_removes_profile_dir() {
