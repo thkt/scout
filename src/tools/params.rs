@@ -225,12 +225,8 @@ mod tests {
         assert_help_sections::<super::SearchParams>(Some("BRAVE_SEARCH_API_KEY"));
     }
 
-    /// [T-H002] fetch --help contains Examples: and Environment: sections
-    ///
-    /// `fetch` was the one subcommand whose help named no environment variable,
-    /// yet a Slack permalink fails without `SLACK_TOKEN`. Only the root help
-    /// carried it, so an agent that read `scout fetch --help` after that failure
-    /// found nothing to act on.
+    /// [T-H002] Fetch help includes Examples and Environment, including
+    /// SLACK_TOKEN so a failed Slack fetch can be diagnosed from subcommand help.
     #[test]
     fn fetch_help_contains_examples_and_environment() {
         assert_help_sections::<super::FetchParams>(Some("SLACK_TOKEN"));

@@ -1,12 +1,5 @@
-//! Shared body-reading leaf used by the Brave, Slack, GitHub, and fetch
-//! backends.
-//!
-//! Placement rule: a cap or helper lives here when 2 or more backends share
-//! it. `read_body_capped` is used by all four backends, so it lives here.
-//! `MAX_API_RESPONSE_BYTES` is shared by Brave and Slack, so it lives here
-//! too. A cap used by exactly one backend stays with that backend instead:
-//! `MAX_GITHUB_RESPONSE_BYTES` belongs in `github.rs`, and
-//! `MAX_RESPONSE_BYTES` belongs in `fetch.rs`.
+//! Body readers and limits shared by multiple backends. Backend-specific caps
+//! stay with their backend; Brave and Slack share the JSON response cap here.
 
 /// Upper bound on JSON response body bytes accepted from Brave and Slack.
 ///
@@ -18,27 +11,15 @@
 /// structured data, not human pages.
 pub(crate) const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
 
-/// Upper bound on how much of a *failed* response's body is read to build a
-/// diagnostic message. Generous beside the few hundred bytes GitHub and Brave
-/// actually send on an error, and small enough that the error path cannot cost
-/// what the success path is capped against.
+/// Cap diagnostic reads so failed responses cannot consume unbounded memory.
 pub(crate) const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
-/// Read up to `limit` bytes of `response`'s body for a diagnostic snippet.
+/// Read a diagnostic prefix; reaching `limit` is not an error.
+/// `Response::text()` would buffer the entire failed response.
 ///
-/// Separate from [`read_body_capped`] because exceeding the limit is not an
-/// error here: the caller wants whatever prefix explains the failure, and the
-/// status it already has is the finding. What the two share is the reason for
-/// existing at all — `Response::text()` reads the whole body, so an error
-/// response can exhaust memory exactly as a successful one can. The cap
-/// therefore cannot be scoped to bodies expected to be useful.
-///
-/// Stops after the first chunk that reaches `limit`, so the bytes read are
-/// bounded by `limit + one chunk` no matter how much the server sends. The
-/// allocation is the looser bound: `body` starts empty and grows by doubling,
-/// so its capacity can pass `limit` before the loop exits, and `truncate` cuts
-/// the length without returning the capacity. Both bounds are constants — the
-/// response's own size enters neither.
+/// Reads at most `limit + one chunk` bytes. Vec growth may reserve beyond the
+/// limit, and truncation reduces length without releasing capacity. Neither
+/// bound depends on the full response size.
 pub(crate) async fn read_body_snippet(
     mut response: reqwest::Response,
     limit: usize,

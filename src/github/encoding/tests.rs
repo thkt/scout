@@ -1,7 +1,5 @@
 use super::*;
 
-// ── Explicit Shift_JIS decoding ──
-
 /// [T-GE001]
 #[test]
 fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
@@ -16,8 +14,6 @@ fn decode_bytes_with_shift_jis_hint_returns_explicit_result() {
     assert_eq!(result.source, DetectionSource::Explicit);
 }
 
-// ── Explicit EUC-JP decoding ──
-
 /// [T-GE002]
 #[test]
 fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
@@ -31,8 +27,6 @@ fn decode_bytes_with_euc_jp_hint_returns_explicit_result() {
     assert_eq!(result.encoding, "euc-jp");
     assert_eq!(result.source, DetectionSource::Explicit);
 }
-
-// ── Invalid encoding hint ──
 
 /// [T-GE003] decode_bytes with unknown encoding hint returns NonUtf8 error with retry guidance
 #[test]
@@ -55,8 +49,6 @@ fn decode_bytes_with_invalid_hint_returns_non_utf8_error() {
     );
 }
 
-// ── Auto-detect Shift_JIS (chardetng) ──
-
 /// [T-GE004]
 #[test]
 fn decode_bytes_without_hint_detects_shift_jis() {
@@ -70,15 +62,12 @@ fn decode_bytes_without_hint_detects_shift_jis() {
     assert_eq!(result.source, DetectionSource::Detected);
 }
 
-// ── ASCII-heavy Shift_JIS detected before UTF-8 ──
-
 /// [T-GE005]
 #[test]
 fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
     // Simulate a source file with English comments and Japanese string literals.
     // The ASCII portion is valid UTF-8, but the Shift_JIS bytes are not.
     let mut bytes = Vec::new();
-    // ASCII header (valid UTF-8)
     bytes.extend_from_slice(b"// Copyright 2026 Example Corp.\n");
     bytes.extend_from_slice(b"// Licensed under MIT\n");
     bytes.extend_from_slice(b"fn main() {\n");
@@ -105,8 +94,6 @@ fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
     );
 }
 
-// ── UTF-16 BE BOM detection ──
-
 /// [T-GE006]
 #[test]
 fn decode_bytes_with_utf16be_bom_returns_bom_source() {
@@ -129,16 +116,9 @@ fn decode_bytes_with_utf16be_bom_returns_bom_source() {
     );
 }
 
-// ── Bytes invalid in the specified encoding produce NonUtf8 error ──
-// Spec Evolution: original design tested auto-detect failure, but chardetng always
-// falls back to windows-1252 which encoding_rs decodes without errors (maps undefined
-// bytes to C1 control characters, not U+FFFD). The NonUtf8 path is reliably reached
-// via decode_explicit: user specifies --encoding but the file has invalid bytes for it.
-
 /// [T-GE007] decode_bytes returns NonUtf8 with --encoding hint when explicit encoding fails
 #[test]
 fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
-    // bytes invalid for specified encoding → NonUtf8 with retry hint
     // 0x83 is a valid Shift_JIS lead byte; 0x3F ('?') is NOT a valid trail byte
     // (trail must be 0x40-0x7E or 0x80-0xFC; 0x3F < 0x40).
     // Every pair is an invalid Shift_JIS 2-byte sequence → had_errors=true.
@@ -161,8 +141,6 @@ fn decode_bytes_random_bytes_returns_non_utf8_with_encoding_hint() {
     );
 }
 
-// ── Binary file (null bytes) returns NonUtf8 error ──
-
 /// [T-GE008]
 #[test]
 fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
@@ -182,8 +160,6 @@ fn decode_bytes_with_null_bytes_returns_non_utf8_error() {
         "error should mention binary, got: {msg}"
     );
 }
-
-// ── Non-NUL random bytes (windows-1252 fallback) return NonUtf8 error ──
 
 /// [T-GE009]
 #[test]
@@ -219,7 +195,6 @@ fn decode_bytes_non_nul_random_bytes_return_non_utf8_error() {
     );
 }
 
-// ── NonUtf8 Display output ──
 // The ScoutError mapping test belongs in tools/errors.rs.
 
 /// [T-GE010]
@@ -232,8 +207,6 @@ fn non_utf8_error_contains_descriptive_message() {
         "NonUtf8 Display should include the inner message, got: {msg}"
     );
 }
-
-// ── Decode (base64) error remains distinct ──
 
 /// [T-GE011] GitHubError::Decode and NonUtf8 variants produce distinct Display output
 #[test]
@@ -254,12 +227,9 @@ fn decode_error_is_distinct_from_non_utf8() {
     );
 }
 
-// ── decode_base64 tests ──
-
 /// [T-GE012]
 #[test]
 fn decode_base64_valid_input_returns_bytes() {
-    // The base64 → bytes path on its own, apart from decode_content
     let encoded = base64_encode(b"hello world");
     let bytes = decode_base64(&encoded).unwrap();
     assert_eq!(bytes, b"hello world");
@@ -268,7 +238,6 @@ fn decode_base64_valid_input_returns_bytes() {
 /// [T-GE013]
 #[test]
 fn decode_base64_with_whitespace_succeeds() {
-    // GitHub API returns base64 with line breaks
     let encoded = "aGVs\nbG8g\nd29y\nbGQ=\n";
     let bytes = decode_base64(encoded).unwrap();
     assert_eq!(bytes, b"hello world");
@@ -286,18 +255,9 @@ fn decode_base64_invalid_input_returns_decode_error() {
     );
 }
 
-// ── Fallback logging ──
-
-/// [T-GE015] a BOM whose bytes do not decode is an error, not a lossy success
-///
-/// The three decode paths can disagree about `had_errors`: `decode_explicit`
-/// fails on it, `decode_detect` falls through to the next strategy, and
-/// `decode_bom` returns the replacement characters under
-/// `DetectionSource::Bom`. Left to disagree, the weakest declaration (a BOM in
-/// the file) becomes the most permissive, and the caller reads a settled
-/// encoding off a mojibake body — the GitHub path has no counterpart to fetch's
-/// `decode_uncertain` to signal otherwise. ADR-0013 ends this path in a
-/// `NonUtf8` error with a retry hint.
+/// [T-GE015] A BOM with invalid bytes must fail, not return lossy text
+/// under a settled Bom encoding. GitHub has no decode_uncertain flag to
+/// warn callers about replacement characters (ADR-0013).
 #[tracing_test::traced_test]
 #[test]
 fn decode_bom_that_does_not_decode_is_an_error() {
@@ -338,8 +298,6 @@ fn decode_bom_that_decodes_cleanly_still_succeeds() {
     assert_eq!(result.source, DetectionSource::Bom);
     assert_eq!(result.encoding, "utf-16be");
 }
-
-// ── Helper ──
 
 fn base64_encode(input: &[u8]) -> String {
     use base64::{Engine as _, engine::general_purpose::STANDARD};

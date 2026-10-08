@@ -158,10 +158,7 @@ pub(crate) fn apply_line_range(content: &str, start: usize, end: Option<usize>) 
         return format!("(file has {total} lines, requested start at {start})");
     }
 
-    // Width from the file rather than a fixed 5: the byte cap admits far more
-    // than 99,999 lines (a 100k-line file of short records is about 1 MB against
-    // a 10 MB cap), and past that the gutter stopped lining up mid-file. `max(5)`
-    // holds the previous width for everything smaller.
+    // Short files keep a five-column gutter; large files need their full line width.
     let width = total.to_string().len().max(5);
     lines[start_idx..end_idx]
         .iter()

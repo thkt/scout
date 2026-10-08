@@ -135,28 +135,23 @@ jobs:
           VERSION: ${{ needs.release.outputs.version }}
           TAG: ${{ github.ref_name }}
         run: |
-          # Validate version format again
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
             echo "::error::Invalid version format: $VERSION"
             exit 1
           fi
 
-          # Validate TAG matches VERSION
           if [[ "$TAG" != "v$VERSION" ]]; then
             echo "::error::TAG ($TAG) does not match VERSION (v$VERSION)"
             exit 1
           fi
 
-          # Calculate checksums
           SHA_AARCH64_DARWIN=$(sha256sum artifacts/scout-aarch64-apple-darwin/scout-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
           SHA_X86_64_DARWIN=$(sha256sum artifacts/scout-x86_64-apple-darwin/scout-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
           SHA_AARCH64_LINUX=$(sha256sum artifacts/scout-aarch64-unknown-linux-gnu/scout-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
           SHA_X86_64_LINUX=$(sha256sum artifacts/scout-x86_64-unknown-linux-gnu/scout-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
 
-          # Ensure Formula directory exists
           mkdir -p Formula
 
-          # Update Formula using sed on existing template
           sed -e "s/__VERSION__/$VERSION/g" \
               -e "s/__TAG__/$TAG/g" \
               -e "s/__SHA_AARCH64_DARWIN__/$SHA_AARCH64_DARWIN/g" \

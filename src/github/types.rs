@@ -75,11 +75,8 @@ pub(crate) struct ContentsResponse {
 /// of the two. The listing's entries are not modeled — `repo-tree` is what
 /// reads directories, and here the shape alone answers "was this a file?".
 ///
-/// `Vec<IgnoredAny>` rather than a bare `IgnoredAny` is what makes the sentence
-/// above true. `IgnoredAny` matches any JSON at all, so every body that was not
-/// a file — an error object, a string, `null` — landed in this arm, and the
-/// caller turned each into `PathIsDirectory`: "'x' is a directory, not a file",
-/// about a response that was neither.
+/// `Vec<IgnoredAny>` restricts this arm to arrays. Bare `IgnoredAny` would also
+/// accept error objects, strings and null, falsely reporting them as directories.
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub(super) enum ContentsPayload {

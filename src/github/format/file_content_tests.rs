@@ -1,7 +1,5 @@
 use super::*;
 
-// ── format_file_content / lang_for_path / fence_delimiter ──
-
 /// [T-GF026] format_file_content wraps a Rust file in a ```rust fenced block
 #[test]
 fn format_file_content_wraps_rust_file_in_fenced_code_block() {
@@ -105,7 +103,6 @@ fn format_file_content_fence_does_not_collide_with_inner_backticks() {
     let output = format_file_content("doc.md", 3, inner, None);
 
     let lines: Vec<&str> = output.lines().collect();
-    // Structure: line 0 = header, line 1 = blank, line 2 = opening fence, ..., last = closing fence
     let opening_fence_line = lines[2];
     let fence_backticks: String = opening_fence_line
         .chars()

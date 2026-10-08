@@ -81,6 +81,10 @@ Chosen: Option A — 新規 ADR-0011、ADR-0065 §Classification Priority を su
 - 既存 unit test `T-ER023` (priority 2 wins over priority 5 for Api 4xx)/`T-ER024` (priority 4 TempFailure takes precedence for Api 5xx) が priority 評価順を pin。
 - `ugrep "ADR-0065" src/ tests/` で hit 0 (本 PR で移行完了)。
 
+> **訂正注記 (2026-10-08, Application Rule の 4xx 条件と現行の検証範囲)**: 例 2 の除外集合は、Classification Priority Table と同じく 401/403/404/408/429。408 と 429 は priority 2 の `DataError` ではなく、priority 4 の `TempFailure` (75、retryable) に分類する。
+>
+> 現行の `GitHubError::classify` (`src/github/errors.rs`) と `BraveError::classify` (`src/brave/client.rs`) の `Api` は、`Classification::from_http_status` (`src/classify.rs`) の共有表へ委譲する。GitHub の 401 専用 arm は認証 hint を保持するために先行し、共有表でも code は `UsageError` になる。Confirmation の arm 順序とテストについての説明は、現在の検証範囲と区別する。`[T-ER023]` (`src/tools/errors/classification_tests.rs`) は GitHub の 400/422 と Brave の 400 が `DataError` (65、非 retryable)、`[T-ER024]` (同ファイル) は GitHub の 502 と Brave の 503 が `TempFailure` (75、retryable) になることを検証する。これらは分類結果・exit code・retryable の保証であり、旧来の競合 arm の評価順を検証するものではない。`[T-ER034]` (同ファイル) は 408/429 を含む共有表と GitHub / Brave の `Api`、Fetch の `Status` の写像を固定期待値で検証する。既存の分類方針と実行動作は変更しない。
+
 ## Pros and Cons of the Options
 
 ### Option A: 新規 ADR-0011 + ADR-0065 §Classification Priority supersede (採用)

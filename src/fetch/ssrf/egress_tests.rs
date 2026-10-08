@@ -1,12 +1,8 @@
 use super::*;
 use std::collections::HashMap;
 
-// Contract: mirror the proxy environment variables reqwest users expect
-// (HTTPS_PROXY / HTTP_PROXY plus their lowercase forms), resolved as data in
-// / data out — the environment is passed in as a map so the function never
-// reads process env itself. The reqwest 0.13 "System Proxies" section that
-// documents these vars was not retrievable via WebFetch this session; the
-// four scenarios below are the authoritative spec for the expected outputs.
+// Proxy precedence is scout's contract, not a claim about reqwest's case order.
+// Inputs are an explicit map so tests need no process-env mutation.
 
 /// [T-FS022]
 #[test]

@@ -80,23 +80,17 @@ unsafe_code = "forbid"
 unreachable_pub = "deny"
 
 [lints.clippy]
-# absolute paths
 absolute_paths = "deny"
-# casts
 cast_possible_truncation = "deny"
 cast_precision_loss = "deny"
-# idiomatic iterators
 redundant_closure_for_method_calls = "deny"
 filter_map_next = "deny"
 flat_map_option = "deny"
 manual_filter_map = "deny"
 manual_find_map = "deny"
-# imports
 wildcard_imports = "deny"
 enum_glob_use = "deny"
-# strings
 str_to_string = "deny"
-# arguments
 needless_pass_by_value = "deny"
 # uncapped reads (list and rationale in clippy.toml)
 disallowed_methods = "deny"

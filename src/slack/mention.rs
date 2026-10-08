@@ -29,14 +29,8 @@ fn parse_mentions(text: &str) -> Vec<MentionSpan<'_>> {
             Some((id, label)) => (id, Some(label).filter(|l| !l.is_empty())),
             None => (inner, None),
         };
-        // `<@` opens a mention only when what follows can be a user id. Slack ids
-        // carry no whitespace and no `<`, so `<@U1 hi>` or `<@>` is some other use
-        // of the sequence — treating it as a mention both rewrites text the author
-        // did not write as a mention and spends one of the 50 `users.info` slots
-        // (`SLACK_MAX_USER_LOOKUPS`) on an id Slack cannot have issued, which can
-        // cap out the real mentions behind it. The rule stays this narrow on
-        // purpose: a full shape check would start dropping real mentions the day
-        // Slack widens its id alphabet.
+        // Reject impossible IDs without imposing a fixed Slack ID alphabet.
+        // Malformed tokens must not rewrite prose or consume lookup slots.
         if user_id.is_empty() || user_id.chars().any(|c| c.is_whitespace() || c == '<') {
             search_from = abs_end;
             continue;

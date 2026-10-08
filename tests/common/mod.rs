@@ -88,7 +88,7 @@ pub(crate) fn spawn_mock_proxy(
                 return;
             };
             counter.fetch_add(1, Ordering::SeqCst);
-            // Drain the request before replying to avoid racing unread request data.
+            // Read once to wait for request data before replying; unread bytes may remain.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             if !delay.is_zero() {
@@ -121,7 +121,7 @@ pub(crate) fn spawn_mock_proxy_raw_response(
             return;
         };
         counter.fetch_add(1, Ordering::SeqCst);
-        // Drain the request before replying.
+        // Read once to wait for request data before replying; unread bytes may remain.
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
         let _ = stream.write_all(&raw_response);

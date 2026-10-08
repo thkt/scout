@@ -238,9 +238,8 @@ fn retry_after_cap_includes_exact_boundary() {
 
 /// [T-R004] reqwest 0.13 surfaces a mid-stream body drop as
 /// `is_decode() == true` with an `io::Error` (UnexpectedEof) in the
-/// source chain. is_transient_network must classify this as transient
-/// so the retry loop attempts recovery; left untreated it falls into
-/// GitHubError::Decode → Internal(70), retryable=false.
+/// source chain. This checks that `is_transient_network` recognizes the
+/// transport failure as transient, not how a backend maps error variants.
 #[expect(
     clippy::disallowed_methods,
     reason = "the decode failure is the fixture: the server drops the connection mid-body"
@@ -267,10 +266,9 @@ async fn is_transient_network_recognizes_mid_stream_body_drop() {
     join_server_thread(handle);
 }
 
-/// [T-R005] Counterpart to T-R004. A 2xx with malformed JSON also returns
-/// `is_decode() == true` but the source chain is a serde_json::Error,
-/// not an io::Error. is_transient_network must keep returning false
-/// so the error stays on the Decode → Internal(70) non-retry path.
+/// [T-R005] Unlike T-R004's truncated body, malformed JSON has a serde_json
+/// source rather than an io::Error and must not be considered transient.
+/// This checks `is_transient_network`, not backend error-variant mapping.
 #[expect(
     clippy::disallowed_methods,
     reason = "the decode failure is the fixture, not a body this test wants; the mock serves 15 bytes"

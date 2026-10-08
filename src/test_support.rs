@@ -129,7 +129,7 @@ where
         for _ in 0..accept_count {
             let (mut stream, _) = listener.accept()?;
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            // Drain the request so unread bytes do not race the response.
+            // Read once to wait for request data before replying; unread bytes may remain.
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             if let Err(e) = respond(&mut stream) {

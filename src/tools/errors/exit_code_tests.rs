@@ -24,7 +24,7 @@ fn usage_errors_have_exit_code_64() {
 }
 
 /// [T-ER001b] DataError errors surface with exit 65 (EX_DATAERR per ADR-0002).
-/// Per ADR-0011 priority 2, `*Error::Api { code }` 4xx (other than 401/403/404) now
+/// Per ADR-0011 priority 2, `*Error::Api { code }` 4xx (except 401/403/404/408/429)
 /// routes to DataError instead of folding onto IoError via `internal()`. The three
 /// `Insecure*` variants (one per backend) belong here because a plain-HTTP URL is a
 /// caller-supplied config defect, not a transient runtime failure.

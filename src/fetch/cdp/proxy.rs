@@ -76,12 +76,7 @@ async fn handle_conn<S>(mut stream: S, resolver: &dyn DnsResolver) -> io::Result
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // 1-2. Read and parse the greeting + CONNECT request under a single deadline.
-    //      Every `read_exact` here reads client bytes, so a peer that connects but
-    //      stalls cannot pin the task; on timeout the future drops (freeing the
-    //      borrow of `stream`) and the connection closes with no reply. The dial
-    //      and tunnel that follow have their own bounds and legitimately run long,
-    //      so they stay outside this timeout.
+    // Bound stalled client reads together; dialing and tunneling stay outside this deadline.
     let (target, port) = match timeout(HANDSHAKE_TIMEOUT, read_request(&mut stream)).await {
         Ok(Ok(Some(parsed))) => parsed,
         Ok(Ok(None)) => return Ok(()), // dropped or replied mid-parse
@@ -92,7 +87,6 @@ where
         }
     };
 
-    // 3. Resolve the target to the IPs that will actually be dialed.
     let (host_label, ips): (String, Vec<IpAddr>) = match target {
         Target::Ip(ip) => (ip.to_string(), vec![ip]),
         Target::Domain(domain) => match resolver.lookup(&domain, port).await {
@@ -101,13 +95,11 @@ where
         },
     };
 
-    // 4. Validate fail-closed before any dial.
     if first_blocked_ip("proxy", &host_label, &ips).is_some() {
         return send_reply(&mut stream, REP_NOT_ALLOWED).await;
     }
 
-    // 5. Dial the validated IP and tunnel. Every IP in `ips` already passed the
-    //    private-IP check, so there is no unvalidated happy-eyeballs fallback.
+    // Every candidate passed validation; no unvalidated fallback may be dialed.
     let dial_addr = SocketAddr::new(ips[0], port);
     transport::dial_and_tunnel(&mut stream, dial_addr).await
 }

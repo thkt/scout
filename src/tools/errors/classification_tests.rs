@@ -153,13 +153,8 @@ fn slack_space_message_not_found_classifies_as_not_found() {
     assert_eq!(err.exit_code(), 66, "expected EX_NOINPUT (66)");
 }
 
-/// [T-ER034] every backend answers the ADR-0003 status table the same way
-///
-/// The table was re-derived per backend and had already drifted: a GitHub 408
-/// reported DataError(65, retryable=false) instead of TempFailure, and a Brave
-/// 404 reported DataError instead of NotFound. `Classification::from_http_status`
-/// is now the one copy; this pins each row against the DR so the next divergence
-/// fails here rather than in a caller's exit-code branch.
+/// [T-ER034] GitHub/Brave Api and Fetch Status follow ADR-0003's status table.
+/// Independent expected codes catch backend drift, including 408/404.
 #[test]
 fn http_status_table_is_answered_identically_across_backends() {
     use crate::brave::client::BraveError;
@@ -210,10 +205,8 @@ fn http_status_table_is_answered_identically_across_backends() {
     }
 }
 
-/// [T-ER023] ADR-0011 priority 2 wins over priority 5 for Api 4xx codes.
-/// Prior to the priority rule reflection, `GitHubError::Api { code: 4xx }` and
-/// `BraveError::Api { code: 4xx }` folded onto `internal()` (IoError, exit 74).
-/// Per ADR-0011 priority 2 they must classify as DataError (exit 65 per ADR-0002).
+/// [T-ER023] GitHub/Brave Api 400/422 use ADR-0011 priority 2:
+/// DataError (65), non-retryable, per the shared HTTP status table.
 #[test]
 fn api_4xx_classifies_as_data_error_per_priority_2() {
     let github_400 = ScoutError::from(github::GitHubError::Api {
@@ -235,9 +228,8 @@ fn api_4xx_classifies_as_data_error_per_priority_2() {
     }
 }
 
-/// [T-ER024] ADR-0011 priority 4 (TEMP_FAILURE) takes precedence for `Api { 5xx }`
-/// even though priority 5 (INTERNAL) could match the bare `Api { .. }` arm.
-/// Match-arm ordering enforces the priority ranking.
+/// [T-ER024] GitHub/Brave Api 5xx use the shared HTTP status table:
+/// TempFailure (75), retryable, per ADR-0011 priority 4.
 #[test]
 fn api_5xx_classifies_as_temp_failure_per_priority_4() {
     let github_502 = ScoutError::from(github::GitHubError::Api {
@@ -287,13 +279,9 @@ fn internal_bug_constructor_classifies_as_internal_exit_70() {
     assert!(!err.retryable(), "Internal must not be retryable");
 }
 
-/// [T-ER030] GitHub `Api { code: 401 }` classifies as UsageError(64) with auth hint.
-///
-/// Prior to this fix, 401 fell through the generic `(400..500)` DataError arm
-/// (exit 65) because the GitHubClient surfaces every non-special 4xx as
-/// `GitHubError::Api`. 401 is an auth-class failure — the user must set
-/// `GITHUB_TOKEN` or run `gh auth login` — so ADR-0011 priority 1 (USAGE_ERROR)
-/// is the correct landing, peer to `GitHubError::Forbidden`.
+/// [T-ER030] GitHub Api 401 is UsageError (64) with an auth hint.
+/// The dedicated arm preserves GITHUB_TOKEN / gh auth login guidance;
+/// shared HTTP status mapping supplies the same code without that hint.
 #[test]
 fn github_401_classifies_as_usage_error_with_auth_hint() {
     let err = ScoutError::from(github::GitHubError::Api {

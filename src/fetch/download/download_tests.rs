@@ -286,10 +286,8 @@ async fn too_many_redirects_returns_error() {
     );
 }
 
-/// [T-F056] redirect_cap_exceeded_emits_calibration_warn — `redirect cap
-/// exceeded` warn must carry structured fields (`redirect_chain_length`,
-/// `max_redirects`, `final_url`) so caller logs can sample retry-success
-/// rate for the DataError vs TempFailure flip decision.
+/// [T-F056] Redirect-cap warnings carry chain length, hop cap and final URL
+/// for diagnosing terminal redirect failures.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn redirect_cap_exceeded_emits_calibration_warn() {

@@ -189,7 +189,6 @@ impl Scout {
             &releases,
         );
 
-        // Use the shared degradation-note prefix for Markdown consumers.
         if !degradation.is_empty() {
             markdown.push_str("\n> Note: ");
             markdown.push_str(&degradation.notes().join(". "));
@@ -207,7 +206,6 @@ impl Scout {
         });
 
         info!(
-            // Report the filtered count used by both output formats.
             issues = real_issues.len(),
             pulls = pulls.len(),
             releases = releases.len(),

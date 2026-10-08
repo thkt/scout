@@ -237,8 +237,7 @@ async fn repo_overview_parallel_after_get_repo() {
         repository: Some("owner/repo".into()),
     };
 
-    // Parallel: barrier(4) releases instantly → completes in ms.
-    // Sequential: barrier never reaches 4 → deadlock → timeout.
+    // Sequential requests cannot release the four-party barrier and must time out.
     let result = timeout(Duration::from_secs(5), s.repo_overview(params)).await;
 
     assert!(
@@ -344,7 +343,6 @@ async fn fetch_leaves_github_uninitialized() {
     let Some(server) = try_spawn_mock_server("tools::t_005").await else {
         return;
     };
-    // Serve a minimal HTML page for the fetch command to consume.
     Mock::given(method("GET"))
         .and(path("/page"))
         .respond_with(

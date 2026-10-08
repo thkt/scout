@@ -15,9 +15,9 @@ fn forbidden_is_usage_error_with_scope_hint() {
     );
 }
 
-/// [T-GHC002] Api { code: 401 } classifies as UsageError (priority 1 over 4xx fallback).
-/// Regression guard: a reorder that moves the 4xx arm above 401 would flip this to
-/// DataError(65) without `match` exhaustiveness catching it.
+/// [T-GHC002] Api { code: 401 } preserves UsageError and the GitHub auth hint.
+/// Shared HTTP status mapping also returns UsageError, but bypassing the
+/// dedicated arm would lose the `gh auth login` hint.
 #[test]
 fn api_401_is_usage_error_not_data_error() {
     let c = GitHubError::Api {
@@ -151,12 +151,8 @@ fn api_non_4xx_5xx_is_unknown() {
     assert_eq!(c.kind, ErrorCode::Unknown);
 }
 
-/// [T-GHC011] a transport failure delegates to the shared reqwest classifier
-///
-/// `Network` was the last variant no test reached. Every other backend pins its
-/// transport arm (T-SLNET001-003 for Slack, and the fetch and Brave classify
-/// suites), so GitHub's delegation to `Classification::from_reqwest` rested on
-/// reading the code.
+/// [T-GHC011] A transport failure delegates to the shared reqwest classifier.
+/// Complements T-SLNET001-003 and the fetch/Brave classification suites.
 #[tokio::test]
 async fn network_delegates_to_shared_reqwest_classification() {
     let Some(err) = connection_refused_error("github::classify").await else {
@@ -179,12 +175,8 @@ async fn network_delegates_to_shared_reqwest_classification() {
     );
 }
 
-/// [T-GHC012] the reqwest conversion strips the request URL
-///
-/// `From<reqwest::Error>` calls `without_url` because reqwest's `Display`
-/// appends `for url (…)` with the query string, which is where a token would
-/// sit. The comment said so; nothing checked it, so dropping the call would
-/// have looked like a simplification.
+/// [T-GHC012] The reqwest conversion strips the request URL so Display
+/// cannot expose query-string credentials.
 #[tokio::test]
 async fn reqwest_conversion_drops_the_url() {
     let Some(err) = connection_refused_error("github::url_strip").await else {

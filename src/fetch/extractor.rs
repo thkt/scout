@@ -320,11 +320,8 @@ mod tests {
         assert_eq!(extract_title_from_html(html), None);
     }
 
-    /// [T-FX016] Readability drops chrome and keeps the article body
-    ///
-    /// ADR-0014 delegates active-markup removal to dom_smoothie, and nothing
-    /// asserted that the delegate actually does it — a library upgrade could
-    /// start returning the full page and every test here would still pass.
+    /// [T-FX016] Readability drops chrome and keeps the article body (ADR-0014).
+    /// A library upgrade returning the whole page must fail this contract.
     #[test]
     fn readability_removes_nav_and_footer() {
         let result = extract_article(BLOG_HTML, None);

@@ -97,8 +97,7 @@ const SLACK_USERS_CONCURRENCY: usize = 5;
 
 /// Upper bound on `conversations.replies` pages fetched per thread. At
 /// `SLACK_REPLIES_LIMIT` (200) messages per page this covers threads up to
-/// ~10k replies; the cap stops an unbounded paging loop from re-introducing
-/// the rate-limit exhaustion that claim 3 bounds.
+/// ~10k replies; the cap bounds traffic even if Slack keeps returning cursors.
 const SLACK_MAX_REPLY_PAGES: usize = 50;
 
 /// Upper bound on distinct user IDs resolved via `users.info` per message.
@@ -426,8 +425,6 @@ impl SlackClient {
         let mut seen: HashSet<String> = HashSet::new();
         let mut cursor: Option<String> = None;
         for _ in 0..SLACK_MAX_REPLY_PAGES {
-            // Scope `params` so its borrow of `cursor` ends before the
-            // reassignment below.
             let body: MessagesBody = {
                 let mut params = vec![
                     ("channel", channel),
@@ -514,13 +511,9 @@ impl SlackClient {
             });
         }
 
-        // Authors render on every message, so when distinct IDs exceed the
-        // lookup cap they take priority over mentions: an unresolved author
-        // degrades visible output more than an unresolved mention. The keep set
-        // is fixed to first-occurrence (thread chronological) order so which IDs
-        // resolve is reproducible across runs. Two passes over the
-        // messages — all authors first, then mentions — share one `seen` set, so
-        // a dual-role ID is kept as an author and consumes one slot, not two.
+        // Authors appear on every message, so preserve them before mentions when
+        // capped. First-occurrence order makes selection reproducible; one shared
+        // seen set gives dual-role IDs a single author slot.
         let mut authors: Vec<String> = Vec::new();
         let mut mentions: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -544,8 +537,6 @@ impl SlackClient {
                 "too many distinct user IDs; capping users.info lookups, excess IDs render as raw IDs (authors kept first)"
             );
         }
-        // `take` is a no-op under the cap, so the capped and uncapped cases
-        // collapse to one chained collect: authors first, then mention top-up.
         let user_ids: HashSet<String> = authors
             .into_iter()
             .chain(mentions)

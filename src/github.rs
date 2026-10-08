@@ -221,9 +221,7 @@ impl GitHubClient {
                 let retry_after = self.rate_limit_delay(response.headers());
                 match remaining {
                     Some(r) if r > 0 => {
-                        // Bounded rather than `text()`: the body is read only to
-                        // name the failure, and an error response can be as large
-                        // as a successful one that `read_body_capped` guards.
+                        // Bound diagnostic reads as well as successful payloads.
                         let raw = read_body_snippet(response, MAX_ERROR_BODY_BYTES)
                             .await
                             .unwrap_or_default();
@@ -240,8 +238,6 @@ impl GitHubClient {
                 }
             }
             _ => {
-                // Bounded for the same reason as the 403 arm above: this body is
-                // read only to name the failure.
                 let body = match read_body_snippet(response, MAX_ERROR_BODY_BYTES).await {
                     Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
                     Err(_) => format!("HTTP {status}"),

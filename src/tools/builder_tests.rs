@@ -779,7 +779,7 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
 /// Driving a real timed-out call is what makes the assertion non-tautological:
 /// a `SlackError::Timeout` built in-process would assert on a payload this test
 /// wrote itself. `with_slack_timeout` cuts the wait to 1s from the production
-/// 30s, and the mock delay only has to outlast it.
+/// 60s, and the mock delay only has to outlast it.
 #[tokio::test]
 async fn fetch_slack_timeout_message_states_the_timeout_once() {
     let Some(server) = try_spawn_mock_server("tools::slack_timeout").await else {

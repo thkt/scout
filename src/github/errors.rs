@@ -63,15 +63,15 @@ impl From<reqwest::Error> for GitHubError {
 impl GitHubError {
     /// Map each variant to its ADR-0011 priority-table [`Classification`].
     ///
-    /// Arm order is load-bearing: `Api { code: 401 }` precedes the generic 4xx
-    /// arm so a reorder cannot silently demote 401 from UsageError(64) to
-    /// DataError(65).
+    /// The dedicated `Api { code: 401 }` arm precedes shared HTTP status
+    /// mapping to preserve the GitHub authentication hint. Both paths
+    /// classify 401 as UsageError.
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
             Self::Forbidden(_) => Classification::new(ErrorCode::UsageError)
                 .with_hint("Check that your GITHUB_TOKEN has the required scopes"),
-            // 401 must precede the 4xx arm below to avoid falling into DataError.
+            // Preserve the authentication hint before shared HTTP status mapping.
             Self::Api { code: 401, .. } => Classification::new(ErrorCode::UsageError)
                 .with_hint("Set GITHUB_TOKEN or run `gh auth login` to authenticate"),
             // Priority 2: DATA_ERROR
@@ -103,12 +103,8 @@ impl GitHubError {
                 }),
             // Priority 4 (TIMEOUT or TEMP_FAILURE) or the retreat slot, by error kind
             Self::Network(re) => Classification::from_reqwest(re),
-            // Priority 5: INTERNAL — scout-side bug (unexpected schema) or a
-            // response that overran the byte cap (peer to
-            // BraveError::ResponseTooLarge). Non-retriable: a retry would refetch
-            // the same oversized body.
+            // Priority 5: INTERNAL — schema drift and oversized payloads cannot recover by retry.
             Self::Decode(_) | Self::ResponseTooLarge => Classification::new(ErrorCode::Internal),
-            // Every remaining status follows the ADR-0003 table.
             Self::Api { code, .. } => Classification::from_http_status(*code),
         }
     }

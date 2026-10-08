@@ -176,12 +176,8 @@ mod tests {
         assert_eq!(token.as_ref().map(Redacted::expose), Some("real-token"));
     }
 
-    /// [T-TOK003] with no env token, the subprocess's stdout becomes the token
-    ///
-    /// `gh auth token` prints a trailing newline, which `Redacted::new` trims.
-    /// DR-0018 says these tests catch a change in `gh`'s output contract; until
-    /// the subprocess was injectable they could not reach it at all, because
-    /// whether this path ran depended on the machine having a logged-in `gh`.
+    /// [T-TOK003] With no env token, injected gh stdout becomes the token.
+    /// The trailing newline matches gh output and must be trimmed (DR-0018).
     #[tokio::test]
     async fn resolve_from_env_or_gh_takes_the_subprocess_stdout() {
         let token =
@@ -190,11 +186,8 @@ mod tests {
         assert_eq!(token.as_ref().map(Redacted::expose), Some("gho_abc123"));
     }
 
-    /// [T-TOK004] a non-zero exit yields no token and withholds stderr
-    ///
-    /// The SEC comment on that arm says stderr is dropped because `gh` can echo
-    /// the token back through it. Nothing asserted it, so a later change that
-    /// logged stderr "for diagnosis" would have looked harmless.
+    /// [T-TOK004] A non-zero gh exit yields no token and withholds stderr,
+    /// which may contain secrets.
     #[tracing_test::traced_test]
     #[tokio::test]
     async fn resolve_from_env_or_gh_withholds_stderr_on_failure() {
