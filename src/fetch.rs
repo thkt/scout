@@ -210,20 +210,19 @@ pub(crate) async fn fetch_page(
     )
     .await?;
 
-    // An explicit --js still requests browser output. Otherwise plain text
-    // is source content, not markup, even when it contains HTML-looking bytes.
-    if media_type == MediaType::PlainText && !opts.js {
+    // An explicit --js still requests browser output. Otherwise accepted non-HTML
+    // text is source content, even when it contains HTML-looking bytes.
+    if matches!(media_type, MediaType::PlainText | MediaType::OtherText) && !opts.js {
         return Ok(plain_text_result(
             &html,
             final_url.as_str().to_owned(),
             decode_uncertain,
         ));
     }
-    let html_heuristics = matches!(media_type, MediaType::Unknown | MediaType::Html);
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
         true
-    } else if html_heuristics && is_js_dependent(&html) {
+    } else if is_js_dependent(&html) {
         warn!("JS-dependent page detected, trying JS rendering fallback");
         true
     } else {
@@ -261,7 +260,7 @@ pub(crate) async fn fetch_page(
         extract_article(&html, Some(final_url.as_str()))
     };
 
-    let need_thin_fallback = html_heuristics && !opts.raw && !need_js && is_thin_extract(&article);
+    let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");

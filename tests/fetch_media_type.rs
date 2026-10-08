@@ -4,10 +4,10 @@ mod common;
 
 use std::sync::atomic::Ordering;
 
-/// [T-C049] HTML parsing must not consume plain-text syntax or whitespace;
-/// neither HTML heuristic may launch Chrome for a short plain-text response.
+/// [T-C049] HTML parsing must not consume explicit non-HTML source syntax or whitespace;
+/// neither HTML heuristic may launch Chrome for these short responses.
 #[test]
-fn plain_text_survives_normal_raw_markdown_and_json() {
+fn non_html_source_survives_normal_raw_markdown_and_json() {
     for (content_type, body) in [
         (
             "text/plain; charset=utf-8",
@@ -16,6 +16,22 @@ fn plain_text_survives_normal_raw_markdown_and_json() {
         (
             " TEXT/PLAIN ; charset=UTF-8",
             "pub fn id<T>(x: T) -> T { x }\nLiteral: <secret>preserve me</secret> &amp; &\n<script>literal</script>\nTitle\n=====\n# comment\n\n",
+        ),
+        (
+            "application/xml; charset=utf-8",
+            "<catalog>\n<item id=\"42\">Primary <symbol>X</symbol> &amp; &#65;</item>\n</catalog>\n\n",
+        ),
+        (
+            "text/markdown; charset=utf-8",
+            "# Heading\n\nLiteral: <widget key=\"value\"> &amp; &#65;\n```rust\nlet x = \"<value>\";\n```\n\n",
+        ),
+        (
+            "text/xml",
+            "<p id=\"source\">Visible &amp; readable</p>\n<script>literal</script>\n",
+        ),
+        (
+            "APPLICATION/RSS+XML; charset=UTF-8",
+            "<rss><channel><title>Source</title><item id=\"42\" /></channel></rss>\n",
         ),
     ] {
         for raw in [false, true] {
@@ -38,10 +54,9 @@ fn plain_text_survives_normal_raw_markdown_and_json() {
     }
 }
 
-/// [T-C050] Retain HTML conversion while suppressing automatic HTML JS
-/// heuristics for accepted explicit non-HTML media types.
+/// [T-C050] HTML and XHTML still decode entities and suppress active markup.
 #[test]
-fn html_still_converts_and_non_html_does_not_auto_render() {
+fn html_and_xhtml_still_convert() {
     for content_type in ["text/html", "application/xhtml+xml"] {
         let body = format!(
             "<p>Visible &amp; readable {}</p><script>hidden</script>",
@@ -54,35 +69,19 @@ fn html_still_converts_and_non_html_does_not_auto_render() {
         assert!(!markdown.contains("<p>"), "{markdown}");
         assert!(!markdown.contains("hidden"), "{markdown}");
     }
-    for content_type in ["text/xml", "application/rss+xml"] {
-        for body in [
-            "<p>Visible &amp; readable</p>",
-            "<p>Visible &amp; readable</p><script>hidden</script>",
-        ] {
-            for raw in [false, true] {
-                let Some((markdown, stderr)) = fetch(content_type, body, raw, false) else {
-                    return;
-                };
-                assert!(markdown.contains("Visible & readable"), "{markdown}");
-                assert!(!stderr.contains("trying JS rendering"), "{stderr}");
-                assert!(
-                    !stderr.contains("extraction yielded too little content"),
-                    "{stderr}"
-                );
-            }
-        }
-    }
 }
 
-/// [T-C051] Bypassing HTML conversion must still neutralize YAML boundaries.
+/// [T-C051] Non-HTML source output must still neutralize YAML boundaries.
 #[test]
-fn plain_text_keeps_yaml_output_defense() {
-    for json in [false, true] {
-        let Some((markdown, _)) = fetch("text/plain", "before\n---\n...\nafter\n", false, json)
-        else {
-            return;
-        };
-        assert_eq!(markdown, "---\n---\n\nbefore\n***\n***\nafter\n");
+fn non_html_source_keeps_yaml_output_defense() {
+    for content_type in ["text/plain", "text/markdown", "application/xml"] {
+        for json in [false, true] {
+            let Some((markdown, _)) = fetch(content_type, "before\n---\n...\nafter\n", false, json)
+            else {
+                return;
+            };
+            assert_eq!(markdown, "---\n---\n\nbefore\n***\n***\nafter\n");
+        }
     }
 }
 
