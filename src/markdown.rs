@@ -1,11 +1,9 @@
 use std::borrow::Cow;
 
-/// Escape characters that break Markdown link syntax, folding newlines to
-/// spaces so an untrusted value cannot inject block Markdown.
-///
-/// `|` is absent: a URL inside `[](…)` has no table column to break out of.
-/// Text that is not a link target wants [`escape_md_inline`], which does escape
-/// it, so this stays private and reachable only through [`md_link`].
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+
+/// Escape link delimiters and fold CR/LF to prevent block injection.
+/// `|` is safe in link destinations; visible text uses [`escape_md_inline`].
 fn escape_md_link(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -21,17 +19,11 @@ fn escape_md_link(s: &str) -> String {
     out
 }
 
-/// Render a Markdown link `[text](url)` only when `url` carries an http/https
-/// scheme, emitting anything else as inert `text (url)`.
-///
-/// The scheme check is an allowlist rather than a `javascript:`/`data:` denylist,
-/// so an obfuscated or whitespace-prefixed scheme fails to match and lands in
-/// the inert branch instead of slipping past a pattern nobody listed.
+/// Allow only http/https links without ASCII whitespace or controls;
+/// render other URLs as escaped, inert text.
 pub(crate) fn md_link(text: &str, url: &str) -> String {
     let lower = url.to_ascii_lowercase();
     let scheme_ok = lower.starts_with("http://") || lower.starts_with("https://");
-    // A real URL carries no ASCII whitespace or control chars, and a raw newline
-    // here would break out of `[](…)`.
     let clean = !url
         .bytes()
         .any(|b| b.is_ascii_whitespace() || b.is_ascii_control());
@@ -42,8 +34,7 @@ pub(crate) fn md_link(text: &str, url: &str) -> String {
     }
 }
 
-/// Sanitize untrusted input for embedding in Markdown table cells and inline text.
-/// Prevents column breaks (`|`), row breaks (newlines), and link injection (`[]()`).
+/// Prevent table column/row breaks and link injection in untrusted inline text.
 pub(crate) fn escape_md_inline(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -59,10 +50,7 @@ pub(crate) fn escape_md_inline(s: &str) -> String {
     out
 }
 
-/// Replace newlines, which would break heading structure, with spaces.
-///
-/// Returns the input borrowed when it carries no newline. Headings are titles
-/// and URLs, so that is the common path and it allocates nothing.
+/// Fold CR/LF to spaces; borrow input that needs no change.
 pub(crate) fn sanitize_heading(s: &str) -> Cow<'_, str> {
     if !s.contains(['\n', '\r']) {
         return Cow::Borrowed(s);
@@ -72,24 +60,15 @@ pub(crate) fn sanitize_heading(s: &str) -> Cow<'_, str> {
         .collect()
 }
 
-/// The note appended wherever output is cut at a byte cap.
-///
-/// Callers that cannot use [`truncate_with_note`] — because they transform the
-/// text between the cut and the note — still emit this exact wording, so the
-/// two halves cannot drift into two different messages.
+/// Shared byte-count note for callers that transform text after the cut.
 pub(crate) fn truncation_note(shown: usize, total: usize) -> String {
     format!("\n\n(truncated: showing {shown} / {total} bytes)")
 }
 
-/// Truncate a string at a line boundary and append a byte-count note.
+/// Cut at a UTF-8/line boundary and append a byte-count note.
 ///
-/// The cut lands on a line boundary, not the byte cap: cutting mid-line can
-/// leave a partial line that reads as syntax it was not, such as `-------`
-/// becoming a bare `---` that the appended note then terminates. Falling back
-/// to the byte cap happens only when no newline precedes it, and there the
-/// line starts at offset 0, so no partial line can form.
-///
-/// Returns the input borrowed if it fits within `max_bytes`.
+/// Prefer a complete line so cutting `-------` cannot manufacture `---`.
+/// Use the byte boundary only if no preceding newline exists; borrow uncut input.
 pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
     if s.len() <= max_bytes {
         return Cow::Borrowed(s);
@@ -102,14 +81,9 @@ pub(crate) fn truncate_with_note(s: &str, max_bytes: usize) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Number of leading lines occupied by a `---`-delimited frontmatter block, or
-/// 0 when the input does not open with one.
-///
-/// scout's own fetch output carries this block (ADR-0014), and its lines are not
-/// content: `author: "Jane"` above the closing `---` reads as a setext h2 by the
-/// CommonMark rule, which would rewrite the key as a heading and consume the
-/// delimiter that closes the block. An unterminated opening `---` yields 0, so a
-/// body that merely starts with a thematic break is still shifted.
+/// Count leading `---`-delimited frontmatter lines; return 0 if unclosed.
+/// Skipping this block prevents a closing `---` from becoming the setext
+/// underline of a metadata field (DR-0014).
 fn frontmatter_len(lines: &[&str]) -> usize {
     if lines.first() != Some(&"---") {
         return 0;
@@ -120,12 +94,8 @@ fn frontmatter_len(lines: &[&str]) -> usize {
         .map_or(0, |p| p + 2)
 }
 
-/// Return the setext heading level if `text` followed by `underline` forms one
-/// (CommonMark §4.3): `=` underlines an h1, `-` an h2.
-///
-/// `-` is also a thematic break and a list bullet, and what separates them is
-/// the line the underline sits under: a setext underline follows a paragraph
-/// line, a thematic break follows a blank one. Hence the check on `text`.
+/// Recognize setext h1/h2 underlines after paragraph-like text (CommonMark §4.3).
+/// A blank predecessor makes dashes a thematic break instead.
 fn setext_heading_level(text: &str, underline: &str) -> Option<usize> {
     let text = text.trim();
     if text.is_empty() || text.starts_with(['#', '-', '*', '+', '>', '|', '=']) {
@@ -135,8 +105,6 @@ fn setext_heading_level(text: &str, underline: &str) -> Option<usize> {
         return None;
     }
     let underline = underline.trim_end();
-    // Column 0 only, matching `atx_heading_level`'s treatment of the marker: an
-    // indented underline is a code block or list continuation, not a heading.
     let mut chars = underline.chars();
     let first = chars.next()?;
     if !matches!(first, '=' | '-') || !chars.all(|c| c == first) {
@@ -173,15 +141,9 @@ pub(crate) fn fence_delimiter(content: &str) -> String {
     "`".repeat(max_run.max(2) + 1)
 }
 
-/// Advance `fence` across one line and report whether that line is
-/// fence-protected: inside a fenced code block, or the delimiter line itself.
-///
-/// A fence closes only at a line whose run of the same character is at least
-/// as long as the one that opened it (CommonMark §4.5), so a 4-backtick fence
-/// stays open through a nested 3-backtick line.
-///
-/// Callers must not pre-trim. The trim happens here, and an indented delimiter
-/// would otherwise arrive with the caller's indent handling already applied.
+/// Track same-character fence runs; shorter runs cannot close a wider opener.
+/// Return true for protected content and delimiter lines. This conservative
+/// tracker also accepts fence-looking inline code; YAML defense relies on it.
 pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool {
     let marker = fence_marker(line.trim_start());
     match (*fence, marker) {
@@ -194,8 +156,72 @@ pub(crate) fn track_fence(fence: &mut Option<(char, usize)>, line: &str) -> bool
     fence.is_some() || marker.is_some()
 }
 
-/// Return the fence character and run length if `trimmed` opens or closes a
-/// fenced code block (CommonMark §4.5: a run of 3+ backticks or tildes).
+/// Find a dangling top-level fence at a report composition boundary.
+/// Parse block context before examining delimiters: fence-looking lines in
+/// HTML, lists, blockquotes or indented code must not manufacture a new block.
+/// YAML defense continues to use the separate conservative `track_fence`.
+pub(crate) fn dangling_report_fence(body: &str) -> Option<(usize, char, usize)> {
+    let parsed = report_parser_input(body);
+    let mut depth = 0;
+    for (event, range) in Parser::new(&parsed).into_offset_iter() {
+        match event {
+            Event::Start(tag) => {
+                if depth == 0 && matches!(tag, Tag::CodeBlock(CodeBlockKind::Fenced(_))) {
+                    let block = &parsed[range.clone()];
+                    let (marker, width) = fence_marker(block)?;
+                    let closed = block.split_once('\n').is_some_and(|(_, rest)| {
+                        rest.lines().last().is_some_and(|line| {
+                            let indent = line.bytes().take_while(|&b| b == b' ').count();
+                            let trimmed = &line[indent..];
+                            indent <= 3
+                                && fence_marker(trimmed).is_some_and(|(c, len)| {
+                                    c == marker
+                                        && len >= width
+                                        && trimmed[len..].trim_matches([' ', '\t', '\r']).is_empty()
+                                })
+                        })
+                    });
+                    if !closed {
+                        let line_start = parsed[..range.start].rfind('\n').map_or(0, |p| p + 1);
+                        return Some((line_start, marker, width));
+                    }
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// pulldown-cmark 0.13.4 scans block lines by LF and closing whitespace by
+/// spaces. Normalize lone CR and trailing tabs only for parsing. Replacing
+/// these ASCII bytes preserves source offsets and leaves emitted text intact.
+fn report_parser_input(body: &str) -> Cow<'_, str> {
+    if !body.contains(['\r', '\t']) {
+        return Cow::Borrowed(body);
+    }
+    let mut bytes = body.as_bytes().to_vec();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n') {
+            bytes[i] = b'\n';
+        }
+    }
+    let mut trailing = true;
+    for byte in bytes.iter_mut().rev() {
+        match *byte {
+            b'\n' | b'\r' => trailing = true,
+            b'\t' if trailing => *byte = b' ',
+            b' ' => {}
+            _ => trailing = false,
+        }
+    }
+    Cow::Owned(String::from_utf8(bytes).expect("ASCII replacements preserve UTF-8"))
+}
+
+/// Return the character and width of a leading 3+ backtick or tilde run.
+/// This lexical check does not validate indentation or info strings.
 fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
     let c = trimmed.chars().next()?;
     if c != '`' && c != '~' {
@@ -205,23 +231,8 @@ fn fence_marker(trimmed: &str) -> Option<(char, usize)> {
     (run >= 3).then_some((c, run))
 }
 
-/// Shift all Markdown heading levels deeper by `levels` (e.g., `# Foo` → `#### Foo`
-/// with `levels = 3`).  Clamps output at h6 (CommonMark maximum).
-///
-/// Only valid ATX headings (CommonMark §4.2: 1–6 `#` + space/tab/EOL) are
-/// shifted; lines like `#include` or `#123` are left unchanged.
-///
-/// A setext heading (`Title` over `=====`) is rewritten to its ATX equivalent
-/// before being shifted, because past h2 there is no setext form to shift into.
-/// The underline line is consumed. Some READMEs are written almost entirely in
-/// setext, so skipping the form would drop a whole document's structure a level
-/// below the `## README` it sits under.
-///
-/// Skips lines inside fenced code blocks so that comment lines like `# TODO`
-/// are not affected.  The fence tracks the opening marker's character and
-/// length (CommonMark §4.5): a fence only closes at a line whose run of the
-/// same character is at least as long as the one that opened it, so a
-/// 4-backtick fence stays open through a nested 3-backtick line.
+/// Deepen ATX and setext headings, clamping at h6.
+/// Convert setext to ATX; preserve frontmatter and conservative fence content.
 pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
     if levels == 0 {
         return markdown.to_owned();
@@ -282,13 +293,46 @@ pub(crate) fn shift_headings(markdown: &str, levels: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::yaml::{ReportBody, finish_report_body};
+
+    /// [T-MD038] Literal completion controls: widths, decoy closes, indentation,
+    /// invalid info, CR/CRLF and trailing tabs.
+    #[test]
+    fn report_body_preserves_body_and_adds_only_a_valid_close() {
+        for (body, expected) in [
+            ("plain", "plain"),
+            ("```", "```\n```"),
+            ("```\n", "```\n```"),
+            ("~~~", "~~~\n~~~"),
+            ("~~~\n", "~~~\n~~~"),
+            ("```rust\ncode", "```rust\ncode\n```"),
+            ("~~~rust\ncode\n", "~~~rust\ncode\n~~~"),
+            ("````\n```\ncode", "````\n```\ncode\n````"),
+            ("~~~\n```\ncode", "~~~\n```\ncode\n~~~"),
+            ("```\n```rust", "```\n```rust\n```"),
+            ("```\n    ```", "```\n    ```\n```"),
+            ("    ```\ncode", "    ```\ncode"),
+            ("\t~~~\ncode", "\t~~~\ncode"),
+            ("\u{a0}```\ncode", "\u{a0}```\ncode"),
+            ("```bad`info\ncode", "```bad`info\ncode"),
+            ("   ~~~~\ncode\n ~~~~~\t", "   ~~~~\ncode\n ~~~~~\t"),
+            ("```\r\ncode\r\n```\r\n", "```\r\ncode\r\n```\r\n"),
+            ("```\rcode\r```", "```\rcode\r```"),
+            ("```\ncode\n```\t\nprose", "```\ncode\n```\t\nprose"),
+        ] {
+            assert_eq!(
+                finish_report_body(body, ReportBody::Fetched),
+                expected,
+                "body: {body:?}"
+            );
+        }
+    }
 
     /// [T-MD001] escape_md_link brackets and parens
     #[test]
     fn escapes_special_chars() {
         assert_eq!(escape_md_link("normal text"), "normal text");
         assert_eq!(escape_md_link("a[b]c(d)e"), r"a\[b\]c\(d\)e");
-        // Left as-is, the newline would open a new Markdown line inside the link.
         assert_eq!(escape_md_link("a\n## h"), "a ## h");
     }
 
@@ -375,11 +419,7 @@ mod tests {
         );
     }
 
-    /// [T-MD021] setext headings are rewritten to ATX and shifted
-    ///
-    /// `=` underlines an h1 and `-` an h2 (CommonMark §4.3). Past h2 there is no
-    /// setext form to shift into, so both become ATX and the underline is
-    /// consumed.
+    /// [T-MD021] Setext h1/h2 become ATX h3/h4 without underline lines.
     #[test]
     fn shift_headings_converts_setext_to_atx() {
         let input = "Title\n=====\n\nBody\n\nSection\n-------\n\nmore";
@@ -390,11 +430,7 @@ mod tests {
         );
     }
 
-    /// [T-MD022] a `---` that follows a blank line stays a thematic break
-    ///
-    /// The rule separating a setext underline from a thematic break is what sits
-    /// above it. Without this case, widening the underline test would silently
-    /// turn every horizontal rule in a README into a heading.
+    /// [T-MD022] Dashes after a blank line remain a thematic break.
     #[test]
     fn shift_headings_leaves_thematic_break_alone() {
         let input = "Para\n\n---\n\nNext";
@@ -436,12 +472,7 @@ mod tests {
         assert_eq!(shift_headings(input, 5), "###### Deep");
     }
 
-    /// [T-MD026] a leading frontmatter block survives the shift intact
-    ///
-    /// Regression: when setext support landed, the closing `---` read as an
-    /// underline for the `author:` line above it, so the key became a heading and
-    /// the delimiter that closes the block disappeared. `tests/output_injection.rs`
-    /// caught it end-to-end; this pins the same thing at the function boundary.
+    /// [T-MD026] Preserve frontmatter delimiters and fields while shifting the body.
     #[test]
     fn shift_headings_leaves_frontmatter_intact() {
         let input = "---\ntitle: \"T\"\nauthor: \"Jane\"\n---\n\nBody\n\n# Heading";
@@ -452,10 +483,7 @@ mod tests {
         );
     }
 
-    /// [T-MD027] an unterminated leading `---` is body content, not frontmatter
-    ///
-    /// Without the closing delimiter there is no block to protect, so the usual
-    /// rules apply and the rest of the document still shifts.
+    /// [T-MD027] An unclosed leading `---` does not prevent body heading shifts.
     #[test]
     fn shift_headings_unterminated_frontmatter_still_shifts() {
         let input = "---\n\n# Heading";
@@ -500,7 +528,6 @@ mod tests {
             md_link("x", "JaVaScRiPt:alert(1)"),
             r"x (JaVaScRiPt:alert\(1\))"
         );
-        // Leading whitespace is not http/https -> inert (whitespace newlines collapsed).
         assert_eq!(md_link("x", " javascript:1"), "x ( javascript:1)");
     }
 
@@ -535,13 +562,7 @@ mod tests {
         assert!(result.contains("(truncated: showing 100 / 200 bytes)"));
     }
 
-    /// [T-MD020] A cap that lands mid-character cuts at the boundary below it
-    ///
-    /// Every other truncation test feeds ASCII, where every byte index is a char
-    /// boundary — so none of them fails if `floor_char_boundary` is dropped for a
-    /// plain `&s[..max_bytes]`, which panics on the first multi-byte page scout
-    /// fetches. 100 falls inside the 34th 3-byte character, so the cut must land
-    /// on 99.
+    /// [T-MD020] Byte 100 lies inside a three-byte character; retain 99 bytes.
     #[test]
     fn truncate_with_note_cuts_on_a_char_boundary() {
         let input = "あ".repeat(50);
@@ -552,15 +573,11 @@ mod tests {
         );
     }
 
-    /// [T-MD036]
-    ///
-    /// Byte 100 of a 120-byte input built from 20 six-byte lines falls inside the
-    /// 17th line. Backing up to the preceding newline at byte 95 keeps 96 bytes,
-    /// which is 16 whole lines.
+    /// [T-MD036] Keep 16 complete six-byte lines under a 100-byte cap.
     #[test]
     fn truncate_with_note_with_newlines_cuts_at_line_boundary_leaving_no_partial_line() {
-        let line = "01234\n"; // 6 bytes per line
-        let input = line.repeat(20); // 120 bytes, 20 complete lines
+        let line = "01234\n";
+        let input = line.repeat(20);
         let result = truncate_with_note(&input, 100);
         assert!(
             result.contains("showing 96 / 120 bytes"),
@@ -574,16 +591,11 @@ mod tests {
         );
     }
 
-    /// [T-MD037]
-    ///
-    /// A 7-dash line follows 15 six-byte lines, and the cut lands at byte 93.
-    /// A plain `floor_char_boundary(93)` stops three bytes into the dash line,
-    /// leaving `---` alone on its own line, which Markdown reads as a thematic
-    /// break the source never had. Backing up to byte 90 drops the dash line whole.
+    /// [T-MD037] Drop the dash line rather than cut it into a bare `---`.
     #[test]
     fn truncate_with_note_cutting_mid_dash_run_does_not_leave_a_lone_thematic_break() {
-        let lines = "01234\n".repeat(15); // 90 bytes, 15 complete lines
-        let input = format!("{lines}-------\n"); // + a 7-dash line, 98 bytes total
+        let lines = "01234\n".repeat(15);
+        let input = format!("{lines}-------\n");
         let result = truncate_with_note(&input, 93);
         let content = result.split("\n\n(truncated").next().unwrap();
         assert!(
@@ -649,12 +661,7 @@ mod tests {
         assert_eq!(fence_marker("~~~"), Some(('~', 3)));
     }
 
-    /// [T-MD035]
-    ///
-    /// `fence_marker` takes an already-trimmed line, so asserting on it
-    /// directly would only restate T-MD032. `track_fence` owns the trim, so
-    /// the indent has to be observed through a caller: a `#` line between two
-    /// indented fences must keep its level, since it sits inside a code block.
+    /// [T-MD035] Observe conservative indented-fence tracking through heading shifts.
     #[test]
     fn fence_marker_recognizes_four_space_indented_fence_line() {
         let shifted = shift_headings("    ```\n# not a heading\n    ```\n# heading\n", 1);

@@ -62,6 +62,7 @@ httpdate = "1"
 chromiumoxide = { version = "0.9", optional = true }
 nix = { version = "0.31", features = ["signal"], optional = true }
 tempfile = { version = "3", optional = true }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [features]
 js-rendering = ["chromiumoxide", "nix", "tempfile"]
