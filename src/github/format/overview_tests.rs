@@ -42,7 +42,7 @@ fn format_overview_minimal() {
     assert!(!output.contains("## Recent Issues"));
 }
 
-/// [T-GF007] format_overview renders language, license, topics, and description rows
+/// [T-GF007] Language, license, topics and description appear in the output.
 #[test]
 fn format_overview_with_metadata() {
     let repo = sample_repo();
@@ -259,7 +259,7 @@ fn parse_shown_bytes(output: &str) -> usize {
         .expect("shown bytes should be a number")
 }
 
-/// [T-GF020] README passes through intact when below MAX_README_BYTES
+/// [T-GF020] A below-cap README emits no truncation note.
 #[test]
 fn readme_no_truncation_under_limit() {
     let repo = sample_repo();
@@ -270,7 +270,7 @@ fn readme_no_truncation_under_limit() {
     assert!(!output.contains("truncated"));
 }
 
-/// [T-GF021] README passes through intact at exactly MAX_README_BYTES
+/// [T-GF021] A README at the byte cap emits no truncation note.
 #[test]
 fn readme_no_truncation_at_exact_limit() {
     let repo = sample_repo();
@@ -356,7 +356,7 @@ fn readme_truncation_multibyte_with_newlines() {
     );
 }
 
-/// [T-GF036] README truncation note is appended after heading shift so it is not rewritten
+/// [T-GF036] The truncation note has no h2/h3 prefix.
 #[test]
 fn readme_truncation_note_not_heading_shifted() {
     let repo = sample_repo();
@@ -429,8 +429,8 @@ fn readme_closed_fence_dashes_stay_verbatim() {
     );
 }
 
-/// [T-GF048] A truncated README must end before every following overview section.
-/// Checks literal closing/section boundaries without reusing the fence scanner.
+/// [T-GF048] Literal boundaries after cut fences; normal container blocks
+/// must not gain a fence. Keep the conservative whole-body YAML fallback.
 #[test]
 fn truncated_fences_keep_overview_sections_independent() {
     let issues = [IssueInfo {
@@ -455,7 +455,7 @@ fn truncated_fences_keep_overview_sections_independent() {
         published_at: None,
         prerelease: false,
     }];
-    // Closed container blocks must not cause a synthetic top-level opener.
+    // Normal HTML/container fences must not trigger completion.
     for prefix in [
         "<!--\n```\n-->\n",
         "- ```rust\n  let x = 1;\n  ```\n",
@@ -474,7 +474,6 @@ fn truncated_fences_keep_overview_sections_independent() {
                 .split("\n\n## Recent Issues\n")
                 .next()
                 .unwrap();
-            // Literal section boundary: ordinary prose or the note, never a new fence.
             if padding.is_empty() {
                 assert_eq!(
                     retained.trim_end(),
@@ -491,8 +490,7 @@ fn truncated_fences_keep_overview_sections_independent() {
             assert!(output.contains("\n\n## Recent Releases\n"));
         }
     }
-    // The conservative whole-body fallback must survive composition even
-    // when the Markdown parser correctly rejects the last inline-code run.
+    // Invalid Markdown fence syntax still triggers conservative YAML defense.
     let readme = "```\n---\n```\n\n```` ``` ```` before marker\n... tail";
     let output = format_overview(&sample_repo(), Some(readme), &issues, &pulls, &releases);
     assert!(output.contains("```\n***\n```"));

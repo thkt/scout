@@ -3,24 +3,18 @@ use super::*;
 /// [T-F007]
 #[test]
 fn accepts_textual_content_types() {
-    for ct in [
-        "text/html; charset=utf-8",
-        "text/plain",
-        "application/xhtml+xml",
-        "application/xml",
-        "; charset=utf-8", // edge: empty mime before semicolon → permissive
+    for (ct, expected) in [
+        ("text/html; charset=utf-8", MediaType::Html),
+        ("text/plain", MediaType::PlainText),
+        ("application/xhtml+xml", MediaType::Html),
+        ("application/xml", MediaType::OtherText),
+        ("; charset=utf-8", MediaType::Unknown),
     ] {
-        assert!(check_content_type(ct).is_ok(), "should accept: {ct}");
+        assert_eq!(check_content_type(ct).unwrap(), expected, "{ct}");
     }
 }
 
-/// [T-F079] A feed is accepted under its registered type, not only under the
-/// generic one.
-///
-/// The same document reaches scout labelled `application/xml`, `text/xml`, or
-/// `application/rss+xml` depending on the server. A list of names accepts the
-/// first two and rejects the third, letting the server's choice of label decide
-/// whether the fetch works.
+/// [T-F079] Registered feed types must work as well as generic XML labels.
 #[test]
 fn accepts_the_xml_structured_syntax_suffix() {
     for ct in [
@@ -32,11 +26,7 @@ fn accepts_the_xml_structured_syntax_suffix() {
     }
 }
 
-/// [T-F080] The `+xml` suffix is honoured under `application/` alone.
-///
-/// An SVG is an image whose serialization happens to be XML; converting one to
-/// Markdown yields the text of its `<title>` and `<text>` nodes, which reads as
-/// a successful fetch of an almost empty page.
+/// [T-F080] Reject image serialization even when its suffix is `+xml`.
 #[test]
 fn rejects_the_xml_suffix_outside_application() {
     assert!(matches!(

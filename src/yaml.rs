@@ -26,8 +26,6 @@ pub(crate) fn neutralize_yaml_markers(body: &str) -> String {
     out
 }
 
-/// The rewrite rule shared by [`neutralize_yaml_markers`] and
-/// [`neutralize_yaml_markers_outside_fences`].
 fn append_marker_rewritten(out: &mut String, line: &str) {
     match yaml_marker_rest(line) {
         Some(rest) if rest.trim_matches([' ', '\t', '\r']).is_empty() => out.push_str("***"),
@@ -39,17 +37,9 @@ fn append_marker_rewritten(out: &mut String, line: &str) {
     }
 }
 
-/// Apply [`neutralize_yaml_markers`]'s rewrite rule only outside a fenced code
-/// block, so a marker quoted inside a closed fence stays as written.
-///
-/// A body ending with a fence still open falls back to the whole-body rewrite
-/// rather than keeping the partial result: an unclosed fence is more likely a
-/// stray backtick run than a real code block, and the partial result would
-/// leave every line after it unprotected.
-///
-/// `src/slack/format.rs` does not use this variant. Slack message text reaches
-/// the leaf nearly raw, so one attacker-authored unclosed fence would turn off
-/// neutralization for everything after it.
+/// Preserve markers inside closed conservative fences; rewrite the whole body
+/// if a fence remains open so its tail cannot bypass YAML defense.
+/// Slack uses unconditional rewriting because its input is nearly raw.
 pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fence: Option<(char, usize)> = None;
@@ -69,17 +59,8 @@ pub(crate) fn neutralize_yaml_markers_outside_fences(body: &str) -> String {
     out
 }
 
-/// Re-neutralize the tail of already-truncated output that a byte-cap cut left
-/// with a fenced code block open.
-///
-/// [`neutralize_yaml_markers_outside_fences`] leaves a marker verbatim when a
-/// fence closes around it. A byte cap applied later can cut past that marker
-/// but before the closing delimiter, exposing it at column 0.
-///
-/// The scan runs forward rather than backward: read from the end, a line that
-/// looks like a fence delimiter could be the dangling block's own opening line
-/// or an inner line resembling one, and only a forward pass carries the
-/// open/close state that separates the two.
+/// Rewrite the dangling tail exposed by truncation of fence-neutralized text.
+/// A forward scan distinguishes opening fences from inner delimiter-like lines.
 pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
     let dangling_start = conservative_dangling_start(truncated);
     match dangling_start {
@@ -93,7 +74,7 @@ pub(crate) fn reneutralize_dangling_fence(truncated: &str) -> Cow<'_, str> {
     }
 }
 
-/// Locate the conservative dangling tail without rewriting it.
+/// Locate a dangling tail using the YAML defense's conservative fence tracker.
 fn conservative_dangling_start(truncated: &str) -> Option<usize> {
     let mut fence: Option<(char, usize)> = None;
     let mut dangling_start: Option<usize> = None;
@@ -162,15 +143,15 @@ pub(crate) fn finish_report_body(body: &str, kind: ReportBody) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// [`truncate_with_note`] followed by [`reneutralize_dangling_fence`].
-///
-/// Standalone fetch truncation uses this pair. Composed reports instead use
-/// [`finish_report_body`] after truncation to combine the two tail defenses
-/// before adding a closing delimiter.
+/// Truncate already fence-neutralized output; a cut must also re-neutralize
+/// any newly dangling fence.
 pub(crate) fn truncate_and_reneutralize(s: &str, max_bytes: usize) -> Cow<'_, str> {
-    let truncated = truncate_with_note(s, max_bytes);
+    let truncated = match truncate_with_note(s, max_bytes) {
+        unchanged @ Cow::Borrowed(_) => return unchanged,
+        Cow::Owned(truncated) => truncated,
+    };
     match reneutralize_dangling_fence(&truncated) {
-        Cow::Borrowed(_) => truncated,
+        Cow::Borrowed(_) => Cow::Owned(truncated),
         Cow::Owned(rewritten) => Cow::Owned(rewritten),
     }
 }
@@ -194,16 +175,9 @@ fn yaml_marker_rest(line: &str) -> Option<&str> {
 /// room inside the page budget.
 const MAX_FIELD_BYTES: usize = MAX_PAGE_BYTES / 10;
 
-/// Truncate `value` to [`MAX_FIELD_BYTES`] before it reaches [`escape_yaml`].
-///
-/// Mirrors `truncate_with_note`'s (`src/markdown.rs`) use of
-/// [`str::floor_char_boundary`] to land the cut on a char boundary, but
-/// truncates the raw value rather than an escaped one: cutting an
-/// already-escaped value can split a doubled `\\\\` in half, leaving a lone
-/// trailing `\` that escapes the closing quote and never lets the scalar
-/// close. A truncated value gets an ellipsis appended as the sole signal —
-/// not `truncate_with_note`'s byte-count note, which does not fit inside a
-/// single-line `key: "value"` scalar.
+/// Truncate raw values at a UTF-8 boundary before escaping: cutting escaped
+/// backslashes could leave one that escapes the closing YAML quote. Use a
+/// compact ellipsis rather than a multiline truncation note inside the scalar.
 fn truncate_field(value: &str) -> Cow<'_, str> {
     if value.len() <= MAX_FIELD_BYTES {
         return Cow::Borrowed(value);
@@ -214,24 +188,15 @@ fn truncate_field(value: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Write one frontmatter key whose value is a string.
-///
-/// The double quotes and [`escape_yaml`] are one contract, not two steps:
-/// `escape_yaml`'s escape set is exactly what a double-quoted YAML scalar needs,
-/// so emitting the quotes without the escape (or the reverse) is how a value
-/// containing `"` or a newline breaks out of the block. Keeping them in one
-/// place means a call site cannot do half of it.
+/// Write an escaped, double-quoted scalar atomically so callers cannot omit
+/// half of the YAML breakout defense.
 pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
     let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(&truncate_field(value)));
 }
 
-/// Escape a string for use inside a double-quoted YAML scalar.
-///
-/// The value-side half of [`write_yaml_str`]'s contract, so a caller writing a
-/// frontmatter field reaches for that function instead.
+/// Escape a double-quoted scalar; callers use [`write_yaml_str`] to add the key
+/// and quotes together.
 fn escape_yaml(s: &str) -> Cow<'_, str> {
-    // A plain title or date carries no escapable char, so the loop below would
-    // allocate a copy identical to its input.
     if !s
         .bytes()
         .any(|b| matches!(b, b'\\' | b'"' | b'\n' | b'\r' | b'\t' | b'\0'))
@@ -257,6 +222,15 @@ fn escape_yaml(s: &str) -> Cow<'_, str> {
 mod tests {
     use super::*;
 
+    /// [T-FC105] An unchanged, already-neutralized dangling fence needs no copy.
+    #[test]
+    fn truncation_borrows_uncut_neutralized_body() {
+        let body = "---\n---\n\n```yaml\n***\nbody\n\n";
+        let output = truncate_and_reneutralize(body, body.len());
+        assert!(matches!(output, Cow::Borrowed(_)));
+        assert_eq!(output, body);
+    }
+
     /// [T-FC003]
     #[test]
     fn escapes_yaml_special_chars() {
@@ -271,7 +245,6 @@ mod tests {
     /// [T-FC004]
     #[test]
     fn escapes_combined_special_chars() {
-        // Backslash-first ordering prevents double-escape: \" must not become \\\"
         assert_eq!(
             escape_yaml("She said \"hi\"\nand left\\"),
             "She said \\\"hi\\\"\\nand left\\\\"
@@ -284,15 +257,8 @@ mod tests {
         assert!(matches!(escape_yaml("plain title 2026"), Cow::Borrowed(_)));
     }
 
-    /// [T-FC013] C0 control characters other than `\0\n\r\t` pass through
-    ///
-    /// ADR-0014 accepts this: the escape set covers what breaks out of a
-    /// double-quoted scalar, and the primary consumer is an agent rather than a
-    /// terminal. Two things follow that the ADR does not state — the value stays
-    /// borrowed (ESC is not in the escape scan), and the emitted scalar carries a
-    /// byte YAML 1.2 excludes from c-printable, so a strict parser rejects it.
-    /// Pinned here so a later change to either behaviour has to revisit the ADR
-    /// rather than pass unnoticed.
+    /// [T-FC013] C0 characters outside `\0\n\r\t` pass through under ADR-0014.
+    /// ESC remains borrowed even though strict YAML rejects it as non-printable.
     #[test]
     fn escape_yaml_passes_control_characters_through() {
         let with_esc = "title\u{1b}[31m";
@@ -318,7 +284,6 @@ mod tests {
     /// [T-FC006] neutralize_yaml_markers leaves indented and inline --- intact
     #[test]
     fn neutralize_yaml_markers_preserves_non_markers() {
-        // Indented `---` is not a YAML document marker (must be at column 0).
         assert_eq!(neutralize_yaml_markers("  ---"), "  ---");
         assert_eq!(neutralize_yaml_markers("a --- b"), "a --- b");
         assert_eq!(neutralize_yaml_markers("----"), "----");
@@ -343,8 +308,7 @@ mod tests {
             neutralize_yaml_markers_outside_fences("```yaml\n---\nfoo"),
             "```yaml\n***\nfoo"
         );
-        // T-C042's converted inline-code shape is not a CommonMark fence,
-        // but must still trigger the existing whole-body YAML fallback.
+        // T-C042's inline-code shape must trigger the conservative YAML fallback.
         assert_eq!(
             neutralize_yaml_markers_outside_fences(
                 "```\n---\n...\n```\n--- outside\n```` ``` ```` before marker\n... tail"
@@ -380,11 +344,8 @@ mod tests {
         );
     }
 
-    /// [T-FC100]
-    ///
-    /// Scoped to `write_yaml_str` alone. Whether the frontmatter still closes
-    /// once a caller's byte cap cuts the result belongs to T-FC104, which runs
-    /// the whole path through `to_fetch_result`.
+    /// [T-FC100] Field-level truncation only; T-FC104 checks the closed
+    /// frontmatter after the caller's output cap.
     #[test]
     fn truncates_title_over_the_cap() {
         let long_title = "A".repeat(10_000);
@@ -397,11 +358,7 @@ mod tests {
         );
     }
 
-    /// [T-FC101]
-    ///
-    /// `format_with_frontmatter` reaches this function from three call sites,
-    /// and the cap has to hold at each. A field that later formats its value
-    /// inline instead of calling `write_yaml_str` would slip past T-FC100.
+    /// [T-FC101] Author and date values need the same cap as title values.
     #[test]
     fn truncates_byline_and_published_time_over_the_cap() {
         let long_byline = "b".repeat(10_000);
@@ -421,12 +378,8 @@ mod tests {
         );
     }
 
-    /// [T-FC102]
-    ///
-    /// Guards the ordering the contract requires: truncate the raw value, then
-    /// escape it. Truncating an already-escaped value instead can cut a
-    /// doubled `\\\\` in half, leaving a lone trailing backslash that escapes
-    /// the closing quote and never lets the YAML scalar close.
+    /// [T-FC102] Truncate before escaping so a cut cannot split a doubled
+    /// backslash and escape the closing scalar quote.
     #[test]
     fn truncated_all_escapable_value_still_closes_the_quote() {
         let long_backslashes = "\\".repeat(10_000);

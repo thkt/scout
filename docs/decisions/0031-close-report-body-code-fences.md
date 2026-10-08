@@ -65,8 +65,10 @@ rewritten at most once within this report completion step, directly into the
 output buffer. Closed conservative fences outside these ranges retain markers
 verbatim. The two trackers intentionally have different guarantees.
 
-`format_fetched_pages` in `src/search/engine.rs` keeps heading shift → byte cut
-and note → integrated tail neutralization and completion.
+`format_fetched_pages` in `src/search/engine.rs` keeps media-aware heading
+handling → byte cut and note → integrated tail neutralization and completion.
+`FetchResult::with_heading_offset` shifts HTML-derived headings and preserves
+plain-text literals and terminal blank lines before the report byte cut.
 `format_readme_section` in `src/github/format.rs` keeps byte cut → heading
 shift → note → integrated YAML neutralization and completion. Moving the note
 before neutralization changes no marker behavior because the generated note
@@ -74,7 +76,8 @@ contains no YAML marker. The original source must be neutralized before a
 synthetic close is appended; otherwise #405's defense would be weakened.
 The note's wording and position relative to retained source text stay unchanged;
 when the cut is inside code, the note remains inside the completed code block.
-Standalone fetch's truncation/re-neutralization remains separate and unchanged.
+Standalone fetch's truncation/re-neutralization remains separate from report
+completion. The later main integration retains its uncut borrowed return.
 
 Only the report composition boundaries invoke completion. Already unclosed
 short bodies also need completion to protect following sections. Fully closed
@@ -117,8 +120,8 @@ real Web/GitHub responses. The Issue's acceptance fixtures do not require them.
 
 The reserved DR-0029/0030 and test IDs were checked against local PR source
 refs: #485 at `96ddd62908e081b507c053912ee4adec0c78f4b5` and #486 at
-`c3a003994f97fa260a273ed06a8e31bf01cd6a1e`. Those independent implementations
-are not incorporated. #485 also edits `src/search/engine.rs` and its tests;
+`c3a003994f97fa260a273ed06a8e31bf01cd6a1e`. At the original implementation stage, those independent implementations
+were not incorporated. #485 also edits `src/search/engine.rs` and its tests;
 #486 changes the caller of `format_report` in `src/tools/query.rs` and tests in
 `src/tools/query_tests.rs`, not the engine or its tests. Both PRs also change
 the README files and decision index. Overlapping edits must be reconciled when
@@ -274,3 +277,39 @@ classified R1-1/R1-2 as resolved. It checked the focused log summaries but did
 not rerun the full check. Real Chrome/services and arbitrary CommonMark inputs
 remain unverified; the configured host check still runs separately on this
 artifact. No contract change, capture, commit, push or publication was made.
+
+### Main integration (2026-10-08)
+
+PR #487 repair starts at `d5ac13252c9f0f002a0d8f23144a938304cb1cc1` and
+integrates main `22354cdad4917ce095b6403c3fdb89fc4988b68d` through the authorized
+host merge. Unlike the original independent implementation described above,
+this version includes #485's media-aware fetch path and regressions from main;
+those are not new #481 work. Research composes main's heading-offset method
+with this record's truncation, YAML defense and completion. T-SE021 and T-SE023
+coexist, as do DR-0029 and this proposed record in the index. Merging does not
+change either record's proposed status.
+
+The six Rust files changed by this PR receive comment/doc cleanup only after
+merge resolution. Fixtures, assertions, test IDs, registrations, settings and
+non-doc Rust tokens remain identical to that resolved baseline. Descriptions
+are limited to the actual observations: marker absence does not establish full
+body retention, and a handcrafted formatter fixture is not a fetch integration
+run. The existing plain-text and fence-boundary tests check the two composed
+behaviors; no additional test, fixture, assertion or lint is added.
+Earlier check/CI and independent-review results above remain historical
+evidence for their respective versions; the merged artifact needs the
+configured default/all-features host check and a new independent evaluation.
+The contract's ignored all-features run covers Chrome; local offline structure
+checks do not. Capture remains null and this Issue needs no media.
+
+On this merged working tree, `cargo fmt -- --check`,
+`cargo clippy --offline --all-targets -- -D warnings`, its `--all-features`
+variant and `git diff --check` succeeded. The focused nextest command recorded
+above passed 116 tests in each feature configuration, with 0 failures and
+691/699 excluded respectively; ignored tests were not run. Nextest execution
+was 0.974/0.595 seconds, excluding compilation. Both Cargo checks used the
+existing writable `CARGO_TARGET_DIR=/private/tmp/scout-481-target` and Rust
+1.99.0. These runs used no browser, server or real Web/GitHub response. They
+confirm the local composition regressions, not the full host contract, CI,
+current remote mergeability or a new independent acceptance. No runtime or
+maintenance improvement is inferred from comment cleanup or these timings.

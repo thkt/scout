@@ -8,8 +8,7 @@ mod download;
 mod extractor;
 mod ssrf;
 
-/// Re-exported for the `tools::config` invariant test alone; `cdp` itself stays
-/// private to `fetch`, and no production path outside this module reads it.
+/// Test-only re-export for the `tools::config` timeout invariant.
 #[cfg(all(test, feature = "js-rendering"))]
 pub(crate) use cdp::CDP_TIMEOUT;
 use ssrf::ssrf_check;
@@ -30,14 +29,11 @@ use crate::envelope::ErrorCode;
 
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
-use converter::{FetchResult, to_fetch_result};
-use download::{DownloadedPage, download};
+use converter::{FetchResult, plain_text_result, to_fetch_result};
+use download::{DownloadedPage, MediaType, download};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
-///
-/// Not `Copy`: `egress`'s `Proxied` variant owns a `String`, so callers move or
-/// clone the whole `FetchOptions`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FetchOptions {
     /// Force JS rendering via CDP (skip auto-detection). Requires `js-rendering` feature.
@@ -52,11 +48,8 @@ pub(crate) struct FetchOptions {
 
 const MAX_RESPONSE_BYTES: usize = 10_000_000;
 
-/// Hop limit for `download`'s hand-rolled redirect loop, which re-runs the SSRF
-/// check on every hop. `tools::builder` carries a same-valued `MAX_REDIRECTS`
-/// for reqwest's own `Policy::limited` on the Brave / GitHub / Slack client —
-/// a different mechanism on a different client, so the two move independently
-/// despite matching today.
+/// Manual redirect hop limit; every hop repeats the SSRF check.
+/// The service clients use their own independent reqwest redirect policy.
 const FETCH_MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
@@ -94,10 +87,8 @@ pub(crate) enum FetchError {
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
 
-    /// The payload names what did not respond and within what budget; the
-    /// phrase itself belongs to this prefix alone. Carrying it in both read as
-    /// "fetch timed out: fetch timed out after 30s". `T-C027` pins
-    /// the `fetch` call site, `T-SE015` the research one.
+    /// Payload names the operation and budget without repeating this error prefix.
+    /// T-C027 and T-SE015 cover the fetch and research call sites.
     #[error("fetch timed out: {0}")]
     Timeout(String),
 
@@ -109,11 +100,8 @@ pub(crate) enum FetchError {
 }
 
 impl FetchError {
-    /// Map each variant to its ADR-0011 priority-table [`Classification`].
-    ///
-    /// Arm order is load-bearing: specific `Status` codes (401/403, 404,
-    /// 408/429) precede the 4xx fallback so a reorder cannot silently demote
-    /// them to DataError.
+    /// Map variants to the ADR-0011 classification table.
+    /// Specific status hints must precede the generic `Status` delegation.
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
@@ -132,13 +120,10 @@ impl FetchError {
             Self::TooLarge => {
                 Classification::new(ErrorCode::DataError).with_hint("fetch a smaller resource")
             }
-            // Terminal DataError: cap=5 absorbs canonical chains (HTTPS upgrade →
-            // trailing slash → final URL), so a breach dominantly indicates a
-            // server-side redirect loop or caller URL mistake — both caller-fixable.
+            // Redirect loops and caller URL mistakes are terminal DataError.
             Self::TooManyRedirects(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL has too many redirects; check for a redirect loop"),
-            // The ADR-0003 table decides the code; these two arms add the hint
-            // only fetch can give, so they sit ahead of the delegating one.
+            // Specific status arms add fetch hints; classification stays in ADR-0003.
             Self::Status(code @ (401 | 403)) => Classification::from_http_status(*code)
                 .with_hint("URL requires authentication that scout does not support"),
             Self::Status(code @ 404) => Classification::from_http_status(*code)
@@ -167,9 +152,7 @@ pub(crate) async fn fetch_page(
     resolver: Arc<dyn DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<FetchResult, FetchError> {
-    // `cancel` is only consumed on the CDP path. Silence the unused-arg
-    // warning in builds without `js-rendering` instead of duplicating the
-    // function signature behind cfg.
+    // `cancel` is used only by CDP; keep one signature across feature builds.
     #[cfg(not(feature = "js-rendering"))]
     let _ = cancel;
 
@@ -197,15 +180,13 @@ pub(crate) async fn fetch_page(
     let egress = &opts.egress;
     let validated = ssrf_check(url, resolver.as_ref(), egress).await?;
 
-    // `decode_uncertain` flags a body neither the server charset label nor
-    // reliability-gated detection could decode cleanly. It is
-    // cleared whenever CDP output replaces the body below, because the headless
-    // browser re-decodes the page from its own response handling.
+    // CDP replaces the decoded body and clears its original decoding uncertainty.
     #[cfg(feature = "js-rendering")]
     let DownloadedPage {
         url: final_url,
         text: mut html,
         mut decode_uncertain,
+        media_type,
     } = download(
         client,
         &validated,
@@ -219,6 +200,7 @@ pub(crate) async fn fetch_page(
         url: final_url,
         text: html,
         decode_uncertain,
+        media_type,
     } = download(
         client,
         &validated,
@@ -228,10 +210,20 @@ pub(crate) async fn fetch_page(
     )
     .await?;
 
+    // An explicit --js still requests browser output. Otherwise plain text
+    // is source content, not markup, even when it contains HTML-looking bytes.
+    if media_type == MediaType::PlainText && !opts.js {
+        return Ok(plain_text_result(
+            &html,
+            final_url.as_str().to_owned(),
+            decode_uncertain,
+        ));
+    }
+    let html_heuristics = matches!(media_type, MediaType::Unknown | MediaType::Html);
     let need_js = if opts.js {
         info!("--js flag set, requesting JS rendering");
         true
-    } else if is_js_dependent(&html) {
+    } else if html_heuristics && is_js_dependent(&html) {
         warn!("JS-dependent page detected, trying JS rendering fallback");
         true
     } else {
@@ -269,7 +261,7 @@ pub(crate) async fn fetch_page(
         extract_article(&html, Some(final_url.as_str()))
     };
 
-    let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
+    let need_thin_fallback = html_heuristics && !opts.raw && !need_js && is_thin_extract(&article);
     #[cfg(feature = "js-rendering")]
     let article = if need_thin_fallback {
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");
@@ -329,26 +321,12 @@ fn visible_text_len(html: &str, limit: usize) -> usize {
     count
 }
 
-/// Visible characters below which a `<body>` counts as empty enough that the
-/// page is probably rendered by JS. Counted in characters, not bytes, so the
-/// same prose crosses it at the same length in every script — 100 bytes is 100
-/// Latin characters but only 33 CJK ones, which let a Japanese SPA past the
-/// check on a third of the text an English one needed.
+/// Count characters, not bytes, so CJK and Latin text use the same threshold.
 const BODY_TEXT_THRESHOLD: usize = 100;
 
-/// Markers of a client-rendered shell, listed in the double-quoted form only.
-///
-/// The list decides nothing for a page carrying `<script`, since that arm of
-/// [`is_js_dependent`] short-circuits first. It is consulted only for a thin
-/// body with no script tag anywhere, where the shell marker is the sole evidence
-/// the page is an app (T-F023).
-///
-/// The single-quoted (`id='root'`) and unquoted (`id=root`) forms are left out
-/// rather than overlooked: the templates and server renderers that emit these
-/// ids write double quotes, and the form that strips them is an HTML minifier,
-/// whose output ships the bundle's `<script` tag for the other arm to catch.
-/// Attribute values are also case-sensitive, unlike the tag names
-/// [`contains_ignore_ascii_case`] folds.
+/// Double-quoted app-root markers provide evidence for thin, script-free shells
+/// (T-F023). Attribute values remain case-sensitive. Single/unquoted forms are
+/// not detected here; a `<script` tag provides an independent heuristic.
 const SPA_ROOT_IDS: &[&str] = &[
     r#"id="root""#,
     r#"id="app""#,

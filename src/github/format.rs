@@ -8,9 +8,7 @@ use crate::yaml::{ReportBody, finish_report_body};
 
 const MAX_README_BYTES: usize = 24_000;
 
-/// `f64` carries 53 bits of mantissa, so the cast below is exact up to 8 PB.
-/// GitHub caps a blob at 100 MB, and the tree sizes this formats come from the
-/// same API, so no input reaches the range where the rounding would show.
+/// The f64 cast is exact below 8 PB; GitHub blobs are capped at 100 MB.
 #[expect(
     clippy::cast_precision_loss,
     reason = "sizes come from the GitHub API and stay far below 2^53 bytes"
@@ -71,18 +69,8 @@ pub(crate) fn format_file_content(
     format!("{header}\n\n{fence}{lang}\n{content}\n{fence}")
 }
 
-/// List the tree entries, fencing the paths.
-///
-/// `owner` and `repo` reach here through `parse_repo`, which admits only
-/// `[A-Za-z0-9._-]`, and `ref_` through `validate_ref`, which rejects `[` among
-/// others — so neither can carry link syntax and neither is escaped.
-///
-/// The paths are different: they come from the GitHub API unvalidated, and a
-/// name like `docs/[draft](old).md` reads as a link once it lands in markdown.
-/// They go inside a fence rather than through `escape_md_inline`, because the
-/// agent reading this list passes a path straight back to `repo-read` — escaping
-/// would hand it `docs/\[draft\]\(old\).md` and turn a rendering concern into a
-/// 404. A fence neutralizes the block without altering a byte of the path.
+/// Fence API-provided paths without escaping: escaped paths would break repo-read.
+/// `parse_repo` and `validate_ref` reject link syntax in header inputs.
 pub(crate) fn format_tree(
     owner: &str,
     repo: &str,
@@ -163,9 +151,7 @@ fn format_metadata_table(repo: &RepoInfo, out: &mut String) {
 fn format_readme_section(readme: Option<&str>, out: &mut String) {
     let Some(content) = readme else { return };
     out.push_str("## README\n\n");
-    // Not reusing truncate_with_note: shift_headings runs between the cut and
-    // the note. Finish YAML defense after the cut and before adding a close,
-    // so the whole-body fallback still sees the original dangling fence.
+    // Cut before heading shifts; count retained source bytes in the note.
     let truncated = content.len() > MAX_README_BYTES;
     let end = if truncated {
         let boundary = content.floor_char_boundary(MAX_README_BYTES);
