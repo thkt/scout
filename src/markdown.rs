@@ -198,7 +198,7 @@ pub(crate) fn dangling_report_fence(body: &str) -> Option<(usize, char, usize)> 
 /// pulldown-cmark 0.13.4 scans block lines by LF and closing whitespace by
 /// spaces. Normalize lone CR and trailing tabs only for parsing. Replacing
 /// these ASCII bytes preserves source offsets and leaves emitted text intact.
-fn report_parser_input(body: &str) -> Cow<'_, str> {
+pub(crate) fn report_parser_input(body: &str) -> Cow<'_, str> {
     if !body.contains(['\r', '\t']) {
         return Cow::Borrowed(body);
     }
