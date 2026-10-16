@@ -1214,20 +1214,20 @@ mod tests {
         );
     }
 
-    /// [T-FC054] Inline-code spans retain htmd trimming; only pre ancestors bypass it.
+    /// [T-FC054] Inline-code spans delegate to htmd, which folds newlines to spaces.
     /// The newline must be inside the span to exercise that handler.
     #[test]
-    fn span_inside_inline_code_outside_pre_loses_the_newline_entirely() {
+    fn span_inside_inline_code_outside_pre_folds_the_newline_to_a_space() {
         let article = article("<p><code><span>line1\n</span>line2</code></p>");
 
         let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
         let markdown = result.markdown();
 
         assert!(
-            markdown.contains("line1line2"),
+            markdown.contains("`line1 line2`"),
             "a span inside inline code with no <pre> ancestor must fall through to htmd's \
-             built-in span handler, whose trim_matches('\\n') strips the newline before the \
-             code handler can fold it to a space:\n{markdown}"
+             built-in span handler, preserving the newline for the code handler to fold \
+             to a space:\n{markdown}"
         );
         assert!(
             !markdown.contains("line1\nline2"),
