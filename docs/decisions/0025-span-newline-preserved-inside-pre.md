@@ -6,6 +6,14 @@ decision-makers: thkt (project owner)
 
 # Span Newline Preserved Inside `<pre>`
 
+## htmd 0.5.6 への更新後
+
+htmd 0.5.6 の取得済みソースで、`dom_walker.rs` の `walk_node` の span 高速経路と `element_handler/span.rs` の `span_handler` の両方に、preformatted 文脈では改行を剥がさない分岐が入ったことを確認した。組み込みハンドラの `is_inside_pre` は `<code>` 祖先も含むため、`<code><span>line1\n</span>line2</code>` は `line1line2` から `line1 line2` へ変わる。T-FC054 は、scout のハンドラから htmd へ委譲し、改行が空白へ畳まれる現在の出力を固定する。
+
+scout の `span_handler` はこの更新では残す。上流の組み込みハンドラは改行処理より前に `math math-inline` / `math math-display` を数式記法へ変換するため、削除すると `<pre>` 配下の該当 span にも `$` / `$$` が追加される。改行修正だけを根拠に削除すると別の出力変更を伴うため、ハンドラの撤去はこの差も含めて再評価する。
+
+以下は htmd 0.5.5 時点の判断と検証記録であり、inline code の改行消失と上流未修正の記述は当時の状態を示す。
+
 ## Context and Problem Statement
 
 #373 で fast_html2md から htmd へ乗り換えた結果、行ごとに `<span>` を使うシンタックスハイライトのページでコードブロック全体が 1 行に潰れる退行が生じた (#384)。原因は htmd 自身の 2 箇所にある。`span` ハンドラが未登録のとき通る高速経路 (`htmd-0.5.5/src/dom_walker.rs` の `walk_node` の span 高速経路) が、span の walk 済み内容の先頭と末尾の `\n` を無条件に剥がす。この strip に `is_pre` の除外が無く、`<pre>` の中で行ごとに置かれた span の末尾改行も剥がれるため、隣接するテキストと同じ行へ合流する。同じ欠落は組み込みの `htmd-0.5.5/src/element_handler/span.rs` の `span_handler` にもあり、こちらは高速経路より前から存在する。0.5.4 でも同じ strip があるため、htmd のバージョンを下げても直らない。
