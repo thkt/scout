@@ -2,6 +2,8 @@
 .yomu/
 .claude/
 .playwright-cli/
+/.dotagents.json
+/.venv/
 docs/*
 !docs/decisions/
 !docs/audit/
