@@ -2,6 +2,8 @@
 //!
 //! The error type and request gate also compile without `js-rendering`.
 
+#[cfg(feature = "js-rendering")]
+mod connection;
 mod launch;
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 mod proxy;
@@ -14,23 +16,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "js-rendering")]
-use chromiumoxide::error::CdpError;
-#[cfg(feature = "js-rendering")]
 use tokio::sync::watch;
 #[cfg(feature = "js-rendering")]
 use tokio::task::JoinHandle;
 #[cfg(feature = "js-rendering")]
 use tokio::time::timeout;
 #[cfg(feature = "js-rendering")]
-use tracing::{debug, error, warn};
+use tracing::warn;
 
 use super::FetchError;
 #[cfg(feature = "js-rendering")]
-use super::ssrf::{self, RedactedLogUrl, ValidatedUrl};
+use super::ssrf::{self, ValidatedUrl};
 #[cfg(feature = "js-rendering")]
-use launch::{
-    check_browser_request, parse_ws_url_from_lines, resolve_browser_binary, spawn_chromium_pgroup,
-};
+use launch::{parse_ws_url_from_lines, resolve_browser_binary, spawn_chromium_pgroup};
 
 #[cfg_attr(not(feature = "js-rendering"), allow(dead_code))]
 #[derive(Debug, thiserror::Error)]
@@ -55,22 +53,6 @@ impl From<BrowserError> for FetchError {
             BrowserError::ProcessFailed(msg) => Self::BrowserFailed(msg),
             BrowserError::TimedOut | BrowserError::Cancelled => Self::Timeout(e.to_string()),
         }
-    }
-}
-
-/// Forwards interceptor failures to navigation instead of leaving a paused
-/// subrequest waiting until the CDP timeout.
-#[cfg(feature = "js-rendering")]
-#[derive(Debug, thiserror::Error)]
-enum CdpInterceptError {
-    #[error("CDP intercept execute failed: {0}")]
-    Execute(CdpError),
-}
-
-#[cfg(feature = "js-rendering")]
-impl From<CdpInterceptError> for BrowserError {
-    fn from(e: CdpInterceptError) -> Self {
-        BrowserError::ProcessFailed(e.to_string())
     }
 }
 
@@ -110,9 +92,6 @@ pub(super) async fn fetch_with_cdp_with(
     resolver: Arc<dyn ssrf::DnsResolver>,
     cancel: &watch::Sender<bool>,
 ) -> Result<String, BrowserError> {
-    use chromiumoxide::Browser;
-    use futures::StreamExt;
-
     // Start the proxy first to supply its port to chromium. Connect-time IP
     // validation closes the DNS-rebinding gap left by subrequest pre-checks.
     let (proxy_port, proxy_task) =
@@ -137,25 +116,14 @@ pub(super) async fn fetch_with_cdp_with(
         }
     };
 
-    let connect_result = Browser::connect(&ws_url)
-        .await
-        .map_err(|e| BrowserError::ProcessFailed(format!("browser connect: {e}")));
-    let (mut browser, mut handler) = match connect_result {
-        Ok(pair) => pair,
-        Err(e) => {
+    let connect_result = connection::Connection::connect(&ws_url, resolver).await;
+    let mut browser = match connect_result {
+        Ok(browser) => browser,
+        Err(error) => {
             process.reap().await;
-            return Err(e);
+            return Err(error);
         }
     };
-
-    let mut handler_task = AbortOnDrop(tokio::spawn(async move {
-        while let Some(h) = handler.next().await {
-            if let Err(e) = h {
-                debug!(error = ?e, "CDP handler stream ended with error");
-                break;
-            }
-        }
-    }));
 
     // Cancellation reaches graceful close; outer timeout/drain cutoff uses Drop.
     // `wait_for` also sees cancellation sent before subscription.
@@ -163,7 +131,7 @@ pub(super) async fn fetch_with_cdp_with(
     let result = tokio::select! {
         biased;
         _ = rx.wait_for(|&cancelled| cancelled) => Err(BrowserError::Cancelled),
-        r = timeout(CDP_TIMEOUT, cdp_navigate(&mut browser, url, resolver)) => {
+        r = timeout(CDP_TIMEOUT, browser.navigate(url)) => {
             r.unwrap_or(Err(BrowserError::TimedOut))
         }
     };
@@ -177,105 +145,10 @@ pub(super) async fn fetch_with_cdp_with(
             "CDP browser.close() exceeded timeout; falling back to process group cleanup"
         ),
     }
-    handler_task.0.abort();
-    match (&mut handler_task.0).await {
-        Ok(()) => {}
-        Err(e) if e.is_cancelled() => {}
-        Err(e) => error!(error = ?e, "CDP handler task panicked"),
-    }
-
     // Browser helpers and crashpad may outlive browser.close(), especially on
     // macOS where there is no PR_SET_PDEATHSIG.
     process.reap().await;
 
-    result
-}
-
-/// Intercepts subrequests for SSRF validation before navigation.
-/// Borrows the browser so the caller retains timeout cleanup ownership.
-#[cfg(feature = "js-rendering")]
-async fn cdp_navigate(
-    browser: &mut chromiumoxide::Browser,
-    url: &ValidatedUrl,
-    resolver: Arc<dyn ssrf::DnsResolver>,
-) -> Result<String, BrowserError> {
-    use chromiumoxide::cdp::browser_protocol::fetch::{
-        ContinueRequestParams, EnableParams, EventRequestPaused, FailRequestParams,
-    };
-    use chromiumoxide::cdp::browser_protocol::network::ErrorReason;
-    use futures::StreamExt;
-    use tokio::sync::oneshot;
-
-    let page = browser
-        .new_page("about:blank")
-        .await
-        .map_err(|e| BrowserError::ProcessFailed(format!("new page: {e}")))?;
-
-    page.execute(EnableParams::default())
-        .await
-        .map_err(|e| BrowserError::ProcessFailed(format!("fetch enable: {e}")))?;
-
-    let mut events = page
-        .event_listener::<EventRequestPaused>()
-        .await
-        .map_err(|e| BrowserError::ProcessFailed(format!("event listener: {e}")))?;
-
-    let (intercept_err_tx, intercept_err_rx) = oneshot::channel::<CdpInterceptError>();
-    let intercept_page = page.clone();
-    let mut interceptor = AbortOnDrop(tokio::spawn(async move {
-        while let Some(event) = events.next().await {
-            let req_url = &event.request.url;
-            let allowed = check_browser_request(req_url, resolver.as_ref()).await;
-            let exec_result: Result<(), CdpError> = if allowed {
-                intercept_page
-                    .execute(ContinueRequestParams::new(event.request_id.clone()))
-                    .await
-                    .map(|_| ())
-            } else {
-                warn!(blocked_url = %RedactedLogUrl(req_url), "SSRF: blocked browser subrequest");
-                intercept_page
-                    .execute(FailRequestParams::new(
-                        event.request_id.clone(),
-                        ErrorReason::BlockedByClient,
-                    ))
-                    .await
-                    .map(|_| ())
-            };
-            if let Err(e) = exec_result {
-                // Receiver dropped (= navigation already completed) is harmless; ignore.
-                let _ = intercept_err_tx.send(CdpInterceptError::Execute(e));
-                break;
-            }
-        }
-    }));
-
-    let navigation = async {
-        page.goto(url.as_str())
-            .await
-            .map_err(|e| BrowserError::ProcessFailed(format!("navigation: {e}")))?;
-        page.content()
-            .await
-            .map_err(|e| BrowserError::ProcessFailed(format!("content: {e}")))
-    };
-    tokio::pin!(navigation);
-    let mut intercept_err_rx = intercept_err_rx;
-    // An already-sent intercept error must win over completed navigation.
-    let result = tokio::select! {
-        biased;
-        intercept_err = &mut intercept_err_rx => Err(intercept_err
-            .map(BrowserError::from)
-            .unwrap_or_else(|_| BrowserError::ProcessFailed(
-                "CDP intercept task dropped without status".into(),
-            ))),
-        nav_result = &mut navigation => nav_result,
-    };
-
-    interceptor.0.abort();
-    match (&mut interceptor.0).await {
-        Ok(()) => {}
-        Err(e) if e.is_cancelled() => {}
-        Err(e) => error!(error = ?e, "CDP intercept task panicked"),
-    }
     result
 }
 

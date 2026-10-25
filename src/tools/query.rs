@@ -235,10 +235,19 @@ impl Scout {
                 "> Warning: Brave search failed; this is a degraded report, not a successful search with no results.\n\n{markdown}"
             )
         };
-        let mut data = to_data_value(&report, "research report")?;
-        if let Some(map) = data.as_object_mut() {
-            map.insert("query".to_owned(), serde_json::Value::String(query));
+        #[derive(serde::Serialize)]
+        struct ResearchData<'a> {
+            query: &'a str,
+            #[serde(flatten)]
+            report: &'a engine::ResearchReport,
         }
+        let data = to_data_value(
+            &ResearchData {
+                query: &query,
+                report: &report,
+            },
+            "research report",
+        )?;
         collect_research_degradations(&report, &mut degradation);
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
     }

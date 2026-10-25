@@ -73,16 +73,11 @@ async fn read_stdin(needs_stdin: bool) -> Result<Option<String>, ScoutError> {
         ))
     })?
     .map_err(|e| ScoutError::user_error(format!("failed to read stdin: {e}")))?;
-    let trimmed = buf.trim();
-    Ok(if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    })
+    Ok(Some(buf))
 }
 
 enum StdinState {
-    /// stdin was a TTY, or read_stdin returned empty after trim.
+    /// stdin was not read.
     NotPiped,
     /// stdin content was buffered and no `resolve()` has taken it yet.
     Available(String),
@@ -202,18 +197,15 @@ impl Scout {
 
     async fn github(&self) -> &GitHubClient {
         self.github
-            .get_or_init(|| {
-                let source = self.token_source.clone();
-                let clock = self.clock.clone();
-                let rng = self.rng.clone();
-                let http = self.http.clone();
-                let max_retries = self.config.max_retries;
-                async move {
-                    GitHubClient::from_env_with_source(http, max_retries, source.as_ref())
-                        .await
-                        .with_clock(clock)
-                        .with_rng(rng)
-                }
+            .get_or_init(|| async {
+                GitHubClient::from_env_with_source(
+                    self.http.clone(),
+                    self.config.max_retries,
+                    self.token_source.as_ref(),
+                )
+                .await
+                .with_clock(self.clock.clone())
+                .with_rng(self.rng.clone())
             })
             .await
     }

@@ -6,6 +6,8 @@ decision-makers: thkt (project owner)
 
 # Fetch Body Line-Break Handling: Paragraph Folding as Contract, `<br>`/`<pre>` as the Named Exceptions
 
+> 2026-10-25追記：HTML変換を `dom_query` ベースの実装へ移した。現行実装と検証方法は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。この文書で定めた出力仕様は維持し、以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装記録として残す。
+
 ## Context and Problem Statement
 
 fast_html2md 0.0.62 から htmd 0.5.5 への置き換え (#373) で、段落の改行の扱いが変わった。旧ライブラリは原文の改行をそのまま残していたが、新ライブラリは段落内の折り返しを空白 1 個へ畳む。fetch が返す本文のほぼ全ページでこの差が出力に現れるが、畳みを正とするかどうかを決定した DR はこれまで無かった (#377)。

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -264,8 +264,8 @@ fn is_private_ip(ip: IpAddr) -> bool {
         IpAddr::V6(v6) => {
             v6.is_loopback()
                 || v6.is_unspecified()
-                || is_ipv6_link_local(&v6)
-                || is_ipv6_unique_local(&v6)
+                || v6.is_unicast_link_local()
+                || v6.is_unique_local()
                 // `to_ipv4` (not `to_ipv4_mapped`) so both IPv4-mapped
                 // (`::ffff:a.b.c.d`) and IPv4-compatible (`::a.b.c.d`, e.g.
                 // `::7f00:1` = `::127.0.0.1`) embeddings are unwrapped and
@@ -276,14 +276,6 @@ fn is_private_ip(ip: IpAddr) -> bool {
                     .is_some_and(|v4| is_private_ip(IpAddr::V4(v4)))
         }
     }
-}
-
-fn is_ipv6_link_local(v6: &Ipv6Addr) -> bool {
-    (v6.segments()[0] & 0xffc0) == 0xfe80
-}
-
-fn is_ipv6_unique_local(v6: &Ipv6Addr) -> bool {
-    (v6.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// reqwest [`Resolve`] implementation that re-validates resolved IPs at connect

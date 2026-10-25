@@ -2,7 +2,7 @@
 name = "scout"
 version = "2.6.2"
 edition = "2024"
-rust-version = "1.99.0"
+rust-version = "1.99.1"
 description = "CLI tool for web search (Brave Search), page fetching, and GitHub repository exploration"
 license = "MIT"
 repository = "https://github.com/thkt/scout"
@@ -11,24 +11,9 @@ repository = "https://github.com/thkt/scout"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", features = ["json", "gzip", "brotli", "deflate", "zstd"] }
 dom_smoothie = "0.18"
-htmd = "0.5.5"
-# htmd re-exports only `Node`, so the handlers in src/fetch/converter.rs read
-# the DOM through this crate's `NodeData`. Pinned to the version htmd itself
-# depends on, so the two resolve to one crate and the node types stay
-# identical.
-#
-# That leaves html5ever and markup5ever duplicated one level down, where
-# dom_smoothie pulls 0.39 of both, and `cargo deny check` warns per crate. We
-# leave those warnings rather than skipping them, and do not chase the
-# duplication: `TreeBuilder<Handle, Sink>` and `Tokenizer<Sink>` monomorphize
-# on the sink type, so htmd (RcDom) and dom_smoothie (dom_query sink) keep
-# their own copy of the parser code whichever version they share. Aligning
-# removes the two warnings, not the two code sets (measured in issue #379).
-#
-# renovate.json holds this crate at `allowedVersions: "<0.39"` so it cannot be
-# raised past htmd on its own. Bump this pin and drop that bound together once
-# htmd moves, or renovate stops offering updates for the crate entirely.
-markup5ever_rcdom = "0.38"
+# Keep the parser aligned with dom_query's TreeSink API.
+dom_query = { version = "0.29", default-features = false }
+html5ever = "0.40.1"
 # `full` also pulls `fs` (no call site) and `parking_lot` (swaps tokio's
 # internal Mutex). The list below is what the crate actually calls; adding a
 # call site for a feature outside it fails to compile, which is the signal we
@@ -59,13 +44,13 @@ encoding_rs = "0.8"
 chardetng = "1"
 fastrand = "2"
 httpdate = "1"
-chromiumoxide = { version = "0.9", optional = true }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"], optional = true }
 nix = { version = "0.31", features = ["signal"], optional = true }
 tempfile = { version = "3", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [features]
-js-rendering = ["chromiumoxide", "nix", "tempfile"]
+js-rendering = ["tokio-tungstenite", "nix", "tempfile"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

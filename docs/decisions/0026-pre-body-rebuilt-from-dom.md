@@ -6,6 +6,8 @@ decision-makers: thkt (project owner)
 
 # Pre Body Rebuilt from DOM, Not Reverse-Escaped from htmd's Walked Text
 
+> 2026-10-25追記：HTML変換を `dom_query` ベースの実装へ移した。現行実装と検証方法は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。この文書で定めた出力仕様は維持し、以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装記録として残す。
+
 ## Context and Problem Statement
 
 `pre_handler` (`src/fetch/converter.rs`) が `<code>` 子を持たない `<pre>` をフェンスする際、旧実装は htmd の走査後テキスト (`Handlers::walk_children` の戻り値) から先頭 1 箇所のバックスラッシュを剥がしていた。剥がす理由は、htmd 自身の `escape_pre_text_if_needed` (`htmd-0.5.5/src/dom_walker.rs` の `walk_node` の `is_pre` テキスト分岐と `escape_pre_text_if_needed`) が `<pre>` 直下のテキストノードごとに、先頭が `` ` `` または `~` のとき常にバックスラッシュを前置するためで、この前置とフェンス文字の衝突を避ける処理は元から必要だった。

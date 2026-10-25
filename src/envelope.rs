@@ -81,7 +81,6 @@ pub(crate) struct CommandOutput {
     data: serde_json::Value,
     notes: Vec<String>,
     degraded_reasons: Vec<DegradedReason>,
-    degraded: bool,
 }
 
 impl CommandOutput {
@@ -91,7 +90,6 @@ impl CommandOutput {
             data,
             notes: Vec::new(),
             degraded_reasons: Vec::new(),
-            degraded: false,
         }
     }
 
@@ -100,14 +98,12 @@ impl CommandOutput {
         data: serde_json::Value,
         degradation: Degradation,
     ) -> Self {
-        let degraded = !degradation.is_empty();
         let (notes, degraded_reasons) = degradation.into_parts();
         Self {
             markdown,
             data,
             notes,
             degraded_reasons,
-            degraded,
         }
     }
 
@@ -118,7 +114,7 @@ impl CommandOutput {
     pub(crate) fn into_envelope(self) -> SuccessEnvelope {
         SuccessEnvelope {
             data: self.data,
-            degraded: self.degraded,
+            degraded: !self.notes.is_empty() || !self.degraded_reasons.is_empty(),
             notes: self.notes,
             degraded_reasons: self.degraded_reasons,
         }
