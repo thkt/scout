@@ -1,0 +1,346 @@
+[
+  [
+    "<p>before <strong>hello</strong> after</p>",
+    "before **hello** after"
+  ],
+  [
+    "<p>before <strong> hello </strong> after</p>",
+    "before **hello** after"
+  ],
+  [
+    "<p>before <strong>a <em>b</em> c</strong> after</p>",
+    "before **a *b* c** after"
+  ],
+  [
+    "<p>before <b>hello</b> after</p>",
+    "before **hello** after"
+  ],
+  [
+    "<p>before <b> hello </b> after</p>",
+    "before **hello** after"
+  ],
+  [
+    "<p>before <b>a <em>b</em> c</b> after</p>",
+    "before **a *b* c** after"
+  ],
+  [
+    "<p>before <em>hello</em> after</p>",
+    "before *hello* after"
+  ],
+  [
+    "<p>before <em> hello </em> after</p>",
+    "before *hello* after"
+  ],
+  [
+    "<p>before <em>a <em>b</em> c</em> after</p>",
+    "before *a *b* c* after"
+  ],
+  [
+    "<p>before <i>hello</i> after</p>",
+    "before *hello* after"
+  ],
+  [
+    "<p>before <i> hello </i> after</p>",
+    "before *hello* after"
+  ],
+  [
+    "<p>before <i>a <em>b</em> c</i> after</p>",
+    "before *a *b* c* after"
+  ],
+  [
+    "<p>before <del>hello</del> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <del> hello </del> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <del>a <em>b</em> c</del> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <s>hello</s> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <s> hello </s> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <s>a <em>b</em> c</s> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <strike>hello</strike> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <strike> hello </strike> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <strike>a <em>b</em> c</strike> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <u>hello</u> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <u> hello </u> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <u>a <em>b</em> c</u> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <span>hello</span> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <span> hello </span> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <span>a <em>b</em> c</span> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <a>hello</a> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <a> hello </a> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <a>a <em>b</em> c</a> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <code>hello</code> after</p>",
+    "before `hello` after"
+  ],
+  [
+    "<p>before <code> hello </code> after</p>",
+    "before `  hello  ` after"
+  ],
+  [
+    "<p>before <code>a <em>b</em> c</code> after</p>",
+    "before `a *b* c` after"
+  ],
+  [
+    "<p>before <kbd>hello</kbd> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <kbd> hello </kbd> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <kbd>a <em>b</em> c</kbd> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <sub>hello</sub> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <sub> hello </sub> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <sub>a <em>b</em> c</sub> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <sup>hello</sup> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <sup> hello </sup> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <sup>a <em>b</em> c</sup> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <mark>hello</mark> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <mark> hello </mark> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <mark>a <em>b</em> c</mark> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <small>hello</small> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <small> hello </small> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <small>a <em>b</em> c</small> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<p>before <label>hello</label> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <label> hello </label> after</p>",
+    "before hello after"
+  ],
+  [
+    "<p>before <label>a <em>b</em> c</label> after</p>",
+    "before a *b* c after"
+  ],
+  [
+    "<div>one</div><div>two</div>",
+    "one\n\ntwo"
+  ],
+  [
+    "<section>one</section><section>two</section>",
+    "one\n\ntwo"
+  ],
+  [
+    "<article>one</article><article>two</article>",
+    "one\n\ntwo"
+  ],
+  [
+    "<main>one</main><main>two</main>",
+    "one\n\ntwo"
+  ],
+  [
+    "<header>one</header><header>two</header>",
+    "one\n\ntwo"
+  ],
+  [
+    "<footer>one</footer><footer>two</footer>",
+    "one\n\ntwo"
+  ],
+  [
+    "<aside>one</aside><aside>two</aside>",
+    "one\n\ntwo"
+  ],
+  [
+    "<address>one</address><address>two</address>",
+    "one\n\ntwo"
+  ],
+  [
+    "<figure>one</figure><figure>two</figure>",
+    "one\n\ntwo"
+  ],
+  [
+    "<figcaption>one</figcaption><figcaption>two</figcaption>",
+    "one\n\ntwo"
+  ],
+  [
+    "<dl>one</dl><dl>two</dl>",
+    "one\n\ntwo"
+  ],
+  [
+    "<dt>one</dt><dt>two</dt>",
+    "one\n\ntwo"
+  ],
+  [
+    "<dd>one</dd><dd>two</dd>",
+    "one\n\ntwo"
+  ],
+  [
+    "<details>one</details><details>two</details>",
+    "one\n\ntwo"
+  ],
+  [
+    "<summary>one</summary><summary>two</summary>",
+    "one\n\ntwo"
+  ],
+  [
+    "<h1>one</h1><h1>two</h1>",
+    "# one\n\n# two"
+  ],
+  [
+    "<h3>one</h3><h3>two</h3>",
+    "### one\n\n### two"
+  ],
+  [
+    "<blockquote>one</blockquote><blockquote>two</blockquote>",
+    "> one\n\n> two"
+  ],
+  [
+    "<ul><li>one</li><li>two</li></ul>",
+    "*   one\n*   two"
+  ],
+  [
+    "<ul><li><p>one</p><p>two</p></li><li>three</li></ul>",
+    "*   one\n\n    two\n\n*   three"
+  ],
+  [
+    "<ol start=3><li>one</li><li>two</li></ol>",
+    "3.  one\n4.  two"
+  ],
+  [
+    "<ul><li>one<ul><li>two</li></ul>three</li></ul>",
+    "*   one\n    *   two\n    three"
+  ],
+  [
+    "<p>x <code> a </code> y</p>",
+    "x `  a  ` y"
+  ],
+  [
+    "<p>x <code>a\nb</code> y</p>",
+    "x `a b` y"
+  ],
+  [
+    "<p>x <code>a<br>b</code> y</p>",
+    "x `a   b` y"
+  ],
+  [
+    "<pre><code class=\"language-rust\">a\n</code></pre>",
+    "```rust\na\n```"
+  ],
+  [
+    "<pre>prefix<code>x</code>suffix</pre>",
+    "prefix```\nx\n```suffix"
+  ],
+  [
+    "<pre><span>a</span><span>b</span></pre>",
+    "```\nab\n```"
+  ],
+  [
+    "<pre>a <div>b</div></pre>",
+    "```\na \n\nb\n```"
+  ],
+  [
+    "<img src=\"/a(b).png\" alt=\"hello\" title=\"world\">",
+    "![hello](/a\\(b\\).png \"world\")"
+  ],
+  [
+    "<a href=\"https://example.com/a b\"> x </a>",
+    "[x](<https://example.com/a b>)"
+  ],
+  [
+    "<p><span class=\"math math-inline\">a_b</span></p>",
+    "$a_b$"
+  ],
+  [
+    "<p><span class=\"math math-display\">a_b</span></p>",
+    "$$a_b$$"
+  ],
+  [
+    "<pre><code><span class=\"math math-inline\">a_b</span></code></pre>",
+    "```\na_b\n```"
+  ],
+  [
+    "<p><a href=\"/x\"><img src=\"/y\" alt=\"image\"></a></p>",
+    "[![image](/y)](/x)"
+  ]
+]

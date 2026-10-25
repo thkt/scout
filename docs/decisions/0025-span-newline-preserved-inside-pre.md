@@ -6,6 +6,8 @@ decision-makers: thkt (project owner)
 
 # Span Newline Preserved Inside `<pre>`
 
+> 2026-10-25追記：HTML変換を `dom_query` ベースの実装へ移した。現行実装と検証方法は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。この文書で定めた出力仕様は維持し、以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装記録として残す。
+
 ## htmd 0.5.6 への更新後
 
 htmd 0.5.6 の取得済みソースで、`dom_walker.rs` の `walk_node` の span 高速経路と `element_handler/span.rs` の `span_handler` の両方に、preformatted 文脈では改行を剥がさない分岐が入ったことを確認した。組み込みハンドラの `is_inside_pre` は `<code>` 祖先も含むため、`<code><span>line1\n</span>line2</code>` は `line1line2` から `line1 line2` へ変わる。T-FC054 は、scout のハンドラから htmd へ委譲し、改行が空白へ畳まれる現在の出力を固定する。

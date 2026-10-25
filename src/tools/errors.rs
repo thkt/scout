@@ -13,7 +13,6 @@ use crate::slack::SlackError;
 #[derive(Debug)]
 pub(crate) struct ScoutError {
     message: String,
-    retryable: bool,
     kind: ErrorCode,
     next_step: Option<String>,
     candidates: Vec<String>,
@@ -25,7 +24,7 @@ impl fmt::Display for ScoutError {
         if let Some(hint) = &self.next_step {
             write!(f, " — {hint}")?;
         }
-        if self.retryable {
+        if self.retryable() {
             write!(f, " (temporary failure; retry may succeed)")?;
         }
         Ok(())
@@ -40,7 +39,6 @@ impl ScoutError {
     fn new(kind: ErrorCode, msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
-            retryable: kind.is_retryable(),
             kind,
             next_step: None,
             candidates: Vec::new(),
@@ -110,7 +108,7 @@ impl ScoutError {
     }
 
     pub(crate) fn retryable(&self) -> bool {
-        self.retryable
+        self.kind.is_retryable()
     }
 
     pub(crate) fn error_kind(&self) -> ErrorCode {

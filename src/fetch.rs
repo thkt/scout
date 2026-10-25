@@ -81,9 +81,6 @@ pub(crate) enum FetchError {
     #[error("unsupported content type: {0} (expected text/HTML)")]
     UnsupportedContentType(String),
 
-    #[error("markdown conversion failed: {0}")]
-    MarkdownConversion(String),
-
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
 
@@ -115,7 +112,6 @@ impl FetchError {
                 .with_hint("URL must point to an external host (private IPs are blocked)"),
             Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must serve HTML or text content"),
-            Self::MarkdownConversion(_) => Classification::new(ErrorCode::DataError),
             Self::RedirectMissingLocation => Classification::new(ErrorCode::DataError),
             Self::TooLarge => {
                 Classification::new(ErrorCode::DataError).with_hint("fetch a smaller resource")
@@ -291,7 +287,11 @@ pub(crate) async fn fetch_page(
     }
 
     debug!(url = %RedactedLogUrl(final_url.as_str()), bytes = html.len(), "page fetched");
-    to_fetch_result(&article, final_url.as_str().to_owned(), decode_uncertain)
+    Ok(to_fetch_result(
+        &article,
+        final_url.as_str().to_owned(),
+        decode_uncertain,
+    ))
 }
 
 /// Raw fallback is always thin because shell text (nav, footer) inflates
@@ -335,17 +335,13 @@ const SPA_ROOT_IDS: &[&str] = &[
 
 /// Case-insensitive substring search over raw bytes, for HTML tag names — which
 /// are case-insensitive, unlike the attribute values in [`SPA_ROOT_IDS`].
-fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle))
-}
-
 fn is_js_dependent(html: &str) -> bool {
     if !has_thin_body(html) {
         return false;
     }
-    contains_ignore_ascii_case(html.as_bytes(), b"<script")
+    html.as_bytes()
+        .windows(b"<script".len())
+        .any(|window| window.eq_ignore_ascii_case(b"<script"))
         || SPA_ROOT_IDS.iter().any(|p| html.contains(p))
 }
 

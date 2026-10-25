@@ -1,15 +1,10 @@
 use std::borrow::Cow;
-use std::rc::{Rc, Weak};
 
-use htmd::element_handler::{HandlerResult, Handlers};
-use htmd::options::{Options, TranslationMode};
-use htmd::{HtmlToMarkdown, Node};
-use markup5ever_rcdom::NodeData;
+mod html;
 use serde::Serialize;
 
-use super::FetchError;
 use super::extractor::ExtractedArticle;
-use crate::markdown::{fence_delimiter, shift_headings};
+use crate::markdown::shift_headings;
 use crate::yaml::{neutralize_yaml_markers_outside_fences, write_yaml_str};
 
 /// Private fields restrict production construction to media-specific output
@@ -82,105 +77,6 @@ pub(crate) const RAW_FALLBACK_NOTE: &str =
 
 pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could not be determined; the body is a best-effort decode and may be garbled.\n\n";
 
-/// Pure mode keeps comments out of the body; preformatted_code preserves inline-code whitespace.
-fn markdown_converter() -> HtmlToMarkdown {
-    let options = Options {
-        translation_mode: TranslationMode::Pure,
-        preformatted_code: true,
-        ..Options::default()
-    };
-    HtmlToMarkdown::builder()
-        .options(options)
-        .add_handler(vec!["pre"], pre_handler)
-        .add_handler(vec!["span"], span_handler)
-        .add_handler(vec!["table"], table_handler)
-        .add_handler(vec!["a"], a_handler)
-        .add_handler(SUPPRESSED_TAGS.to_vec(), suppressed_handler)
-        .build()
-}
-
-/// Fence bare `<pre>` content; htmd already fences a direct `<code>` child.
-/// Inspect the DOM: highlighted bare text can itself start with backticks.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "htmd's ElementHandler blanket impl takes Element by value"
-)]
-fn pre_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    // Walking first merges adjacent DOM siblings before either branch reads them.
-    // Only the `<pre><code>` branch uses the walked string.
-    let result = handlers.walk_children(element.node);
-
-    // Handle cells before the code-child split to avoid block fences in tables.
-    // Read the whole subtree so text beside a `<code>` child survives.
-    if has_table_cell_ancestor(element.node) {
-        let content = text_content(element.node);
-        return Some(HandlerResult {
-            content: inline_code_span(content.trim_matches('\n')),
-            markdown_translated: result.markdown_translated,
-        });
-    }
-
-    if has_code_child(element.node) {
-        let content = result.content.trim_matches('\n');
-        return Some(HandlerResult {
-            content: format!("\n\n{content}\n\n"),
-            markdown_translated: result.markdown_translated,
-        });
-    }
-
-    let (content, markdown_translated) = raw_pre_content(handlers, element.node);
-    let content = content.trim_matches('\n');
-    let fence = fence_delimiter(content);
-    Some(HandlerResult {
-        content: format!("\n\n{fence}\n{content}\n{fence}\n\n"),
-        markdown_translated,
-    })
-}
-
-/// Suppress element bodies that htmd otherwise walks in Pure mode. This runs
-/// after JS detection and does not alter the downloaded source.
-///
-/// htmd dispatches by local name: suppress `desc` only in SVG so visible HTML
-/// text survives. Suppress `title` in all namespaces; metadata extraction
-/// handles the page title separately. Other `desc` elements delegate to fallback.
-fn suppressed_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if !is_suppressed_element(element.node) {
-        return handlers.fallback(element);
-    }
-    Some(HandlerResult {
-        content: String::new(),
-        markdown_translated: true,
-    })
-}
-
-const SUPPRESSED_TAGS: [&str; 7] = [
-    "script", "style", "noscript", "textarea", "iframe", "desc", "title",
-];
-
-/// Direct DOM readers must use the same suppression rules as handler dispatch.
-fn is_suppressed_element(node: &Rc<Node>) -> bool {
-    let Some(tag) = element_tag(node) else {
-        return false;
-    };
-    SUPPRESSED_TAGS.contains(&tag)
-        && (tag != "desc" || element_namespace(node) == Some(SVG_NAMESPACE))
-}
-
-/// SVG namespace of the `desc` element, even though its children parse as HTML.
-const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
-
-fn element_namespace(node: &Rc<Node>) -> Option<&str> {
-    match &node.data {
-        NodeData::Element { name, .. } => Some(name.ns.as_ref()),
-        _ => None,
-    }
-}
-
-/// Tags whose content html5ever tokenizes as raw text, so an unclosed one
-/// consumes every following byte until its own end tag. Every entry is also a
-/// `suppressed_handler` tag, which is what turns the swallow into a silent
-/// loss rather than garbled output. `desc` is deliberately absent: it holds
-/// ordinary parsed children and cannot swallow anything.
 const RAW_TEXT_TAGS: [&str; 6] = ["script", "style", "textarea", "iframe", "noscript", "title"];
 
 /// Expand self-closed raw-text tags so HTML parsing of XHTML cannot swallow
@@ -267,473 +163,22 @@ fn start_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-fn element_tag(node: &Rc<Node>) -> Option<&str> {
-    match &node.data {
-        NodeData::Element { name, .. } => Some(name.local.as_ref()),
-        _ => None,
-    }
-}
-
-fn has_code_child(node: &Rc<Node>) -> bool {
-    node.children
-        .borrow()
-        .iter()
-        .any(|child| element_tag(child) == Some("code"))
-}
-
-/// Read bare `<pre>` text from the DOM to avoid htmd's fence-character escapes.
-/// Requires the initial `walk_children` in `pre_handler` to merge siblings.
-/// Only element children contribute to `markdown_translated`, as in htmd.
-fn raw_pre_content(handlers: &dyn Handlers, node: &Rc<Node>) -> (String, bool) {
-    let mut content = String::new();
-    let mut markdown_translated = true;
-    for child in node.children.borrow().iter() {
-        match &child.data {
-            NodeData::Text { contents } => content.push_str(&contents.borrow()),
-            NodeData::Element { .. } => {
-                if let Some(res) = handlers.handle(child) {
-                    markdown_translated &= res.markdown_translated;
-                    push_element_content(&mut content, &res.content);
-                }
-            }
-            _ => {}
-        }
-    }
-    (content, markdown_translated)
-}
-
-/// Cap the join at two newlines when appending a converted element's content.
-/// Text children append directly, but their trailing newlines can be capped
-/// when a subsequent element's content is appended.
-/// Newline counts are also byte counts, so these cuts are UTF-8 safe.
-fn push_element_content(content: &mut String, addition: &str) {
-    let trailing = content.chars().rev().take_while(|&c| c == '\n').count();
-    let leading = addition.chars().take_while(|&c| c == '\n').count();
-    let total = trailing + leading;
-    if total > 2 {
-        let excess = total - 2;
-        let cut_from_content = excess.min(trailing);
-        content.truncate(content.len() - cut_from_content);
-        let cut_from_addition = excess - cut_from_content;
-        content.push_str(&addition[cut_from_addition..]);
-    } else {
-        content.push_str(addition);
-    }
-}
-
-/// Preserve span-edge newlines inside `<pre>`. Registering a second span handler
-/// disables htmd's trimming fast path; other spans delegate to fallback.
-/// The ancestor check excludes inline `<code>` (DR-0025, T-FC054).
-fn span_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    if has_pre_ancestor(element.node) {
-        return Some(handlers.walk_children(element.node));
-    }
-    handlers.fallback(element)
-}
-
-fn has_pre_ancestor(node: &Rc<Node>) -> bool {
-    has_ancestor_matching(node, |tag| tag == "pre")
-}
-
-fn has_table_cell_ancestor(node: &Rc<Node>) -> bool {
-    has_ancestor_matching(node, |tag| matches!(tag, "td" | "th"))
-}
-
-fn has_ancestor_matching(node: &Rc<Node>, predicate: impl Fn(&str) -> bool) -> bool {
-    let mut current = get_parent(node);
-    while let Some(parent) = current {
-        if element_tag(&parent).is_some_and(&predicate) {
-            return true;
-        }
-        current = get_parent(&parent);
-    }
-    false
-}
-
-/// Taking the `Cell` parent link is necessary to read it; restore it so later
-/// traversals retain the same DOM ancestry.
-fn get_parent(node: &Rc<Node>) -> Option<Rc<Node>> {
-    let value = node.parent.take();
-    let parent = value.as_ref().and_then(Weak::upgrade);
-    node.parent.set(value);
-    parent
-}
-
-/// Read table-cell `<pre>` content without htmd's fence-character escapes.
-/// Direct DOM traversal must suppress hidden elements and turn `<br>` into a
-/// newline; `normalize_cell_content` folds that newline to a space.
-fn text_content(node: &Rc<Node>) -> String {
-    let mut out = String::new();
-    push_text_content(node, &mut out);
-    out
-}
-
-fn push_text_content(node: &Rc<Node>, out: &mut String) {
-    match &node.data {
-        NodeData::Text { contents } => {
-            out.push_str(&contents.borrow());
-            return;
-        }
-        NodeData::Element { .. } if is_suppressed_element(node) => return,
-        NodeData::Element { .. } if element_tag(node) == Some("br") => {
-            out.push('\n');
-            return;
-        }
-        _ => {}
-    }
-    for child in node.children.borrow().iter() {
-        push_text_content(child, out);
-    }
-}
-
-/// Build a CommonMark 0.31.2 §6.3 code span: its backtick delimiter must exceed
-/// the longest content run, without the block-fence minimum. Inner spaces keep
-/// content-edge backticks separate from the delimiter.
-fn inline_code_span(content: &str) -> String {
-    let max_run = content
-        .bytes()
-        .fold((0usize, 0usize), |(longest, run), b| {
-            if b == b'`' {
-                let next = run + 1;
-                (longest.max(next), next)
-            } else {
-                (longest, 0)
-            }
-        })
-        .0;
-    let delimiter = "`".repeat(max_run + 1);
-    if content.starts_with('`') || content.ends_with('`') {
-        format!("{delimiter} {content} {delimiter}")
-    } else {
-        format!("{delimiter}{content}{delimiter}")
-    }
-}
-
-/// Remove empty same-page anchors emitted by highlighters and heading links.
-/// Delegate other links so destination escaping and link bookkeeping stay in htmd.
-/// Strip titles only from links with text; empty absolute links retain theirs
-/// (T-FC049).
-fn a_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    let result = handlers.walk_children(element.node);
-    let has_link_text = !result.content.trim().is_empty();
-    // An empty href resolves to the current page, just like a fragment.
-    let is_empty_fragment_anchor = anchor_href(&element)
-        .is_some_and(|href| href.is_empty() || href.starts_with('#'))
-        && !has_link_text;
-
-    if is_empty_fragment_anchor {
-        return Some(HandlerResult {
-            content: String::new(),
-            markdown_translated: true,
-        });
-    }
-
-    // Read before `element` moves into `fallback` below.
-    let title_attr = has_link_text
-        .then(|| anchor_attr(&element, "title"))
-        .flatten();
-    let result = handlers.fallback(element)?;
-
-    let Some(title_attr) = title_attr else {
-        return Some(result);
-    };
-    Some(HandlerResult {
-        content: strip_link_title(&result.content, &title_attr),
-        markdown_translated: result.markdown_translated,
-    })
-}
-
-fn anchor_href(element: &htmd::Element) -> Option<String> {
-    anchor_attr(element, "href")
-}
-
-fn anchor_attr(element: &htmd::Element, name: &str) -> Option<String> {
-    element
-        .attrs
-        .iter()
-        .find(|attr| attr.name.local.as_ref() == name)
-        .map(|attr| attr.value.to_string())
-}
-
-/// Remove only the delegated link's title suffix, never matching text in the
-/// link body. Unknown tail shapes remain unchanged. Reproduce htmd's title
-/// escaping and reflow before matching, including whitespace-only titles.
-fn strip_link_title(content: &str, title_attr: &str) -> String {
-    let processed_title = process_title_like_htmd(title_attr);
-    let (body, trailing_ws) = split_trailing_document_whitespace(content);
-    let Some(before_close_paren) = body.strip_suffix(')') else {
-        return content.to_owned();
-    };
-    let title_suffix = format!(" \"{processed_title}\"");
-    let Some(before_title) = before_close_paren.strip_suffix(title_suffix.as_str()) else {
-        return content.to_owned();
-    };
-    format!("{before_title}){trailing_ws}")
-}
-
-/// Mirror htmd's private `process_title` byte for byte so the delegated suffix
-/// can be located; this is not an independent escaping policy.
-fn process_title_like_htmd(text: &str) -> String {
-    let mut result = String::new();
-    let mut wrote_any = false;
-    for line in text.lines() {
-        let line = trim_document_whitespace(line);
-        if line.is_empty() {
-            continue;
-        }
-        if wrote_any {
-            result.push('\n');
-        }
-        for ch in line.chars() {
-            if ch == '"' {
-                result.push('\\');
-            }
-            result.push(ch);
-        }
-        wrote_any = true;
-    }
-    result
-}
-
-/// Separate whitespace htmd re-appends after the closing `)` so it cannot hide
-/// the title suffix. Leading whitespace does not affect this tail match.
-fn split_trailing_document_whitespace(content: &str) -> (&str, &str) {
-    let body = content.trim_end_matches(['\t', '\n', '\r', ' ']);
-    content.split_at(body.len())
-}
-
-/// Read mixed `<th>`/`<td>` rows positionally; htmd's per-tag extraction loses
-/// cells of the other kind. Keep caption, cell normalization and column-count
-/// behavior, but omit column-width padding. Only `markdown_converter` registers
-/// this handler, in Pure mode.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "htmd's ElementHandler blanket impl takes Element by value"
-)]
-fn table_handler(handlers: &dyn Handlers, element: htmd::Element) -> Option<HandlerResult> {
-    let mut captions: Vec<String> = Vec::new();
-    let mut headers: Vec<String> = Vec::new();
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    // Only the first candidate row may decide the header.
-    let mut header_decided = false;
-    let mut markdown_translated = true;
-
-    for child in element.node.children.borrow().iter() {
-        let Some(tag) = element_tag(child) else {
-            continue;
-        };
-        match tag {
-            "caption" => {
-                if let Some(res) = handlers.handle(child) {
-                    markdown_translated &= res.markdown_translated;
-                    captions.push(trim_document_whitespace(&res.content).to_owned());
-                }
-            }
-            "thead" => {
-                let mut thead_rows = row_children(child).into_iter();
-                // A thead's first row becomes the header whether its cells are
-                // `<th>` or `<td>`, unlike a body row.
-                if let Some(row_node) = thead_rows.next() {
-                    let (cells, translated) = extract_row_cells(handlers, &row_node);
-                    headers = cells;
-                    markdown_translated &= translated;
-                    header_decided = true;
-                }
-                for row_node in thead_rows {
-                    let (cells, translated) = extract_row_cells(handlers, &row_node);
-                    markdown_translated &= translated;
-                    if !cells.is_empty() {
-                        rows.push(cells);
-                    }
-                }
-            }
-            "tbody" | "tfoot" => {
-                for row_node in row_children(child) {
-                    markdown_translated &= extract_data_row(
-                        handlers,
-                        &row_node,
-                        &mut header_decided,
-                        &mut headers,
-                        &mut rows,
-                    );
-                }
-            }
-            "tr" => {
-                markdown_translated &= extract_data_row(
-                    handlers,
-                    child,
-                    &mut header_decided,
-                    &mut headers,
-                    &mut rows,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    let num_columns = headers
-        .len()
-        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
-    if num_columns == 0 {
-        let content = handlers.walk_children(element.node).content;
-        let content = content.trim_matches('\n');
-        if content.is_empty() {
-            return None;
-        }
-        return Some(HandlerResult {
-            content: format!("\n\n{content}\n\n"),
-            markdown_translated,
-        });
-    }
-
-    let mut table_md = String::from("\n\n");
-    for caption in captions {
-        table_md.push_str(&caption);
-        table_md.push('\n');
-    }
-    // With columns but no qualifying header, emit an empty header and separator
-    // so the first data row is not interpreted as the header.
-    table_md.push_str(&format_table_row(&headers, num_columns));
-    table_md.push_str(&format_separator_row(num_columns));
-    for row in &rows {
-        table_md.push_str(&format_table_row(row, num_columns));
-    }
-    table_md.push('\n');
-
-    Some(HandlerResult {
-        content: table_md,
-        markdown_translated,
-    })
-}
-
-/// Collect eagerly because the children borrow cannot outlive this call.
-fn row_children(node: &Rc<Node>) -> Vec<Rc<Node>> {
-    node.children
-        .borrow()
-        .iter()
-        .filter(|child| is_row(child))
-        .cloned()
-        .collect()
-}
-
-fn is_row(node: &Rc<Node>) -> bool {
-    element_tag(node) == Some("tr")
-}
-
-/// Promote only nonempty all-`<th>` rows: a mixed label/value row is data, not
-/// a fabricated column header. Ignore whitespace text nodes between cells.
-fn row_is_all_header_cells(row_node: &Rc<Node>) -> bool {
-    let children = row_node.children.borrow();
-    let mut cells = children
-        .iter()
-        .filter_map(|cell| element_tag(cell).filter(|tag| matches!(*tag, "th" | "td")));
-    let mut saw_cell = false;
-    let all_th = cells.all(|tag| {
-        saw_cell = true;
-        tag == "th"
-    });
-    saw_cell && all_th
-}
-
-/// The first body-level row decides header candidacy; later rows remain data.
-fn extract_data_row(
-    handlers: &dyn Handlers,
-    row_node: &Rc<Node>,
-    header_decided: &mut bool,
-    headers: &mut Vec<String>,
-    rows: &mut Vec<Vec<String>>,
-) -> bool {
-    let (cells, translated) = extract_row_cells(handlers, row_node);
-    if !*header_decided {
-        *header_decided = true;
-        if row_is_all_header_cells(row_node) {
-            *headers = cells;
-            return translated;
-        }
-    }
-    if !cells.is_empty() {
-        rows.push(cells);
-    }
-    translated
-}
-
-/// Read both cell kinds in source order, preserving handler conversion.
-fn extract_row_cells(handlers: &dyn Handlers, row_node: &Rc<Node>) -> (Vec<String>, bool) {
-    let mut cells = Vec::new();
-    let mut markdown_translated = true;
-
-    for cell in row_node.children.borrow().iter() {
-        if !matches!(element_tag(cell), Some("th" | "td")) {
-            continue;
-        }
-        let Some(res) = handlers.handle(cell) else {
-            continue;
-        };
-        markdown_translated &= res.markdown_translated;
-        cells.push(normalize_cell_content(&res.content));
-    }
-
-    (cells, markdown_translated)
-}
-
-/// Fold line breaks and escape pipes so content cannot split rows or columns.
-/// Preserve NBSP and other non-document whitespace. GFM resolves `\|` inside
-/// code spans, whereas `&#124;` remains literal there.
-fn normalize_cell_content(content: &str) -> String {
-    let content = content
-        .replace('\n', " ")
-        .replace('\r', "")
-        .replace('|', "\\|");
-    trim_document_whitespace(&content).to_owned()
-}
-
-/// Match htmd's document whitespace set: tab, newline, CR and space.
-/// NBSP and other non-ASCII whitespace remain content.
-fn trim_document_whitespace(s: &str) -> &str {
-    s.trim_matches(|c: char| matches!(c, '\t' | '\n' | '\r' | ' '))
-}
-
-/// Use fixed one-space cell padding, including empty or missing cells.
-fn format_table_row(row: &[String], num_columns: usize) -> String {
-    let mut line = String::from("|");
-    for i in 0..num_columns {
-        let cell = row.get(i).map(String::as_str).unwrap_or("");
-        line.push(' ');
-        line.push_str(cell);
-        line.push_str(" |");
-    }
-    line.push('\n');
-    line
-}
-
-fn format_separator_row(num_columns: usize) -> String {
-    let mut line = String::from("|");
-    for _ in 0..num_columns {
-        line.push_str(" --- |");
-    }
-    line.push('\n');
-    line
-}
-
 pub(super) fn to_fetch_result(
     article: &ExtractedArticle,
     url: String,
     decode_uncertain: bool,
-) -> Result<FetchResult, FetchError> {
-    // Fail closed on conversion errors rather than returning a partial body.
+) -> FetchResult {
     let content_html = close_self_closed_raw_text_tags(&article.content_html);
-    let markdown = markdown_converter()
-        .convert(&content_html)
-        .map_err(|e| FetchError::MarkdownConversion(e.to_string()))?;
+    let markdown = html::convert(&content_html);
     let output = format_with_frontmatter(article, &markdown);
 
-    Ok(FetchResult {
+    FetchResult {
         url,
         markdown: output,
         is_plain_text: false,
         used_raw_fallback: article.used_raw_fallback,
         decode_uncertain,
-    })
+    }
 }
 
 /// Preserve decoded non-HTML text without interpreting tags, entities or Markdown
@@ -804,7 +249,7 @@ mod tests {
                 <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
         let lines: Vec<&str> = markdown.lines().collect();
 
@@ -831,7 +276,7 @@ mod tests {
     fn li_pre_stays_in_the_same_item_as_the_list_marker() {
         let article = article("<ul><li>intro<pre><code>line1\nline2</code></pre></li></ul>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let marker_line = markdown
@@ -872,7 +317,7 @@ mod tests {
                 <pre><code>line1\nline2</code></pre></td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let data_row = markdown
@@ -900,7 +345,7 @@ mod tests {
     fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
         let article = article(r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#);
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -921,7 +366,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(result.markdown().starts_with("---\n"));
         assert!(result.markdown().contains("\n---\n\n"));
@@ -939,7 +384,7 @@ mod tests {
             ..article("<p>Text</p>")
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(result.markdown().contains("title: \"Only Title\""));
         assert!(!result.markdown().contains("author:"));
@@ -972,8 +417,7 @@ mod tests {
             used_raw_fallback: true,
             ..article("<p>x</p>")
         };
-        let result =
-            to_fetch_result(&raw_fallback_only, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&raw_fallback_only, "https://example.com".into(), false);
         assert!(
             result.used_raw_fallback(),
             "the article's raw-fallback flag must reach the result"
@@ -984,8 +428,7 @@ mod tests {
         );
 
         let decode_uncertain_only = article("<p>x</p>");
-        let result =
-            to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true).unwrap();
+        let result = to_fetch_result(&decode_uncertain_only, "https://example.com".into(), true);
         assert!(
             !result.used_raw_fallback(),
             "the article carried no raw-fallback flag"
@@ -1001,7 +444,7 @@ mod tests {
     fn pre_code_escape_target_chars_are_not_backslash_escaped() {
         let article = article(r#"<pre><code>\ * _ ` [ ] end</code></pre>"#);
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains(r"\ * _ ` [ ] end"),
@@ -1015,7 +458,7 @@ mod tests {
     fn code_block_with_three_backticks_widens_fence_to_four() {
         let article = article("<pre><code>a ``` b</code></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("````\na ``` b\n````"),
@@ -1030,7 +473,7 @@ mod tests {
     fn code_block_with_language_class_gets_language_info_string() {
         let article = article(r#"<pre><code class="language-rust">fn main() {}</code></pre>"#);
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```rust\nfn main() {}\n```"),
@@ -1044,7 +487,7 @@ mod tests {
     fn pre_without_code_child_is_wrapped_in_a_fence() {
         let article = article("<pre>plain text</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\nplain text\n```"),
@@ -1058,7 +501,7 @@ mod tests {
     fn pre_without_code_child_widens_its_fence_past_a_backtick_run_in_the_content() {
         let article = article("<pre>a ``` b</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1076,7 +519,7 @@ mod tests {
              <tbody><tr><td>1</td><td>2</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1087,10 +530,10 @@ mod tests {
 
     /// [T-FC020] Pre/code outside table cells must retain a single fenced block.
     #[test]
-    fn pre_code_already_fenced_by_htmd_is_not_double_fenced() {
+    fn pre_code_is_fenced_exactly_once() {
         let article = article("<pre><code>fn main() {}</code></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\nfn main() {}\n```"),
@@ -1110,7 +553,7 @@ mod tests {
     fn htmd_leading_backslash_before_pre_text_does_not_survive_inside_the_fence() {
         let article = article("<pre>`hello</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\n`hello\n```"),
@@ -1129,7 +572,7 @@ mod tests {
     fn literal_backslash_backtick_pair_mid_content_survives_unstripped() {
         let article = article("<pre>abc\n\\` def</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\nabc\n\\` def\n```"),
@@ -1143,7 +586,7 @@ mod tests {
     fn source_leading_backslash_backtick_pair_survives_unstripped() {
         let article = article("<pre>\\`hello</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\n\\`hello\n```"),
@@ -1158,7 +601,7 @@ mod tests {
     fn htmd_leading_backslash_is_stripped_when_a_comment_precedes_the_text() {
         let article = article("<pre><!-- c -->`hello</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             !result.markdown().contains("\\`hello"),
@@ -1172,7 +615,7 @@ mod tests {
     fn pre_with_nested_inline_element_is_wrapped_in_a_fence() {
         let article = article("<pre><span>`x`</span></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
 
         assert!(
             result.markdown().contains("```\n`x`\n```"),
@@ -1186,7 +629,7 @@ mod tests {
     fn trailing_newline_at_the_end_of_a_span_inside_pre_survives_in_the_output() {
         let article = article("<pre><span>line1\n</span>line2</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1205,7 +648,7 @@ mod tests {
              <span data-line=\"3\">line3</span></pre>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1214,19 +657,18 @@ mod tests {
         );
     }
 
-    /// [T-FC054] Inline-code spans delegate to htmd, which folds newlines to spaces.
+    /// [T-FC054] Inline-code spans fold newlines to spaces.
     /// The newline must be inside the span to exercise that handler.
     #[test]
     fn span_inside_inline_code_outside_pre_folds_the_newline_to_a_space() {
         let article = article("<p><code><span>line1\n</span>line2</code></p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
             markdown.contains("`line1 line2`"),
-            "a span inside inline code with no <pre> ancestor must fall through to htmd's \
-             built-in span handler, preserving the newline for the code handler to fold \
+            "a span inside inline code with no <pre> ancestor must preserve its newline as a space, preserving the newline for the code handler to fold \
              to a space:\n{markdown}"
         );
         assert!(
@@ -1243,7 +685,7 @@ mod tests {
              <tr><th>Age</th><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let name_row = markdown
@@ -1275,7 +717,7 @@ mod tests {
              <tbody><tr><td>Al</td><td>Springfield</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let data_row = markdown
@@ -1298,7 +740,7 @@ mod tests {
              <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         // Anchored on the pipe so the frontmatter's own `---` delimiter cannot
@@ -1323,7 +765,7 @@ mod tests {
              <tbody><tr><td>A\u{00A0}B</td><td>x</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1338,7 +780,7 @@ mod tests {
     fn pre_newline_survives_when_the_neighboring_span_has_an_element_child() {
         let article = article("<pre><span>line1\n</span><span><b>line2</b></span></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1356,7 +798,7 @@ mod tests {
              <tbody><tr><td>Bob</td><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let header_line = markdown
@@ -1379,7 +821,7 @@ mod tests {
              <tr><th>Bob</th><th>40</th></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
         let lines: Vec<&str> = markdown.lines().collect();
 
@@ -1412,7 +854,7 @@ mod tests {
              <tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         markdown
@@ -1433,7 +875,7 @@ mod tests {
              <tr><th>Age</th><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
         let lines: Vec<&str> = markdown.lines().collect();
 
@@ -1463,7 +905,7 @@ mod tests {
              <tr><td>Alice</td><td>30</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
         let lines: Vec<&str> = markdown.lines().collect();
 
@@ -1492,7 +934,7 @@ mod tests {
              <tbody><tr><td>Osaka</td><td>2</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
         let lines: Vec<&str> = markdown.lines().collect();
 
@@ -1515,7 +957,7 @@ mod tests {
     fn table_with_no_rows_falls_back_to_its_walked_content() {
         let article = article("<table><caption>Empty</caption></table>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1537,7 +979,7 @@ mod tests {
              \n  <tr>\n    <td>Alice</td>\n    <td>30</td>\n  </tr>\n</table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1557,7 +999,7 @@ mod tests {
     fn second_pre_child_text_starting_with_backtick_survives_unstripped() {
         let article = article("<pre>abc<span>X</span>`def</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1577,7 +1019,7 @@ mod tests {
     fn backtick_after_a_preceding_element_child_survives_unstripped() {
         let article = article("<pre><span>abc</span>`def</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1597,7 +1039,7 @@ mod tests {
     fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
         let article = article("<pre><pre>abc<span>X</span>`def</pre></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1618,7 +1060,7 @@ mod tests {
         let article =
             article("<pre><span>line1\n</span><span>line2\n</span><span>line3</span></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1633,7 +1075,7 @@ mod tests {
     fn adjacent_block_children_boundary_keeps_newlines_capped_at_two() {
         let article = article("<pre><div>ALPHA</div><div>BETA</div></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         let alpha_end = markdown
@@ -1658,7 +1100,7 @@ mod tests {
     fn br_directly_under_pre_survives_as_two_trailing_spaces_and_a_newline() {
         let article = article("<pre>line1<br>line2</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1673,7 +1115,7 @@ mod tests {
     fn unregistered_tag_child_text_inside_pre_is_not_escaped() {
         let article = article("<pre><mark>a_b*c</mark></pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1683,12 +1125,12 @@ mod tests {
         );
     }
 
-    /// [T-FC041] Ordinary paragraph newlines retain htmd whitespace folding.
+    /// [T-FC041] Ordinary paragraph newlines fold to spaces.
     #[test]
     fn a_newline_inside_a_paragraph_collapses_to_a_single_space() {
         let article = article("<p>line1\nline2</p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1706,7 +1148,7 @@ mod tests {
     fn br_inside_a_paragraph_survives_as_two_trailing_spaces_and_a_newline() {
         let article = article("<p>line1<br>line2</p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1721,7 +1163,7 @@ mod tests {
     fn pre_content_is_not_collapsed_and_keeps_its_newline() {
         let article = article("<pre>line1\nline2</pre>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1736,7 +1178,7 @@ mod tests {
     fn consecutive_spaces_inside_inline_code_survive_unchanged() {
         let article = article("<p>a <code>x   y</code> b</p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1751,7 +1193,7 @@ mod tests {
     fn br_inside_a_table_cell_loses_the_line_break_and_collapses_to_whitespace() {
         let article = article("<table><tr><td>line1<br>line2</td></tr></table>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1766,12 +1208,12 @@ mod tests {
         );
     }
 
-    /// [T-FC046] List-item br output retains htmd indentation and trimming.
+    /// [T-FC046] List-item br output retains four-space indentation and trims trailing spaces.
     #[test]
     fn br_inside_a_list_item_loses_its_trailing_spaces_and_becomes_an_indented_newline() {
         let article = article("<ul><li>line1<br>line2</li></ul>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1787,12 +1229,12 @@ mod tests {
         );
     }
 
-    /// [T-FC047] A heading br leaves the next line unmarked, as htmd emits it.
+    /// [T-FC047] A heading br leaves the next line unmarked.
     #[test]
     fn text_after_a_br_inside_a_heading_lands_outside_the_heading_line() {
         let article = article("<h2>line1<br>line2</h2>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1818,7 +1260,7 @@ mod tests {
              <a href=\"#__codelineno-0-2\"></a>        return 1\n</pre>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1844,7 +1286,7 @@ mod tests {
              and <a href=\"#top\"></a> for details.</p>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1865,7 +1307,7 @@ mod tests {
              title=\"Link to this heading\"></a></h2>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1888,7 +1330,7 @@ mod tests {
     fn anchor_without_href_delegates_to_the_builtin_handler() {
         let article = article("<p><a>plain text</a> and <a href=\"#nav\"></a></p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1907,7 +1349,7 @@ mod tests {
     fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
         let article = article("<p><a href=\"\" title=\"here\"></a>tail</p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1928,7 +1370,7 @@ mod tests {
             "<p><a href=\"https://example.com/target\" title=\"My Title\">link text</a></p>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1950,7 +1392,7 @@ mod tests {
              link text</a></p>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1972,7 +1414,7 @@ mod tests {
              link text</a></p>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -1993,7 +1435,7 @@ mod tests {
         let article =
             article("<p><a href=\"https://example.com/target\" title=\"   \">link text</a></p>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2016,7 +1458,7 @@ mod tests {
              <style>.hiddenStyleRule { color: red; }</style></div>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2046,7 +1488,7 @@ mod tests {
              </div>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2085,7 +1527,7 @@ mod tests {
              </body></html>";
         let raw_article = super::super::extractor::extract_raw(html);
 
-        let result = to_fetch_result(&raw_article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&raw_article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2109,7 +1551,7 @@ mod tests {
              <p>After iframe</p></div>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2141,7 +1583,7 @@ mod tests {
              </div>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2185,7 +1627,7 @@ mod tests {
              <svg><desc>svg desc content</desc></svg></div>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2206,7 +1648,7 @@ mod tests {
                 <pre><code>let x = 1;</code></pre></td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2226,7 +1668,7 @@ mod tests {
         let article =
             article("<table><tbody><tr><td><pre>x\ny</pre></td><td>b</td></tr></tbody></table>");
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2248,7 +1690,7 @@ mod tests {
                 <td>b</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2266,7 +1708,7 @@ mod tests {
                 <script>hidden()</script></code></pre></td><td>b</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2288,7 +1730,7 @@ mod tests {
                 <td>c</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2306,7 +1748,7 @@ mod tests {
                 <pre><code>a ``` b</code></pre></td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2324,7 +1766,7 @@ mod tests {
                 <pre><code>`code`</code></pre></td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2346,7 +1788,7 @@ mod tests {
             used_raw_fallback: false,
         };
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let cut = truncate_and_reneutralize(result.markdown(), MAX_PAGE_BYTES);
         let delimiters = cut.lines().filter(|l| *l == "---").count();
 
@@ -2368,7 +1810,7 @@ mod tests {
             "<table><tbody><tr><td><pre><code>a | b</code></pre></td><td>x</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2391,7 +1833,7 @@ mod tests {
             "<table><tbody><tr><td><pre><code>a\\</code></pre></td><td>second</td></tr></tbody></table>",
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(
@@ -2413,7 +1855,7 @@ mod tests {
             "fixture must take the fallback for this test to cover that path"
         );
 
-        let result = to_fetch_result(&article, "https://example.com".into(), false).unwrap();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
         let markdown = result.markdown();
 
         assert!(

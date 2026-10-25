@@ -354,11 +354,10 @@ impl SlackClient {
     /// Bound concurrent lookups with `buffer_unordered`; each completion can
     /// start another lookup, so the cap does not enforce a request rate.
     async fn prefetch_users(&self, ids: &HashSet<String>) -> (HashMap<String, String>, bool) {
-        let id_list: Vec<String> = ids.iter().cloned().collect();
-        let results: Vec<(String, String, bool)> = stream::iter(id_list)
+        let results: Vec<(String, String, bool)> = stream::iter(ids)
             .map(|id| async move {
-                let (name, failed) = self.fetch_user_name(&id).await;
-                (id, name, failed)
+                let (name, failed) = self.fetch_user_name(id).await;
+                (id.clone(), name, failed)
             })
             .buffer_unordered(SLACK_USERS_CONCURRENCY)
             .collect()

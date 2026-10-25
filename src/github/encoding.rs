@@ -112,13 +112,9 @@ fn decode_bom(bytes: &[u8]) -> Option<Result<DecodeResult, GitHubError>> {
     }))
 }
 
-fn is_likely_binary(bytes: &[u8]) -> bool {
-    bytes.contains(&0)
-}
-
 fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
     // Treat NUL as binary after BOM handling; BOM-less UTF-16 needs an explicit hint.
-    if is_likely_binary(bytes) {
+    if bytes.contains(&0) {
         return Err(GitHubError::NonUtf8(
             "File appears to be binary (contains null bytes). \
             Use --encoding utf-16le or --encoding utf-16be if this is a UTF-16 file without a BOM."

@@ -6,6 +6,8 @@ decision-makers: thkt (project owner)
 
 # Output-Injection Defense for AI-Agent Consumers
 
+> 2026-10-25追記：HTML変換の現行実装は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。本文の抑制規則と関連テストは維持し、`htmd` のハンドラを `src/fetch/converter/html.rs` の `suppressed` / `render` / `raw_text` へ置き換えた。以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装を記録したものである。
+
 ## Context and Problem Statement
 
 scout の主 consumer は AI エージェントで、fetch/search/GitHub/Slack の結果を直接 context に取り込んで判断や次のアクションに使う。取得元は信頼できない Web ページや外部 message であり、本文に active markup や構造マーカーを仕込むことでエージェントの解釈を歪められる。代表的な注入面は次の 4 つである。

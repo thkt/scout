@@ -191,8 +191,8 @@ impl Drop for ChromiumProcess {
 }
 
 /// Spawns a new group and captures ownership without an intervening await.
-/// chromiumoxide 0.9 hides the Command needed for `process_group(0)`, so scout
-/// self-spawns and connects to the resulting DevTools URL.
+/// The caller connects to the announced DevTools URL; the process guard owns
+/// group termination independently of the CDP connection.
 #[cfg(feature = "js-rendering")]
 pub(super) fn spawn_chromium_pgroup(
     browser_path: &Path,
