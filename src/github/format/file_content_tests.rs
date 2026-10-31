@@ -99,23 +99,22 @@ fn fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
 /// [T-GF032] format_file_content picks a fence longer than any inner backtick run
 #[test]
 fn format_file_content_fence_does_not_collide_with_inner_backticks() {
+    // The longest inner backtick run is 3. The `"    N\t"` gutter keeps every
+    // content line from equaling a bare fence, so compare fence lengths.
     let inner = "    1\t```\n    2\tsome code\n    3\t```\n";
     let output = format_file_content("doc.md", 3, inner, None);
 
     let lines: Vec<&str> = output.lines().collect();
-    let opening_fence_line = lines[2];
-    let fence_backticks: String = opening_fence_line
-        .chars()
-        .take_while(|&c| c == '`')
-        .collect();
-
-    let content_lines = &lines[3..lines.len() - 1];
-    for line in content_lines {
-        assert_ne!(
-            *line, &*fence_backticks,
-            "opening fence delimiter should not appear as standalone line in content"
-        );
-    }
+    let fence: String = lines[2].chars().take_while(|&c| c == '`').collect();
+    assert!(
+        fence.len() > 3,
+        "opening fence must be longer than the inner 3-backtick run, got {fence:?}"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some(fence.as_str()),
+        "closing fence must repeat the opening fence"
+    );
 }
 
 /// [T-GF033] format_file_content emits a bare triple-backtick fence for paths without extensions
