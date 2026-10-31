@@ -228,6 +228,7 @@ mod tests {
     use crate::fetch::extractor::extract_article;
     use crate::search::engine::MAX_PAGE_BYTES;
     use crate::yaml::truncate_and_reneutralize;
+    use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
     /// Hand-authored HTML fixture bypasses Readability. Class-driven behavior here
     /// therefore also applies to raw fetch; normal extraction strips classes.
@@ -1447,6 +1448,141 @@ mod tests {
             !markdown.contains("\"\""),
             "no empty title marker must survive:\n{markdown}"
         );
+    }
+
+    /// CommonMark events of the converted body. `article` fixtures carry no
+    /// metadata, so the output starts with an empty frontmatter.
+    fn body_events(markdown: &str) -> Vec<Event<'_>> {
+        let body = markdown
+            .strip_prefix("---\n---\n\n")
+            .expect("an article without metadata must start with an empty frontmatter");
+        Parser::new(body).collect()
+    }
+
+    /// The events of a paragraph that holds `element` and nothing else.
+    fn lone_paragraph(element: Tag<'_>) -> Vec<Event<'_>> {
+        let end = element.to_end();
+        vec![
+            Event::Start(Tag::Paragraph),
+            Event::Start(element),
+            Event::End(end),
+            Event::End(TagEnd::Paragraph),
+        ]
+    }
+
+    /// Title attributes whose line breaks precede block syntax, paired with
+    /// the title text a CommonMark reader must recover. A lone CR reaches the
+    /// attribute only through `&#13;`; html5ever turns a literal CR into LF.
+    const LINE_BREAK_TITLES: [(&str, &str); 11] = [
+        ("a&#10;# Heading", "a # Heading"),
+        ("a&#10;```rust", "a ```rust"),
+        ("a&#10;~~~", "a ~~~"),
+        ("a&#10;> quote", "a > quote"),
+        ("a&#10;- item", "a - item"),
+        ("a&#10;---&#10;b", "a --- b"),
+        ("a&#10;...&#10;b", "a ... b"),
+        ("a&#13;# Heading", "a # Heading"),
+        ("a&#13;&#10;# Heading", "a # Heading"),
+        ("  line1  \n\n   line2 ", "line1 line2"),
+        ("&#10;# Heading&#10;", "# Heading"),
+    ];
+
+    /// Title attributes holding backslashes, paired with the title text a
+    /// CommonMark reader must recover.
+    const BACKSLASH_TITLES: [(&str, &str); 3] = [
+        (r"a\", r"a\"),
+        (r"a\&quot;b", r#"a\"b"#),
+        (r"a\*b", r"a\*b"),
+    ];
+
+    /// [T-FC106] An image title whose line break precedes a heading, fence,
+    /// quote, list or YAML marker stays one title inside one paragraph.
+    #[test]
+    fn image_title_with_a_line_break_cannot_open_a_block() {
+        for (attribute, title) in LINE_BREAK_TITLES {
+            let article = article(&format!(
+                "<p><img src=\"https://example.com/x.png\" title=\"{attribute}\"></p>"
+            ));
+
+            let result = to_fetch_result(&article, "https://example.com".into(), false);
+            let markdown = result.markdown();
+
+            assert_eq!(
+                body_events(markdown),
+                lone_paragraph(Tag::Image {
+                    link_type: LinkType::Inline,
+                    dest_url: "https://example.com/x.png".into(),
+                    title: title.into(),
+                    id: "".into(),
+                }),
+                "title attribute {attribute:?} must stay inside the image:\n{markdown}"
+            );
+        }
+    }
+
+    /// [T-FC107] An empty anchor's title whose line break precedes a heading,
+    /// fence, quote, list or YAML marker stays one title inside one paragraph.
+    #[test]
+    fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
+        for (attribute, title) in LINE_BREAK_TITLES {
+            let article = article(&format!(
+                "<p><a href=\"https://example.com/target\" title=\"{attribute}\"></a></p>"
+            ));
+
+            let result = to_fetch_result(&article, "https://example.com".into(), false);
+            let markdown = result.markdown();
+
+            assert_eq!(
+                body_events(markdown),
+                lone_paragraph(Tag::Link {
+                    link_type: LinkType::Inline,
+                    dest_url: "https://example.com/target".into(),
+                    title: title.into(),
+                    id: "".into(),
+                }),
+                "title attribute {attribute:?} must stay inside the link:\n{markdown}"
+            );
+        }
+    }
+
+    /// [T-FC108] A title holding a backslash, including a trailing one or one
+    /// before a double quote, still closes and reads back unchanged on both
+    /// images and empty anchors.
+    #[test]
+    fn title_with_a_backslash_closes_and_reads_back_unchanged() {
+        for (attribute, title) in BACKSLASH_TITLES {
+            for (html, expected) in [
+                (
+                    format!("<p><img src=\"https://example.com/x.png\" title=\"{attribute}\"></p>"),
+                    Tag::Image {
+                        link_type: LinkType::Inline,
+                        dest_url: "https://example.com/x.png".into(),
+                        title: title.into(),
+                        id: "".into(),
+                    },
+                ),
+                (
+                    format!(
+                        "<p><a href=\"https://example.com/target\" title=\"{attribute}\"></a></p>"
+                    ),
+                    Tag::Link {
+                        link_type: LinkType::Inline,
+                        dest_url: "https://example.com/target".into(),
+                        title: title.into(),
+                        id: "".into(),
+                    },
+                ),
+            ] {
+                let result = to_fetch_result(&article(&html), "https://example.com".into(), false);
+                let markdown = result.markdown();
+
+                assert_eq!(
+                    body_events(markdown),
+                    lone_paragraph(expected),
+                    "title attribute {attribute:?} must close and read back unchanged:\n{markdown}"
+                );
+            }
+        }
     }
 
     /// [T-FC084] Pure-mode block handling must not leak script or style source.
