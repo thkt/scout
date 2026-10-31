@@ -1,8 +1,8 @@
 //! End-to-end YAML-boundary defense through `scout fetch` (src/yaml.rs).
 //! Outside closed fences, column-0 `---`/`...` markers become `***`; an
 //! unclosed conservative fence makes the entire body subject to rewriting.
-//! Both htmd's pre/code fences (T-C032) and scout's bare-pre fences
-//! (T-C039, T-FC019) must preserve quoted markers when closed.
+//! Both pre/code fences (T-C032) and bare-pre fences (T-C039, T-FC019)
+//! must preserve quoted markers when closed.
 //!
 //! Fixtures need enough article prose for Readability extraction. The helper
 //! rejects RAW_FALLBACK_NOTE so fallback cannot silently satisfy these checks.
@@ -190,8 +190,8 @@ fn pre_code_column_zero_marker_survives_verbatim_inside_closed_fence() {
 
 // T-C039: bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence
 //
-// Unlike T-C032's htmd pre/code path, this exercises scout's bare-pre
-// handler (T-FC019) through Readability and the CLI.
+// Unlike T-C032's pre/code input, this exercises a bare pre with no code
+// child (T-FC019) through Readability and the CLI.
 #[test]
 fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "bare pre element marker";
@@ -204,8 +204,8 @@ fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
 
     assert!(
         body.contains("```\n---\nevil: true\n...\n```"),
-        "a bare <pre> (no <code> child) must be wrapped in a fence by the added \
-         pre handler, and that closed fence's column-0 YAML markers must \
+        "a bare <pre> (no <code> child) must be wrapped in a fence, and that \
+         closed fence's column-0 YAML markers must \
          survive verbatim, not be rewritten to ***, the same combination \
          T-C032 pins for <pre><code>, got body:\n{body}"
     );
@@ -248,9 +248,9 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
 
 // T-C045: row_heading_label_survives_and_column_alignment_padding_is_absent
 //
-// Exercises table_handler through Readability and the CLI, beyond the direct
+// Exercises table rendering through Readability and the CLI, beyond the direct
 // T-FC060/T-FC061/T-FC062 converter checks. Unequal cell widths distinguish
-// scout's unpadded rows from htmd's column-alignment padding.
+// unpadded rows from column-alignment padding.
 #[test]
 fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     let context = "row heading table with column alignment";
@@ -375,10 +375,10 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
 
 // T-C043: on a page whose pre holds one span per line, no fetch output line carries a backslash
 //
-// Extends T-FC053 through Readability and the CLI. Direct pre text and span
-// children use different converter paths; extraction must preserve the final
-// code text across that seam. Leading tilde/backtick bytes expose htmd escapes
-// that plain text would not, so the no-backslash assertion is discriminating.
+// Extends T-FC053 through Readability and the CLI; extraction must keep the
+// per-line span structure and its code text intact. Body text outside a fence
+// would gain a backslash before a leading tilde or backtick, so those bytes
+// make the no-backslash assertion discriminating.
 #[test]
 fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     let context = "syntax-highlighted pre with one span per line";
@@ -397,10 +397,9 @@ fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     );
     assert!(
         !body.lines().any(|l| l.contains('\\')),
-        "{context}: no line of fetch output should contain a backslash, since neither \
-         raw_pre_content's direct-Text-child path nor span_handler's walk_children path may \
-         introduce htmd's leading `~`/`` ` `` escape once the per-line <span> structure survives \
-         Readability extraction intact, got body:\n{body}"
+        "{context}: no line of fetch output should contain a backslash, since neither a \
+         direct text child nor a per-line <span> of the pre may gain a leading `~`/`` ` `` \
+         escape once that structure survives Readability extraction intact, got body:\n{body}"
     );
 }
 

@@ -91,7 +91,7 @@ fn titled_headerlink_with_empty_content_is_removed() {
 /// [T-FC051] Text in a missing-href anchor survives without link brackets;
 /// the empty fragment-only sibling is suppressed.
 #[test]
-fn anchor_without_href_delegates_to_the_builtin_handler() {
+fn anchor_without_href_keeps_its_text_without_link_brackets() {
     let article = article("<p><a>plain text</a> and <a href=\"#nav\"></a></p>");
 
     let result = to_fetch_result(&article, "https://example.com".into(), false);
@@ -99,16 +99,16 @@ fn anchor_without_href_delegates_to_the_builtin_handler() {
 
     assert!(
         markdown.contains("plain text") && !markdown.contains("[plain text]"),
-        "an <a> with no href must fall through to the builtin handler's walk-children \
-         behavior, not gain link brackets:\n{markdown}"
+        "an <a> with no href must keep its text without gaining link brackets:\n{markdown}"
     );
     assert!(
         !markdown.contains("#nav"),
-        "the fragment-only sibling anchor must be suppressed, not just the hrefless one delegated:\n{markdown}"
+        "the fragment-only sibling anchor must be suppressed, not just the hrefless one \
+         kept as text:\n{markdown}"
     );
 }
 
-/// [T-FC073] Delegated nonempty links must not retain redundant title suffixes.
+/// [T-FC073] A link with link text drops its title attribute from the output.
 #[test]
 fn title_disappears_from_the_output_of_a_link_that_has_link_text() {
     let article =

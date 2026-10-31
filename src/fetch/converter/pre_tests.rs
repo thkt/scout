@@ -214,9 +214,10 @@ fn backtick_led_pre_text_after_an_element_child_survives_unescaped() {
     }
 }
 
-/// [T-FC036] DOM-based text preservation must hold through nested pre handling.
+/// [T-FC036] A backtick-led text node after an element child survives
+/// unescaped when its pre is nested inside another pre.
 #[test]
-fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
+fn backtick_led_text_in_a_nested_pre_survives_unescaped() {
     let article = article("<pre><pre>abc<span>X</span>`def</pre></pre>");
 
     let result = to_fetch_result(&article, "https://example.com".into(), false);
@@ -228,8 +229,7 @@ fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
     );
     assert!(
         !markdown.contains(r"abcX\`def"),
-        "htmd's escape on the inner pre's second text node must not survive as a literal \
-         backslash:\n{markdown}"
+        "no backslash may precede the inner pre's second text node's backtick:\n{markdown}"
     );
 }
 
@@ -297,9 +297,10 @@ fn br_directly_under_pre_survives_as_two_trailing_spaces_and_a_newline() {
     );
 }
 
-/// [T-FC040] Unregistered child tags must still preserve pre text without escaping.
+/// [T-FC040] Text in a pre child tag that has no Markdown form, here `<mark>`,
+/// keeps escape-target characters unescaped.
 #[test]
-fn unregistered_tag_child_text_inside_pre_is_not_escaped() {
+fn pre_child_tag_without_a_markdown_form_keeps_its_text_unescaped() {
     let article = article("<pre><mark>a_b*c</mark></pre>");
 
     let result = to_fetch_result(&article, "https://example.com".into(), false);
@@ -307,8 +308,8 @@ fn unregistered_tag_child_text_inside_pre_is_not_escaped() {
 
     assert!(
         markdown.contains("a_b*c"),
-        "an unregistered tag's text content inside <pre> must survive without \
-         escape-target characters gaining a backslash:\n{markdown}"
+        "a <mark> child's text inside <pre> must survive without escape-target \
+         characters gaining a backslash:\n{markdown}"
     );
 }
 
@@ -326,8 +327,8 @@ fn trailing_newline_at_the_end_of_a_span_inside_pre_survives_in_the_output() {
     );
 }
 
-/// [T-FC054] Inline-code spans fold newlines to spaces.
-/// The newline must be inside the span to exercise that handler.
+/// [T-FC054] A span's trailing newline inside inline code outside pre folds to
+/// a space. The newline sits inside the span, so dropping it would join the words.
 #[test]
 fn span_inside_inline_code_outside_pre_folds_the_newline_to_a_space() {
     let article = article("<p><code><span>line1\n</span>line2</code></p>");
@@ -337,8 +338,8 @@ fn span_inside_inline_code_outside_pre_folds_the_newline_to_a_space() {
 
     assert!(
         markdown.contains("`line1 line2`"),
-        "a span inside inline code with no <pre> ancestor must preserve its newline as a space, preserving the newline for the code handler to fold \
-         to a space:\n{markdown}"
+        "the newline inside a span within inline code with no <pre> ancestor must \
+         fold to a space:\n{markdown}"
     );
     assert!(
         !markdown.contains("line1\nline2"),

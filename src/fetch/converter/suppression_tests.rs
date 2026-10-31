@@ -28,8 +28,9 @@ fn script_and_style_content_left_in_content_html_does_not_reach_the_body() {
     );
 }
 
-/// [T-FC085] Suppress hidden bodies in both registered and fallback tag paths.
-/// With scripting enabled, noscript and iframe children are parsed as raw text.
+/// [T-FC085] Content of noscript, textarea, iframe, and SVG title and desc
+/// elements does not reach the body. With scripting enabled, noscript and
+/// iframe children are parsed as raw text.
 #[test]
 fn noscript_textarea_iframe_child_and_svg_desc_title_content_do_not_reach_the_body() {
     let article = article(
@@ -95,7 +96,7 @@ fn raw_extraction_end_to_end_does_not_leak_script_content_into_the_body() {
 }
 
 /// [T-FC089] XHTML self-closed raw-text tags must not swallow the rest of the
-/// body when htmd parses them as HTML. Cover script and iframe.
+/// body; an HTML parser ignores their self-closing slash. Cover script and iframe.
 #[test]
 fn body_after_a_self_closed_raw_text_tag_still_reaches_the_body() {
     let article = article(
@@ -197,8 +198,8 @@ fn a_script_tag_inside_js_source_is_not_rewritten_into_an_early_close() {
 /// fallback, not only hand-built converter fixtures.
 #[test]
 fn readability_failure_path_still_drops_script_content() {
-    // Avoid `_` in the leak marker: htmd escapes it and a literal substring
-    // assertion could then miss leaked script text.
+    // Avoid `_` in the leak marker: body text escapes it as `\_`, so a literal
+    // substring assertion could then miss leaked script text.
     let html = "<script>SCRIPTMARKER</script>";
     let article = extract_article(html, Some("https://example.com"));
     assert!(

@@ -544,7 +544,7 @@ fn table_cell_code_span_escapes_a_pipe_with_a_backslash() {
 /// so it cannot produce a bare trailing backslash at that boundary.
 #[test]
 fn table_row_keeps_a_space_between_a_trailing_backslash_and_the_closing_pipe() {
-    // htmd leaves a backslash inside a code span unescaped (T-FC015).
+    // A backslash inside a code span stays unescaped (T-FC015).
     let article = article(
         "<table><tbody><tr><td><pre><code>a\\</code></pre></td><td>second</td></tr></tbody></table>",
     );
