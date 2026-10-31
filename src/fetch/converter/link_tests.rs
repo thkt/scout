@@ -2,7 +2,7 @@ use super::test_helpers::article;
 use super::*;
 use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
-/// [T-FC026] Parentheses in a destination must not close the Markdown link early.
+/// [T-FC026]
 #[test]
 fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
     let article = article(r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#);
@@ -109,7 +109,7 @@ fn anchor_without_href_keeps_its_text_without_link_brackets() {
     );
 }
 
-/// [T-FC073] A link with link text drops its title attribute from the output.
+/// [T-FC073]
 #[test]
 fn title_disappears_from_the_output_of_a_link_that_has_link_text() {
     let article =
@@ -145,7 +145,7 @@ fn empty_anchor_title_backslash_escapes_double_quotes() {
     );
 }
 
-/// [T-FC075] A multi-line title on an empty anchor folds onto one line.
+/// [T-FC075]
 #[test]
 fn empty_anchor_title_folds_trimmed_non_blank_lines_onto_one_line() {
     let article = article(
@@ -161,8 +161,7 @@ fn empty_anchor_title_folds_trimmed_non_blank_lines_onto_one_line() {
     );
 }
 
-/// [T-FC076] A whitespace-only title on an empty anchor becomes an empty
-/// title marker `""` after the destination.
+/// [T-FC076]
 #[test]
 fn whitespace_only_title_on_an_empty_anchor_becomes_an_empty_title() {
     let article = article("<p><a href=\"https://example.com/target\" title=\"   \"></a></p>");
@@ -176,7 +175,7 @@ fn whitespace_only_title_on_an_empty_anchor_becomes_an_empty_title() {
     );
 }
 
-/// [T-FC077] Empty href resolves to the same page and must not emit an empty link.
+/// [T-FC077]
 #[test]
 fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
     let article = article("<p><a href=\"\" title=\"here\"></a>tail</p>");
@@ -233,8 +232,7 @@ const BACKSLASH_TITLES: [(&str, &str); 3] = [
     (r"a\*b", r"a\*b"),
 ];
 
-/// [T-FC106] An image title with a line break before block syntax stays one
-/// title in one paragraph.
+/// [T-FC106]
 #[test]
 fn image_title_with_a_line_break_cannot_open_a_block() {
     for (attribute, title) in LINE_BREAK_TITLES {
@@ -258,8 +256,7 @@ fn image_title_with_a_line_break_cannot_open_a_block() {
     }
 }
 
-/// [T-FC107] An empty anchor's title with a line break before block syntax
-/// stays one title in one paragraph.
+/// [T-FC107]
 #[test]
 fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
     for (attribute, title) in LINE_BREAK_TITLES {
@@ -283,8 +280,7 @@ fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
     }
 }
 
-/// [T-FC108] A title holding a backslash closes and reads back unchanged on
-/// images and empty anchors.
+/// [T-FC108]
 #[test]
 fn title_with_a_backslash_closes_and_reads_back_unchanged() {
     for (attribute, title) in BACKSLASH_TITLES {
