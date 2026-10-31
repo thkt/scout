@@ -341,8 +341,6 @@ mod tests {
     /// default path carries what `--raw` carries.
     #[test]
     fn parse_failure_on_non_empty_html_falls_back_with_the_content_intact() {
-        // Marker matches T-FC097's, which needs one free of `_` to survive the
-        // converter's escaping. Nothing here converts, but the two read together.
         let html = "<script>SCRIPTMARKER</script>";
 
         let result = extract_article(html, Some("https://example.com"));

@@ -540,8 +540,8 @@ fn table_cell_code_span_escapes_a_pipe_with_a_backslash() {
 }
 
 /// [T-FC099] Row padding must keep a trailing content backslash from escaping
-/// the next cell delimiter. Current inline-code output closes with a backtick
-/// so it cannot produce a bare trailing backslash at that boundary.
+/// the next cell delimiter. Inline-code output closes with a backtick, so it
+/// cannot produce a bare trailing backslash at that boundary.
 #[test]
 fn table_row_keeps_a_space_between_a_trailing_backslash_and_the_closing_pipe() {
     // A backslash inside a code span stays unescaped (T-FC015).
