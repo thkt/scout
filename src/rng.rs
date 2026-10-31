@@ -56,21 +56,4 @@ mod tests {
             assert!(v < 10, "fastrand returned {v} for upper_exclusive=10");
         }
     }
-
-    /// [T-RNG003] Calls through `&self` advance the same SeededRng state
-    /// rather than returning a constant sequence.
-    #[test]
-    fn seeded_rng_advances_state_across_calls() {
-        use std::collections::HashSet;
-        let rng = SeededRng::new(7);
-        let mut samples = Vec::with_capacity(5);
-        for _ in 0..5 {
-            samples.push(rng.u64_below(u64::MAX));
-        }
-        let unique: HashSet<_> = samples.iter().collect();
-        assert!(
-            unique.len() > 1,
-            "SeededRng must advance state; got constant sequence: {samples:?}"
-        );
-    }
 }

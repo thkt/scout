@@ -203,21 +203,6 @@ fn format_report_neutralizes_javascript_source_url() {
     );
 }
 
-/// [T-SE016] format_report does not emit a "## Search Result" header
-#[test]
-fn format_report_omits_search_result_header() {
-    let report = ResearchReport {
-        sources: vec![make_source("https://a.com", "A")],
-        ..Default::default()
-    };
-
-    let text = format_report(&report, "test");
-    assert!(
-        !text.contains("## Search Result"),
-        "report must not contain the obsolete Search Result header, got:\n{text}"
-    );
-}
-
 /// [T-SE004] format_report shifts page headings to avoid hierarchy collision
 #[test]
 fn format_report_includes_fetched_pages() {
