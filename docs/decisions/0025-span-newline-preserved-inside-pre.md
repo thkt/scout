@@ -54,7 +54,7 @@ Chosen option: 方式 A。`src/fetch/converter.rs` の `pre_handler` と同じ `
 
 ### Confirmation
 
-T-FC052〜T-FC055 (`src/fetch/converter.rs` の `mod tests`) が、pre 内 span の末尾改行の保持、行ごとの span が別行を保つこと、pre 外の inline code 内 span で改行が剥がれること、隣接 span が要素の子を持つ形でも改行が残ることを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
+T-FC052〜T-FC055 (`src/fetch/converter/pre_tests.rs`) が、pre 内 span の末尾改行の保持、行ごとの span が別行を保つこと、pre 外の inline code 内 span で改行が剥がれること、隣接 span が要素の子を持つ形でも改行が残ることを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
 
 ## Pros and Cons of the Options
 
