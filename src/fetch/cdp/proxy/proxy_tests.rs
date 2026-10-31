@@ -100,7 +100,7 @@ async fn t201_1_rebind_to_imds_replies_not_allowed_and_logs() {
 async fn t201_2_ipv4_literal_loopback_replies_not_allowed() {
     // Resolver is unused for IP literals; supply a public IP to prove the
     // literal itself (127.0.0.1) is what gets rejected.
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let mut bytes = GREETING.to_vec();
     // CONNECT 127.0.0.1:80, ATYP=IPv4.
     bytes.extend_from_slice(&[0x05, CMD_CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0, 80]);
@@ -144,7 +144,7 @@ async fn t201_4_mixed_public_and_private_fails_closed() {
 /// [T-201-5]: a non-CONNECT command (BIND) is refused with REP 0x07.
 #[tokio::test]
 async fn t201_5_bind_command_replies_cmd_not_supported() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let mut bytes = GREETING.to_vec();
     // BIND request header only. The server rejects on CMD before parsing the
     // address, so DST.ADDR/DST.PORT are omitted: sending trailing bytes the
@@ -162,7 +162,7 @@ async fn t201_5_bind_command_replies_cmd_not_supported() {
 /// [T-201-6]
 #[tokio::test]
 async fn t201_6_non_socks5_greeting_closes_silently() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     // Exactly the 2-byte greeting head: VER=0x04 (SOCKS4) plus NMETHODS. The
     // server rejects on the version byte and reads nothing further, so no
     // trailing bytes are sent (an unread tail would trigger a macOS RST).
@@ -179,7 +179,7 @@ async fn t201_6_non_socks5_greeting_closes_silently() {
 /// [T-201-9]
 #[tokio::test]
 async fn t201_9_request_stage_version_mismatch_closes_after_method_reply() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let mut bytes = GREETING.to_vec();
     // Request header with VER=0x04. The server consumes the 4-byte header, sees
     // the bad version, and returns without reading an address, so no trailing
@@ -199,7 +199,7 @@ async fn t201_9_request_stage_version_mismatch_closes_after_method_reply() {
 /// loopback address ::1 is private, so REP 0x02.
 #[tokio::test]
 async fn t201_10_ipv6_literal_loopback_replies_not_allowed() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let mut bytes = GREETING.to_vec();
     // CONNECT [::1]:80, ATYP=IPv6 (16-byte address + 2-byte port).
     bytes.extend_from_slice(&[0x05, CMD_CONNECT, 0x00, 0x04]);
@@ -214,7 +214,7 @@ async fn t201_10_ipv6_literal_loopback_replies_not_allowed() {
 /// [T-201-11]: an unsupported address type (ATYP 0x05) is refused with REP 0x08.
 #[tokio::test]
 async fn t201_11_unknown_atyp_replies_addr_not_supported() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let mut bytes = GREETING.to_vec();
     // Request header only: the server rejects on the unknown ATYP before reading
     // any address, so trailing bytes are omitted (unread tail = macOS RST).
@@ -274,7 +274,7 @@ async fn t201_13_upstream_dial_refused_replies_general_failure() {
 #[tokio::test]
 #[traced_test]
 async fn t201_14_abrupt_client_disconnect_is_logged_not_fatal() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let (_tx, rx) = watch::channel(false);
     let (port, task) = spawn_ssrf_proxy(resolver, rx).await.unwrap();
 
@@ -305,7 +305,7 @@ async fn t201_14_abrupt_client_disconnect_is_logged_not_fatal() {
 #[tokio::test(start_paused = true)]
 #[traced_test]
 async fn t201_15_no_handshake_bytes_times_out_and_closes() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let (mut client, server) = duplex(64);
 
     // Send nothing: handle_conn hangs on the greeting read until the deadline.
@@ -331,7 +331,7 @@ async fn t201_15_no_handshake_bytes_times_out_and_closes() {
 #[tokio::test(start_paused = true)]
 #[traced_test]
 async fn t201_16_partial_handshake_times_out_after_method_reply() {
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let (mut client, server) = duplex(64);
 
     // Greeting only: handle_conn replies no-auth, then hangs on the request read.

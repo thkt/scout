@@ -22,6 +22,14 @@ use reqwest::Client;
 use reqwest::redirect::Policy;
 use wiremock::{MockServer, ResponseTemplate};
 
+use crate::fetch::{DnsResolver, TokioDnsResolver};
+
+/// System DNS resolver for tests that never reach a lookup, such as an
+/// IP-literal host, a failure before the fetch, or proxied egress.
+pub(crate) fn real_resolver() -> Arc<dyn DnsResolver> {
+    Arc::new(TokioDnsResolver)
+}
+
 /// Redirects are disabled; callers must bound requests that need a timeout.
 pub(crate) fn no_redirect_client() -> Client {
     Client::builder().redirect(Policy::none()).build().unwrap()

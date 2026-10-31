@@ -333,6 +333,11 @@ impl StaticDnsResolver {
     pub(crate) fn single(ip: &str) -> Self {
         Self(vec![ip.parse().expect("test IP must parse")])
     }
+
+    /// Answers every lookup with one public address the SSRF check accepts.
+    pub(crate) fn public() -> Self {
+        Self::single("93.184.216.34")
+    }
 }
 
 #[cfg(test)]

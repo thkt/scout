@@ -5,10 +5,6 @@ fn private_dns() -> StaticDnsResolver {
     StaticDnsResolver::single("10.0.0.1")
 }
 
-fn public_dns() -> StaticDnsResolver {
-    StaticDnsResolver::single("93.184.216.34")
-}
-
 /// [T-F044]
 #[tokio::test]
 async fn t004_blocks_dns_resolving_to_private_ip() {
@@ -22,7 +18,7 @@ async fn t004_blocks_dns_resolving_to_private_ip() {
 /// [T-F045]
 #[tokio::test]
 async fn t004_blocks_internal_ip_literal() {
-    let resolver = public_dns();
+    let resolver = StaticDnsResolver::public();
     assert!(
         !check_browser_request("http://127.0.0.1/secret", &resolver).await,
         "must block loopback IP"
@@ -32,7 +28,7 @@ async fn t004_blocks_internal_ip_literal() {
 /// [T-F046]
 #[tokio::test]
 async fn t004_allows_public_url() {
-    let resolver = public_dns();
+    let resolver = StaticDnsResolver::public();
     assert!(
         check_browser_request("https://example.com/page", &resolver).await,
         "must allow public URL"
@@ -42,7 +38,7 @@ async fn t004_allows_public_url() {
 /// [T-F047]
 #[tokio::test]
 async fn t004_allows_non_network_urls() {
-    let resolver = public_dns();
+    let resolver = StaticDnsResolver::public();
     for url in [
         "data:text/html,<p>test</p>",
         "about:blank",
@@ -59,7 +55,7 @@ async fn t004_allows_non_network_urls() {
 /// [T-F048]
 #[tokio::test]
 async fn t004_blocks_unknown_schemes() {
-    let resolver = public_dns();
+    let resolver = StaticDnsResolver::public();
     for url in ["file:///etc/passwd", "ftp://internal/data", "gopher://x"] {
         assert!(
             !check_browser_request(url, &resolver).await,
@@ -71,7 +67,7 @@ async fn t004_blocks_unknown_schemes() {
 /// [T-F049]
 #[tokio::test]
 async fn t004_blocks_websocket_to_internal() {
-    let resolver = public_dns();
+    let resolver = StaticDnsResolver::public();
     assert!(
         !check_browser_request("ws://127.0.0.1:8080/ws", &resolver).await,
         "must block ws:// to loopback"

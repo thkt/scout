@@ -1,15 +1,11 @@
 use super::*;
 use crate::fetch::StaticDnsResolver;
-use crate::test_support::try_spawn_mock_server;
+use crate::test_support::{real_resolver, try_spawn_mock_server};
 use reqwest::redirect::Policy;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
-
-fn real_resolver() -> Arc<dyn DnsResolver> {
-    Arc::new(fetch::TokioDnsResolver)
-}
 
 struct MockSearch {
     responses: Mutex<VecDeque<Result<Vec<SearchResult>, BraveError>>>,
@@ -101,7 +97,7 @@ async fn fetch_sources_requests_only_the_ranked_depth_prefix() {
         &sources,
         2,
         &EgressMode::Direct,
-        Arc::new(StaticDnsResolver::single("93.184.216.34")),
+        Arc::new(StaticDnsResolver::public()),
         &cancel,
         Duration::from_secs(5),
     )
@@ -339,7 +335,7 @@ async fn research_with_mock_returns_report() {
         .resolve("scout-test.example", addr)
         .build()
         .expect("test client builds");
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
 
     let req = ResearchRequest {
         query: "test",
@@ -456,7 +452,7 @@ async fn source_fetch_timeout_states_the_timeout_once() {
         .resolve("scout-test.example", addr)
         .build()
         .expect("test client builds");
-    let resolver: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::public());
     let sources = vec![make_source(
         &format!("http://scout-test.example:{}/slow", addr.port()),
         "Slow",
