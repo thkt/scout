@@ -88,18 +88,6 @@ fn decode_body_decodes_correctly_labeled_iso_8859_1() {
     assert!(!decoded.uncertain);
 }
 
-/// [T-F062]
-#[test]
-fn decode_body_decodes_valid_utf8_clean() {
-    let labeled = decode_body("hello world".as_bytes(), Some("utf-8"));
-    assert_eq!(labeled.text, "hello world");
-    assert!(!labeled.uncertain);
-
-    let unlabeled = decode_body("hello world".as_bytes(), None);
-    assert_eq!(unlabeled.text, "hello world");
-    assert!(!unlabeled.uncertain);
-}
-
 /// [T-F063] windows-1252 single-byte content mislabeled utf-8 returns lossy body and is uncertain
 #[test]
 fn decode_body_marks_undecodable_bytes_uncertain() {

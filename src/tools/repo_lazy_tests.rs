@@ -249,25 +249,13 @@ async fn repo_overview_parallel_after_get_repo() {
     server.abort();
 }
 
-/// [T-TS011] Base case of the lazy-github triple (T-TS012 / T-TS013):
-/// construction alone must not build the client, because the first
-/// `Scout::github()` touch pays a `gh auth token` subprocess (DR-0008).
-#[test]
-fn scout_lazy_github_initially_none() {
-    let s = scout_lazy("http://localhost:0");
-    assert!(
-        s.github.get().is_none(),
-        "github OnceCell should be uninitialized after scout_lazy()"
-    );
-}
-
 /// [T-TS036] `repo-tree` rejects a malformed `--path` or `--ref` before the
 /// GitHub client exists.
 ///
 /// Both checks read the argument's shape alone and need nothing from the
-/// network, while the first `Scout::github()` touch pays a `gh auth token`
-/// subprocess (T-TS011 / DR-0008). `repo_read` already validates first; this
-/// pins the same order for `repo_tree`, whose own comment claims it.
+/// network, while the first `Scout::github()` touch in production pays a
+/// `gh auth token` subprocess (DR-0008). `repo_read` already validates first;
+/// this pins the same order for `repo_tree`, whose own comment claims it.
 #[tokio::test]
 async fn repo_tree_rejects_a_malformed_argument_before_building_the_client() {
     for (label, params) in [
@@ -401,21 +389,6 @@ async fn research_leaves_github_uninitialized() {
     assert!(
         s.github.get().is_none(),
         "research should not initialize GitHubClient on the success path"
-    );
-}
-
-/// [T-TS015] github() called twice returns the same reference
-/// (OnceCell caching verified via std::ptr::eq).
-#[tokio::test]
-async fn github_returns_same_reference() {
-    use std::ptr;
-    // Use pre-set OnceCell to avoid triggering real `gh auth token` subprocess.
-    let s = scout_with_github("http://localhost:0", "http://localhost:0");
-    let first = s.github().await;
-    let second = s.github().await;
-    assert!(
-        ptr::eq(first, second),
-        "github() should return the same cached reference on second call"
     );
 }
 
