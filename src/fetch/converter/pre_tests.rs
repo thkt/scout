@@ -78,23 +78,25 @@ fn pre_code_is_fenced_exactly_once() {
     );
 }
 
-/// [T-FC021] Fenced bare-pre text must not retain htmd's leading fence escape.
+/// [T-FC021] A leading backtick in bare-pre text survives unescaped inside the
+/// fence, also when a comment node precedes the text.
 #[test]
-fn htmd_leading_backslash_before_pre_text_does_not_survive_inside_the_fence() {
-    let article = article("<pre>`hello</pre>");
+fn leading_backtick_of_bare_pre_text_survives_unescaped_inside_the_fence() {
+    for html in ["<pre>`hello</pre>", "<pre><!-- c -->`hello</pre>"] {
+        let article = article(html);
 
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let markdown = result.markdown();
 
-    assert!(
-        result.markdown().contains("```\n`hello\n```"),
-        "the leading backtick must survive unescaped inside the fence:\n{}",
-        result.markdown()
-    );
-    assert!(
-        !result.markdown().contains("\\`hello"),
-        "htmd's pre-text leading backslash must be stripped once the content is fenced:\n{}",
-        result.markdown()
-    );
+        assert!(
+            markdown.contains("```\n`hello\n```"),
+            "the leading backtick must survive unescaped inside the fence for {html}:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains("\\`hello"),
+            "no backslash may precede the leading backtick for {html}:\n{markdown}"
+        );
+    }
 }
 
 /// [T-FC022] Source backslashes inside pre content must survive unchanged.
@@ -173,21 +175,6 @@ fn pre_with_nested_inline_element_is_wrapped_in_a_fence() {
     assert!(
         result.markdown().contains("```\n`x`\n```"),
         "a <pre> whose fence-leading text comes from a nested element must still be fenced:\n{}",
-        result.markdown()
-    );
-}
-
-/// [T-FC029] htmd's extra leading backslash must not remain when a comment
-/// precedes the pre text.
-#[test]
-fn htmd_leading_backslash_is_stripped_when_a_comment_precedes_the_text() {
-    let article = article("<pre><!-- c -->`hello</pre>");
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-
-    assert!(
-        !result.markdown().contains("\\`hello"),
-        "htmd's escape must be stripped even when a comment node comes first:\n{}",
         result.markdown()
     );
 }
