@@ -72,10 +72,6 @@ impl Scout {
             )))
         })?;
 
-        if result.used_raw_fallback() {
-            warn!(url = %RedactedLogUrl(&url), "readability extraction failed, using raw fallback");
-        }
-
         info!(url = %RedactedLogUrl(&url), "fetch complete");
         let markdown = format_fetch_output(&result);
         let data = to_data_value(&result, "fetch result")?;
