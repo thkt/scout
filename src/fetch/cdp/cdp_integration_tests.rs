@@ -98,7 +98,7 @@ async fn devtools_eof_cleans_browser_group_and_profile() {
 
 /// [T-F060] A nonexistent injected browser path reports a chromium spawn failure.
 #[tokio::test]
-async fn t007_fetch_with_cdp_with_injects_browser_path() {
+async fn nonexistent_browser_path_fails_at_chromium_spawn() {
     let (cancel, _) = watch::channel(false);
     let bogus = Path::new("/nonexistent/scout-test-no-such-chromium");
     let err = fetch_with_cdp_with(
@@ -123,7 +123,7 @@ async fn t007_fetch_with_cdp_with_injects_browser_path() {
 /// Requires real chromium; recording only this profile avoids concurrent fixtures.
 #[tokio::test]
 #[ignore = "requires chromium"]
-async fn t005_t006_cdp_renders_and_removes_profile_dir() {
+async fn chromium_renders_the_page_and_removes_its_profile_dir() {
     let recording = tempdir().expect("profile recorder");
     let profile_record = recording.path().join("profile");
     let wrapper = recording.path().join("chromium");

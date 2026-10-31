@@ -153,7 +153,7 @@ pub async fn run() -> ExitCode {
     };
     let json_mode = cli.json;
 
-    let scout = match Scout::new().await {
+    let scout = match Scout::new(json_mode).await {
         Ok(s) => s,
         Err(e) => return emit_error(&e, json_mode),
     };

@@ -225,6 +225,10 @@ fn format_overview_escapes_issue_title() {
     }];
     let output = format_overview(&repo, None, &issues, &[], &[]);
     assert!(!output.contains("[click](http://evil)"));
+    assert!(
+        output.contains("## Recent Issues") && output.contains(r"bug \[click\]\(http://evil\)"),
+        "the issue must render under its section with an escaped title, got:\n{output}"
+    );
 }
 
 /// [T-GF019] format_overview escapes markdown link syntax in PR titles
@@ -240,6 +244,11 @@ fn format_overview_escapes_pr_title() {
     }];
     let output = format_overview(&repo, None, &[], &pulls, &[]);
     assert!(!output.contains("[link](http://evil)"));
+    assert!(
+        output.contains("## Recent Pull Requests")
+            && output.contains(r"feat \| \[link\]\(http://evil\)"),
+        "the PR must render under its section with an escaped title, got:\n{output}"
+    );
 }
 
 fn make_readme_bytes(n: usize) -> String {

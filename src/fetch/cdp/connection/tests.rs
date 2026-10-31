@@ -13,7 +13,7 @@ async fn pair() -> (Connection, Peer) {
         "ws://{}/devtools/browser/test",
         listener.local_addr().unwrap()
     );
-    let resolver = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let resolver = Arc::new(StaticDnsResolver::public());
     let client = Connection::connect(&endpoint, resolver);
     let server = async {
         let (stream, _) = listener.accept().await.unwrap();

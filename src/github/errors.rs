@@ -112,3 +112,5 @@ impl GitHubError {
 
 #[cfg(test)]
 mod classify_tests;
+#[cfg(test)]
+mod display_tests;

@@ -112,19 +112,6 @@ fn rate_limited_without_retry_after_suggests_token() {
     );
 }
 
-/// [T-GHC007] Api 5xx classifies as TempFailure (priority 4 over Unknown fallback).
-#[test]
-fn api_5xx_is_temp_failure() {
-    for code in [500u16, 502, 503, 599] {
-        let c = GitHubError::Api {
-            code,
-            message: "x".into(),
-        }
-        .classify();
-        assert_eq!(c.kind, ErrorCode::TempFailure, "code {code}");
-    }
-}
-
 /// [T-GHC008] Decode (schema drift) classifies as Internal per ADR-0011 priority 5.
 #[test]
 fn decode_is_internal() {
@@ -138,17 +125,6 @@ fn decode_is_internal() {
 fn response_too_large_is_internal() {
     let c = GitHubError::ResponseTooLarge.classify();
     assert_eq!(c.kind, ErrorCode::Internal);
-}
-
-/// [T-GHC009] Api codes outside 4xx/5xx (e.g., 1xx/3xx leak) land on Unknown.
-#[test]
-fn api_non_4xx_5xx_is_unknown() {
-    let c = GitHubError::Api {
-        code: 304,
-        message: "not modified".into(),
-    }
-    .classify();
-    assert_eq!(c.kind, ErrorCode::Unknown);
 }
 
 /// [T-GHC011] A transport failure delegates to the shared reqwest classifier.

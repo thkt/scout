@@ -154,7 +154,8 @@ fn slack_space_message_not_found_classifies_as_not_found() {
 }
 
 /// [T-ER034] GitHub/Brave Api and Fetch Status follow ADR-0003's status table.
-/// Independent expected codes catch backend drift, including 408/404.
+/// Independent expected codes catch backend drift, including 408/404 and the
+/// upper ends of the 4xx and 5xx ranges (499, 599).
 #[test]
 fn http_status_table_is_answered_identically_across_backends() {
     use crate::brave::client::BraveError;
@@ -162,15 +163,20 @@ fn http_status_table_is_answered_identically_across_backends() {
 
     for (status, expected) in [
         (500, ErrorCode::TempFailure),
+        (502, ErrorCode::TempFailure),
         (503, ErrorCode::TempFailure),
+        (599, ErrorCode::TempFailure),
         (408, ErrorCode::TempFailure),
         (429, ErrorCode::TempFailure),
         (404, ErrorCode::NotFound),
         (401, ErrorCode::UsageError),
         (403, ErrorCode::UsageError),
         (400, ErrorCode::DataError),
+        (410, ErrorCode::DataError),
         (422, ErrorCode::DataError),
+        (499, ErrorCode::DataError),
         (301, ErrorCode::Unknown),
+        (304, ErrorCode::Unknown),
     ] {
         assert_eq!(
             Classification::from_http_status(status).kind,

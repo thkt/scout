@@ -51,7 +51,7 @@ htmd の出力を位置で逆変換しない。`escape_pre_text_if_needed` が�
 
 ### Confirmation
 
-T-FC034〜T-FC040 (`src/fetch/converter.rs` の `mod tests`) が、2 番目以降の Text 子・先頭 Text 子より前の Element 子・入れ子 `<pre>` のいずれでもバックスラッシュが原文どおり残ること、同タグ同属性の隣接 span で改行が保たれること、隣接ブロック子境界の改行が 2 個までに収まること、`<br>` が行末空白 2 個と改行として残ること、未登録タグの子のテキストがエスケープされないことを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
+T-FC034〜T-FC040 (`src/fetch/converter/pre_tests.rs`) が、2 番目以降の Text 子・先頭 Text 子より前の Element 子・入れ子 `<pre>` のいずれでもバックスラッシュが原文どおり残ること、同タグ同属性の隣接 span で改行が保たれること、隣接ブロック子境界の改行が 2 個までに収まること、`<br>` が行末空白 2 個と改行として残ること、未登録タグの子のテキストがエスケープされないことを assert する。`cargo nextest run --profile ci` が緑であることを確認する。
 
 ## Pros and Cons of the Options
 

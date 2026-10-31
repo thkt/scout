@@ -102,12 +102,14 @@ impl Scout {
         {
             Ok(c) => c,
             Err(github::GitHubError::NotFound(_)) => {
-                let candidates =
-                    collect_path_candidates(github, owner, repo, params.ref_.as_deref(), &path)
-                        .await;
                 let mut err = ScoutError::from(github::GitHubError::NotFound(path.clone()));
-                if !candidates.is_empty() {
-                    err = err.with_candidates(candidates);
+                if self.not_found_candidates {
+                    let candidates =
+                        collect_path_candidates(github, owner, repo, params.ref_.as_deref(), &path)
+                            .await;
+                    if !candidates.is_empty() {
+                        err = err.with_candidates(candidates);
+                    }
                 }
                 return Err(err);
             }
@@ -410,6 +412,54 @@ mod tests {
                 )
             );
         }
+    }
+
+    /// [T-TS041] Only the JSON envelope renders not-found candidates (DR-0010),
+    /// so a run that cannot show them must not spend the repo and tree requests.
+    #[tokio::test]
+    async fn repo_read_not_found_skips_candidate_lookup_when_candidates_are_not_rendered() {
+        let Some(server) = try_spawn_mock_server("repo_read_skips_candidates").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/contents/"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"default_branch": "main"})),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/repos/owner/repo/git/trees/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "tree": [{"path": "README.md", "type": "blob"}],
+                "truncated": false
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let mut scout = scout_with_github("http://localhost:0", &server.uri());
+        scout.not_found_candidates = false;
+        let err = scout
+            .run(super::super::Command::RepoRead(RepoReadParams {
+                repository: Some("owner/repo".into()),
+                path: Some("REDME.md".into()),
+                ref_: None,
+                lines: None,
+                encoding: None,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 66);
+        assert!(err.candidates().is_empty(), "{:?}", err.candidates());
     }
 
     /// [T-TS032] Repo-overview excludes the PR-backed fixture from Markdown and JSON.
