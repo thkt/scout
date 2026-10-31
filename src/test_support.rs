@@ -396,6 +396,8 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use tracing_test::traced_test;
 
+    /// [T-SUP017] A loopback bind that succeeds yields a MockServer whose URI
+    /// is on 127.0.0.1.
     #[tokio::test]
     async fn try_spawn_mock_server_returns_some_in_normal_env() {
         let Some(server) = try_spawn_mock_server("normal_env").await else {
@@ -409,6 +411,8 @@ mod tests {
         );
     }
 
+    /// [T-SUP018] A bind failure without SCOUT_NETWORK_TESTS returns None and
+    /// logs a warning naming the test.
     #[traced_test]
     #[tokio::test]
     async fn bind_failure_without_force_returns_none_and_warns() {
@@ -426,6 +430,8 @@ mod tests {
         assert!(logs_contain("permission_denied"));
     }
 
+    /// [T-SUP019] A bind failure with SCOUT_NETWORK_TESTS set panics with a
+    /// message naming the test.
     #[tokio::test]
     #[should_panic(expected = "forced_panic")]
     async fn bind_failure_with_force_panics() {
