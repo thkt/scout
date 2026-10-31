@@ -238,20 +238,28 @@ fn inner_pre_backtick_survives_unstripped_when_pre_is_nested() {
     );
 }
 
-/// [T-FC037] Line breaks survive between same-tag, same-attribute spans
-/// that htmd merges as siblings inside pre.
+/// [T-FC037] Per-line spans inside pre keep each line on its own output line
+/// when the spans share attributes; [T-FC053] the same holds when each span
+/// carries a distinct `data-line` value.
 #[test]
-fn newlines_survive_across_merged_same_tag_same_attrs_spans_in_pre() {
-    let article = article("<pre><span>line1\n</span><span>line2\n</span><span>line3</span></pre>");
+fn per_line_spans_inside_pre_keep_each_line_on_its_own_output_line() {
+    for html in [
+        "<pre><span>line1\n</span><span>line2\n</span><span>line3</span></pre>",
+        "<pre><span data-line=\"1\">line1\n</span>\
+         <span data-line=\"2\">line2\n</span>\
+         <span data-line=\"3\">line3</span></pre>",
+    ] {
+        let article = article(html);
 
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let markdown = result.markdown();
 
-    assert!(
-        markdown.contains("line1\nline2\nline3"),
-        "each line's newline must survive as a real line break even when htmd merges the \
-         same-tag, same-attrs spans into one node before handling:\n{markdown}"
-    );
+        assert!(
+            markdown.contains("line1\nline2\nline3"),
+            "each line-span's content must land on its own output line, in order, \
+             for {html}:\n{markdown}"
+        );
+    }
 }
 
 /// [T-FC038] Adjacent block children must not accumulate extra blank lines.
@@ -320,25 +328,6 @@ fn trailing_newline_at_the_end_of_a_span_inside_pre_survives_in_the_output() {
     assert!(
         markdown.contains("line1\nline2"),
         "the span's trailing newline must reach the sibling text as a real line break:\n{markdown}"
-    );
-}
-
-/// [T-FC053] Per-line spans must not collapse code lines. Distinct `data-line`
-/// attributes prevent sibling merging from hiding per-span trimming.
-#[test]
-fn pre_with_one_span_per_line_keeps_each_line_on_its_own_output_line() {
-    let article = article(
-        "<pre><span data-line=\"1\">line1\n</span>\
-         <span data-line=\"2\">line2\n</span>\
-         <span data-line=\"3\">line3</span></pre>",
-    );
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
-
-    assert!(
-        markdown.contains("line1\nline2\nline3"),
-        "each line-span's content must land on its own output line, in order:\n{markdown}"
     );
 }
 
