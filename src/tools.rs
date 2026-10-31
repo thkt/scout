@@ -309,6 +309,8 @@ mod repo_io_tests;
 #[cfg(test)]
 mod repo_lazy_tests;
 #[cfg(test)]
+mod repo_request_flow_tests;
+#[cfg(test)]
 mod slack_fetch_tests;
 #[cfg(test)]
 mod stdin_tests;
