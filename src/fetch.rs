@@ -176,22 +176,6 @@ pub(crate) async fn fetch_page(
     let egress = &opts.egress;
     let validated = ssrf_check(url, resolver.as_ref(), egress).await?;
 
-    // CDP replaces the decoded body and clears its original decoding uncertainty.
-    #[cfg(feature = "js-rendering")]
-    let DownloadedPage {
-        url: final_url,
-        text: mut html,
-        mut decode_uncertain,
-        media_type,
-    } = download(
-        client,
-        &validated,
-        FETCH_MAX_REDIRECTS,
-        resolver.as_ref(),
-        egress,
-    )
-    .await?;
-    #[cfg(not(feature = "js-rendering"))]
     let DownloadedPage {
         url: final_url,
         text: html,
@@ -205,6 +189,9 @@ pub(crate) async fn fetch_page(
         egress,
     )
     .await?;
+    // CDP replaces the decoded body and clears its original decoding uncertainty.
+    #[cfg(feature = "js-rendering")]
+    let (mut html, mut decode_uncertain) = (html, decode_uncertain);
 
     // An explicit --js still requests browser output. Otherwise accepted non-HTML
     // text is source content, even when it contains HTML-looking bytes.
@@ -333,7 +320,8 @@ const SPA_ROOT_IDS: &[&str] = &[
     r#"id="__nuxt""#,
 ];
 
-/// Case-insensitive substring search over raw bytes, for HTML tag names — which
+/// A thin body with a `<script` tag or an app-root marker needs JS rendering.
+/// The tag is matched case-insensitively over raw bytes because HTML tag names
 /// are case-insensitive, unlike the attribute values in [`SPA_ROOT_IDS`].
 fn is_js_dependent(html: &str) -> bool {
     if !has_thin_body(html) {
