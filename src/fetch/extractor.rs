@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-
+use dom_query::Document;
 use dom_smoothie::{Config, Readability};
 use tracing::warn;
 
@@ -66,82 +65,24 @@ fn make_raw(html: &str, used_raw_fallback: bool) -> ExtractedArticle {
     }
 }
 
-/// Scans the bytes case-insensitively in place rather than lowercasing the whole
-/// document, which would copy up to the full (multi-MB) input on the warm path.
+/// Scans the bytes case-insensitively in place rather than parsing or lowercasing
+/// the whole document, which would copy up to the full (multi-MB) input.
 fn extract_title_from_html(html: &str) -> Option<String> {
     let bytes = html.as_bytes();
     let tag_start = find_ascii_ci(bytes, b"<title")?;
     // `>` is ASCII, so a byte search is exact even inside multi-byte UTF-8 content.
     let content_start = tag_start + bytes[tag_start..].iter().position(|&b| b == b'>')? + 1;
     let content_end = content_start + find_ascii_ci(&bytes[content_start..], b"</title>")?;
-    // Trim again after decoding: `&nbsp;` becomes U+00A0, which the first trim
-    // could not see and which `str::trim` does treat as whitespace.
-    let decoded = decode_char_refs(html[content_start..content_end].trim());
+    // dom_smoothie returns a title the HTML parser already decoded. Parsing only
+    // the title text decodes references the same way, so the frontmatter reads
+    // alike whether or not Readability succeeded. The trim follows decoding
+    // because `&nbsp;` becomes U+00A0, which `str::trim` treats as whitespace.
+    let raw = &html[content_start..content_end];
+    let decoded = Document::from(format!("<title>{raw}</title>"))
+        .select("title")
+        .text();
     let title = decoded.trim();
     (!title.is_empty()).then(|| title.to_owned())
-}
-
-/// Decode the HTML character references that realistically reach a `<title>`:
-/// the five XML predefined names, `&nbsp;`, and numeric references.
-///
-/// dom_smoothie hands back an already-decoded title, so without this the same
-/// page reads `A & B` or `A &amp; B` in the frontmatter depending on whether
-/// Readability succeeded — and the body never shows the difference, because
-/// `htmd` decodes it on the way to Markdown. Running the title through
-/// that same converter would decode it too, but it also applies Markdown
-/// escaping (`&lt;` becomes `\<`), which has no business in a YAML scalar.
-///
-/// Names outside this set stay literal. The HTML5 table has over 2000 entries,
-/// and a title carrying one of the rest is rarer than the cost of shipping the
-/// table to catch it.
-fn decode_char_refs(s: &str) -> Cow<'_, str> {
-    if !s.contains('&') {
-        return Cow::Borrowed(s);
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        let after = &rest[amp..];
-        // The longest form handled here is `&#x10FFFF;` at 10 bytes; a `;` further
-        // out belongs to some later construct, so the `&` stays literal.
-        match after.find(';').filter(|&semi| semi <= 10) {
-            Some(semi) => {
-                match decode_one_ref(&after[1..semi]) {
-                    Some(ch) => out.push(ch),
-                    None => out.push_str(&after[..=semi]),
-                }
-                rest = &after[semi + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &after[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    Cow::Owned(out)
-}
-
-/// The body of one character reference (between `&` and `;`), or `None` when it
-/// is a name this does not carry or a number outside Unicode.
-fn decode_one_ref(body: &str) -> Option<char> {
-    match body {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "nbsp" => Some('\u{a0}'),
-        _ => {
-            let digits = body.strip_prefix('#')?;
-            let code = match digits.strip_prefix(['x', 'X']) {
-                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-                None => digits.parse().ok()?,
-            };
-            char::from_u32(code)
-        }
-    }
 }
 
 /// Byte offset of the first case-insensitive (ASCII) match of `needle` in `haystack`,
@@ -276,7 +217,7 @@ mod tests {
 
     /// [T-FX013] the raw-fallback title decodes character references
     ///
-    /// dom_smoothie decodes the title it returns, and `htmd` decodes the
+    /// dom_smoothie decodes the title it returns, and the converter decodes the
     /// body on the way to Markdown — so without this the frontmatter is the one
     /// place a page reads differently depending on whether Readability succeeded.
     #[test]
@@ -289,6 +230,8 @@ mod tests {
             ("&#x3042;", "\u{3042}"),
             ("A &unknownref; B", "A &unknownref; B"),
             ("Tom &amp; Jerry &lt;3", "Tom & Jerry <3"),
+            ("&copy; 2026", "\u{a9} 2026"),
+            ("Wait&hellip;", "Wait\u{2026}"),
         ];
         for (input, expected) in cases {
             let html = format!("<html><head><title>{input}</title></head></html>");
@@ -300,10 +243,11 @@ mod tests {
         }
     }
 
-    /// [T-FX014] a lone `&` and an unterminated reference stay literal
+    /// [T-FX014] an `&` that starts no reference stays literal, while a legacy
+    /// reference without `;` decodes as it does on the Readability path
     #[test]
     fn raw_title_leaves_bare_ampersand_alone() {
-        for input in ["R&D", "AT&T rules", "&", "&amp"] {
+        for input in ["R&D", "AT&T rules", "&"] {
             let html = format!("<html><head><title>{input}</title></head></html>");
             assert_eq!(
                 extract_title_from_html(&html).as_deref(),
@@ -311,6 +255,10 @@ mod tests {
                 "input: {input}"
             );
         }
+        assert_eq!(
+            extract_title_from_html("<html><head><title>&amp</title></head></html>").as_deref(),
+            Some("&")
+        );
     }
 
     /// [T-FX015] `&nbsp;` decodes and then trims away on its own
@@ -393,8 +341,8 @@ mod tests {
     /// default path carries what `--raw` carries.
     #[test]
     fn parse_failure_on_non_empty_html_falls_back_with_the_content_intact() {
-        // Marker matches T-FC097's, which needs one free of `_` to survive
-        // htmd's escaping. Nothing here converts, but the two read together.
+        // Marker matches T-FC097's, which needs one free of `_` to survive the
+        // converter's escaping. Nothing here converts, but the two read together.
         let html = "<script>SCRIPTMARKER</script>";
 
         let result = extract_article(html, Some("https://example.com"));

@@ -290,6 +290,7 @@ impl ScoutBuilder {
             token_source: self.token_source,
             dns: self.dns,
             egress: self.egress,
+            not_found_candidates: true,
         }
     }
 }

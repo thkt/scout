@@ -54,7 +54,7 @@ pub(super) fn scout_reaching(addr: SocketAddr) -> Scout {
         .build()
         .expect("test client builds");
     ScoutBuilder::for_test()
-        .with_dns(Arc::new(StaticDnsResolver::single("93.184.216.34")))
+        .with_dns(Arc::new(StaticDnsResolver::public()))
         .with_fetch_http(fetch_http)
         .build()
 }

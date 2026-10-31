@@ -253,7 +253,8 @@ async fn get_json_429_with_retry_after_carries_delay() {
     ));
 }
 
-/// [T-GH008] Pinned clock + reset 60s later asserts the exact subtraction result.
+/// [T-GH008] A clock injected via `with_clock` reaches the 403 retry_after
+/// calculation: a reset 60s after the pinned clock yields exactly 60.
 #[tokio::test]
 async fn get_json_403_with_ratelimit_reset_carries_delay() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
@@ -426,36 +427,4 @@ fn secs_until_ratelimit_reset_returns_none_when_header_missing() {
     let headers = HeaderMap::new();
     let clock = FixedClock(1000);
     assert_eq!(secs_until_ratelimit_reset(&headers, &clock), None);
-}
-
-/// [T-GH017] with_clock injection threads through to the 403 retry_after
-/// calculation. End-to-end proof that the seam works for callers (the
-/// pure-function tests above only cover the helper in isolation).
-#[tokio::test]
-async fn get_json_403_uses_injected_clock_for_retry_after() {
-    let Some(server) = try_spawn_mock_server("github::http_clock_inject").await else {
-        return;
-    };
-    mount_get(
-        &server,
-        "/repos/owner/repo",
-        ResponseTemplate::new(403)
-            .append_header("x-ratelimit-remaining", "0")
-            .append_header("x-ratelimit-reset", "1300")
-            .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
-    )
-    .await;
-
-    let client = GitHubClient::with_base_url(Client::new(), &server.uri())
-        .with_clock(Arc::new(FixedClock(1000)));
-    let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
-    assert!(
-        matches!(
-            result,
-            Err(GitHubError::RateLimited {
-                retry_after: Some(300)
-            })
-        ),
-        "expected retry_after = 300 (reset 1300 - clock 1000), got: {result:?}"
-    );
 }

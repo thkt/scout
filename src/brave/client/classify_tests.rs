@@ -79,17 +79,6 @@ fn schema_drift_is_internal() {
     }
 }
 
-/// [T-BRC006] Api codes outside 4xx/5xx classify as Unknown (escape hatch).
-#[test]
-fn api_non_4xx_5xx_is_unknown() {
-    let c = BraveError::Api {
-        code: 304,
-        message: "not modified".into(),
-    }
-    .classify();
-    assert_eq!(c.kind, ErrorCode::Unknown);
-}
-
 /// [T-BRC007] is_degradable is true exactly for TempFailure/Timeout infra faults.
 #[test]
 fn temp_failure_variants_are_degradable() {
@@ -107,8 +96,8 @@ fn temp_failure_variants_are_degradable() {
 }
 
 /// [T-BRC008] is_degradable is false for config, data, internal, and Unknown
-/// variants. The `Api { code: 304 }` case pins the classify-derived behavior
-/// against T-BRC006: an Unknown status propagates rather than degrading.
+/// variants. The `Api { code: 304 }` case, which classifies as Unknown per the
+/// shared status table (T-ER034), propagates rather than degrading.
 #[test]
 fn non_temp_failure_variants_are_not_degradable() {
     let cases: Vec<BraveError> = vec![

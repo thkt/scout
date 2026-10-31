@@ -6,7 +6,7 @@ use wiremock::{Mock, ResponseTemplate};
 
 /// [T-SK025] SlackClient::with_base_url constructs a client that reaches a wiremock server
 #[tokio::test]
-async fn t010_with_base_url_constructs_usable_client() {
+async fn client_with_base_url_reaches_that_server() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
     };
@@ -28,7 +28,7 @@ async fn t010_with_base_url_constructs_usable_client() {
 /// through the backend-agnostic `Redacted::from_env_var`, which does
 /// not know `SlackError`.
 #[test]
-fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
+fn unset_token_env_is_rejected_as_token_not_set() {
     // `.map(|_| ())` drops the `SlackClient` (no `Debug`) so the failure
     // message can format the `Result`.
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
@@ -44,7 +44,7 @@ fn t033_from_env_with_returns_token_not_set_when_closure_errs() {
 /// [T-SK034] from_env_with rejects a whitespace-only token as `TokenNotSet`
 /// (parity with `Redacted::new` rejecting blank secrets).
 #[test]
-fn t034_from_env_with_rejects_whitespace_only_token() {
+fn whitespace_only_token_is_rejected_as_token_not_set() {
     let result =
         SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("   ".to_owned()))
             .map(|_| ());
@@ -56,7 +56,7 @@ fn t034_from_env_with_rejects_whitespace_only_token() {
 
 /// [T-SK035]
 #[test]
-fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
+fn user_token_builds_a_client_on_the_slack_api_base() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
         Ok("xoxp-real".to_owned())
     });
@@ -69,7 +69,7 @@ fn t035_from_env_with_constructs_client_with_api_base_and_exposed_token() {
 /// at construction, so a bot token cannot pass through to fail later with an
 /// opaque API error.
 #[test]
-fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
+fn bot_token_is_rejected_as_wrong_type() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
         Ok("xoxb-bot-token".to_owned())
     })
@@ -84,7 +84,7 @@ fn t065_from_env_with_rejects_bot_token_as_wrong_type() {
 /// `TokenWrongType` — the prefix check covers any string outside Slack's
 /// user-token taxonomy, not just bot tokens.
 #[test]
-fn t066_from_env_with_rejects_arbitrary_string_as_wrong_type() {
+fn token_without_user_prefix_is_rejected_as_wrong_type() {
     let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
         Ok("garbage".to_owned())
     })
