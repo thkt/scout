@@ -7,7 +7,7 @@ fn private_dns() -> StaticDnsResolver {
 
 /// [T-F044]
 #[tokio::test]
-async fn t004_blocks_dns_resolving_to_private_ip() {
+async fn blocks_host_resolving_to_private_ip() {
     let resolver = private_dns();
     assert!(
         !check_browser_request("https://evil.example/secret", &resolver).await,
@@ -17,7 +17,7 @@ async fn t004_blocks_dns_resolving_to_private_ip() {
 
 /// [T-F045]
 #[tokio::test]
-async fn t004_blocks_internal_ip_literal() {
+async fn blocks_loopback_ip_literal() {
     let resolver = StaticDnsResolver::public();
     assert!(
         !check_browser_request("http://127.0.0.1/secret", &resolver).await,
@@ -27,7 +27,7 @@ async fn t004_blocks_internal_ip_literal() {
 
 /// [T-F046]
 #[tokio::test]
-async fn t004_allows_public_url() {
+async fn allows_host_resolving_to_public_ip() {
     let resolver = StaticDnsResolver::public();
     assert!(
         check_browser_request("https://example.com/page", &resolver).await,
@@ -37,7 +37,7 @@ async fn t004_allows_public_url() {
 
 /// [T-F047]
 #[tokio::test]
-async fn t004_allows_non_network_urls() {
+async fn allows_non_network_schemes() {
     let resolver = StaticDnsResolver::public();
     for url in [
         "data:text/html,<p>test</p>",
@@ -54,7 +54,7 @@ async fn t004_allows_non_network_urls() {
 
 /// [T-F048]
 #[tokio::test]
-async fn t004_blocks_unknown_schemes() {
+async fn blocks_unknown_schemes() {
     let resolver = StaticDnsResolver::public();
     for url in ["file:///etc/passwd", "ftp://internal/data", "gopher://x"] {
         assert!(
@@ -66,7 +66,7 @@ async fn t004_blocks_unknown_schemes() {
 
 /// [T-F049]
 #[tokio::test]
-async fn t004_blocks_websocket_to_internal() {
+async fn blocks_websocket_to_loopback_host() {
     let resolver = StaticDnsResolver::public();
     assert!(
         !check_browser_request("ws://127.0.0.1:8080/ws", &resolver).await,
@@ -80,7 +80,7 @@ async fn t004_blocks_websocket_to_internal() {
 
 /// [T-F050]
 #[tokio::test]
-async fn t004_blocks_websocket_dns_to_private() {
+async fn blocks_websocket_host_resolving_to_private_ip() {
     let resolver = private_dns();
     assert!(
         !check_browser_request("ws://evil.example/ws", &resolver).await,

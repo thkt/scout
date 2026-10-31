@@ -94,7 +94,7 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
 /// [T-F019]
 #[cfg(not(feature = "js-rendering"))]
 #[tokio::test]
-async fn t010_js_flag_errors_when_feature_disabled() {
+async fn js_flag_without_js_rendering_feature_returns_browser_not_found() {
     let client = no_redirect_client();
     let opts = FetchOptions {
         js: true,

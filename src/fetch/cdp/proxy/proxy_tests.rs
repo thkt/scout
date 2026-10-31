@@ -3,7 +3,7 @@
 //! directly so no real upstream connection is attempted.
 //!
 //! The full-tunnel (SOCKS5 -> real upstream) success path is reached only by
-//! `cdp_integration_tests::t005_t006_cdp_renders_and_removes_profile_dir`,
+//! `cdp_integration_tests::chromium_renders_the_page_and_removes_its_profile_dir`,
 //! which fetches example.com through a real chromium and therefore through
 //! this proxy. That coverage is incidental — the test pins rendering and
 //! profile-dir cleanup, not the tunnel — and it runs only under
