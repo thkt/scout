@@ -1,4 +1,5 @@
-//! HTML parsing uses dom_query; rendering keeps scout's Markdown output contract.
+//! dom_query's built-in Markdown output is not used: it changed the output of
+//! 31 of the 77 converter tests at the time (DR-0036).
 
 mod table;
 #[cfg(test)]
