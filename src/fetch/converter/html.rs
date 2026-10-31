@@ -292,15 +292,10 @@ fn render_link(node: NodeRef<'_>, preformatted: bool) -> String {
     )
 }
 
-/// Fold a `title` attribute onto one line for a `"..."` link title.
-///
-/// CommonMark resolves blocks before inlines. A line break inside the title
-/// would let its next line open a heading, fence, quote or list, and a fence
-/// line would also change what DR-0014's unclosed-fence check sees. Splitting
-/// on both LF and CR, CommonMark's line endings, keeps title text off the start
-/// of every output line. Escaping line-start markers was rejected: it must list
-/// every construct that can interrupt a paragraph, and one omission reopens the
-/// injection.
+/// A line break in the title would let its next line open a CommonMark block,
+/// so both CommonMark line endings, LF and CR, fold into spaces. Escaping
+/// line-start markers was rejected: it must list every construct that can
+/// interrupt a paragraph, and one omission reopens the injection.
 ///
 /// `\` is escaped before `"` so a trailing backslash cannot escape the closing
 /// quote.

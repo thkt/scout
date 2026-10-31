@@ -145,8 +145,7 @@ fn empty_anchor_title_backslash_escapes_double_quotes() {
     );
 }
 
-/// [T-FC075] A multi-line title on an empty anchor folds onto one line:
-/// each line is trimmed, blank lines are dropped, and the rest join with a space.
+/// [T-FC075] A multi-line title on an empty anchor folds onto one line.
 #[test]
 fn empty_anchor_title_folds_trimmed_non_blank_lines_onto_one_line() {
     let article = article(
@@ -196,8 +195,6 @@ fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
     );
 }
 
-/// CommonMark events of the converted body. `article` fixtures carry no
-/// metadata, so the output starts with an empty frontmatter.
 fn body_events(markdown: &str) -> Vec<Event<'_>> {
     let body = markdown
         .strip_prefix("---\n---\n\n")
@@ -205,7 +202,6 @@ fn body_events(markdown: &str) -> Vec<Event<'_>> {
     Parser::new(body).collect()
 }
 
-/// The events of a paragraph that holds `element` and nothing else.
 fn lone_paragraph(element: Tag<'_>) -> Vec<Event<'_>> {
     let end = element.to_end();
     vec![
@@ -216,9 +212,8 @@ fn lone_paragraph(element: Tag<'_>) -> Vec<Event<'_>> {
     ]
 }
 
-/// Title attributes whose line breaks precede block syntax, paired with
-/// the title text a CommonMark reader must recover. A lone CR reaches the
-/// attribute only through `&#13;`; html5ever turns a literal CR into LF.
+/// A lone CR reaches the attribute only through `&#13;`; html5ever turns a
+/// literal CR into LF.
 const LINE_BREAK_TITLES: [(&str, &str); 10] = [
     ("a&#10;# Heading", "a # Heading"),
     ("a&#10;```rust", "a ```rust"),
@@ -232,16 +227,14 @@ const LINE_BREAK_TITLES: [(&str, &str); 10] = [
     ("&#10;# Heading&#10;", "# Heading"),
 ];
 
-/// Title attributes holding backslashes, paired with the title text a
-/// CommonMark reader must recover.
 const BACKSLASH_TITLES: [(&str, &str); 3] = [
     (r"a\", r"a\"),
     (r"a\&quot;b", r#"a\"b"#),
     (r"a\*b", r"a\*b"),
 ];
 
-/// [T-FC106] An image title whose line break precedes a heading, fence,
-/// quote, list or YAML marker stays one title inside one paragraph.
+/// [T-FC106] An image title with a line break before block syntax stays one
+/// title in one paragraph.
 #[test]
 fn image_title_with_a_line_break_cannot_open_a_block() {
     for (attribute, title) in LINE_BREAK_TITLES {
@@ -265,8 +258,8 @@ fn image_title_with_a_line_break_cannot_open_a_block() {
     }
 }
 
-/// [T-FC107] An empty anchor's title whose line break precedes a heading,
-/// fence, quote, list or YAML marker stays one title inside one paragraph.
+/// [T-FC107] An empty anchor's title with a line break before block syntax
+/// stays one title in one paragraph.
 #[test]
 fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
     for (attribute, title) in LINE_BREAK_TITLES {
@@ -290,8 +283,7 @@ fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
     }
 }
 
-/// [T-FC108] A title holding a backslash, including a trailing one or one
-/// before a double quote, still closes and reads back unchanged on both
+/// [T-FC108] A title holding a backslash closes and reads back unchanged on
 /// images and empty anchors.
 #[test]
 fn title_with_a_backslash_closes_and_reads_back_unchanged() {
