@@ -2,14 +2,14 @@ use super::*;
 
 /// [T-SK015]
 #[test]
-fn t001_no_mentions_returns_empty() {
+fn text_without_mentions_yields_no_spans() {
     let spans = parse_mentions("hello world");
     assert!(spans.is_empty());
 }
 
 /// [T-SK016]
 #[test]
-fn t002_single_mention_returns_one_span() {
+fn single_mention_yields_one_span_covering_its_bytes() {
     let text = "hi <@U123> bye";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 1);
@@ -21,7 +21,7 @@ fn t002_single_mention_returns_one_span() {
 
 /// [T-SK017]
 #[test]
-fn t003_pipe_label_extracts_user_id_only() {
+fn labeled_mention_yields_the_user_id_without_the_label() {
     let text = "cc <@U123|alice>";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 1);
@@ -30,7 +30,7 @@ fn t003_pipe_label_extracts_user_id_only() {
 
 /// [T-SK058]
 #[test]
-fn t003b_pipe_label_captured() {
+fn labeled_mention_captures_the_label() {
     let spans = parse_mentions("cc <@U123|alice>");
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].user_id, "U123");
@@ -39,7 +39,7 @@ fn t003b_pipe_label_captured() {
 
 /// [T-SK059]
 #[test]
-fn t003c_bare_mention_has_no_label() {
+fn bare_mention_carries_no_label() {
     let spans = parse_mentions("hi <@U123>");
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].label, None);
@@ -47,7 +47,7 @@ fn t003c_bare_mention_has_no_label() {
 
 /// [T-SK060]
 #[test]
-fn t003d_empty_label_normalized_to_none() {
+fn empty_label_is_read_as_no_label() {
     let spans = parse_mentions("x <@U123|>");
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].user_id, "U123");
@@ -56,7 +56,7 @@ fn t003d_empty_label_normalized_to_none() {
 
 /// [T-SK018] parse_mentions captures consecutive adjacent mentions
 #[test]
-fn t004_multiple_adjacent_mentions() {
+fn adjacent_mentions_yield_contiguous_spans() {
     let text = "<@U001><@U002><@U003>";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 3);
@@ -69,7 +69,7 @@ fn t004_multiple_adjacent_mentions() {
 
 /// [T-SK019] parse_mentions stops at unclosed mention token
 #[test]
-fn t005_unclosed_mention_breaks_early() {
+fn unclosed_mention_stops_the_scan_after_earlier_spans() {
     let text = "<@U001> then <@U002";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 1);
@@ -78,7 +78,7 @@ fn t005_unclosed_mention_breaks_early() {
 
 /// [T-SK020] parse_mentions yields correct byte offsets across multibyte characters
 #[test]
-fn t006_multibyte_characters_correct_offsets() {
+fn spans_after_multibyte_text_carry_byte_offsets() {
     let text = "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}<@UCJK>end";
     let spans = parse_mentions(text);
     assert_eq!(spans.len(), 1);
@@ -97,7 +97,7 @@ fn t006_multibyte_characters_correct_offsets() {
 
 /// [T-SK021]
 #[test]
-fn t007_known_user_replaced_with_display_name() {
+fn cached_user_renders_as_display_name() {
     let cache: HashMap<String, String> = [("U100".into(), "Alice".into())].into_iter().collect();
     let result = substitute_mentions("hello <@U100> world", &cache);
     assert_eq!(result, "hello @Alice world");
@@ -105,7 +105,7 @@ fn t007_known_user_replaced_with_display_name() {
 
 /// [T-SK022] substitute_mentions falls back to @UID when user unknown
 #[test]
-fn t008_unknown_user_kept_as_at_uid() {
+fn uncached_user_without_label_renders_as_user_id() {
     let cache: HashMap<String, String> = HashMap::new();
     let result = substitute_mentions("hello <@UXXX> world", &cache);
     assert_eq!(result, "hello @UXXX world");
@@ -113,7 +113,7 @@ fn t008_unknown_user_kept_as_at_uid() {
 
 /// [T-SK023] substitute_mentions returns text unchanged when no mentions present
 #[test]
-fn t009_no_mentions_returns_text_unchanged() {
+fn text_without_mentions_is_returned_unchanged() {
     let cache: HashMap<String, String> = [("U100".into(), "Alice".into())].into_iter().collect();
     let text = "no mentions here";
     let result = substitute_mentions(text, &cache);
@@ -122,7 +122,7 @@ fn t009_no_mentions_returns_text_unchanged() {
 
 /// [T-SK024] substitute_mentions prefers the cached display name over the embedded pipe label
 #[test]
-fn t009b_pipe_label_substituted_with_display_name() {
+fn cached_display_name_replaces_embedded_label() {
     let cache: HashMap<String, String> = [("U123".into(), "Alice".into())].into_iter().collect();
     let result = substitute_mentions("cc <@U123|alice_handle>", &cache);
     assert_eq!(result, "cc @Alice");
@@ -131,7 +131,7 @@ fn t009b_pipe_label_substituted_with_display_name() {
 /// [T-SK061] substitute_mentions falls back to embedded label when the user id
 /// is absent from the cache
 #[test]
-fn t025_cache_miss_renders_embedded_label() {
+fn uncached_user_renders_embedded_label() {
     let cache: HashMap<String, String> = HashMap::new();
     let result = substitute_mentions("cc <@U123|alice>", &cache);
     assert_eq!(result, "cc @alice");
@@ -140,7 +140,7 @@ fn t025_cache_miss_renders_embedded_label() {
 /// [T-SK062] substitute_mentions falls back to the raw user id when the cache
 /// misses and the embedded label is empty
 #[test]
-fn t026_cache_miss_empty_label_renders_user_id() {
+fn uncached_user_with_empty_label_renders_user_id() {
     let cache: HashMap<String, String> = HashMap::new();
     let result = substitute_mentions("x <@U123|>", &cache);
     assert_eq!(result, "x @U123");
@@ -148,7 +148,7 @@ fn t026_cache_miss_empty_label_renders_user_id() {
 
 /// [T-SK063]
 #[test]
-fn t027_empty_cache_value_falls_through_to_label() {
+fn empty_cached_name_falls_back_to_embedded_label() {
     let cache: HashMap<String, String> = [("U123".into(), String::new())].into_iter().collect();
     let result = substitute_mentions("cc <@U123|alice>", &cache);
     assert_eq!(result, "cc @alice");
@@ -156,7 +156,7 @@ fn t027_empty_cache_value_falls_through_to_label() {
 
 /// [T-SK064]
 #[test]
-fn t028_cache_hit_takes_priority_over_label() {
+fn cached_name_takes_priority_over_embedded_label() {
     let cache: HashMap<String, String> = [("U123".into(), "Bob".into())].into_iter().collect();
     let result = substitute_mentions("cc <@U123|alice>", &cache);
     assert_eq!(result, "cc @Bob");

@@ -10,7 +10,7 @@ decision-makers: thkt (project owner)
 
 外部前提を欠く host でテストが静かに緑で終わると、実行されなかった検証が実行されたものとして数えられる。loopback bind についてはこの問題を解決済みで、`guard_loopback_bind` (src/test_support.rs) が env `SCOUT_NETWORK_TESTS` の設定時に panic し、`.github/workflows/ci.yml` が workflow レベルでその env を立てている。
 
-chromium を要求する `t005_t006_cdp_renders_and_removes_profile_dir` (src/fetch/cdp/cdp_integration_tests.rs) には同じ仕組みが無く、`chrome_available()` が false のとき `eprintln!` + 早期 return で終わる。このテストは CDP 経路の SOCKS5 full-tunnel 成功経路を通す唯一の自動テストで、OUTCOME の Constraints が定める防御の成功経路にあたる (ADR-0021)。
+chromium を要求する `chromium_renders_the_page_and_removes_its_profile_dir` (src/fetch/cdp/cdp_integration_tests.rs) には同じ仕組みが無く、`chrome_available()` が false のとき `eprintln!` + 早期 return で終わる。このテストは CDP 経路の SOCKS5 full-tunnel 成功経路を通す唯一の自動テストで、OUTCOME の Constraints が定める防御の成功経路にあたる (ADR-0021)。
 
 同じ policy なので同じ機構を複製すればよいはずだが、guard 方式の伝達チャネルは実行時のローカル観測に使えない。tracing subscriber の初期化は `src/lib.rs` の `run()` 内だけで、`src/**` の単体テストは `run()` を通らない。guard がスキップする通常経路 (`guard_loopback_bind` が `None` を返す経路) には subscriber がいないため、`tracing::warn!` の record は誰にも読まれずに消える。一方 `#[traced_test]` を付けたテスト関数の中でだけ `tracing-test` がその場で subscriber を差し込み、`logs_contain` で record を capture して assert できる (`bind_failure_without_force_returns_none_and_warns` がこの経路を pin する)。`eprintln!` は ci.yml のコメント自身が述べるとおり nextest が passing test の stderr を隠す。前提ごとに何で表すかを決める必要がある。
 

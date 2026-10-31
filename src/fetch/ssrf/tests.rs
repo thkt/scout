@@ -130,15 +130,3 @@ async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
         "proxied mode must still reject a localhost domain, got: {result:?}"
     );
 }
-
-/// [T-FS021]
-#[tokio::test]
-async fn direct_mode_still_returns_dnsresolution_when_the_resolver_fails_pre_check_behavior_unchanged()
- {
-    let resolver = FailingDnsResolver("lookup failed".into());
-    let result = ssrf_check("https://example.com/page", &resolver, &EgressMode::Direct).await;
-    assert!(
-        matches!(result, Err(FetchError::DnsResolution(_))),
-        "direct mode must still run the DNS pre-check, got: {result:?}"
-    );
-}

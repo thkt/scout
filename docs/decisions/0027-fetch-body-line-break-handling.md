@@ -59,7 +59,7 @@ Chosen option: 方式 A。fetch が返す本文の改行の扱いを次の 3 契
 
 ### Confirmation
 
-T-FC041〜T-FC044 (`src/fetch/converter.rs` の `mod tests`) が、段落内の折り返しの畳み、段落内の `<br>` の hard break、`<pre>` の非畳み、inline code 内の連続空白の保持を assert する。T-FC045〜T-FC047 が、表セル・リスト項目・見出しの中の `<br>` がこの契約から外れる 3 形を反例として assert する。`cargo nextest run --profile ci` が緑であることを確認する。
+T-FC041〜T-FC044 (`src/fetch/converter/whitespace_tests.rs`) が、段落内の折り返しの畳み、段落内の `<br>` の hard break、`<pre>` の非畳み、inline code 内の連続空白の保持を assert する。T-FC045〜T-FC047 が、表セル・リスト項目・見出しの中の `<br>` がこの契約から外れる 3 形を反例として assert する。`cargo nextest run --profile ci` が緑であることを確認する。
 
 ## Pros and Cons of the Options
 

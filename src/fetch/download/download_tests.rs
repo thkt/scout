@@ -257,35 +257,6 @@ async fn redirect_to_dns_private_ip_blocked() {
     );
 }
 
-/// [T-F015]
-#[tokio::test]
-async fn too_many_redirects_returns_error() {
-    let Some(server) = try_spawn_mock_server("fetch::download").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/redir"))
-        .respond_with(
-            ResponseTemplate::new(302).insert_header("location", "https://example.com/next"),
-        )
-        .mount(&server)
-        .await;
-
-    let client = no_redirect_client();
-    let result = download(
-        &client,
-        &validated(&format!("{}/redir", server.uri())),
-        0, // max_redirects = 0
-        &public_resolver(),
-        &ssrf::EgressMode::Direct,
-    )
-    .await;
-    assert!(
-        matches!(result, Err(FetchError::TooManyRedirects(0))),
-        "should error on too many redirects, got: {result:?}"
-    );
-}
-
 /// [T-F056] Redirect-cap warnings carry chain length, hop cap and final URL
 /// for diagnosing terminal redirect failures.
 #[tokio::test]

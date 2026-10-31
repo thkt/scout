@@ -1,14 +1,12 @@
 use super::ssrf::EgressMode;
 use super::*;
-use crate::test_support::{join_server_thread, no_redirect_client, spawn_forward_proxy};
+use crate::test_support::{
+    join_server_thread, no_redirect_client, real_resolver, spawn_forward_proxy,
+};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use std::io;
 use std::thread::JoinHandle;
-
-fn real_resolver() -> Arc<dyn DnsResolver> {
-    Arc::new(TokioDnsResolver)
-}
 
 /// [T-F017]
 #[tokio::test]
@@ -73,7 +71,7 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
         ))))
         .build()
         .unwrap();
-    let preflight: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("93.184.216.34"));
+    let preflight: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::public());
     let (cancel, _) = watch::channel(false);
     let result = fetch_page(
         &client,
@@ -96,7 +94,7 @@ async fn fetch_blocks_dns_rebind_at_connect_time() {
 /// [T-F019]
 #[cfg(not(feature = "js-rendering"))]
 #[tokio::test]
-async fn t010_js_flag_errors_when_feature_disabled() {
+async fn js_flag_without_js_rendering_feature_returns_browser_not_found() {
     let client = no_redirect_client();
     let opts = FetchOptions {
         js: true,

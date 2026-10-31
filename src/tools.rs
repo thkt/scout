@@ -182,12 +182,18 @@ pub(crate) struct Scout {
     /// `fetch_page` skip the DNS pre-check and route through the proxy that
     /// `fetch_http` was built with; `Direct` keeps scout resolving and dialing.
     egress: EgressMode,
+    /// Whether a repo-read 404 looks up path candidates. Only the JSON envelope
+    /// renders them (DR-0010), so Markdown runs skip the repo and tree requests.
+    not_found_candidates: bool,
 }
 
 impl Scout {
     /// Production entry point; async for existing `Scout::new().await` callers.
-    pub(crate) async fn new() -> Result<Self, ScoutError> {
-        Ok(ScoutBuilder::from_env()?.build())
+    /// `not_found_candidates` is true only when the output can render them.
+    pub(crate) async fn new(not_found_candidates: bool) -> Result<Self, ScoutError> {
+        let mut scout = ScoutBuilder::from_env()?.build();
+        scout.not_found_candidates = not_found_candidates;
+        Ok(scout)
     }
 
     /// Share shutdown state with `lib::run` without borrowing `Scout`.
@@ -302,6 +308,10 @@ mod query_tests;
 mod repo_io_tests;
 #[cfg(test)]
 mod repo_lazy_tests;
+#[cfg(test)]
+mod repo_request_flow_tests;
+#[cfg(test)]
+mod slack_fetch_tests;
 #[cfg(test)]
 mod stdin_tests;
 #[cfg(test)]
