@@ -128,68 +128,51 @@ fn title_disappears_from_the_output_of_a_link_that_has_link_text() {
     );
 }
 
-/// [T-FC074] Escaped quotes in a delegated title must not defeat suffix removal.
+/// [T-FC074] Double quotes in an empty anchor's title are backslash-escaped,
+/// so they cannot close the Markdown title early.
 #[test]
-fn title_containing_double_quotes_does_not_escape_the_rewrite() {
-    let article = article(
-        "<p><a href=\"https://example.com/target\" title=\"say &quot;hi&quot;\">\
-         link text</a></p>",
-    );
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
-
-    assert!(
-        markdown.contains("[link text](https://example.com/target)"),
-        "a title holding double quotes must still be dropped in full, leaving a bare \
-         `[text](url)`:\n{markdown}"
-    );
-    assert!(
-        !markdown.contains("hi"),
-        "no fragment of the quoted title text must survive:\n{markdown}"
-    );
-}
-
-/// [T-FC075] Title reflow must not defeat suffix matching across lines.
-#[test]
-fn title_containing_a_newline_does_not_escape_the_rewrite() {
-    let article = article(
-        "<p><a href=\"https://example.com/target\" title=\"line1\nline2\">\
-         link text</a></p>",
-    );
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
-
-    assert!(
-        markdown.contains("[link text](https://example.com/target)"),
-        "a title holding a newline must still be dropped in full, leaving a bare \
-         `[text](url)`:\n{markdown}"
-    );
-    assert!(
-        !markdown.contains("line1") && !markdown.contains("line2"),
-        "no fragment of the multi-line title text must survive:\n{markdown}"
-    );
-}
-
-/// [T-FC076] Whitespace-only titles still produce an empty suffix in htmd;
-/// that suffix must be removed from nonempty links.
-#[test]
-fn whitespace_only_title_is_treated_as_no_title() {
+fn empty_anchor_title_backslash_escapes_double_quotes() {
     let article =
-        article("<p><a href=\"https://example.com/target\" title=\"   \">link text</a></p>");
+        article("<p><a href=\"https://example.com/target\" title=\"say &quot;hi&quot;\"></a></p>");
 
     let result = to_fetch_result(&article, "https://example.com".into(), false);
     let markdown = result.markdown();
 
     assert!(
-        markdown.contains("[link text](https://example.com/target)"),
-        "a whitespace-only title must leave a bare `[text](url)` with no empty title \
-         syntax:\n{markdown}"
+        markdown.contains(r#"[](https://example.com/target "say \"hi\"")"#),
+        "each double quote inside the title must gain a backslash:\n{markdown}"
     );
+}
+
+/// [T-FC075] A multi-line title on an empty anchor keeps its line breaks,
+/// trims spaces around each line, and drops blank lines.
+#[test]
+fn empty_anchor_title_trims_each_line_and_drops_blank_lines() {
+    let article = article(
+        "<p><a href=\"https://example.com/target\" title=\"  line1  \n\n   line2 \"></a></p>",
+    );
+
+    let result = to_fetch_result(&article, "https://example.com".into(), false);
+    let markdown = result.markdown();
+
     assert!(
-        !markdown.contains("\"\""),
-        "no empty title marker must survive:\n{markdown}"
+        markdown.contains("[](https://example.com/target \"line1\nline2\")"),
+        "the title must keep one line break between its trimmed, non-blank lines:\n{markdown}"
+    );
+}
+
+/// [T-FC076] A whitespace-only title on an empty anchor becomes an empty
+/// title marker `""` after the destination.
+#[test]
+fn whitespace_only_title_on_an_empty_anchor_becomes_an_empty_title() {
+    let article = article("<p><a href=\"https://example.com/target\" title=\"   \"></a></p>");
+
+    let result = to_fetch_result(&article, "https://example.com".into(), false);
+    let markdown = result.markdown();
+
+    assert!(
+        markdown.contains("[](https://example.com/target \"\")"),
+        "a whitespace-only title must trim to an empty title, not keep its spaces:\n{markdown}"
     );
 }
 
