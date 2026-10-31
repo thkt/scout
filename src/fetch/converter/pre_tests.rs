@@ -179,44 +179,39 @@ fn pre_with_nested_inline_element_is_wrapped_in_a_fence() {
     );
 }
 
-/// [T-FC034] Fence-character preservation must also hold after preceding text.
+/// [T-FC034] A backtick-led pre text node after an element child survives
+/// unescaped when text precedes that element; [T-FC035] the same holds when
+/// the element is the first child.
 #[test]
-fn second_pre_child_text_starting_with_backtick_survives_unstripped() {
-    let article = article("<pre>abc<span>X</span>`def</pre>");
+fn backtick_led_pre_text_after_an_element_child_survives_unescaped() {
+    for (html, fenced, escaped) in [
+        (
+            "<pre>abc<span>X</span>`def</pre>",
+            "```\nabcX`def\n```",
+            r"abcX\`def",
+        ),
+        (
+            "<pre><span>abc</span>`def</pre>",
+            "```\nabc`def\n```",
+            r"abc\`def",
+        ),
+    ] {
+        let article = article(html);
 
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let markdown = result.markdown();
 
-    assert!(
-        markdown.contains("```\nabcX`def\n```"),
-        "the second text node's leading backtick must survive unescaped inside the \
-         fence:\n{markdown}"
-    );
-    assert!(
-        !markdown.contains(r"abcX\`def"),
-        "htmd's escape on the second text node must not survive as a literal \
-         backslash:\n{markdown}"
-    );
-}
-
-/// [T-FC035] Fence-character preservation must hold after a converted element.
-#[test]
-fn backtick_after_a_preceding_element_child_survives_unstripped() {
-    let article = article("<pre><span>abc</span>`def</pre>");
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
-
-    assert!(
-        markdown.contains("```\nabc`def\n```"),
-        "the backtick following a preceding element child must survive unescaped inside \
-         the fence:\n{markdown}"
-    );
-    assert!(
-        !markdown.contains(r"abc\`def"),
-        "htmd's escape must not survive as a literal backslash when an element precedes \
-         the text node:\n{markdown}"
-    );
+        assert!(
+            markdown.contains(fenced),
+            "the backtick after the element child must survive unescaped inside the \
+             fence for {html}:\n{markdown}"
+        );
+        assert!(
+            !markdown.contains(escaped),
+            "no backslash may precede the backtick after the element child for \
+             {html}:\n{markdown}"
+        );
+    }
 }
 
 /// [T-FC036] DOM-based text preservation must hold through nested pre handling.
