@@ -47,7 +47,7 @@ Markdown出力とCDPの限定的な操作はscoutで保守する。`htmd` の全
 
 直接依存の最新公開版への追随を、バージョン重複の解消より優先する。重複回避のために一度追加したRenovateの `allowedVersions` は削除する。`dom_smoothie` / `dom_query` / `html5ever` の更新は同じPRで確認する。
 
-公開版の `dom_smoothie 0.18.2` は `dom_query 0.28` を使うため、変換側の0.29と併存する。抽出処理と変換処理の間はHTML文字列で受け渡し、DOM型は混ぜない。上流の開発版は0.29へ移行済みだが、公開されるまではこの重複を許容する。
+`dom_smoothie 0.19.0` は変換側と同じ `dom_query 0.29` を使うため、DOM系の依存は1系列にそろう。抽出処理と変換処理の間はHTML文字列で受け渡し、DOM型は混ぜない。
 
 `core-foundation` と `syn` も、現在の公開版の上流依存が異なる系列を要求するため併存する。`hyper-util 0.1.21` は `system-configuration 0.7` 経由で `core-foundation 0.9` を使い、TLS検証側は0.10を使う。複数のマクロクレートは `syn 2` を要求し、他の現行クレートは3を使う。重複を消すための機能削除や独自forkは行わず、上流の公開版更新に追随する。
 
