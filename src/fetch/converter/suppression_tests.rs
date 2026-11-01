@@ -2,7 +2,7 @@ use super::test_helpers::article;
 use super::*;
 use crate::fetch::extractor::extract_article;
 
-/// [T-FC084] Pure-mode block handling must not leak script or style source.
+/// [T-FC084] The converter must not leak script or style source into the body.
 #[test]
 fn script_and_style_content_left_in_content_html_does_not_reach_the_body() {
     let article = article(
