@@ -325,7 +325,7 @@ async fn resolve_readme(
 mod tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
-    use crate::tools::test_helpers::scout_with_github;
+    use crate::tools::test_helpers::{mount_repo_info, scout_with_github};
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
 
@@ -469,22 +469,7 @@ mod tests {
             return;
         };
 
-        Mock::given(method("GET"))
-            .and(path("/repos/owner/repo"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "full_name": "owner/repo",
-                "description": null,
-                "html_url": "https://github.com/owner/repo",
-                "default_branch": "main",
-                "language": null,
-                "stargazers_count": 0,
-                "forks_count": 0,
-                "open_issues_count": 0,
-                "topics": null,
-                "license": null
-            })))
-            .mount(&server)
-            .await;
+        mount_repo_info(&server).await;
 
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo/readme"))
@@ -556,22 +541,7 @@ mod tests {
     async fn overview_with_failed_issues(label: &str) -> Option<CommandOutput> {
         let server = try_spawn_mock_server(label).await?;
 
-        Mock::given(method("GET"))
-            .and(path("/repos/owner/repo"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "full_name": "owner/repo",
-                "description": null,
-                "html_url": "https://github.com/owner/repo",
-                "default_branch": "main",
-                "language": null,
-                "stargazers_count": 0,
-                "forks_count": 0,
-                "open_issues_count": 0,
-                "topics": null,
-                "license": null
-            })))
-            .mount(&server)
-            .await;
+        mount_repo_info(&server).await;
         Mock::given(method("GET"))
             .and(path("/repos/owner/repo/readme"))
             .respond_with(ResponseTemplate::new(404))
