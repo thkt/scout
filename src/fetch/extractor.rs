@@ -86,7 +86,7 @@ fn extract_title_from_html(html: &str) -> Option<String> {
 }
 
 /// Byte offset of the first case-insensitive (ASCII) match of `needle` in `haystack`,
-/// or `None`.  Offsets index into the original bytes, so slicing the source `&str` at
+/// or `None`. Offsets index into the original bytes, so slicing the source `&str` at
 /// the returned position stays on a char boundary (`needle` is ASCII).
 fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
