@@ -34,14 +34,14 @@ This directory contains important decisions about the project.
 | [0026](0026-pre-body-rebuilt-from-dom.md) | Pre Body Rebuilt from DOM, Not Reverse-Escaped from htmd's Walked Text | accepted | 2026-08-14 |
 | [0027](0027-fetch-body-line-break-handling.md) | Fetch Body Line-Break Handling: Paragraph Folding as Contract, `<br>`/`<pre>` as the Named Exceptions | accepted | 2026-08-14 |
 | [0028](0028-dr-code-refs-by-symbol-name.md) | DR のコード参照はシンボル名で指す | accepted | 2026-08-18 |
-| [0029](0029-explicit-plain-text-fetch.md) | 明示的な text/plain を HTML として解釈しない | proposed | 2026-10-08 |
-| [0030](0030-research-search-failure-markdown-warning.md) | Show research search failures in default Markdown | proposed | 2026-10-08 |
-| [0031](0031-close-report-body-code-fences.md) | Close code fences at report body boundaries | proposed | 2026-10-08 |
-| [0032](0032-browser-group-cleanup-on-future-drop.md) | Future破棄時にもブラウザgroupを停止する | proposed | 2026-10-08 |
-| [0033](0033-bound-repo-candidate-matching.md) | repoの候補照合に仕事量上限と中断点を設ける | proposed | 2026-10-08 |
-| [0034](0034-explicit-non-html-text-xml-fetch.md) | 明示的な非HTML text/XML を一次ソース本文として返す | proposed | 2026-10-08 |
-| [0035](0035-close-slack-message-and-truncation-fences.md) | Slackのメッセージ境界と打ち切り境界でコードフェンスを閉じる | proposed | 2026-10-08 |
-| [0036](0036-replace-unsupported-dom-and-cdp-dependencies.md) | HTML DOMとCDP接続の依存を置き換える | proposed | 2026-10-25 |
+| [0029](0029-explicit-plain-text-fetch.md) | 明示的な text/plain を HTML として解釈しない | accepted | 2026-10-08 |
+| [0030](0030-research-search-failure-markdown-warning.md) | Show research search failures in default Markdown | accepted | 2026-10-08 |
+| [0031](0031-close-report-body-code-fences.md) | Close code fences at report body boundaries | accepted | 2026-10-08 |
+| [0032](0032-browser-group-cleanup-on-future-drop.md) | Future破棄時にもブラウザgroupを停止する | accepted | 2026-10-08 |
+| [0033](0033-bound-repo-candidate-matching.md) | repoの候補照合に仕事量上限と中断点を設ける | accepted | 2026-10-08 |
+| [0034](0034-explicit-non-html-text-xml-fetch.md) | 明示的な非HTML text/XML を一次ソース本文として返す | accepted | 2026-10-08 |
+| [0035](0035-close-slack-message-and-truncation-fences.md) | Slackのメッセージ境界と打ち切り境界でコードフェンスを閉じる | accepted | 2026-10-08 |
+| [0036](0036-replace-unsupported-dom-and-cdp-dependencies.md) | HTML DOMとCDP接続の依存を置き換える | accepted | 2026-10-25 |
 
 ## By Status
 

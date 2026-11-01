@@ -1,5 +1,5 @@
 ---
-status: "proposed"
+status: "accepted"
 date: 2026-10-08
 decision-makers: "未確認（Issue #483の範囲内で実装担当が選択。設計の承認待ち）"
 ---

@@ -1,5 +1,5 @@
 ---
-status: "proposed"
+status: "accepted"
 date: 2026-10-08
 ---
 
@@ -172,7 +172,7 @@ success and the earlier lint repair remain historical evidence, not proof of
 this contract.
 
 Restore shared `track_fence` to the implementation-base behavior and keep
-strict Markdown recognition local to `close_open_fence`. Merely restoring
+strict Markdown recognition local to `dangling_report_fence`. Merely restoring
 the shared function exposed a second failure in T-SE023: an info-bearing
 decoy close could hide dangling-tail markers from the conservative tracker.
 Completion therefore re-neutralizes that tail before adding the delimiter.
