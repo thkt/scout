@@ -1,7 +1,7 @@
 use super::test_helpers::*;
 use super::*;
 use crate::test_support::try_spawn_mock_server;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, ResponseTemplate};
 
 /// [T-TS017] repo_read: --encoding hint is passed to decode_content and
@@ -54,22 +54,7 @@ async fn repo_tree_path_filter_excludes_non_matching_files() {
         return;
     };
 
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repo"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "full_name": "owner/repo",
-            "description": null,
-            "html_url": "https://github.com/owner/repo",
-            "default_branch": "main",
-            "language": null,
-            "stargazers_count": 0,
-            "forks_count": 0,
-            "open_issues_count": 0,
-            "topics": null,
-            "license": null
-        })))
-        .mount(&server)
-        .await;
+    mount_repo_info(&server).await;
 
     Mock::given(method("GET"))
         .and(path_regex(r"^/repos/owner/repo/git/trees/"))

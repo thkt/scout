@@ -3,9 +3,31 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
 use crate::fetch::StaticDnsResolver;
+
+/// Answers `GET /repos/owner/repo` with the metadata repo commands read.
+pub(super) async fn mount_repo_info(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "full_name": "owner/repo",
+            "description": null,
+            "html_url": "https://github.com/owner/repo",
+            "default_branch": "main",
+            "language": null,
+            "stargazers_count": 0,
+            "forks_count": 0,
+            "open_issues_count": 0,
+            "topics": null,
+            "license": null
+        })))
+        .mount(server)
+        .await;
+}
 
 pub(super) fn scout_with_github(brave_uri: &str, github_uri: &str) -> Scout {
     ScoutBuilder::for_test()
