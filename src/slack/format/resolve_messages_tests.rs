@@ -13,7 +13,7 @@ fn make_msg(user: Option<&str>, text: &str, ts: Option<&str>) -> Message {
 #[traced_test]
 /// [T-SK026]
 #[test]
-fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
+fn message_without_user_renders_no_author_and_logs_debug() {
     let messages = vec![make_msg(None, "hello", Some("1000.000"))];
     let users = HashMap::new();
 
@@ -27,7 +27,7 @@ fn t012_user_none_emits_debug_and_falls_back_to_no_author() {
 #[traced_test]
 /// [T-SK027]
 #[test]
-fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
+fn message_without_ts_renders_empty_ts_and_logs_warn() {
     let messages = vec![make_msg(Some("U1"), "hi", None)];
     let users = HashMap::from([("U1".into(), "Alice".into())]);
 
@@ -41,7 +41,7 @@ fn t013_ts_none_emits_warn_and_falls_back_to_empty() {
 #[traced_test]
 /// [T-SK028]
 #[test]
-fn t014_mention_resolved_and_user_mapped() {
+fn author_and_mentions_render_as_display_names() {
     let messages = vec![make_msg(Some("U1"), "cc <@U2>", Some("1000.000"))];
     let users = HashMap::from([("U1".into(), "Alice".into()), ("U2".into(), "Bob".into())]);
 
@@ -55,7 +55,7 @@ fn t014_mention_resolved_and_user_mapped() {
 
 /// [T-SK029]
 #[test]
-fn t015_unknown_user_id_kept_as_author() {
+fn unresolved_author_renders_as_user_id() {
     let messages = vec![make_msg(Some("UXXX"), "text", Some("1000.000"))];
     let users = HashMap::new();
 

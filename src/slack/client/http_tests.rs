@@ -197,24 +197,6 @@ async fn api_get_once_oversized_body_returns_decode() {
     }
 }
 
-/// [T-SK030] A mid-stream body-read failure maps to SlackError::Network;
-/// JSON parse failures after successful reads map to Decode. The separate
-/// transient check recognizes reqwest's io::Error source (T-R004), while
-/// T-SK080 checks the resulting classification.
-#[tokio::test]
-async fn api_get_once_2xx_mid_stream_drop_returns_network() {
-    let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {
-        return;
-    };
-    let client = SlackClient::with_base_url(Client::new(), &url);
-    let result: Result<DummyBody, _> = client.api_get_once("test.method", &[]).await;
-    assert!(
-        matches!(result, Err(SlackError::Network(_))),
-        "expected SlackError::Network for mid-stream drop, got: {result:?}"
-    );
-    join_server_thread(handle);
-}
-
 /// [T-SK040] conversations.info 200 with a null channel.name emits a WARN
 /// before falling back to the raw channel ID. Without it the label-resolution
 /// degradation is silent to operators. The Err branch
@@ -927,9 +909,9 @@ async fn transport_error_neither_timeout_nor_transient_is_not_retried() {
 
 /// [T-SK080] A mid-stream body drop on a 2xx lands on Network and classifies as TempFailure
 ///
-/// Mirrors `api_get_once_2xx_mid_stream_drop_returns_network` (T-SK030), and
-/// additionally pins the classification: a transport-IO drop must land in
-/// TempFailure (retriable), not Decode (schema drift, terminal).
+/// A transport-IO drop must land in TempFailure (retriable), not Decode
+/// (schema drift, terminal). T-R004 covers the transient check that
+/// recognizes reqwest's io::Error source.
 #[tokio::test]
 async fn mid_stream_body_drop_classifies_as_temp_failure() {
     let Some((url, _counter, handle)) = spawn_mid_stream_drop_server(1) else {

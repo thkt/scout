@@ -26,7 +26,7 @@ async fn browser_owner_cleans_interrupted_reap() {
 
 /// [T-F043]
 #[test]
-fn t009_launch_args_contain_security_flags() {
+fn launch_args_include_egress_hardening_flags() {
     let args = build_launch_args(0);
     for flag in [
         "--disable-webrtc",
@@ -44,7 +44,7 @@ fn t009_launch_args_contain_security_flags() {
 
 /// [T-F085] The nine non-proxy hardening flags match exactly, including order.
 #[test]
-fn t085_launch_args_hardening_set_matches_exactly() {
+fn launch_args_hardening_flags_match_exactly_in_order() {
     let args = build_launch_args(0);
     let hardening: Vec<&str> = args
         .iter()
