@@ -12,36 +12,3 @@ workspace/
 *.profraw
 /lcov.info
 .codegraph/
-
-# Keep shared AI-DLC work tracked; ignore per-user navigation and derived state.
-# Committing active cursors would make teammates overwrite each other's context.
-aidlc/active-space
-aidlc/spaces/*/intents/active-intent
-
-# Clone IDs name per-clone audit shards; sharing them would cause audit conflicts.
-aidlc/.aidlc-clone-id
-aidlc/.aidlc-unit-scope.json
-aidlc/.aidlc-unit-parked
-aidlc/.aidlc-claim-generations.json
-aidlc/.aidlc-unit-participant
-aidlc/.aidlc-claim-registry.json
-aidlc/.aidlc-unit-releases/
-aidlc/.aidlc-unit-merges/
-# Atomic active-space create staging (normally unlinked immediately).
-aidlc/.aidlc-active-space-*.tmp
-# Session-to-intent bindings are per-user runtime state.
-aidlc/.aidlc-sessions/
-aidlc/spaces/*/intents/.aidlc-*
-# Match nested sensor caches, including legacy layouts.
-**/aidlc/spaces/*/intents/**/.aidlc-sensors/
-# Transient DocumentKB transaction journals must not be committed as shared work.
-aidlc/spaces/*/knowledge/documentkb/.journal/
-# Linked-source aliases resolve to machine-local absolute roots; track aliases only.
-aidlc/spaces/*/knowledge/.sources.local.json
-aidlc/spaces/*/intents/*/runtime-graph.json
-aidlc/spaces/*/intents/*/.aidlc-*
-# Regenerated diagnostic exports are machine-local derived output.
-aidlc/diagnostics/
-
-# Keep memory, codekb, intent state, artifacts and per-clone audit shards tracked.
-# Audit blocks need ordered history; merge=union can corrupt multi-line records.
