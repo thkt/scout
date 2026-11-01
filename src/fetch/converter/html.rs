@@ -1,4 +1,5 @@
-//! HTML parsing uses dom_query; rendering keeps scout's Markdown output contract.
+//! dom_query's built-in Markdown output is not used: it changed the output of
+//! 31 of the 77 converter tests at the time (DR-0036).
 
 mod table;
 #[cfg(test)]
@@ -292,13 +293,21 @@ fn render_link(node: NodeRef<'_>, preformatted: bool) -> String {
     )
 }
 
+/// A line break in the title would let its next line open a CommonMark block,
+/// so both CommonMark line endings, LF and CR, fold into spaces. Escaping
+/// line-start markers was rejected: it must list every construct that can
+/// interrupt a paragraph, and one omission reopens the injection.
+///
+/// `\` is escaped before `"` so a trailing backslash cannot escape the closing
+/// quote.
 fn normalize_title(title: &str) -> String {
     title
-        .lines()
+        .split(['\n', '\r'])
         .map(trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(" ")
+        .replace('\\', "\\\\")
         .replace('"', "\\\"")
 }
 

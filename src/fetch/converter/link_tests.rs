@@ -1,7 +1,8 @@
 use super::test_helpers::article;
 use super::*;
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
-/// [T-FC026] Parentheses in a destination must not close the Markdown link early.
+/// [T-FC026]
 #[test]
 fn link_target_with_parens_is_not_cut_off_before_the_parenthesis() {
     let article = article(r#"<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>"#);
@@ -108,7 +109,7 @@ fn anchor_without_href_keeps_its_text_without_link_brackets() {
     );
 }
 
-/// [T-FC073] A link with link text drops its title attribute from the output.
+/// [T-FC073]
 #[test]
 fn title_disappears_from_the_output_of_a_link_that_has_link_text() {
     let article =
@@ -144,10 +145,9 @@ fn empty_anchor_title_backslash_escapes_double_quotes() {
     );
 }
 
-/// [T-FC075] A multi-line title on an empty anchor keeps its line breaks,
-/// trims spaces around each line, and drops blank lines.
+/// [T-FC075]
 #[test]
-fn empty_anchor_title_trims_each_line_and_drops_blank_lines() {
+fn empty_anchor_title_folds_trimmed_non_blank_lines_onto_one_line() {
     let article = article(
         "<p><a href=\"https://example.com/target\" title=\"  line1  \n\n   line2 \"></a></p>",
     );
@@ -156,13 +156,12 @@ fn empty_anchor_title_trims_each_line_and_drops_blank_lines() {
     let markdown = result.markdown();
 
     assert!(
-        markdown.contains("[](https://example.com/target \"line1\nline2\")"),
-        "the title must keep one line break between its trimmed, non-blank lines:\n{markdown}"
+        markdown.contains("[](https://example.com/target \"line1 line2\")"),
+        "the title must join its trimmed, non-blank lines with one space:\n{markdown}"
     );
 }
 
-/// [T-FC076] A whitespace-only title on an empty anchor becomes an empty
-/// title marker `""` after the destination.
+/// [T-FC076]
 #[test]
 fn whitespace_only_title_on_an_empty_anchor_becomes_an_empty_title() {
     let article = article("<p><a href=\"https://example.com/target\" title=\"   \"></a></p>");
@@ -176,7 +175,7 @@ fn whitespace_only_title_on_an_empty_anchor_becomes_an_empty_title() {
     );
 }
 
-/// [T-FC077] Empty href resolves to the same page and must not emit an empty link.
+/// [T-FC077]
 #[test]
 fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
     let article = article("<p><a href=\"\" title=\"here\"></a>tail</p>");
@@ -193,4 +192,126 @@ fn anchor_with_an_empty_href_and_no_content_is_suppressed() {
         markdown.contains("tail"),
         "the text after the suppressed anchor must survive:\n{markdown}"
     );
+}
+
+fn body_events(markdown: &str) -> Vec<Event<'_>> {
+    let body = markdown
+        .strip_prefix("---\n---\n\n")
+        .expect("an article without metadata must start with an empty frontmatter");
+    Parser::new(body).collect()
+}
+
+fn lone_paragraph(element: Tag<'_>) -> Vec<Event<'_>> {
+    let end = element.to_end();
+    vec![
+        Event::Start(Tag::Paragraph),
+        Event::Start(element),
+        Event::End(end),
+        Event::End(TagEnd::Paragraph),
+    ]
+}
+
+/// A lone CR reaches the attribute only through `&#13;`; html5ever turns a
+/// literal CR into LF.
+const LINE_BREAK_TITLES: [(&str, &str); 10] = [
+    ("a&#10;# Heading", "a # Heading"),
+    ("a&#10;```rust", "a ```rust"),
+    ("a&#10;~~~", "a ~~~"),
+    ("a&#10;> quote", "a > quote"),
+    ("a&#10;- item", "a - item"),
+    ("a&#10;---&#10;b", "a --- b"),
+    ("a&#10;...&#10;b", "a ... b"),
+    ("a&#13;# Heading", "a # Heading"),
+    ("a&#13;&#10;# Heading", "a # Heading"),
+    ("&#10;# Heading&#10;", "# Heading"),
+];
+
+const BACKSLASH_TITLES: [(&str, &str); 3] = [
+    (r"a\", r"a\"),
+    (r"a\&quot;b", r#"a\"b"#),
+    (r"a\*b", r"a\*b"),
+];
+
+/// [T-FC106]
+#[test]
+fn image_title_with_a_line_break_cannot_open_a_block() {
+    for (attribute, title) in LINE_BREAK_TITLES {
+        let article = article(&format!(
+            "<p><img src=\"https://example.com/x.png\" title=\"{attribute}\"></p>"
+        ));
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let markdown = result.markdown();
+
+        assert_eq!(
+            body_events(markdown),
+            lone_paragraph(Tag::Image {
+                link_type: LinkType::Inline,
+                dest_url: "https://example.com/x.png".into(),
+                title: title.into(),
+                id: "".into(),
+            }),
+            "title attribute {attribute:?} must stay inside the image:\n{markdown}"
+        );
+    }
+}
+
+/// [T-FC107]
+#[test]
+fn empty_anchor_title_with_a_line_break_cannot_open_a_block() {
+    for (attribute, title) in LINE_BREAK_TITLES {
+        let article = article(&format!(
+            "<p><a href=\"https://example.com/target\" title=\"{attribute}\"></a></p>"
+        ));
+
+        let result = to_fetch_result(&article, "https://example.com".into(), false);
+        let markdown = result.markdown();
+
+        assert_eq!(
+            body_events(markdown),
+            lone_paragraph(Tag::Link {
+                link_type: LinkType::Inline,
+                dest_url: "https://example.com/target".into(),
+                title: title.into(),
+                id: "".into(),
+            }),
+            "title attribute {attribute:?} must stay inside the link:\n{markdown}"
+        );
+    }
+}
+
+/// [T-FC108]
+#[test]
+fn title_with_a_backslash_closes_and_reads_back_unchanged() {
+    for (attribute, title) in BACKSLASH_TITLES {
+        for (html, expected) in [
+            (
+                format!("<p><img src=\"https://example.com/x.png\" title=\"{attribute}\"></p>"),
+                Tag::Image {
+                    link_type: LinkType::Inline,
+                    dest_url: "https://example.com/x.png".into(),
+                    title: title.into(),
+                    id: "".into(),
+                },
+            ),
+            (
+                format!("<p><a href=\"https://example.com/target\" title=\"{attribute}\"></a></p>"),
+                Tag::Link {
+                    link_type: LinkType::Inline,
+                    dest_url: "https://example.com/target".into(),
+                    title: title.into(),
+                    id: "".into(),
+                },
+            ),
+        ] {
+            let result = to_fetch_result(&article(&html), "https://example.com".into(), false);
+            let markdown = result.markdown();
+
+            assert_eq!(
+                body_events(markdown),
+                lone_paragraph(expected),
+                "title attribute {attribute:?} must close and read back unchanged:\n{markdown}"
+            );
+        }
+    }
 }
