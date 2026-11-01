@@ -189,7 +189,6 @@ pub(crate) struct Scout {
 
 impl Scout {
     /// Production entry point; async for existing `Scout::new().await` callers.
-    /// `not_found_candidates` is true only when the output can render them.
     pub(crate) async fn new(not_found_candidates: bool) -> Result<Self, ScoutError> {
         let mut scout = ScoutBuilder::from_env()?.build();
         scout.not_found_candidates = not_found_candidates;

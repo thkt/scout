@@ -96,7 +96,7 @@ fn raw_extraction_end_to_end_does_not_leak_script_content_into_the_body() {
 }
 
 /// [T-FC089] XHTML self-closed raw-text tags must not swallow the rest of the
-/// body; an HTML parser ignores their self-closing slash. Cover script and iframe.
+/// body; an HTML parser ignores their self-closing slash.
 #[test]
 fn body_after_a_self_closed_raw_text_tag_still_reaches_the_body() {
     let article = article(

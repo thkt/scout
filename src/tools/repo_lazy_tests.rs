@@ -12,7 +12,7 @@ use wiremock::{Mock, ResponseTemplate};
 /// Both checks read the argument's shape alone and need nothing from the
 /// network, while the first `Scout::github()` touch in production pays a
 /// `gh auth token` subprocess (DR-0008). `repo_read` already validates first;
-/// this pins the same order for `repo_tree`, whose own comment claims it.
+/// this pins the same order for `repo_tree`.
 #[tokio::test]
 async fn repo_tree_rejects_a_malformed_argument_before_building_the_client() {
     for (label, params) in [
