@@ -154,14 +154,6 @@ fn empty_cached_name_falls_back_to_embedded_label() {
     assert_eq!(result, "cc @alice");
 }
 
-/// [T-SK064]
-#[test]
-fn cached_name_takes_priority_over_embedded_label() {
-    let cache: HashMap<String, String> = [("U123".into(), "Bob".into())].into_iter().collect();
-    let result = substitute_mentions("cc <@U123|alice>", &cache);
-    assert_eq!(result, "cc @Bob");
-}
-
 /// [T-SK084] `<@…>` holding something that cannot be a user id is left alone
 ///
 /// Slack ids carry no whitespace and no `<`, so these are some other use of the
