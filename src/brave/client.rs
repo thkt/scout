@@ -106,14 +106,6 @@ impl BraveError {
     }
 }
 
-pub(crate) trait SearchClient {
-    async fn search(
-        &self,
-        query: &str,
-        search_lang: Option<&str>,
-    ) -> Result<Vec<SearchResult>, BraveError>;
-}
-
 #[derive(Clone)]
 pub(crate) struct BraveClient {
     http: Client,
@@ -322,8 +314,8 @@ async fn read_error_body_snippet(
     text
 }
 
-impl SearchClient for BraveClient {
-    async fn search(
+impl BraveClient {
+    pub(crate) async fn search(
         &self,
         query: &str,
         search_lang: Option<&str>,

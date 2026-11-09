@@ -24,6 +24,8 @@ use wiremock::{MockServer, ResponseTemplate};
 
 use crate::fetch::{DnsResolver, TokioDnsResolver};
 
+pub(crate) mod http_fixture;
+
 /// System DNS resolver for tests that never reach a lookup, such as an
 /// IP-literal host, a failure before the fetch, or proxied egress.
 pub(crate) fn real_resolver() -> Arc<dyn DnsResolver> {

@@ -40,8 +40,6 @@ use crate::yaml::truncate_and_reneutralize;
 #[cfg(test)]
 use crate::envelope::DegradedReason;
 #[cfg(test)]
-use crate::github;
-#[cfg(test)]
 use params::{
     FetchParams, RepoOverviewParams, RepoReadParams, RepoTreeParams, ResearchParams, SearchParams,
 };
@@ -188,8 +186,8 @@ pub(crate) struct Scout {
 }
 
 impl Scout {
-    /// Production entry point; async for existing `Scout::new().await` callers.
-    pub(crate) async fn new(not_found_candidates: bool) -> Result<Self, ScoutError> {
+    /// Construct clients synchronously; token subprocesses remain lazy.
+    pub(crate) fn new(not_found_candidates: bool) -> Result<Self, ScoutError> {
         let mut scout = ScoutBuilder::from_env()?.build();
         scout.not_found_candidates = not_found_candidates;
         Ok(scout)
@@ -302,11 +300,11 @@ fn format_fetch_output(result: &FetchResult) -> String {
 #[cfg(test)]
 mod builder_tests;
 #[cfg(test)]
+mod concurrency_tests;
+#[cfg(test)]
 mod query_tests;
 #[cfg(test)]
 mod repo_io_tests;
-#[cfg(test)]
-mod repo_lazy_tests;
 #[cfg(test)]
 mod repo_request_flow_tests;
 #[cfg(test)]

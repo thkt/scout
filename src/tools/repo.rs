@@ -7,7 +7,6 @@ use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
-use crate::github::types::ContentsResponse;
 use crate::github::{self, GitHubClient, PerPage};
 
 use super::errors::unwrap_or_degraded;
@@ -165,15 +164,13 @@ impl Scout {
         // Verify repo exists first: a 404 here avoids 4 wasted parallel API calls.
         let repo_info = github.get_repo(owner, repo).await?;
 
-        let (readme, issues, pulls, releases) = tokio::join!(
-            github.get_readme(owner, repo),
+        let ((readme_content, mut degradation), issues, pulls, releases) = tokio::join!(
+            fetch_readme(github, owner, repo),
             github.get_issues(owner, repo, OVERVIEW_ITEMS),
             github.get_pulls(owner, repo, OVERVIEW_ITEMS),
             github.get_releases(owner, repo, OVERVIEW_RELEASES),
         );
 
-        let mut degradation = Degradation::default();
-        let readme_content = resolve_readme(github, owner, repo, readme, &mut degradation).await;
         let issues =
             unwrap_or_degraded(issues, DegradedReason::IssuesFetchFailed, &mut degradation);
         let pulls = unwrap_or_degraded(pulls, DegradedReason::PullsFetchFailed, &mut degradation);
@@ -271,14 +268,14 @@ async fn collect_path_candidates(
         .unwrap_or_default()
 }
 
-async fn resolve_readme(
+/// Fetch, recover the blob body and decode in one branch of the overview join.
+async fn fetch_readme(
     github: &GitHubClient,
     owner: &str,
     repo: &str,
-    readme: Result<ContentsResponse, github::GitHubError>,
-    degradation: &mut Degradation,
-) -> Option<String> {
-    let entry = match readme {
+) -> (Option<String>, Degradation) {
+    let mut degradation = Degradation::default();
+    let entry = match github.get_readme(owner, repo).await {
         Ok(r) => Some(r),
         Err(e) => {
             if !matches!(e, github::GitHubError::NotFound(_)) {
@@ -308,7 +305,7 @@ async fn resolve_readme(
         },
     };
 
-    encoded.and_then(|c| match github::decode_content(&c, None) {
+    let content = encoded.and_then(|c| match github::decode_content(&c, None) {
         Ok(result) => Some(result.text),
         Err(e) => {
             warn!(%e, "failed to decode README");
@@ -318,7 +315,8 @@ async fn resolve_readme(
             );
             None
         }
-    })
+    });
+    (content, degradation)
 }
 
 #[cfg(test)]

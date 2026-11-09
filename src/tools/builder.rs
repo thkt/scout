@@ -169,18 +169,6 @@ impl ScoutBuilder {
     }
 
     #[cfg(test)]
-    pub(super) fn with_rng(mut self, rng: Arc<dyn Rng>) -> Self {
-        self.rng = rng;
-        self
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_token_source(mut self, source: Arc<dyn TokenSource>) -> Self {
-        self.token_source = source;
-        self
-    }
-
-    #[cfg(test)]
     pub(super) fn with_dns(mut self, dns: Arc<dyn DnsResolver>) -> Self {
         self.dns = dns;
         self

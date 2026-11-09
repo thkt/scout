@@ -421,7 +421,7 @@ async fn fetch_message_prioritizes_authors_over_mentions_when_capping() {
 
 /// [T-SK045] conversations.replies repeats the thread parent as messages[0] on
 /// every page. The pagination loop flat-extends pages, so a parent that recurs
-/// across pages arrives once per page: extract_target removes only the
+/// across pages arrives once per page: target selection removes only the
 /// first copy, leaving the rest as duplicate replies that inflate
 /// context_messages and re-render the parent body. Dedup by ts so the parent
 /// appears once regardless of page count.

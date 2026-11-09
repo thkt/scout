@@ -68,7 +68,7 @@ fn api_not_found_codes_classify_as_not_found() {
 }
 
 /// [T-SLC010] scout's ts-bearing "message {ts} not found in thread" string
-/// (built at client.rs when `extract_target` misses — target absent or in a
+/// (built at client.rs when target selection fails — target absent or in a
 /// truncated page) classifies as NotFound, same as the bare "message not found"
 /// form. An exact-match arm misses this string because of the interpolated
 /// `{ts}`, dropping it to UsageError (exit 64) instead of NotFound

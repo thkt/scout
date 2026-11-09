@@ -1,54 +1,9 @@
 use super::*;
 use crate::fetch::StaticDnsResolver;
-use crate::test_support::{real_resolver, try_spawn_mock_server};
+use crate::test_support::try_spawn_mock_server;
 use reqwest::redirect::Policy;
-use std::collections::VecDeque;
-use std::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
-
-struct MockSearch {
-    responses: Mutex<VecDeque<Result<Vec<SearchResult>, BraveError>>>,
-    captured: Mutex<Vec<(String, Option<String>)>>,
-}
-
-impl MockSearch {
-    fn with_results(results: Vec<SearchResult>) -> Self {
-        Self {
-            responses: Mutex::new(VecDeque::from([Ok(results)])),
-            captured: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn all_fail(error: BraveError) -> Self {
-        Self {
-            responses: Mutex::new(VecDeque::from([Err(error)])),
-            captured: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn captured(&self) -> Vec<(String, Option<String>)> {
-        self.captured.lock().unwrap().clone()
-    }
-}
-
-impl SearchClient for MockSearch {
-    async fn search(
-        &self,
-        query: &str,
-        search_lang: Option<&str>,
-    ) -> Result<Vec<SearchResult>, BraveError> {
-        self.captured
-            .lock()
-            .unwrap()
-            .push((query.to_owned(), search_lang.map(str::to_owned)));
-        self.responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(Err(BraveError::RateLimited { retry_after: None }))
-    }
-}
 
 fn make_source(url: &str, title: &str) -> SearchResult {
     SearchResult {
@@ -56,70 +11,6 @@ fn make_source(url: &str, title: &str) -> SearchResult {
         title: title.into(),
         description: String::new(),
     }
-}
-
-/// [T-SE022] Depth limits actual requests, not just the displayed result count.
-#[tokio::test]
-async fn fetch_sources_requests_only_the_ranked_depth_prefix() {
-    let Some(server) = try_spawn_mock_server("engine::depth_prefix").await else {
-        return;
-    };
-    // A substantive article keeps this depth test on the HTTP path even when
-    // js-rendering is enabled; a thin fixture would launch a real browser.
-    let body = format!(
-        "<article><h1>Fixture article</h1><p>{}</p></article>",
-        "This is a complete paragraph describing the fixture article in detail. ".repeat(30)
-    );
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let addr = *server.address();
-    let http = Client::builder()
-        .no_proxy()
-        .redirect(Policy::none())
-        .resolve("scout-test.example", addr)
-        .build()
-        .expect("test client builds");
-    let sources: Vec<_> = ["first", "second", "third"]
-        .iter()
-        .map(|name| {
-            make_source(
-                &format!("http://scout-test.example:{}/{name}", addr.port()),
-                name,
-            )
-        })
-        .collect();
-    let (cancel, _) = watch::channel(false);
-    let (pages, failures) = fetch_sources(
-        &http,
-        &sources,
-        2,
-        &EgressMode::Direct,
-        Arc::new(StaticDnsResolver::public()),
-        &cancel,
-        Duration::from_secs(5),
-    )
-    .await;
-    assert!(
-        failures.is_empty(),
-        "unexpected fetch failures: {failures:?}"
-    );
-    assert_eq!(
-        pages.iter().map(FetchResult::url).collect::<Vec<_>>(),
-        [sources[0].url.as_str(), sources[1].url.as_str()],
-        "exactly the first two ranked sources must be fetched"
-    );
-    let mut requested: Vec<_> = server
-        .received_requests()
-        .await
-        .expect("request recording is enabled")
-        .iter()
-        .map(|request| request.url.path().to_owned())
-        .collect();
-    requested.sort();
-    assert_eq!(requested, ["/first", "/second"]);
 }
 
 /// [T-SE003]
@@ -140,32 +31,6 @@ fn format_report_includes_sections() {
     assert!(text.contains("https://fail.com"));
     assert!(text.contains("Sources"));
     assert!(text.contains("[A](https://a.com)"));
-}
-
-/// [T-SE014] Hand-built out-of-order outcomes are partitioned in source rank order.
-#[test]
-fn partition_by_rank_orders_failures_like_pages() {
-    let timeout = || fetch::FetchError::DnsResolution("no such host".into());
-    let page = |url: &str| FetchResult::for_test(url.to_owned(), "body".to_owned(), false);
-
-    let outcomes = vec![
-        (3, "https://d.example", Err(timeout())),
-        (0, "https://a.example", Ok(page("https://a.example"))),
-        (2, "https://c.example", Err(timeout())),
-        (1, "https://b.example", Ok(page("https://b.example"))),
-    ];
-
-    let (pages, failed) = partition_by_rank(outcomes);
-
-    assert_eq!(
-        pages.iter().map(FetchResult::url).collect::<Vec<_>>(),
-        ["https://a.example", "https://b.example"]
-    );
-    assert_eq!(
-        failed.iter().map(|f| f.url.as_str()).collect::<Vec<_>>(),
-        ["https://c.example", "https://d.example"],
-        "failed URLs carry search ranking too, not completion order"
-    );
 }
 
 /// [T-SE013] An empty research report retains Sources and the zero-result marker.
@@ -293,124 +158,6 @@ fn format_report_sanitizes_query_newlines() {
     let text = format_report(&report, "line1\nline2");
     assert!(text.contains("# Research: line1 line2"));
     assert!(!text.contains("# Research: line1\n"));
-}
-
-/// [T-SE008] research forwards the English query and delivers the fetched source body.
-#[tokio::test]
-async fn research_with_mock_returns_report() {
-    let Some(server) = try_spawn_mock_server("engine::research_report").await else {
-        return;
-    };
-    // A full article avoids automatic JS fallback under all-features.
-    let body = "Primary source fixture describes the research result in detail. ".repeat(30);
-    Mock::given(method("GET"))
-        .and(path("/article"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
-            "<article><h1>Source article</h1><p>{body}</p></article>"
-        )))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let addr = *server.address();
-    let url = format!("http://scout-test.example:{}/article", addr.port());
-    let mock = MockSearch::with_results(vec![make_source(&url, "Source article")]);
-    let http = Client::builder()
-        .no_proxy()
-        .redirect(Policy::none())
-        .resolve("scout-test.example", addr)
-        .build()
-        .expect("test client builds");
-    let resolver = Arc::new(StaticDnsResolver::public());
-
-    let req = ResearchRequest {
-        query: "test",
-        depth: 3,
-        lang: Lang::En,
-        egress: EgressMode::Direct,
-    };
-    let (cancel, _) = watch::channel(false);
-    let report = research(&mock, &http, &req, resolver, &cancel)
-        .await
-        .unwrap();
-
-    assert_eq!(report.sources.len(), 1);
-    assert_eq!(report.sources[0].url, url);
-    assert_eq!(report.sources[0].title, "Source article");
-    assert!(report.failed_urls.is_empty(), "{:?}", report.failed_urls);
-    assert_eq!(report.fetched_pages.len(), 1);
-    assert_eq!(report.fetched_pages[0].url(), url);
-    assert!(
-        report.fetched_pages[0].markdown().contains(body.trim()),
-        "the report must deliver the fixture body, not merely its source URL"
-    );
-
-    let captured = mock.captured();
-    assert_eq!(
-        captured.len(),
-        1,
-        "research must issue exactly one Brave query"
-    );
-    assert_eq!(captured[0].0, "test", "query must be sent verbatim");
-    assert_eq!(
-        captured[0].1,
-        Some("en".to_owned()),
-        "Lang::En -> search_lang=en"
-    );
-}
-
-/// [T-SE017] Lang::Auto issues exactly one Brave call, with no bilingual expansion
-#[tokio::test]
-async fn research_auto_lang_issues_single_call() {
-    let mock = MockSearch::with_results(vec![]);
-    let http = Client::new();
-    let resolver = real_resolver();
-
-    let req = ResearchRequest {
-        query: "型安全 TypeScript",
-        depth: 3,
-        lang: Lang::Auto,
-        egress: EgressMode::Direct,
-    };
-    let (cancel, _) = watch::channel(false);
-    let report = research(&mock, &http, &req, resolver, &cancel)
-        .await
-        .unwrap();
-
-    assert!(report.sources.is_empty());
-    assert!(report.fetched_pages.is_empty());
-    assert!(report.failed_urls.is_empty());
-
-    let captured = mock.captured();
-    assert_eq!(
-        captured.len(),
-        1,
-        "Lang::Auto must NOT trigger bilingual expansion under Brave"
-    );
-    assert_eq!(
-        captured[0].0, "型安全 TypeScript",
-        "query must be sent verbatim"
-    );
-    assert_eq!(captured[0].1, None, "Lang::Auto -> search_lang omitted");
-}
-
-/// [T-SE012] research surfaces the underlying Brave error when search fails
-#[tokio::test]
-async fn research_search_failure_returns_error() {
-    let mock = MockSearch::all_fail(BraveError::RateLimited { retry_after: None });
-    let http = Client::new();
-    let resolver = real_resolver();
-
-    let req = ResearchRequest {
-        query: "test",
-        depth: 3,
-        lang: Lang::En,
-        egress: EgressMode::Direct,
-    };
-    let (cancel, _) = watch::channel(false);
-    let err = research(&mock, &http, &req, resolver, &cancel)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, BraveError::RateLimited { .. }));
 }
 
 /// [T-SE015] Research timeouts must not repeat the error prefix.

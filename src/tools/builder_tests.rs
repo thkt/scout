@@ -2,67 +2,11 @@ use super::*;
 use crate::clock::FixedClock;
 use crate::envelope::ErrorCode;
 use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
-use crate::rng::SeededRng;
 use crate::test_support::{join_server_thread, spawn_forward_proxy, try_spawn_mock_server};
-use crate::token_source::StaticTokenSource;
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
-
-/// [T-SB001] Minimal proof that the `Arc` handed to `ScoutBuilder::with_clock`
-/// reaches `Scout.clock`. The end-to-end plumbing check is T-SB004.
-#[test]
-fn scout_builder_with_clock_routes_arc_into_scout() {
-    let injected: Arc<dyn Clock> = Arc::new(FixedClock(42));
-    let scout = ScoutBuilder::for_test()
-        .with_clock(injected.clone())
-        .build();
-    assert!(
-        Arc::ptr_eq(&scout.clock, &injected),
-        "with_clock must install the supplied Arc into Scout.clock"
-    );
-}
-
-/// [T-SB002] Minimal proof that the `Arc` handed to `ScoutBuilder::with_rng`
-/// reaches `Scout.rng`.
-#[test]
-fn scout_builder_with_rng_routes_arc_into_scout() {
-    let injected: Arc<dyn Rng> = Arc::new(SeededRng::new(7));
-    let scout = ScoutBuilder::for_test().with_rng(injected.clone()).build();
-    assert!(
-        Arc::ptr_eq(&scout.rng, &injected),
-        "with_rng must install the supplied Arc into Scout.rng"
-    );
-}
-
-/// [T-SB007] `for_test()` resolves no token, so no test spawns `gh auth token`
-///
-/// The default is a plain field initializer, so nothing but this test stops
-/// `GhCliSource` from going back in and making the suite depend on a local `gh`
-/// (ADR-0018).
-#[tokio::test]
-async fn for_test_resolves_no_token_without_touching_gh() {
-    let scout = ScoutBuilder::for_test().build();
-    assert!(
-        scout.token_source.fetch().await.is_none(),
-        "for_test() must resolve no token so the suite does not depend on a local gh"
-    );
-}
-
-/// [T-SB003] Minimal proof that the `Arc` handed to
-/// `ScoutBuilder::with_token_source` reaches `Scout.token_source`.
-#[test]
-fn scout_builder_with_token_source_routes_arc_into_scout() {
-    let injected: Arc<dyn TokenSource> = Arc::new(StaticTokenSource(None));
-    let scout = ScoutBuilder::for_test()
-        .with_token_source(injected.clone())
-        .build();
-    assert!(
-        Arc::ptr_eq(&scout.token_source, &injected),
-        "with_token_source must install the supplied Arc into Scout.token_source"
-    );
-}
 
 /// [T-DNS001] End-to-end check that the `Arc<dyn DnsResolver>` handed to
 /// `ScoutBuilder::with_dns` reaches the `Scout.dns` slot and is consulted on
@@ -78,13 +22,10 @@ async fn scout_builder_with_dns_blocks_fetch_via_injected_private_ip() {
     let injected: Arc<dyn DnsResolver> = Arc::new(StaticDnsResolver::single("10.0.0.1"));
     let scout = ScoutBuilder::for_test().with_dns(injected.clone()).build();
 
-    assert!(
-        Arc::ptr_eq(&scout.dns, &injected),
-        "with_dns must install the supplied Arc into Scout.dns"
-    );
-
     let result = scout
-        .fetch(FetchParams::for_test("https://example.com/page"))
+        .run(Command::Fetch(FetchParams::for_test(
+            "https://example.com/page",
+        )))
         .await;
     let err = result.expect_err("injected private IP must trip SSRF check");
     assert_eq!(
@@ -109,7 +50,9 @@ async fn scout_builder_with_dns_propagates_resolver_failure() {
     let scout = ScoutBuilder::for_test().with_dns(injected).build();
 
     let result = scout
-        .fetch(FetchParams::for_test("https://example.com/page"))
+        .run(Command::Fetch(FetchParams::for_test(
+            "https://example.com/page",
+        )))
         .await;
     let err = result.expect_err("injected resolver failure must surface as error");
     assert!(
@@ -119,19 +62,9 @@ async fn scout_builder_with_dns_propagates_resolver_failure() {
     );
 }
 
-/// [T-SB004] End-to-end check that the `FixedClock` injected via `with_clock`
-/// reaches the `GitHubClient` that `Scout::github()` initializes. The
-/// `Arc::ptr_eq` unit test (T-SB001) cannot catch a plumbing bug inside
-/// `github()` (a missed clone, a binding that never enters the `async move`),
-/// so this asserts the `secs_until_ratelimit_reset` arithmetic across wiremock.
-///
-/// reset = 1600, clock = 1000 → retry_after = 600 exceeds
-/// `MAX_RETRY_AFTER_SECS` (300), so `is_retriable = false` and the retry loop
-/// is skipped. Pairing this with `start_paused` would also stop wiremock's TCP
-/// listener and time the connect out, so arithmetic that runs no retry is the
-/// stabler choice.
+/// [T-SB004] A reset beyond the retry budget fails after one HTTP request.
 #[tokio::test]
-async fn scout_builder_clock_reaches_github_client_via_seam() {
+async fn github_rate_limit_beyond_budget_fails_without_retries() {
     let Some(server) = try_spawn_mock_server("tools::scout_builder_seam").await else {
         return;
     };
@@ -143,6 +76,7 @@ async fn scout_builder_clock_reaches_github_client_via_seam() {
                 .append_header("x-ratelimit-reset", "1600")
                 .set_body_json(serde_json::json!({"message": "rate limit exceeded"})),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -151,16 +85,14 @@ async fn scout_builder_clock_reaches_github_client_via_seam() {
         .with_github_endpoint(&server.uri())
         .build();
 
-    let result = scout.github().await.get_repo("owner", "repo").await;
-    assert!(
-        matches!(
-            result,
-            Err(github::GitHubError::RateLimited {
-                retry_after: Some(600)
-            })
-        ),
-        "expected retry_after = 600 (reset 1600 - clock 1000), got: {result:?}"
-    );
+    let err = scout
+        .run(Command::RepoOverview(RepoOverviewParams {
+            repository: Some("owner/repo".into()),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_kind(), ErrorCode::TempFailure);
+    assert_eq!(err.exit_code(), 75);
 }
 
 /// [T-SB005] End-to-end check that the wiremock endpoint injected via

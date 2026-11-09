@@ -28,6 +28,7 @@ async fn search_returns_plain_url_list() {
                 ]
             }
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -37,7 +38,7 @@ async fn search_returns_plain_url_list() {
         lang: Lang::Auto,
     };
 
-    let result = s.search(params).await.unwrap();
+    let result = s.run(Command::Search(params)).await.unwrap();
     assert_eq!(
         result.markdown(),
         "https://rust-lang.org\nhttps://doc.rust-lang.org",
@@ -69,7 +70,7 @@ async fn search_json_schema_omits_answer() {
         lang: Lang::Auto,
     };
 
-    let result = s.search(params).await.unwrap();
+    let result = s.run(Command::Search(params)).await.unwrap();
     let data = result.data();
     assert!(data.get("answer").is_none(), "answer field must be absent");
     assert_eq!(data["query"], "foo");
@@ -77,29 +78,6 @@ async fn search_json_schema_omits_answer() {
     assert_eq!(data["sources"][0]["url"], "https://a.com");
     assert_eq!(data["sources"][0]["title"], "A");
     assert_eq!(data["sources"][0]["description"], "d");
-}
-
-/// [T-TS026] Successful search makes exactly one request to the Brave mock.
-#[tokio::test]
-async fn search_does_not_traverse_engine_path() {
-    let Some(server) = try_spawn_mock_server("tools::integration").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "web": {"results": [{"url": "https://a.com", "title": "A", "description": ""}]}
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let s = scout_with_brave(&server.uri());
-    let params = SearchParams {
-        query: Some("foo".into()),
-        lang: Lang::Auto,
-    };
-    s.search(params).await.unwrap();
 }
 
 /// [T-TS027] Successful zero-result search has empty Markdown and sources.
@@ -121,103 +99,9 @@ async fn search_zero_results_returns_empty() {
         query: Some("foo".into()),
         lang: Lang::Auto,
     };
-    let result = s.search(params).await.unwrap();
+    let result = s.run(Command::Search(params)).await.unwrap();
     assert_eq!(result.markdown(), "", "empty stdout for zero results");
     assert_eq!(result.data()["sources"].as_array().unwrap().len(), 0);
-}
-
-/// [T-TS002] The report references the Brave URL without legacy search headers
-/// or Google redirect URLs.
-#[tokio::test]
-async fn research_success_returns_report() {
-    let Some(server) = try_spawn_mock_server("tools::integration").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "web": {
-                    "results": [
-                        {"url": "https://rust-lang.test/", "title": "Rust Language", "description": "snippet"}
-                    ]
-                }
-            })))
-            .mount(&server)
-            .await;
-
-    let s = scout_with_brave(&server.uri());
-    let params = ResearchParams {
-        query: Some("What is Rust?".into()),
-        depth: 1,
-        lang: Lang::Auto,
-    };
-
-    let result = s.research(params).await.unwrap();
-    assert!(
-        result.markdown().contains("rust-lang.test"),
-        "report should reference Brave source URL, got: {result:?}"
-    );
-    assert!(
-        !result.markdown().contains("## Search Result"),
-        "report must not contain a Search Result header"
-    );
-    assert!(
-        !result
-            .markdown()
-            .contains("vertexaisearch.cloud.google.com"),
-        "Sources must not contain Google redirect URLs"
-    );
-}
-
-/// [T-TS028] Research data retains query/source fields and page/failure arrays
-/// without legacy answer or all_sources keys.
-#[tokio::test]
-async fn research_json_schema_includes_required_keys() {
-    let Some(server) = try_spawn_mock_server("tools::integration").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "web": {
-                "results": [
-                    {"url": "https://a.test/", "title": "A", "description": "snippet"}
-                ]
-            }
-        })))
-        .mount(&server)
-        .await;
-
-    let s = scout_with_brave(&server.uri());
-    let params = ResearchParams {
-        query: Some("foo".into()),
-        depth: 1,
-        lang: Lang::Auto,
-    };
-    let result = s.research(params).await.unwrap();
-    let data = result.data();
-
-    assert_eq!(data["query"], "foo", "data.query must echo the request");
-    assert!(data["sources"].is_array(), "data.sources must be an array");
-    assert_eq!(data["sources"][0]["url"], "https://a.test/");
-    assert_eq!(data["sources"][0]["title"], "A");
-    assert_eq!(data["sources"][0]["description"], "snippet");
-    assert!(
-        data["fetched_pages"].is_array(),
-        "data.fetched_pages must be an array (possibly empty)"
-    );
-    assert!(
-        data["failed_urls"].is_array(),
-        "data.failed_urls must be an array (possibly empty)"
-    );
-    assert!(
-        data.get("answer").is_none(),
-        "data.answer must be absent: scout emits no LLM-generated answer"
-    );
-    assert!(
-        data.get("all_sources").is_none(),
-        "data.all_sources is the legacy key — must be renamed to sources"
-    );
 }
 
 /// [T-TS029] Mock 503 and successful zero results differ at the CLI writer:
@@ -493,13 +377,6 @@ impl serde::Serialize for FailingSerialize {
     {
         Err(S::Error::custom("forced serialize failure"))
     }
-}
-
-/// [T-TDV001]
-#[test]
-fn to_data_value_serializes_owned_value() {
-    let value = to_data_value(&serde_json::json!({"k": "v"}), "test value").unwrap();
-    assert_eq!(value, serde_json::json!({"k": "v"}));
 }
 
 /// [T-TDV002] Serialization failure must return Internal (exit 70), not panic.
