@@ -53,6 +53,7 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 js-rendering = ["tokio-tungstenite", "nix", "tempfile"]
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 tracing-test = "0.2"
 wiremock = "0.6"

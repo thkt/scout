@@ -21,7 +21,7 @@ use crate::retry::{parse_retry_after, retry_after_within_cap, retry_with_rate_li
 use crate::rng::{FastrandRng, Rng};
 
 use super::{
-    Message, ResolvedMessage, SlackError, SlackUrl, collect_mention_ids_ordered, extract_target,
+    Message, ResolvedMessage, SlackError, SlackUrl, collect_mention_ids_ordered,
     format_slack_output, resolve_messages,
 };
 
@@ -31,6 +31,15 @@ struct FetchedThread {
     /// True when `fetch_replies` stopped at `SLACK_MAX_REPLY_PAGES` with more
     /// pages still available, so the thread is missing replies past the cap.
     truncated: bool,
+}
+
+/// A target verified before enrichment, with its remaining thread context.
+struct ResolvedThread {
+    target: ResolvedMessage,
+    replies: Vec<ResolvedMessage>,
+    truncated: bool,
+    users_capped: bool,
+    lookups_failed: bool,
 }
 
 /// Result of resolving a Slack permalink into rendered Markdown, carrying the
@@ -279,7 +288,7 @@ struct ChannelInfo {
 impl SlackClient {
     /// Calls `api_get_once`, not `api_get`: the error is discarded for a raw-ID
     /// fallback, so a retry only re-fetches what this drops. A long
-    /// `Retry-After` here additionally stalls the `tokio::join!` in
+    /// `Retry-After` here additionally stalls the `tokio::try_join!` in
     /// `fetch_message` and can spend the caller's 60s budget on its own,
     /// turning a raw channel label into an exit 124.
     async fn resolve_channel(&self, id: &str) -> (String, bool) {
@@ -494,16 +503,29 @@ impl SlackClient {
         }
     }
 
-    pub(crate) async fn fetch_message(
-        &self,
-        slack_url: &SlackUrl,
-    ) -> Result<SlackFetchOutcome, SlackError> {
+    async fn resolve_thread(&self, slack_url: &SlackUrl) -> Result<ResolvedThread, SlackError> {
         let fetched = self.fetch_thread(slack_url).await?;
         if fetched.messages.is_empty() {
             return Err(SlackError::Api {
                 error: "message not found".into(),
             });
         }
+
+        // History may return the preceding message for a missing timestamp.
+        // Validate before any user lookups, preserving NotFound even when those
+        // optional requests are slow. Keep source order for author-cap priority.
+        let target_index = fetched.messages.iter()
+            .position(|message| message.ts.as_deref() == Some(&slack_url.ts))
+            .ok_or_else(|| SlackError::Api {
+                error: if fetched.truncated {
+                    format!(
+                        "message {} not found in thread (paging stopped at the {SLACK_MAX_REPLY_PAGES}-page cap, so later replies were never fetched)",
+                        slack_url.ts
+                    )
+                } else {
+                    format!("message {} not found in thread", slack_url.ts)
+                },
+            })?;
 
         // Authors appear on every message, so preserve them before mentions when
         // capped. First-occurrence order makes selection reproducible; one shared
@@ -537,43 +559,43 @@ impl SlackClient {
             .take(SLACK_MAX_USER_LOOKUPS)
             .collect();
 
-        let ((channel_name, channel_failed), (users, users_failed)) = tokio::join!(
-            self.resolve_channel(&slack_url.channel),
-            self.prefetch_users(&user_ids),
-        );
-        let lookups_failed = channel_failed || users_failed;
+        let (users, lookups_failed) = self.prefetch_users(&user_ids).await;
+        let mut resolved = resolve_messages(&fetched.messages, &users);
+        let target = resolved.remove(target_index);
+        if !fetched.is_thread {
+            resolved.clear();
+        }
+        Ok(ResolvedThread {
+            target,
+            replies: resolved,
+            truncated: fetched.truncated,
+            users_capped,
+            lookups_failed,
+        })
+    }
 
-        let resolved = resolve_messages(&fetched.messages, &users);
-
-        // A missing target has two causes that read alike: the message is gone,
-        // or it sits past the page cap and was never fetched. Only the second is
-        // worth acting on, so say which one happened. `classify` matches the
-        // "message … not found" family rather than an exact string, so the
-        // longer form still routes to NotFound.
-        let (first, resolved) =
-            extract_target(resolved, &slack_url.ts).ok_or_else(|| SlackError::Api {
-                error: if fetched.truncated {
-                    format!(
-                        "message {} not found in thread (paging stopped at the {SLACK_MAX_REPLY_PAGES}-page cap, so later replies were never fetched)",
-                        slack_url.ts
-                    )
-                } else {
-                    format!("message {} not found in thread", slack_url.ts)
-                },
-            })?;
-        let replies: &[ResolvedMessage] = if fetched.is_thread { &resolved } else { &[] };
-        let output = format_slack_output(slack_url, &channel_name, &first, replies);
+    pub(crate) async fn fetch_message(
+        &self,
+        slack_url: &SlackUrl,
+    ) -> Result<SlackFetchOutcome, SlackError> {
+        // Channel labels are independent of message paging and user lookups.
+        // A thread error cancels the optional label request immediately.
+        let (thread, (channel_name, channel_failed)) =
+            tokio::try_join!(self.resolve_thread(slack_url), async {
+                Ok(self.resolve_channel(&slack_url.channel).await)
+            },)?;
+        let output = format_slack_output(slack_url, &channel_name, &thread.target, &thread.replies);
         info!(
             workspace = %slack_url.workspace,
             channel = %channel_name,
-            replies = replies.len(),
+            replies = thread.replies.len(),
             "slack fetch complete"
         );
         Ok(SlackFetchOutcome {
             markdown: output,
-            thread_truncated: fetched.truncated,
-            users_capped,
-            lookups_failed,
+            thread_truncated: thread.truncated,
+            users_capped: thread.users_capped,
+            lookups_failed: thread.lookups_failed || channel_failed,
         })
     }
 }

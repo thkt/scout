@@ -5,19 +5,8 @@ use std::time::Duration;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-TS020] run() wraps GitHub commands in the outer github_timeout
-///
-/// `repo-tree` / `repo-read` / `repo-overview` reach GitHub through
-/// bare async handlers; a persistent slow/5xx upstream would hang the command
-/// for minutes (each inner HTTP call has its own 30s timeout plus retries).
-/// `run()` caps the whole command. A GitHub endpoint that delays 30s past
-/// the 200ms `github_timeout` must surface a timeout error AND emit the
-/// `"github command timed out"` warn — the log assertion is non-tautological:
-/// a real connect failure would also yield `is_err()` but emit no such warn.
-/// Going through `run()` (not the handler directly) is essential since the guard
-/// lives at the dispatch layer.
+/// [T-TS020] Slow repo-tree requests return the command's timeout error.
 #[tokio::test]
-#[tracing_test::traced_test]
 async fn run_repo_tree_times_out_on_slow_github() {
     let Some(server) = try_spawn_mock_server("tools::t_185").await else {
         return;
@@ -43,10 +32,7 @@ async fn run_repo_tree_times_out_on_slow_github() {
         "expected a timeout error, got: {}",
         err.message()
     );
-    assert!(
-        logs_contain("github command timed out"),
-        "expected the run()-level github timeout guard to fire",
-    );
+    assert_eq!(err.exit_code(), 124);
 }
 
 /// [T-TS021] run() wraps repo-read in the outer github_timeout
@@ -167,82 +153,76 @@ async fn repo_overview_404_skips_remaining_apis() {
     assert!(result.is_err(), "repo_overview should fail on 404");
 }
 
-/// [T-TS010] repo_overview: after get_repo succeeds, readme/issues/pulls/
-/// releases run in parallel.
-///
-/// Proof: a barrier-synchronized TCP server requires all 4 API requests to
-/// arrive before any response is sent. If requests are sequential, only one
-/// arrives at a time and the barrier never releases → deadlock → timeout.
-#[tokio::test(flavor = "multi_thread")]
+/// [T-TS010] All four optional overview requests progress before any completes.
+#[tokio::test]
 async fn repo_overview_parallel_after_get_repo() {
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::Barrier;
+    use crate::test_support::http_fixture::HttpFixture;
+    use serde_json::json;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
-
-    // 4 parallel APIs must all arrive before any response is sent.
-    let barrier = Arc::new(Barrier::new(4));
-
-    let server = tokio::spawn(async move {
-        for _ in 0..10 {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                break;
-            };
-            let b = barrier.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 4096];
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    return;
-                }
-                let req = String::from_utf8_lossy(&buf[..n]);
-                let path = req
-                    .lines()
-                    .next()
-                    .and_then(|l| l.split_whitespace().nth(1))
-                    .unwrap_or("");
-
-                let (body, wait) = if path == "/repos/owner/repo" {
-                    (r#"{"full_name":"owner/repo","description":"test","html_url":"https://github.com/owner/repo","default_branch":"main","language":"Rust","stargazers_count":1,"forks_count":0,"open_issues_count":0,"topics":[],"license":null}"#.to_owned(), false)
-                } else if path.contains("/git/blobs/") {
-                    (r#"{"content":""}"#.to_owned(), false)
-                } else if path.contains("/readme") {
-                    (r#"{"sha":"abc123","content":""}"#.to_owned(), true)
-                } else {
-                    ("[]".to_owned(), true)
-                };
-
-                if wait {
-                    b.wait().await;
-                }
-
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = stream.write_all(resp.as_bytes()).await;
-            });
-        }
-    });
-
-    let s = scout_with_github(&base_url, &base_url);
-    let params = RepoOverviewParams {
-        repository: Some("owner/repo".into()),
-    };
-
-    // Sequential requests cannot release the four-party barrier and must time out.
-    let result = timeout(Duration::from_secs(5), s.repo_overview(params)).await;
-
-    assert!(
-        result.is_ok(),
-        "repo_overview should complete when 4 APIs run in parallel \
-             (barrier-synchronized); sequential execution deadlocks"
-    );
-
-    server.abort();
+    let server = HttpFixture::start(&[
+        (
+            "/repos/owner/repo",
+            json!({
+                "full_name": "owner/repo", "description": null,
+                "html_url": "https://github.com/owner/repo", "default_branch": "main",
+                "language": null, "stargazers_count": 0, "forks_count": 0,
+                "open_issues_count": 0, "license": null
+            }),
+            &[],
+        ),
+        (
+            "/repos/owner/repo/readme",
+            json!({"sha": "readme", "content": "UkVBRE1FIGJvZHk="}),
+            &[
+                "/repos/owner/repo/issues",
+                "/repos/owner/repo/pulls",
+                "/repos/owner/repo/releases",
+            ],
+        ),
+        (
+            "/repos/owner/repo/issues",
+            json!([]),
+            &[
+                "/repos/owner/repo/readme",
+                "/repos/owner/repo/pulls",
+                "/repos/owner/repo/releases",
+            ],
+        ),
+        (
+            "/repos/owner/repo/pulls",
+            json!([]),
+            &[
+                "/repos/owner/repo/readme",
+                "/repos/owner/repo/issues",
+                "/repos/owner/repo/releases",
+            ],
+        ),
+        (
+            "/repos/owner/repo/releases",
+            json!([]),
+            &[
+                "/repos/owner/repo/readme",
+                "/repos/owner/repo/issues",
+                "/repos/owner/repo/pulls",
+            ],
+        ),
+    ])
+    .await;
+    let scout = ScoutBuilder::for_test()
+        .with_github_endpoint(&server.uri)
+        .build();
+    let result = timeout(
+        Duration::from_secs(5),
+        scout.run(Command::RepoOverview(RepoOverviewParams {
+            repository: Some("owner/repo".into()),
+        })),
+    )
+    .await
+    .expect("independent overview requests must progress together")
+    .unwrap();
+    assert_eq!(result.data()["readme"], "README body");
+    assert_eq!(result.data()["issues"], json!([]));
+    assert_eq!(result.data()["pulls"], json!([]));
+    assert_eq!(result.data()["releases"], json!([]));
+    assert!(result.markdown().contains("README body"));
 }

@@ -16,7 +16,7 @@ pub(crate) use client::SlackClient;
 mod format;
 pub(crate) use format::truncate_slack_output;
 pub(in crate::slack) use format::{
-    Message, ResolvedMessage, extract_target, format_slack_output, resolve_messages,
+    Message, ResolvedMessage, format_slack_output, resolve_messages,
 };
 
 mod mention;

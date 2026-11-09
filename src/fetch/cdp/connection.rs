@@ -6,6 +6,8 @@ mod tests;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -135,12 +137,21 @@ struct Html {
     outer_html: String,
 }
 
+const MAX_CONCURRENT_CHECKS: usize = 5;
+
+struct CheckedRequest {
+    request_id: String,
+    url: String,
+    allowed: bool,
+}
+
 pub(super) struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next_id: u64,
     session: Option<String>,
     resolver: Arc<dyn DnsResolver>,
     interceptions: HashSet<u64>,
+    checks: FuturesUnordered<BoxFuture<'static, CheckedRequest>>,
     loads: HashSet<(String, String)>,
 }
 
@@ -158,6 +169,7 @@ impl Connection {
             session: None,
             resolver,
             interceptions: HashSet::new(),
+            checks: FuturesUnordered::new(),
             loads: HashSet::new(),
         })
     }
@@ -252,6 +264,7 @@ impl Connection {
         let mut reply = None;
         loop {
             if self.interceptions.is_empty()
+                && self.checks.is_empty()
                 && let Some(reply) = reply.take()
             {
                 return serde_json::from_value(reply)
@@ -278,7 +291,14 @@ impl Connection {
 
     async fn receive(&mut self) -> Result<Envelope, BrowserError> {
         loop {
-            match self.socket.next().await {
+            let message = tokio::select! {
+                Some(checked) = self.checks.next() => {
+                    self.complete_check(checked).await?;
+                    continue;
+                }
+                message = self.socket.next() => message,
+            };
+            match message {
                 Some(Ok(Message::Text(text))) => {
                     return serde_json::from_str(&text)
                         .map_err(|error| failed(format!("CDP invalid message: {error}")));
@@ -317,22 +337,23 @@ impl Connection {
         }
         match &message.event {
             Event::Paused(event) => {
-                let allowed =
-                    check_browser_request(&event.request.url, self.resolver.as_ref()).await;
-                let (method, params) = if allowed {
-                    (
-                        "Fetch.continueRequest",
-                        json!({"requestId": event.request_id}),
-                    )
-                } else {
-                    warn!(blocked_url = %RedactedLogUrl(&event.request.url), "SSRF: blocked browser subrequest");
-                    (
-                        "Fetch.failRequest",
-                        json!({"requestId": event.request_id, "errorReason": "BlockedByClient"}),
-                    )
-                };
-                let id = self.send(method, params, true).await?;
-                self.interceptions.insert(id);
+                // Bound active DNS work without spawning tasks. Dropping the
+                // connection also drops every pending validation future.
+                if self.checks.len() == MAX_CONCURRENT_CHECKS {
+                    let checked = self.checks.next().await.expect("checks are non-empty");
+                    self.complete_check(checked).await?;
+                }
+                let resolver = Arc::clone(&self.resolver);
+                let request_id = event.request_id.clone();
+                let url = event.request.url.clone();
+                self.checks.push(Box::pin(async move {
+                    let allowed = check_browser_request(&url, resolver.as_ref()).await;
+                    CheckedRequest {
+                        request_id,
+                        url,
+                        allowed,
+                    }
+                }));
             }
             Event::Lifecycle(event) if event.name == "load" => {
                 self.loads
@@ -343,6 +364,24 @@ impl Connection {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    async fn complete_check(&mut self, checked: CheckedRequest) -> Result<(), BrowserError> {
+        let (method, params) = if checked.allowed {
+            (
+                "Fetch.continueRequest",
+                json!({"requestId": checked.request_id}),
+            )
+        } else {
+            warn!(blocked_url = %RedactedLogUrl(&checked.url), "SSRF: blocked browser subrequest");
+            (
+                "Fetch.failRequest",
+                json!({"requestId": checked.request_id, "errorReason": "BlockedByClient"}),
+            )
+        };
+        let id = self.send(method, params, true).await?;
+        self.interceptions.insert(id);
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-/// Canonical search result type returned by `SearchClient::search`.
+/// Canonical search result type returned by `BraveClient::search`.
 ///
 /// `description` is the search engine snippet (not an LLM-generated summary)
 /// and is included to help AI agents pre-filter results before fetching.

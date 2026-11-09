@@ -3,6 +3,94 @@ mod common;
 use common::{parse_envelope, scout};
 use std::process::Output;
 
+/// [T-HP008] Non-GitHub commands and invalid repo input never launch GitHub authentication.
+#[cfg(unix)]
+#[test]
+fn commands_do_not_consult_unneeded_github_credentials() {
+    use common::{scout_with_clean_env, spawn_mock_proxy_raw_response};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gh = dir.path().join("gh");
+    let marker = dir.path().join("called");
+    fs::write(
+        &gh,
+        "#!/bin/sh\nprintf called > \"$SCOUT_GH_MARKER\"\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o700)).unwrap();
+
+    for (args, expected_code) in [
+        (vec!["search", "query"], 64),
+        (vec!["research", "query"], 64),
+        (
+            vec!["repo-tree", "owner/repo", "--path", "../etc/passwd"],
+            65,
+        ),
+        (vec!["repo-tree", "owner/repo", "--ref", "main..evil"], 65),
+        (vec!["repo-read", "owner/repo", "../etc/passwd"], 65),
+    ] {
+        let output = scout_with_clean_env()
+            .env("PATH", dir.path())
+            .env("SCOUT_GH_MARKER", &marker)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(expected_code), "{args:?}");
+    }
+
+    let Some((proxy, _, server)) = spawn_mock_proxy_raw_response(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nPublic body"
+    ) else { return; };
+    let output = scout_with_clean_env()
+        .env("PATH", dir.path())
+        .env("SCOUT_GH_MARKER", &marker)
+        .env("HTTP_PROXY", proxy)
+        .args(["fetch", "http://example.com/body"])
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Public body")
+    );
+    assert!(
+        !marker.exists(),
+        "unrelated commands must not invoke gh auth token"
+    );
+}
+
+/// [T-HP009] Missing Slack credentials produce the public usage-error envelope.
+#[test]
+fn slack_fetch_without_token_reports_usage_error() {
+    let output = common::scout_with_clean_env()
+        .args([
+            "fetch",
+            "https://team.slack.com/archives/C123/p1111111111222222",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(64));
+    let envelope = parse_envelope(&output, "Slack token absent");
+    assert_eq!(envelope["error"]["code"], "USAGE_ERROR");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("SLACK_TOKEN")
+    );
+    assert_eq!(envelope["error"]["retryable"], false);
+}
+
 // T-C001
 #[test]
 fn help_exits_zero_and_contains_app_name() {

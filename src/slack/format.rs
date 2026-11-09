@@ -58,21 +58,6 @@ pub(in crate::slack) fn resolve_messages(
     resolved
 }
 
-/// Extract the message matching `target_ts` from `messages`, returning it and
-/// the remaining messages in their original order.
-///
-/// `conversations.history` uses `latest` as an upper bound and can return a
-/// preceding message for a missing ts. Exact matching prevents displaying
-/// that neighbour under the requested ts.
-pub(in crate::slack) fn extract_target(
-    mut messages: Vec<ResolvedMessage>,
-    target_ts: &str,
-) -> Option<(ResolvedMessage, Vec<ResolvedMessage>)> {
-    let idx = messages.iter().position(|m| m.ts == target_ts)?;
-    let first = messages.remove(idx);
-    Some((first, messages))
-}
-
 /// Render a resolved Slack permalink as YAML frontmatter and body.
 ///
 /// Frontmatter keys are emitted in a fixed order: `workspace`, `channel`,

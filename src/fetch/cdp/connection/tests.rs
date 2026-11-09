@@ -8,12 +8,15 @@ use tokio_tungstenite::accept_async;
 type Peer = WebSocketStream<TcpStream>;
 
 async fn pair() -> (Connection, Peer) {
+    pair_with(Arc::new(StaticDnsResolver::public())).await
+}
+
+async fn pair_with(resolver: Arc<dyn DnsResolver>) -> (Connection, Peer) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!(
         "ws://{}/devtools/browser/test",
         listener.local_addr().unwrap()
     );
-    let resolver = Arc::new(StaticDnsResolver::public());
     let client = Connection::connect(&endpoint, resolver);
     let server = async {
         let (stream, _) = listener.accept().await.unwrap();
@@ -213,4 +216,74 @@ async fn rejects_malformed_command_results() {
     .await
     .unwrap();
     assert!(result.err().unwrap().to_string().contains("targetId"));
+}
+
+/// [T-HP004] Independent subrequest DNS checks cannot block one another.
+#[tokio::test]
+async fn navigation_checks_subrequests_concurrently_before_allowing_them() {
+    use crate::fetch::FetchError;
+    use std::future::Future;
+    use std::net::IpAddr;
+    use std::pin::Pin;
+    use tokio::sync::Barrier;
+
+    struct ConcurrentDns(Barrier);
+    impl DnsResolver for ConcurrentDns {
+        fn lookup(
+            &self,
+            _: &str,
+            _: u16,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, FetchError>> + Send + '_>> {
+            Box::pin(async {
+                self.0.wait().await;
+                Ok(vec!["93.184.216.34".parse().unwrap()])
+            })
+        }
+    }
+
+    let (mut client, mut peer) = pair_with(Arc::new(ConcurrentDns(Barrier::new(2)))).await;
+    let url = ValidatedUrl::for_test("https://example.com");
+    let navigate = client.navigate(&url);
+    let server = async {
+        exchange(
+            &mut peer,
+            "Target.createTarget",
+            json!({"targetId": "target"}),
+        )
+        .await;
+        exchange(
+            &mut peer,
+            "Target.attachToTarget",
+            json!({"sessionId": "page"}),
+        )
+        .await;
+        exchange(&mut peer, "Page.enable", json!({})).await;
+        exchange(&mut peer, "Page.setLifecycleEventsEnabled", json!({})).await;
+        exchange(&mut peer, "Fetch.enable", json!({})).await;
+        let navigation = receive(&mut peer, "Page.navigate").await;
+        send(&mut peer, json!({"sessionId": "page", "method": "Fetch.requestPaused", "params": {"requestId": "one", "request": {"url": "https://one.example/asset"}}})).await;
+        send(&mut peer, json!({"sessionId": "page", "method": "Fetch.requestPaused", "params": {"requestId": "two", "request": {"url": "https://two.example/asset"}}})).await;
+        exchange(&mut peer, "Fetch.continueRequest", json!({})).await;
+        exchange(&mut peer, "Fetch.continueRequest", json!({})).await;
+        reply(
+            &mut peer,
+            &navigation,
+            json!({"frameId": "main", "loaderId": "navigation"}),
+        )
+        .await;
+        send(&mut peer, json!({"sessionId": "page", "method": "Page.lifecycleEvent", "params": {"name": "load", "frameId": "main", "loaderId": "navigation"}})).await;
+        exchange(&mut peer, "DOM.getDocument", json!({"root": {"nodeId": 1}})).await;
+        exchange(
+            &mut peer,
+            "DOM.getOuterHTML",
+            json!({"outerHTML": "<p>Both assets loaded</p>"}),
+        )
+        .await;
+    };
+    let (html, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(navigate, server)
+    })
+    .await
+    .expect("subrequest validation must progress concurrently");
+    assert_eq!(html.unwrap(), "<p>Both assets loaded</p>");
 }

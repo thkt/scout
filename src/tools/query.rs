@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
-use crate::brave::client::SearchClient as _;
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::FetchResult;
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_page};

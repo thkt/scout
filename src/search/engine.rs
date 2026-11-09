@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use tracing::warn;
 
-use crate::brave::client::{BraveError, SearchClient};
+use crate::brave::client::{BraveClient, BraveError};
 use crate::brave::types::SearchResult;
 use crate::fetch;
 use crate::fetch::converter::FetchResult;
@@ -47,7 +47,7 @@ pub(crate) struct ResearchRequest<'a> {
 }
 
 pub(crate) async fn research(
-    brave: &impl SearchClient,
+    brave: &BraveClient,
     http: &Client,
     req: &ResearchRequest<'_>,
     resolver: Arc<dyn DnsResolver>,
@@ -84,7 +84,7 @@ async fn fetch_sources(
     cancel: &watch::Sender<bool>,
     source_timeout: Duration,
 ) -> (Vec<FetchResult>, Vec<FailedUrl>) {
-    let fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
+    let mut fetch_outcomes: Vec<_> = stream::iter(sources.iter().take(depth).enumerate())
         .map(|(idx, source)| {
             let resolver = Arc::clone(&resolver);
             let opts = fetch::FetchOptions {
@@ -113,46 +113,27 @@ async fn fetch_sources(
         .collect()
         .await;
 
-    let (fetched_pages, failed_urls) = partition_by_rank(fetch_outcomes);
+    fetch_outcomes.sort_unstable_by_key(|(rank, _, _)| *rank);
+    let mut pages = Vec::new();
+    let mut failures = Vec::new();
 
-    if !failed_urls.is_empty() && fetched_pages.is_empty() {
-        warn!(failed = failed_urls.len(), "all page fetches failed");
-    }
-
-    (fetched_pages, failed_urls)
-}
-
-/// Restore search rank after unordered completion, for successes and failures
-/// alike, so timing cannot reorder report sections.
-fn partition_by_rank(
-    outcomes: Vec<(usize, &str, Result<FetchResult, fetch::FetchError>)>,
-) -> (Vec<FetchResult>, Vec<FailedUrl>) {
-    let mut indexed_pages = Vec::new();
-    let mut indexed_failures = Vec::new();
-
-    for (idx, url, outcome) in outcomes {
+    for (_, url, outcome) in fetch_outcomes {
         match outcome {
-            Ok(page) => indexed_pages.push((idx, page)),
+            Ok(page) => pages.push(page),
             Err(e) => {
                 warn!(url = %url, error = %e, "page fetch failed");
-                indexed_failures.push((
-                    idx,
-                    FailedUrl {
-                        url: url.to_owned(),
-                        reason: e.to_string(),
-                    },
-                ));
+                failures.push(FailedUrl {
+                    url: url.to_owned(),
+                    reason: e.to_string(),
+                });
             }
         }
     }
 
-    indexed_pages.sort_by_key(|(idx, _)| *idx);
-    indexed_failures.sort_by_key(|(idx, _)| *idx);
-
-    (
-        indexed_pages.into_iter().map(|(_, page)| page).collect(),
-        indexed_failures.into_iter().map(|(_, f)| f).collect(),
-    )
+    if !failures.is_empty() && pages.is_empty() {
+        warn!(failed = failures.len(), "all page fetches failed");
+    }
+    (pages, failures)
 }
 
 pub(crate) fn format_report(report: &ResearchReport, query: &str) -> String {
