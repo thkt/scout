@@ -14,8 +14,9 @@
 //!
 //! This file is the SOCKS5 protocol layer: greeting/request parsing, fail-closed
 //! IP validation, and reply encoding. Generic client streams allow offline
-//! parse/reject tests (T-201-*); full-tunnel success is exercised by the Chromium
-//! integration test, which requires a browser and real upstream access.
+//! parse/reject tests (T-201-*). A tunnel through this layer to a real upstream
+//! is exercised only by the Chromium integration test, which requires a browser
+//! and real upstream access; T-F088 covers the transport's tunnel over loopback.
 //! The listener accept loop, upstream dial, and byte tunnel live in `transport`.
 
 use std::io;
@@ -97,9 +98,21 @@ where
         return send_reply(&mut stream, REP_NOT_ALLOWED).await;
     }
 
-    // Every candidate passed validation; no unvalidated fallback may be dialed.
-    let dial_addr = SocketAddr::new(ips[0], port);
-    transport::dial_and_tunnel(&mut stream, dial_addr).await
+    transport::dial_and_tunnel(&mut stream, &dial_candidates(&ips, port)).await
+}
+
+/// Every validated IP in resolver order, each once. All of them may be dialed;
+/// nothing outside this list may. A repeated record would take a second share
+/// of the dial budget for an address that just failed.
+fn dial_candidates(ips: &[IpAddr], port: u16) -> Vec<SocketAddr> {
+    let mut candidates: Vec<SocketAddr> = Vec::with_capacity(ips.len());
+    for &ip in ips {
+        let addr = SocketAddr::new(ip, port);
+        if !candidates.contains(&addr) {
+            candidates.push(addr);
+        }
+    }
+    candidates
 }
 
 /// Read the SOCKS5 greeting and CONNECT request, returning the parsed target and

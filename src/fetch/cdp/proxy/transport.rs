@@ -1,11 +1,14 @@
 //! OS-dependent transport for the SOCKS5 proxy: the listener accept loop, the
 //! upstream dial, and the bidirectional byte tunnel.
 //!
-//! T-201-13 covers the failure reply for a refused loopback dial. Accept faults,
-//! black-hole dial timeouts, and mid-stream tunnel resets require other real
-//! socket faults and are not covered by that test. This layer is excluded from
-//! the global diff coverage gate; the parent protocol layer remains on it.
+//! T-201-13 covers the failure reply for a refused loopback dial and T-F088 the
+//! fallback to a later address with a tunnel over loopback. T-F089 to T-F091
+//! cover how the dial budget is shared, with a stand-in dialer and a paused
+//! clock. Accept faults and mid-stream tunnel resets require other real socket
+//! faults and are not covered. This layer is excluded from the global diff
+//! coverage gate; the parent protocol layer remains on it.
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,15 +18,21 @@ use tokio::io::{AsyncRead, AsyncWrite, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout};
 use tracing::{debug, warn};
 
 use super::{REP_GENERAL_FAILURE, REP_SUCCESS, handle_conn, send_reply};
 use crate::fetch::ssrf::DnsResolver;
 
-/// Cap an upstream dial so a black-holed (validated) public IP returns
+/// Cap the upstream dial so black-holed (validated) public IPs return
 /// `REP_GENERAL_FAILURE` promptly instead of hanging on the OS default (~75s).
+/// The budget covers the whole address list.
 const UPSTREAM_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shortest wait one address gets while budget remains. A lost SYN is
+/// retransmitted after about 1s, so an even split across many records must not
+/// drop below a wait that survives one retransmission.
+const MIN_DIAL_ATTEMPT: Duration = Duration::from_secs(2);
 
 /// Backoff after a transient `accept` error so a sustained fault (e.g. EMFILE)
 /// cannot busy-spin the loop while file descriptors stay exhausted.
@@ -80,26 +89,48 @@ async fn accept_loop(
     }
 }
 
-/// Dial the already-validated upstream and tunnel bytes both ways. Split from
-/// `handle_conn` so the dial-failure reply path can be exercised without the
-/// connect-time validation gate: callers must validate `dial_addr` first.
+/// Try each address in order and return the first connection. Each attempt
+/// waits for an even share of the time left, so time an early address did not
+/// use (an immediate refusal) passes to the later ones.
+///
+/// Generic over the dialer so the budget can be tested without sockets.
+pub(super) async fn dial_first_reachable<T, D, Fut>(dial_addrs: &[SocketAddr], dial: D) -> Option<T>
+where
+    D: Fn(SocketAddr) -> Fut,
+    Fut: Future<Output = io::Result<T>>,
+{
+    let deadline = Instant::now() + UPSTREAM_DIAL_TIMEOUT;
+    for (index, &addr) in dial_addrs.iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let addresses_left = u32::try_from(dial_addrs.len() - index).unwrap_or(u32::MAX);
+        let attempt = (remaining / addresses_left)
+            .max(MIN_DIAL_ATTEMPT)
+            .min(remaining);
+        match timeout(attempt, dial(addr)).await {
+            Ok(Ok(stream)) => return Some(stream),
+            Ok(Err(e)) => debug!(%addr, error = %e, "SOCKS5 upstream dial failed"),
+            Err(_) => debug!(%addr, "SOCKS5 upstream dial timed out"),
+        }
+    }
+    None
+}
+
+/// Dial the already-validated upstream addresses in order and tunnel bytes both
+/// ways through the first that connects. Split from `handle_conn` so the
+/// dial-failure reply path can be exercised without the connect-time validation
+/// gate: callers must validate every entry of `dial_addrs` first.
 ///
 /// Generic over the client stream so a refused-dial reply can be asserted with a
 /// loopback `TcpStream` pair.
-pub(super) async fn dial_and_tunnel<S>(client: &mut S, dial_addr: SocketAddr) -> io::Result<()>
+pub(super) async fn dial_and_tunnel<S>(client: &mut S, dial_addrs: &[SocketAddr]) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut upstream = match timeout(UPSTREAM_DIAL_TIMEOUT, TcpStream::connect(dial_addr)).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            debug!(error = %e, "SOCKS5 upstream dial failed");
-            return send_reply(client, REP_GENERAL_FAILURE).await;
-        }
-        Err(_) => {
-            debug!(addr = %dial_addr, "SOCKS5 upstream dial timed out");
-            return send_reply(client, REP_GENERAL_FAILURE).await;
-        }
+    let Some(mut upstream) = dial_first_reachable(dial_addrs, TcpStream::connect).await else {
+        return send_reply(client, REP_GENERAL_FAILURE).await;
     };
     send_reply(client, REP_SUCCESS).await?;
 
