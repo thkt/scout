@@ -289,7 +289,8 @@ async fn navigation_checks_subrequests_concurrently_before_allowing_them() {
 }
 
 /// [T-CDPW006] Close returns on its own reply while an interception from an
-/// abandoned navigation is unanswered and a late paused request arrives.
+/// abandoned navigation is unanswered, a late paused request arrives, and a
+/// page-session reply reuses the close command's id.
 #[tokio::test]
 async fn close_does_not_wait_for_pending_interceptions() {
     let (mut client, mut peer) = pair().await;
@@ -299,6 +300,8 @@ async fn close_does_not_wait_for_pending_interceptions() {
     let server = async {
         let request = receive(&mut peer, "Browser.close").await;
         send(&mut peer, json!({"sessionId": "page", "method": "Fetch.requestPaused", "params": {"requestId": "late", "request": {"url": "https://example.com"}}})).await;
+        // A page-session reply carrying the same id belongs to another command.
+        send(&mut peer, json!({"sessionId": "page", "id": request["id"], "error": {"message": "not the close reply"}})).await;
         reply(&mut peer, &request, json!({})).await;
         drop(peer);
     };
@@ -308,4 +311,30 @@ async fn close_does_not_wait_for_pending_interceptions() {
     .await
     .expect("close must return once its reply arrives");
     result.expect("a browser that acknowledged the close has closed");
+}
+
+/// [T-CDPW007] An error reply to `Browser.close` surfaces as an error naming the command.
+#[tokio::test]
+async fn close_reports_an_error_reply() {
+    let (mut client, mut peer) = pair().await;
+    let close = client.close();
+    let server = async {
+        let request = receive(&mut peer, "Browser.close").await;
+        send(
+            &mut peer,
+            json!({"id": request["id"], "error": {"code": -32000, "message": "refused"}}),
+        )
+        .await;
+    };
+    let (result, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(close, server)
+    })
+    .await
+    .unwrap();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("CDP Browser.close")
+    );
 }
