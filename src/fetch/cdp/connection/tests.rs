@@ -287,3 +287,25 @@ async fn navigation_checks_subrequests_concurrently_before_allowing_them() {
     .expect("subrequest validation must progress concurrently");
     assert_eq!(html.unwrap(), "<p>Both assets loaded</p>");
 }
+
+/// [T-CDPW006] Close returns on its own reply while an interception from an
+/// abandoned navigation is unanswered and a late paused request arrives.
+#[tokio::test]
+async fn close_does_not_wait_for_pending_interceptions() {
+    let (mut client, mut peer) = pair().await;
+    client.session = Some("page".into());
+    client.interceptions.insert(u64::MAX);
+    let close = client.close();
+    let server = async {
+        let request = receive(&mut peer, "Browser.close").await;
+        send(&mut peer, json!({"sessionId": "page", "method": "Fetch.requestPaused", "params": {"requestId": "late", "request": {"url": "https://example.com"}}})).await;
+        reply(&mut peer, &request, json!({})).await;
+        drop(peer);
+    };
+    let (result, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(close, server)
+    })
+    .await
+    .expect("close must return once its reply arrives");
+    result.expect("a browser that acknowledged the close has closed");
+}

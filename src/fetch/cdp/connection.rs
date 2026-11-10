@@ -234,10 +234,24 @@ impl Connection {
         Ok(html.outer_html)
     }
 
+    /// Returns on the reply to `Browser.close` alone. `command` also waits for
+    /// every interception to be answered, and a navigation abandoned by a
+    /// cancel or timeout can leave some that the closing browser never
+    /// answers. Paused requests arriving here are left paused, not allowed.
     pub(super) async fn close(&mut self) -> Result<(), BrowserError> {
-        self.command::<Value>("Browser.close", json!({}), false)
-            .await
-            .map(|_| ())
+        let id = self.send("Browser.close", json!({}), false).await?;
+        loop {
+            let Envelope::Reply(reply) = self.receive().await? else {
+                continue;
+            };
+            if reply.id != id || reply.session_id.is_some() {
+                continue;
+            }
+            return match reply.error {
+                Some(error) => Err(failed(format!("CDP Browser.close: {error}"))),
+                None => Ok(()),
+            };
+        }
     }
 
     async fn send(&mut self, method: &str, params: Value, page: bool) -> Result<u64, BrowserError> {
