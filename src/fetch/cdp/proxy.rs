@@ -97,9 +97,10 @@ where
         return send_reply(&mut stream, REP_NOT_ALLOWED).await;
     }
 
-    // Every candidate passed validation; no unvalidated fallback may be dialed.
-    let dial_addr = SocketAddr::new(ips[0], port);
-    transport::dial_and_tunnel(&mut stream, dial_addr).await
+    // Every candidate passed validation, so each may be dialed; nothing outside
+    // this list may.
+    let dial_addrs: Vec<SocketAddr> = ips.iter().map(|&ip| SocketAddr::new(ip, port)).collect();
+    transport::dial_and_tunnel(&mut stream, &dial_addrs).await
 }
 
 /// Read the SOCKS5 greeting and CONNECT request, returning the parsed target and

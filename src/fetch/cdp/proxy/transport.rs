@@ -21,8 +21,9 @@ use tracing::{debug, warn};
 use super::{REP_GENERAL_FAILURE, REP_SUCCESS, handle_conn, send_reply};
 use crate::fetch::ssrf::DnsResolver;
 
-/// Cap an upstream dial so a black-holed (validated) public IP returns
+/// Cap the upstream dial so black-holed (validated) public IPs return
 /// `REP_GENERAL_FAILURE` promptly instead of hanging on the OS default (~75s).
+/// The budget covers the whole address list and is split evenly per address.
 const UPSTREAM_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Backoff after a transient `accept` error so a sustained fault (e.g. EMFILE)
@@ -80,26 +81,32 @@ async fn accept_loop(
     }
 }
 
-/// Dial the already-validated upstream and tunnel bytes both ways. Split from
-/// `handle_conn` so the dial-failure reply path can be exercised without the
-/// connect-time validation gate: callers must validate `dial_addr` first.
+async fn dial_first_reachable(dial_addrs: &[SocketAddr]) -> Option<TcpStream> {
+    let attempts = u32::try_from(dial_addrs.len()).unwrap_or(u32::MAX).max(1);
+    let per_address = UPSTREAM_DIAL_TIMEOUT / attempts;
+    for &addr in dial_addrs {
+        match timeout(per_address, TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => return Some(stream),
+            Ok(Err(e)) => debug!(%addr, error = %e, "SOCKS5 upstream dial failed"),
+            Err(_) => debug!(%addr, "SOCKS5 upstream dial timed out"),
+        }
+    }
+    None
+}
+
+/// Dial the already-validated upstream addresses in order and tunnel bytes both
+/// ways through the first that connects. Split from `handle_conn` so the
+/// dial-failure reply path can be exercised without the connect-time validation
+/// gate: callers must validate every entry of `dial_addrs` first.
 ///
 /// Generic over the client stream so a refused-dial reply can be asserted with a
 /// loopback `TcpStream` pair.
-pub(super) async fn dial_and_tunnel<S>(client: &mut S, dial_addr: SocketAddr) -> io::Result<()>
+pub(super) async fn dial_and_tunnel<S>(client: &mut S, dial_addrs: &[SocketAddr]) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut upstream = match timeout(UPSTREAM_DIAL_TIMEOUT, TcpStream::connect(dial_addr)).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            debug!(error = %e, "SOCKS5 upstream dial failed");
-            return send_reply(client, REP_GENERAL_FAILURE).await;
-        }
-        Err(_) => {
-            debug!(addr = %dial_addr, "SOCKS5 upstream dial timed out");
-            return send_reply(client, REP_GENERAL_FAILURE).await;
-        }
+    let Some(mut upstream) = dial_first_reachable(dial_addrs).await else {
+        return send_reply(client, REP_GENERAL_FAILURE).await;
     };
     send_reply(client, REP_SUCCESS).await?;
 

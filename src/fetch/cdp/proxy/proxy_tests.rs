@@ -14,11 +14,13 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::yield_now;
+use tokio::time::timeout;
 use tracing_test::traced_test;
 
 use super::transport::dial_and_tunnel;
@@ -254,7 +256,7 @@ async fn t201_13_upstream_dial_refused_replies_general_failure() {
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let _ = dial_and_tunnel(&mut stream, dial_addr).await;
+        let _ = dial_and_tunnel(&mut stream, &[dial_addr]).await;
     });
 
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -265,6 +267,66 @@ async fn t201_13_upstream_dial_refused_replies_general_failure() {
     assert_eq!(
         reply[1], 0x01,
         "refused dial must reply REP_GENERAL_FAILURE"
+    );
+}
+
+/// [T-F088]: when the first validated address refuses the connection and a later
+/// one accepts, the client gets REP_SUCCESS and a tunnel to the accepting address.
+/// Loopback addresses stand in for validated ones, as in T-201-13.
+#[tokio::test]
+async fn refused_first_address_falls_back_to_the_next_validated_address() {
+    const UPSTREAM_BYTES: &[u8] = b"upstream";
+    const SUCCESS_REPLY_LEN: usize = 10;
+
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let refused_addr = closed.local_addr().unwrap();
+    drop(closed);
+
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let upstream_task = tokio::spawn(async move {
+        let (mut conn, _) = upstream.accept().await.unwrap();
+        conn.write_all(UPSTREAM_BYTES).await.unwrap();
+    });
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = dial_and_tunnel(&mut stream, &[refused_addr, upstream_addr]).await;
+    });
+
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let mut reply = Vec::new();
+    timeout(Duration::from_secs(5), client.read_to_end(&mut reply))
+        .await
+        .expect("client read must finish once the upstream closes")
+        .unwrap();
+    // The client half of the tunnel stays open until the client closes.
+    drop(client);
+    timeout(Duration::from_secs(5), server)
+        .await
+        .expect("tunnel must end after both sides close")
+        .unwrap();
+    // An upstream that is never dialed would otherwise wait in `accept` forever.
+    timeout(Duration::from_secs(5), upstream_task)
+        .await
+        .expect("the reachable upstream must be dialed")
+        .unwrap();
+
+    assert_eq!(
+        reply.len(),
+        SUCCESS_REPLY_LEN + UPSTREAM_BYTES.len(),
+        "reply must be a 10-byte SOCKS5 reply followed by the upstream bytes, got {reply:?}"
+    );
+    assert_eq!(
+        reply[1], 0x00,
+        "a reachable later address must reply REP_SUCCESS"
+    );
+    assert_eq!(
+        &reply[SUCCESS_REPLY_LEN..],
+        UPSTREAM_BYTES,
+        "the tunnel must carry the reachable upstream's bytes"
     );
 }
 
