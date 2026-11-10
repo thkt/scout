@@ -118,3 +118,7 @@ out.push_str(&shift_headings(&content[..end], 2)); // 見出し level を 2 下�
 - ADR-0010 (JSON envelope 契約。本 ADR はテキスト整形契約で別レイヤ)
 - `src/github/types.rs` の `IssueInfo` の `pull_request` field の doc comment は `ADR-0010` を参照する (旧 `ADR-0065` 不在参照は差し替え済み)。JSON 出力契約は ADR-0010 が担う
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #8)
+
+## Addendum (2026-11-10): 切り詰めで開いたままになるフェンス
+
+Consequences の「残した前半のフェンスが閉じないまま残る」は、[DR-0031](0031-close-report-body-code-fences.md) で変わった。`src/yaml.rs` の `finish_report_body` が切り詰めた README の末尾に閉じフェンスを足す。

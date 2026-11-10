@@ -154,3 +154,9 @@ Partial Failure Handling の記述が `reason: Option<DegradedReason>` だった
 README 404 の項が `degraded` を「abnormal なときだけ立てる」契約と書いていた。`src/envelope.rs` の `CommandOutput::with_degradation` は `degraded = !degradation.is_empty()` を無条件に置く。issue #222 以降、`fetch_slack` は文書化された page / size 上限に達しただけで `SlackThreadTruncated` などを積むので、`degraded` は失敗だけでなく「出力が完全ではない」ことを表す。README 404 を silent にする判断そのものは変わらないため、その根拠だけを残した。
 
 `degraded` を失敗に限る形へ実装を戻す案は採らない。上限到達を caller が検出する手段が `degraded_reasons` 以外に無く、flag だけを分けると 2 つの真実源ができる。
+
+## Addendum (2026-11-10): variant 数、`unknown()`、`degraded` の算出箇所
+
+- `DegradedReason` は 14 variants (`src/envelope.rs`)。本文の「実装後 12 variants」はそれより前の数である
+- 本文が挙げる 3 つの sibling constructor のうち `unknown()` は存在しない。`ErrorCode::Unknown` は `src/classify.rs` の `Classification::new(ErrorCode::Unknown)` から作られ、`ScoutError` 側の constructor は `internal_bug()` と `io_error()` の 2 つである
+- `degraded` を算出するのは `src/envelope.rs` の `CommandOutput::into_envelope` で、`with_degradation` は notes と reasons を積むだけである

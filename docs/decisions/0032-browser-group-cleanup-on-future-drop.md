@@ -5,6 +5,8 @@ date: 2026-10-08
 
 # Future破棄時にもブラウザgroupを停止する
 
+> 状態の注記 (2026-11-10): プロジェクトオーナーが本記録を accepted と確認した。本文中で本記録や隣接 DR を「proposed」「承認待ち」とする記述は、執筆時点の状態を指す。
+
 ## Context and Problem Statement
 
 [Issue #482](https://github.com/thkt/scout/issues/482)は、外側fetch timeoutや
@@ -46,7 +48,8 @@ DropがSIGKILLを送る。SIGKILL成功またはESRCHでgroupの再送を無効�
 Dropのsignal送信より後に削除する。
 
 CDP handlerとrequest interceptorも既存の`AbortOnDrop`で保持し、Future破棄時の
-タスク切離しを防ぐ。proxyのabortガードはブラウザ所有ガードより後に破棄される。
+タスク切離しを防ぐ。(2026-11-10追記: [DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)でCDP接続を置き換え、
+この2つのタスクは無くなった。`AbortOnDrop`が保持するのはproxyタスクだけである。)proxyのabortガードはブラウザ所有ガードより後に破棄される。
 正常経路では従来のabortとawaitによるタスク結果の確認を続ける。
 
 非同期清掃だけでは、CLI終了時にRuntimeが停止するとそのタスクの実行を保証できない。

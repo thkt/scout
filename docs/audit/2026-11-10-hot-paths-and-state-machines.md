@@ -83,3 +83,5 @@ DR-0008の採用時の説明には、async な `Scout::new` のシグネチャ�
 DR-0005の移行手順には `SearchClient` trait、DR-0003の過去の実装注記には `resolve_readme` が記載されている。今回、前者は削除し、後者は取得全体を持つ `fetch_readme` に置き換えた。過去の移行記録そのものは書き換えていない。
 
 DR-0017には、drain 打切り後のブラウザを OS reaper に委ねる前提の説明が残る。現行の正常な Drop 経路は DR-0032と `ChromiumProcess` の実装どおり、process group に SIGKILL を送ってから profile を削除する。今回、この終了順序は変更していない。
+
+追記 (2026-11-10): この節の DR-0008 と DR-0017 の相違は、各 DR に同日付の追補を入れて解消した。DR-0003 には variant 数と `unknown()` についての追補を入れた。DR-0005 の `SearchClient` の記述は移行記録として残している。

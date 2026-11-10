@@ -27,7 +27,7 @@ scout は `src/tools/config.rs` の `RuntimeConfig::from_env_with` で各 env �
 
 ## Decision Outcome
 
-Chosen option: Option A。`RuntimeConfig::from_env_with` が各 `SCOUT_*` を読み、未設定 (`VarError::NotPresent`) は hard-coded 既定へ、設定済みは parse + 範囲検証する。timeout は `TIMEOUT_MIN_SECS..=TIMEOUT_MAX_SECS` (1..=600 秒) 外、retry は `RETRIES_CAP` (10) 超で `ScoutError::user_error` (exit 64, ADR-0002) を返し、メッセージに変数名・与値・許容範囲を含める。非数値・負数・空文字列は parse 失敗として、非 UTF-8 (`VarError::NotUnicode`) は「設定されたが読めない」として、いずれも usage error にする (既定への素通しを禁ずる)。境界定数とデフォルトは `src/tools/config.rs` に集約し、`--help` (after*help) のレンジ表記と同じ真実源を指す。github コマンドの外側 timeout 既定 (180s) は内側 per-request timeout (`HTTP_TIMEOUT`, `CANDIDATE_FETCH_TIMEOUT`) を上回る値に選び、`SCOUT*\*`override 時もこの大小を崩さない値域 (≤600s) に収める。override が効いたフィールドは`info!` で 1 件ずつ surface し、operator が active な tuning を既定ログレベルで確認できる。
+Chosen option: Option A。`RuntimeConfig::from_env_with` が各 `SCOUT_*` を読み、未設定 (`VarError::NotPresent`) は hard-coded 既定へ、設定済みは parse + 範囲検証する。timeout は `TIMEOUT_MIN_SECS..=TIMEOUT_MAX_SECS` (1..=600 秒) 外、retry は `RETRIES_CAP` (10) 超で `ScoutError::user_error` (exit 64, ADR-0002) を返し、メッセージに変数名・与値・許容範囲を含める。非数値・負数・空文字列は parse 失敗として、非 UTF-8 (`VarError::NotUnicode`) は「設定されたが読めない」として、いずれも usage error にする (既定への素通しを禁ずる)。境界定数とデフォルトは `src/tools/config.rs` に集約し、`--help` (`after_help`) のレンジ表記と同じ真実源を指す。github コマンドの外側 timeout 既定 (180s) は内側 per-request timeout (`HTTP_TIMEOUT`, `CANDIDATE_FETCH_TIMEOUT`) を上回る値に選び、`SCOUT_*` override 時もこの大小を崩さない値域 (≤600s) に収める。override が効いたフィールドは`info!` で 1 件ずつ surface し、operator が active な tuning を既定ログレベルで確認できる。
 
 Option B は silent clamp でエージェントの観測と実挙動を乖離させデバッグを困難にするため却下。Option C は不正値を network I/O 後の遠い場所で失敗させ原因特定を遅らせるため却下。
 
@@ -87,7 +87,7 @@ Option B は silent clamp でエージェントの観測と実挙動を乖離さ
 
 ### timeout 階層 (T-CFG021, issue #185)
 
-外側 `github_timeout` (180s) は GitHub コマンド全体 (`repo-tree` / `repo-read` / `repo-overview`) を縛り、内側の per-request `HTTP_TIMEOUT` (src/tools/builder.rs) と `CANDIDATE_FETCH_TIMEOUT` (src/tools/repo.rs) を上回る。180s は最複雑コマンド `repo-overview` の happy path を通し、全リクエストが retry を尽くす all-timeouts budget (~279s) は下回る fail-fast 寄りの値 (`src/tools/config.rs` の `DEFAULT_GITHUB_TIMEOUT_SECS` の doc comment に算出根拠)。
+外側 `github_timeout` (180s) は GitHub コマンド全体 (`repo-tree` / `repo-read` / `repo-overview`) を縛り、内側の per-request `HTTP_TIMEOUT` (src/tools/builder.rs) と `CANDIDATE_FETCH_TIMEOUT` (src/tools/repo.rs) を上回る。180s は最複雑コマンド `repo-overview` の happy path を通し、全リクエストが retry を尽くす all-timeouts budget (~279s) は下回る fail-fast 寄りの値。
 
 ### downgrade #14 の吸収
 

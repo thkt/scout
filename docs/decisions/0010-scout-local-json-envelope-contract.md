@@ -15,12 +15,12 @@ scout の `--json` 出力は 2 layer の policy で governed:
 
 ADR-0002 §"More Information" は "until a scout-local ADR is promoted to capture it" と書き、JSON schema portion の scout-local 化を 2026-05-13 時点で伏線として残していた。
 
-2026-05-19 audit (`docs/audit/2026-05-19-undocumented-decisions.md` Candidate A) で `src/envelope.rs` + README L158/L314 に **scout-local の field-level rule** が 4 つ存在することが判明した:
+2026-05-19 audit (`docs/audit/2026-05-19-undocumented-decisions.md` Candidate A) で `src/envelope.rs` + README の research 節と Migration to v2 節 に **scout-local の field-level rule** が 4 つ存在することが判明した:
 
 1. `ErrorCode::is_retryable()` mapping (`ErrorCode::is_retryable` (`src/envelope.rs`)): `TempFailure | Timeout` のみ true、`Internal`/`Unknown` は false 固定。
 2. `ErrorPayload` field omit policy (`ErrorPayload` (`src/envelope.rs`)): `code`/`message`/`retryable` は常時出力、`next_step`/`candidates` は `skip_serializing_if`。
 3. `SuccessEnvelope` array field 出力 asymmetry (`SuccessEnvelope` (`src/envelope.rs`)): `notes: Vec<String>` は常時 `[]`、`degraded_reasons` は `skip_serializing_if`。
-4. `data` 配下 array field の `[]`-never-`null` invariant: README L158 と L314 で公開契約として宣言済。
+4. `data` 配下 array field の `[]`-never-`null` invariant: README の research 節と Migration to v2 節 で公開契約として宣言済。
 
 これらは ADR-0065 で governed されない (schema structure 自体は ADR-0065、field-level の omit policy/retryable mapping/`[]`-vs-`null` commitment は scout 判断)。型/lint/serde derive で機械 enforce できず、test は個別 case を pin できても **新規 field 追加時の rule** を未来の reviewer に伝える媒体が無い。
 
@@ -29,7 +29,7 @@ ADR-0002 §"More Information" は "until a scout-local ADR is promoted to captur
 - ADR-0002 §"More Information" の supersede 伏線を実装で成就する。
 - AI agent caller (`--json` の主要 consumer) は parser を `if "next_step" in payload`/`data.array.length === 0` 等の pattern で書く。field 存在性/`[]`-vs-`null` の予測可能性が破綻すると silent regression が起きる。
 - scout-local の field rule (omit policy, retryable mapping) は型/lint/serde derive で機械 enforce できない。例: 将来 `Vec<String>` を `Option<Vec<String>>` に変える PR が field rule を silent に反転させる可能性がある。
-- README L158/L314 は既に "All array fields are `[]` (never null) when empty" を public contract として宣言済。コードは公開契約に追従する責務がある。
+- README の research 節と Migration to v2 節 は既に "All array fields are `[]` (never null) when empty" を public contract として宣言済。コードは公開契約に追従する責務がある。
 
 ## Considered Options
 
@@ -97,7 +97,7 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 
 `data` 配下の array field (`data.sources`, `data.fetched_pages`, `data.failed_urls` 等) は empty 時 `null` ではなく `[]` を返す。
 
-公開契約 (README L158, L314):
+公開契約 (README の research 節と Migration to v2 節):
 
 > JSON envelope: `data = {query, sources, fetched_pages, failed_urls}`. All array fields are `[]` (never `null`) when empty.
 >
@@ -124,7 +124,7 @@ Chosen: Option A — 新規 ADR-0010、ADR-0065 JSON schema portion を supersed
 - `src/envelope.rs` の `ErrorPayload` derive は Rule 2 と機械的に一致 (`code`/`message`/`retryable` 無修飾、`next_step` に `Option::is_none`、`candidates` に `Vec::is_empty`)。
 - `src/envelope.rs` の `SuccessEnvelope` derive は Rule 3 と機械的に一致 (`notes` 無修飾、`degraded_reasons` に `Vec::is_empty`)。
 - 既存 unit test (T-EN001..T-EN015) が omit/always-emit を個別 case で pin。
-- `tests/cli_integration.rs` の `--json` end-to-end が `data.failed_urls = []` 等の `[]` 出力を検証。
+- `src/tools/query_tests.rs` の `[T-TS029]` が `data.sources` / `data.fetched_pages` / `data.failed_urls` の `[]` 出力を検証。
 
 ## Pros and Cons of the Options
 
@@ -179,7 +179,7 @@ code-side migration (`per ADR-0065` → 各 scout-local ADR ref 更新) は foll
 - `~/.claude/docs/decisions/0065-scout-json-output-schema-and-sysexits-exit-code-policy.md` (本 ADR が JSON schema portion を supersede する meta ADR)
 - `docs/audit/2026-05-19-undocumented-decisions.md` (本 ADR の根拠 audit、Candidate A = envelope E-03/E-04/E-05 + README P-A/P-D)
 - `src/envelope.rs` (`ErrorCode` / `ErrorPayload` / `SuccessEnvelope` の実装 site)
-- `README.md` L158, L314 (公開契約の declared form)
+- `README.md` の research 節と Migration to v2 節 (公開契約の declared form)
 
 ## Addendum (2026-06-24): research の `sources` と `fetched_pages` の cardinality 非対称
 

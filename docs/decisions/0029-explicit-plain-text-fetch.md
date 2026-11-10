@@ -18,7 +18,7 @@ date: 2026-10-08
 
 直接渡す方式を実装する。`download`（`src/fetch/download.rs`）は最終応答の媒体種別を保持する。`fetch_page`（`src/fetch.rs`）は明示的な text/plain を抽出・HTML変換から分離し、`plain_text_result`（`src/fetch/converter.rs`）へ渡す。通常/rawの区別はこの本文には適用しない。HTMLとしてタグや文字参照を解釈せず、Markdown構文も変換しない。`FetchResult::with_heading_offset`（`src/fetch/converter.rs`）が本文種別を使って見出し変換を分岐し、fetch・researchの出力境界でも見出し風リテラルと末尾空行を保持する。HTML由来の見出しは従来どおり変換する。`<pre>` 方式はHTMLの空白・エンティティ処理とフェンス整形に依存するため見送る。
 
-自動JS判定は text/html・application/xhtml+xml、または媒体種別不明の場合だけ行う。明示的な `--js` は既存の強制レンダリング要求として維持する。他の受理済み text/XML 媒体の変換方式は拡張しない。
+自動JS判定は text/html・application/xhtml+xml、または媒体種別不明の場合だけ行う。明示的な `--js` は既存の強制レンダリング要求として維持する。他の受理済み text/XML 媒体の変換方式は拡張しない。(2026-11-10 追記: [DR-0034](0034-explicit-non-html-text-xml-fetch.md) が非 HTML の text/XML へ拡張した。)
 
 ### Consequences
 

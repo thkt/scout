@@ -40,7 +40,7 @@ Option B は chromium subprocess を ppid=1 へ orphan させ OS reaper に clea
 - Good, because 上限付き drain が無限 hang を防ぎつつ cleanup の時間を与える
 - Good, because signal source 注入により実 OS signal 無しで `drive` をユニットテストできる
 - Bad, because 非 Unix (Windows) は SIGINT→130 のみで SIGTERM は `#[cfg(unix)]` 限定
-- Bad, because 7s はヒューリスティックで、cleanup が 7s を超えると command future が drop され subprocess は OS reaper に残りうる
+- Bad, because 7s はヒューリスティックで、cleanup が 7s を超えると command future が drop され subprocess は OS reaper に残りうる (2026-11-10 追記: [DR-0032](0032-browser-group-cleanup-on-future-drop.md) 以降、Future の drop 時に browser の process group へ SIGKILL を送り profile を削除する)
 - Bad, because command 内の subtask が I/O で hang すると、drain timeout までは待つが handler 側 cancel check に到達していない場合がある
 
 ### Confirmation

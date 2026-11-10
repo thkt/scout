@@ -42,7 +42,7 @@ Option B は最頻ユースケース (URL を次へ渡す) に後処理を強い
 
 ### Confirmation
 
-`src/tools/query_tests.rs` が出力契約を pin する。`search_returns_plain_url_list` は stdout が 1 行 1 URL で markdown 装飾を含まないこと、`search_zero_results_returns_empty` は 0 件時に空出力になること、`search_json_schema_omits_answer` / `search_does_not_traverse_engine_path` は `search` が research の engine 経路を通らず envelope schema が期待どおりであることを assert する。markdown フォーマットを変える際はこれらが回帰を検出する。
+`src/tools/query_tests.rs` が出力契約を pin する。`search_returns_plain_url_list` は stdout が 1 行 1 URL で markdown 装飾を含まないこと、`search_zero_results_returns_empty` は 0 件時に空出力になること、`search_json_schema_omits_answer` は envelope schema が期待どおりであることを assert する。markdown フォーマットを変える際はこれらが回帰を検出する。
 
 ## Pros and Cons of the Options
 
@@ -86,3 +86,8 @@ markdown 自体を構造化配列にする。
 - `src/lib.rs` の `write_output` (空出力の保持)
 - ADR-0010 (JSON envelope。markdown / data の二面性契約)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 keep #8 / #15)
+
+## Addendum (2026-11-10): 消えた参照
+
+- `search_does_not_traverse_engine_path` は存在しない。`search` が research の engine 経路を通らないことを単独で確かめるテストは無い
+- 参照に引用した `search` の冒頭コメント ("Default output: one URL per line, …") は source から消えている。出力契約の一次ソースは `src/tools/query_tests.rs` の `search_returns_plain_url_list` である

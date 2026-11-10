@@ -132,3 +132,9 @@ Decision table の 74 行と「採用 code 詳細」の 74 行が、network erro
 この食い違いは公開契約の retry 意味を反転させる。DR を文字どおり読んだ script は network 失敗を retry 不可の 74 と扱い、本 ADR の Consequences が約束する `[ $? -eq 75 ] && retry` を飛ばす。`--help` (T-H000 が pin) と README は実装側と一致しており、ずれていたのは本 ADR の 2 つの表だけだった。両方を実装へ揃えた。
 
 `is_transient_network` の判定順は load-bearing で、`src/classify.rs` のコメントが、認識できない transport 失敗を IoError へ丸めてはならない理由を書いている。`[T-ER003]` (`src/tools/errors/exit_code_tests.rs`) が connection refused の `reqwest::Error` を組み立てて exit 75 を assert する。
+
+## Addendum (2026-11-10): exit 74 の 3 つ目の経路と `unknown` constructor
+
+`ErrorCode::IoError` (exit 74) を作る経路は 3 つある。上の表とその後の注記は CDP 失敗と HTTP client / proxy の構築失敗の 2 つだけを挙げていた。3 つ目は stdout への書き込み失敗で、`src/lib.rs` の `write_failure_line` が `IoError` の行を stderr へ出す。`BrokenPipe` だけは成功として終了する。
+
+2026-05-14 の注記にある `ScoutError::unknown` は存在しない。`ErrorCode::Unknown` は `src/classify.rs` の `Classification::new(ErrorCode::Unknown)` から作られる。

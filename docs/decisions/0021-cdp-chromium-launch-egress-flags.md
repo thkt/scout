@@ -92,7 +92,7 @@ ADR-0001 / ADR-0012 は scout HTTP 経路の SSRF を connect-time IP guard で�
 
 ### 参照切れの解消
 
-`src/fetch/cdp/launch.rs` の `build_launch_args` の doc comment は、存在しない `spec.md` の "Chrome Launch Flags table" を参照していた。その表はリポジトリに無く、launch フラグの決定根拠は本 ADR が単一の真実源として置き換える。source コメントの参照差し替えは横流しタスクで追跡する。
+`src/fetch/cdp/launch.rs` の `build_launch_args` の doc comment は、存在しない `spec.md` の "Chrome Launch Flags table" を参照していた。その表はリポジトリに無く、launch フラグの決定根拠は本 ADR が単一の真実源として置き換える。source コメントの参照差し替えは横流しタスクで追跡する。(2026-11-10 確認: `spec.md` への参照は `src/` に残っていない。)
 
 ### 参照
 

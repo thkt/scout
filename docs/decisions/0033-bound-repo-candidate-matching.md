@@ -1,10 +1,12 @@
 ---
 status: "accepted"
 date: 2026-10-08
-decision-makers: "未確認（Issue #483の範囲内で実装担当が選択。設計の承認待ち）"
+decision-makers: thkt (project owner)
 ---
 
 # repoの候補照合に仕事量上限と中断点を設ける
+
+> 状態の注記 (2026-11-10): プロジェクトオーナーが本記録を accepted と確認した。本文中で本記録や隣接 DR を「proposed」「承認待ち」とする記述は、執筆時点の状態を指す。
 
 ## 背景と課題
 

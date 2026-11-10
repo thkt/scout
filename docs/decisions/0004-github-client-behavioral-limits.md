@@ -44,6 +44,17 @@ Chosen option: Option A, because silent behavior は CLI / agent 利用で debug
 
 GitHub docs は 403 で header を必ず付けるとは保証していないため、unknown は retry に倒す。
 
+#### 追補 (2026-11-10): `Retry-After` 付きの 403 は RateLimited
+
+`Retry-After` を持つ 403 は、`remaining > 0` でも RateLimited (retry) に分類する。上の表は `x-ratelimit-remaining` だけで判定しており、`Retry-After` を考慮していなかった。secondary rate limit は primary の残量が残ったまま 403 を返すため、表のままでは Forbidden (exit 64、token scope の確認を促す hint) になり、retry もされなかった。
+
+| Condition                                           | Classification                       |
+| --------------------------------------------------- | ------------------------------------ |
+| `Retry-After` あり (`remaining` の値を問わない)     | RateLimited (retry)                  |
+| `Retry-After` なし + header 存在 + `remaining > 0`  | Forbidden (auth misconfig, no retry) |
+
+secondary rate limit が `Retry-After` を返すという前提は GitHub の rate limit docs の記憶に基づき、この追補の時点で再取得していない。確認先は <https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api>。検証は `[T-GH024]`。
+
 ### Rule 2: per_page must be 1..=100 (type-enforced, compile-time validated)
 
 `per_page` 値は `PerPage` newtype で encapsulate される (`src/github.rs`):

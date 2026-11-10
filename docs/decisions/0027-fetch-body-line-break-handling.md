@@ -6,7 +6,7 @@ decision-makers: thkt (project owner)
 
 # Fetch Body Line-Break Handling: Paragraph Folding as Contract, `<br>`/`<pre>` as the Named Exceptions
 
-> 2026-10-25追記：HTML変換を `dom_query` ベースの実装へ移した。現行実装と検証方法は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。この文書で定めた出力仕様は維持し、以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装記録として残す。
+> 2026-10-25追記：HTML変換を `dom_query` ベースの実装へ移した。現行実装と検証方法は[DR-0036](0036-replace-unsupported-dom-and-cdp-dependencies.md)を参照する。この文書で定めた出力仕様は維持し、以下の `htmd` のAPIや内部処理に関する説明は、移行前の実装記録として残す。`pre_handler`、`span_handler`、`has_table_cell_ancestor` など以下に出る関数名も移行前のもので、現行の対応箇所は `src/fetch/converter/html.rs` の `render_pre` と `render_span` である。
 
 ## Context and Problem Statement
 
