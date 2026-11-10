@@ -3,13 +3,13 @@ name = "scout"
 version = "2.6.5"
 edition = "2024"
 rust-version = "1.99.1"
-description = "CLI tool for web search (Brave Search), page fetching, and GitHub repository exploration"
+description = "CLI tool for web search (Brave Search), page and Slack thread fetching, and GitHub repository exploration"
 license = "MIT"
 repository = "https://github.com/thkt/scout"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.13", features = ["json", "gzip", "brotli", "deflate", "zstd"] }
+reqwest = { version = "0.13", features = ["gzip", "brotli", "deflate", "zstd"] }
 dom_smoothie = "0.19"
 # Keep the parser aligned with dom_query's TreeSink API.
 dom_query = { version = "0.29", default-features = false }
@@ -53,6 +53,8 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 js-rendering = ["tokio-tungstenite", "nix", "tempfile"]
 
 [dev-dependencies]
+# `Response::json` is banned in production (clippy.toml); only retry tests call it.
+reqwest = { version = "0.13", features = ["json"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 tracing-test = "0.2"

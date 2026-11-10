@@ -106,14 +106,12 @@ impl BraveError {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct BraveClient {
     http: Client,
     api_key: Redacted,
     base_url: String,
     max_retries: u32,
-    /// Wall-clock source for `secs_until_ratelimit_reset` / Retry-After
-    /// arithmetic. Set at construction and read on every retry; defaults to
+    /// Wall-clock source for Retry-After arithmetic. Set at construction and read on every retry; defaults to
     /// `SystemClock`. Mirrors `GitHubClient`'s injection seam.
     clock: Arc<dyn Clock>,
     /// Backoff jitter source handed to `retry_with_rate_limit` per attempt.
@@ -282,7 +280,7 @@ async fn classify_response(
         warn!(status = %status, "Brave API error");
         return Err(BraveError::Api {
             code: status.as_u16(),
-            message: format!("HTTP {status}: {snippet}"),
+            message: snippet,
         });
     }
     Ok(response)
@@ -347,5 +345,7 @@ fn is_retriable(e: &BraveError) -> bool {
 
 #[cfg(test)]
 mod classify_tests;
+#[cfg(test)]
+mod constructor_tests;
 #[cfg(test)]
 mod http_tests;

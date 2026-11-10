@@ -125,3 +125,14 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade �
 ### stdin の単一消費 (`StdinResolver`)
 
 stdin は 1 回だけ読み、最初に stdin を要する引数が内容を消費する (`StdinState`: `NotPiped` / `Available` / `Consumed`)。消費後に別の引数が stdin を要求すると `Consumed` 分岐で usage error にする (例: `repo-read - README.md` で repository を stdin から取った後に path も `-` を要求するケース)。これにより「1 つの pipe 入力が複数引数へ二重供給される」曖昧さを排し、どの引数が stdin を受けたかを決定的にする。テストは `[T-S002]` (引数が stdin に優先)、`[T-S003]` (引数省略で stdin 採用)、`[T-S004]` (`-` は TTY でも stdin)、`[T-S005]` (TTY + 引数無しで fail-fast)、`[T-S006]`/`[T-S007]` (空 stdin で error)、`[T-S008]` (stdin は trim) が pin する。
+
+## Addendum (2026-11-10): 現行の入口と setter
+
+本文の Decision Outcome と Confirmation は、次の 4 点で現行コードと食い違う。決定そのもの (`Arc<dyn Trait>` の field と `ScoutBuilder`) は変わらない。
+
+| 本文の記述 | 現行 |
+| --- | --- |
+| `Scout::new()` は `pub async fn new()` で、signature を保つ | `src/tools.rs` の `Scout::new(not_found_candidates: bool)` は sync で引数を取る |
+| setter は `with_clock` / `with_rng` / `with_token_source` / `with_brave_endpoint` / `with_github_endpoint` | `with_rng` は無い。`with_token_source` は 2026-11-10 の時点で無く、同日に追加した。ほかに `with_dns`、`with_egress`、`with_fetch_http`、`with_github_timeout`、`with_slack_timeout`、`with_slack_endpoint` がある (`src/tools/builder.rs`) |
+| `T-SB001`〜`T-SB003` が `Arc::ptr_eq` を assert する。`github_lazy_init_from_empty_cell` が env 分離を確かめる | どちらも存在しない。注入した `TokenSource` が `Scout::github()` の遅延初期化で 1 回だけ解決されることは `[T-SB007]` が、clock の注入は `[T-SB004]` が確かめる |
+| MSRV は `rust-version = "1.95"` | `Cargo.toml` の `rust-version` が一次ソースで、Renovate が更新する |

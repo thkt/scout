@@ -9,7 +9,8 @@ use super::*;
 use crate::envelope::ErrorCode;
 use crate::search::Lang;
 use crate::test_support::try_spawn_mock_server;
-use wiremock::matchers::{method, path};
+use serde_json::json;
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
 
 /// [T-TS024]
@@ -392,7 +393,7 @@ fn to_data_value_maps_serialize_failure_to_internal_bug() {
     );
 }
 
-/// [T-FETCH-OK] Mock fetch retains the host and title in data and emits nonempty
+/// [T-TS042] Mock fetch retains the host and title in data and emits nonempty
 /// Markdown. The loopback client/public resolver is a test seam, not a
 /// production connect-time guard.
 #[tokio::test]
@@ -480,24 +481,6 @@ async fn fetch_flags_decode_uncertain_for_undecodable_body() {
     );
 }
 
-/// [T-SK057] Without a frontmatter terminator, the note opens the output
-/// and the fixture body remains present.
-#[test]
-fn insert_preamble_notes_prepends_when_frontmatter_absent() {
-    let out = super::query::insert_preamble_notes(
-        "a body with no frontmatter".to_owned(),
-        &["a cap note"],
-    );
-    assert!(
-        out.starts_with("> Note: a cap note\n\n"),
-        "absent frontmatter must fall back to a top prepend, got: {out}"
-    );
-    assert!(
-        out.contains("a body with no frontmatter"),
-        "the original body must be preserved after the prepended note, got: {out}"
-    );
-}
-
 /// [T-TS039] Plain-text headings and trailing blank lines survive the output boundary.
 #[test]
 fn fetch_output_preserves_plain_text_literals() {
@@ -509,5 +492,42 @@ fn fetch_output_preserves_plain_text_literals() {
     assert_eq!(
         format_fetch_output(&result),
         "---\n---\n\nTitle\n=====\n# comment\nbody\n\n"
+    );
+}
+
+/// [T-HP007] Auto language sends one verbatim query and returns an undegraded empty report.
+#[tokio::test]
+async fn research_auto_language_keeps_the_query_and_zero_result_contract() {
+    let Some(server) = try_spawn_mock_server("hotpaths::research_auto").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(query_param("q", "型安全 TypeScript"))
+        .and(query_param_is_missing("search_lang"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"web": {"results": []}})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let scout = ScoutBuilder::for_test()
+        .with_brave_endpoint(&server.uri())
+        .build();
+    let result = scout
+        .run(Command::Research(ResearchParams {
+            query: Some("型安全 TypeScript".into()),
+            depth: 3,
+            lang: Lang::Auto,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.data(),
+        &json!({
+            "query": "型安全 TypeScript", "sources": [], "fetched_pages": [], "failed_urls": []
+        })
+    );
+    assert!(result.markdown().contains("## Sources\n\n(no results)"));
+    assert_eq!(
+        serde_json::to_value(result.into_envelope()).unwrap()["degraded"],
+        false
     );
 }

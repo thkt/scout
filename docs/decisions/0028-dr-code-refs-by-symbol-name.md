@@ -42,7 +42,7 @@ Chosen option: 方式 A。DR がコードを指すときは、ファイル名と
 | 2    | シンボル名 (`get_json_once`) | 関数、定数、struct、field、doc comment を指す |
 | 3    | 節見出し                     | 単一のシンボルへ落ちない範囲を指す            |
 
-テスト id を先に置くのは、id が `src/test_support.rs` の採番規約で管理されており、リポジトリ全体で一意だからになる。シンボル名はファイルをまたぐと重複するので、ファイル名を必ず併記する (`classify` は 3 ファイル、`should_check_https` は 2 ファイルにある)。
+テスト id を先に置くのは、id が `src/test_support.rs` の採番規約で管理されており、リポジトリ全体で一意だからになる。シンボル名はファイルをまたぐと重複するので、ファイル名を必ず併記する (`classify` と `should_check_https` はどちらも複数のファイルにある)。
 
 外部 crate を指すときは版つきパスを保つ (`htmd-0.5.5 の src/text_util.rs` の `collapse_whitespace`)。版が変わればパスごと解決できなくなり、そのことが読者に見える。
 

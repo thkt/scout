@@ -112,7 +112,7 @@ fn article_html(injected: &str) -> String {
     article_html_with_title("Marker Injection Post", injected)
 }
 
-// T-C029: body_originated_bare_dash_line_does_not_appear_after_frontmatter_close
+/// [T-C029] body_originated_bare_dash_line_does_not_appear_after_frontmatter_close
 #[test]
 fn body_originated_bare_dash_line_does_not_appear_after_frontmatter_close() {
     let context = "bare dash body line";
@@ -128,7 +128,7 @@ fn body_originated_bare_dash_line_does_not_appear_after_frontmatter_close() {
     );
 }
 
-// T-C030: body_originated_bare_dots_line_does_not_appear_after_frontmatter_close
+/// [T-C030] body_originated_bare_dots_line_does_not_appear_after_frontmatter_close
 #[test]
 fn body_originated_bare_dots_line_does_not_appear_after_frontmatter_close() {
     let context = "bare dots body line";
@@ -144,7 +144,7 @@ fn body_originated_bare_dots_line_does_not_appear_after_frontmatter_close() {
     );
 }
 
-// T-C031: body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true
+/// [T-C031] body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true
 #[test]
 fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
     let context = "dash marker with inline content";
@@ -163,7 +163,7 @@ fn body_dash_evil_true_line_is_rewritten_to_asterisks_evil_true() {
     );
 }
 
-// T-C032: pre_code_column_zero_marker_survives_verbatim_inside_closed_fence
+/// [T-C032] pre_code_column_zero_marker_survives_verbatim_inside_closed_fence
 #[test]
 fn pre_code_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "pre element marker";
@@ -188,10 +188,10 @@ fn pre_code_column_zero_marker_survives_verbatim_inside_closed_fence() {
     );
 }
 
-// T-C039: bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence
-//
-// Unlike T-C032's pre/code input, this exercises a bare pre with no code
-// child (T-FC019) through Readability and the CLI.
+/// [T-C039] bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence
+///
+/// Unlike T-C032's pre/code input, this exercises a bare pre with no code
+/// child (T-FC019) through Readability and the CLI.
 #[test]
 fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
     let context = "bare pre element marker";
@@ -215,7 +215,7 @@ fn bare_pre_column_zero_marker_survives_verbatim_inside_closed_fence() {
     );
 }
 
-// T-C033: title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line
+/// [T-C033] title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line
 #[test]
 fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() {
     // Keep the short title so Readability retains it verbatim; see module docs.
@@ -246,11 +246,11 @@ fn title_with_double_quotes_and_dashes_is_escaped_without_creating_a_new_line() 
     );
 }
 
-// T-C045: row_heading_label_survives_and_column_alignment_padding_is_absent
-//
-// Exercises table rendering through Readability and the CLI, beyond the direct
-// T-FC060/T-FC061/T-FC062 converter checks. Unequal cell widths distinguish
-// unpadded rows from column-alignment padding.
+/// [T-C045] row_heading_label_survives_and_column_alignment_padding_is_absent
+///
+/// Exercises table rendering through Readability and the CLI, beyond the direct
+/// T-FC060/T-FC061/T-FC062 converter checks. Unequal cell widths distinguish
+/// unpadded rows from column-alignment padding.
 #[test]
 fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     let context = "row heading table with column alignment";
@@ -301,11 +301,11 @@ fn row_heading_label_survives_and_column_alignment_padding_is_absent() {
     );
 }
 
-// T-C041: unclosed_fence_body_falls_back_to_asterisks
-//
-// Three content backticks force a four-backtick inline delimiter. Its opener
-// is at column 0, but its close is mid-line; the conservative YAML tracker
-// therefore sees an unclosed fence. No later line has four closing backticks.
+/// [T-C041] unclosed_fence_body_falls_back_to_asterisks
+///
+/// Three content backticks force a four-backtick inline delimiter. Its opener
+/// is at column 0, but its close is mid-line; the conservative YAML tracker
+/// therefore sees an unclosed fence. No later line has four closing backticks.
 #[test]
 fn unclosed_fence_body_falls_back_to_asterisks() {
     let context = "inline code opens an unmatched fence-looking line before a marker";
@@ -326,7 +326,7 @@ fn unclosed_fence_body_falls_back_to_asterisks() {
     );
 }
 
-// T-C034: markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_survive_verbatim
+/// [T-C034] markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_survive_verbatim
 #[test]
 fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_survive_verbatim() {
     // One fixture carrying every hostile shape, so that `write_yaml_str`'s
@@ -373,12 +373,12 @@ fn markers_outside_a_closed_fence_are_rewritten_while_the_fences_own_markers_sur
     );
 }
 
-// T-C043: on a page whose pre holds one span per line, no fetch output line carries a backslash
-//
-// Extends T-FC053 through Readability and the CLI; extraction must keep the
-// per-line span structure and its code text intact. Body text outside a fence
-// would gain a backslash before a leading tilde or backtick, so those bytes
-// make the no-backslash assertion discriminating.
+/// [T-C043] on a page whose pre holds one span per line, no fetch output line carries a backslash
+///
+/// Extends T-FC053 through Readability and the CLI; extraction must keep the
+/// per-line span structure and its code text intact. Body text outside a fence
+/// would gain a backslash before a leading tilde or backtick, so those bytes
+/// make the no-backslash assertion discriminating.
 #[test]
 fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     let context = "syntax-highlighted pre with one span per line";
@@ -403,11 +403,11 @@ fn pre_with_one_span_per_line_produces_no_backslash_in_fetch_output() {
     );
 }
 
-// T-C042: closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
-//
-// A later unclosed fence removes marker protection from the whole body,
-// including the earlier closed pre fence (T-C032/T-C039). Put the unclosed
-// T-C041 trick last to distinguish global fallback from a tail-only rewrite.
+/// [T-C042] closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output
+///
+/// A later unclosed fence removes marker protection from the whole body,
+/// including the earlier closed pre fence (T-C032/T-C039). Put the unclosed
+/// T-C041 trick last to distinguish global fallback from a tail-only rewrite.
 #[test]
 fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_output() {
     let context = "closed fence, paragraph, and unclosed fence combined";
@@ -450,11 +450,11 @@ fn closed_fence_and_paragraph_and_unclosed_fence_in_one_page_converge_to_one_out
     );
 }
 
-// T-C044: a page mixing paragraphs, a table and a list shows folding, hard breaks and the counter-examples in one output
-//
-// Compose DR-0027's line-break cases through Readability and the CLI:
-// paragraph folding/hard breaks (T-FC041/T-FC042), and table/list exceptions
-// (T-FC045/T-FC046). Direct converter tests do not exercise this seam.
+/// [T-C044] a page mixing paragraphs, a table and a list shows folding, hard breaks and the counter-examples in one output
+///
+/// Compose DR-0027's line-break cases through Readability and the CLI:
+/// paragraph folding/hard breaks (T-FC041/T-FC042), and table/list exceptions
+/// (T-FC045/T-FC046). Direct converter tests do not exercise this seam.
 #[test]
 fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one_output() {
     let context = "paragraph fold, hard break, and table/list counter-examples combined";
@@ -524,11 +524,11 @@ fn paragraph_fold_hard_break_and_table_and_list_counter_examples_converge_in_one
     );
 }
 
-// T-C046: a page holding both an empty anchor and a titled link shows the suppression and the removal in one output
-//
-// Compose empty highlighter anchors and titled prose links through the fetched
-// page pipeline. T-FC048/T-FC073 test the converter directly; this catches
-// extraction or registration changes that leave those isolated checks passing.
+/// [T-C046] a page holding both an empty anchor and a titled link shows the suppression and the removal in one output
+///
+/// Compose empty highlighter anchors and titled prose links through the fetched
+/// page pipeline. T-FC048/T-FC073 test the converter directly; this catches
+/// extraction or registration changes that leave those isolated checks passing.
 #[test]
 fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output() {
     let context = "empty per-line code anchor and titled prose link combined";
@@ -569,12 +569,12 @@ fn empty_anchor_suppression_and_link_title_deletion_converge_in_one_fetch_output
     );
 }
 
-// T-C048: fetch_output_truncated_at_the_cap_leaves_no_live_yaml_document_marker
-//
-// Conversion preserves the marker inside a closed pre fence (T-C032). Filler
-// exceeds the 100,000-byte output cap, removing that fence's close; truncation
-// must re-neutralize the now-exposed marker. The private output cap cannot be
-// imported by this integration binary.
+/// [T-C048] fetch_output_truncated_at_the_cap_leaves_no_live_yaml_document_marker
+///
+/// Conversion preserves the marker inside a closed pre fence (T-C032). Filler
+/// exceeds the 100,000-byte output cap, removing that fence's close; truncation
+/// must re-neutralize the now-exposed marker. The private output cap cannot be
+/// imported by this integration binary.
 #[test]
 fn fetch_output_truncated_at_the_cap_leaves_no_live_yaml_document_marker() {
     let context = "marker inside a fence whose close falls past the truncation cap";

@@ -75,3 +75,47 @@ fn detects_proxied_from_lowercase_https_proxy_when_uppercase_forms_are_absent() 
         EgressMode::Proxied("http://proxy.lower:3128".to_owned()),
     );
 }
+
+/// [T-FS029] With both cases of one variable set, the uppercase value is chosen.
+#[test]
+fn detects_proxied_with_the_uppercase_value_when_both_cases_are_set() {
+    let env = HashMap::from([
+        (
+            "https_proxy".to_owned(),
+            "http://proxy.lower:3128".to_owned(),
+        ),
+        (
+            "HTTPS_PROXY".to_owned(),
+            "http://proxy.upper:8443".to_owned(),
+        ),
+    ]);
+    assert_eq!(
+        detect_egress_mode(&env),
+        EgressMode::Proxied("http://proxy.upper:8443".to_owned()),
+    );
+}
+
+/// [T-FS031] `ALL_PROXY` selects proxied egress when it is the only proxy
+/// variable, and yields to `HTTP_PROXY` when both are set.
+#[test]
+fn detects_proxied_from_all_proxy_after_the_scheme_specific_variables() {
+    let all = ("ALL_PROXY".to_owned(), "http://proxy.all:1080".to_owned());
+    assert_eq!(
+        detect_egress_mode(&HashMap::from([all.clone()])),
+        EgressMode::Proxied("http://proxy.all:1080".to_owned()),
+    );
+    assert_eq!(
+        detect_egress_mode(&HashMap::from([(
+            "all_proxy".to_owned(),
+            "http://proxy.lower:1080".to_owned()
+        )])),
+        EgressMode::Proxied("http://proxy.lower:1080".to_owned()),
+    );
+    assert_eq!(
+        detect_egress_mode(&HashMap::from([
+            all,
+            ("HTTP_PROXY".to_owned(), "http://proxy.http:8080".to_owned()),
+        ])),
+        EgressMode::Proxied("http://proxy.http:8080".to_owned()),
+    );
+}

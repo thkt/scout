@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,17 +38,25 @@ pub(crate) enum EgressMode {
 /// reads process env, so callers control the inputs and tests stay pure).
 ///
 /// Reads the same proxy vars reqwest users set. Precedence as pinned by the
-/// egress test scenarios: `HTTPS_PROXY` before `HTTP_PROXY`, uppercase before
-/// lowercase, first match wins; absence yields [`EgressMode::Direct`]. The case
-/// order (upper before lower) is a chosen convention: reqwest 0.13's env-var
-/// precedence is undocumented on
-/// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html> and no test pins
-/// the case order — unverified.
+/// egress test scenarios: `HTTPS_PROXY` before `HTTP_PROXY` before `ALL_PROXY`,
+/// uppercase before lowercase, first match wins; absence yields
+/// [`EgressMode::Direct`]. The case
+/// order (upper before lower) is a chosen convention pinned by T-FS029; reqwest
+/// 0.13's own env-var precedence is undocumented on
+/// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html>, so agreement with
+/// it is unverified.
 /// A present-but-empty value counts as unset, matching reqwest: `Proxy::all("")`
 /// is a relative-URL parse error, so treating it as `Proxied("")` would fail
 /// client construction and take down every command, not just proxied fetches.
 pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
-    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
         if let Some(url) = env.get(key).filter(|u| !u.trim().is_empty()) {
             return EgressMode::Proxied(url.clone());
         }
@@ -146,12 +154,6 @@ impl ValidatedUrl {
     #[cfg(test)]
     pub(super) fn for_test(raw: &str) -> Self {
         Self(url::Url::parse(raw).expect("test URL must parse"))
-    }
-}
-
-impl fmt::Display for ValidatedUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
     }
 }
 
@@ -273,9 +275,26 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 // caught by the loopback/unspecified arms — no false positives.
                 || v6
                     .to_ipv4()
+                    .or_else(|| translated_ipv4(v6))
                     .is_some_and(|v4| is_private_ip(IpAddr::V4(v4)))
         }
     }
+}
+
+/// The IPv4 address a translator or relay would forward this IPv6 address to:
+/// the low 32 bits under NAT64 `64:ff9b::/96` (RFC 6052) and its local-use
+/// prefix `64:ff9b:1::/48` (RFC 8215), bits 16..48 under 6to4 `2002::/16`
+/// (RFC 3056).
+fn translated_ipv4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = v6.segments();
+    let (high, low) = match segments {
+        [0x64, 0xff9b, 0, 0, 0, 0, high, low] | [0x64, 0xff9b, 1, _, _, _, high, low] => {
+            (high, low)
+        }
+        [0x2002, high, low, ..] => (high, low),
+        _ => return None,
+    };
+    Some(Ipv4Addr::from((u32::from(high) << 16) | u32::from(low)))
 }
 
 /// reqwest [`Resolve`] implementation that re-validates resolved IPs at connect

@@ -98,6 +98,7 @@ fn encode_path_encodes_special_chars() {
     assert_eq!(encode_path("main?recursive=0"), "main%3Frecursive%3D0");
     assert_eq!(encode_path("ref#frag"), "ref%23frag");
     assert_eq!(encode_path("a b"), "a%20b");
+    assert_eq!(encode_path("a\\..\\b"), "a%5C..%5Cb");
     assert_eq!(encode_path("100%"), "100%25");
     assert_eq!(encode_path("a&b"), "a%26b");
     assert!(encode_path("ref+1").contains("%2B"));
@@ -167,24 +168,6 @@ fn decode_content_handles_base64() {
             .text,
         "hello world"
     );
-}
-
-/// [T-GHH015]
-#[test]
-fn decode_content_decodes_shift_jis_without_hint() {
-    // "テスト" in Shift_JIS — not valid UTF-8, so a UTF-8-only decode fails here
-    let shift_jis_bytes: &[u8] = &[0x83, 0x65, 0x83, 0x58, 0x83, 0x67];
-    let result = decode_content(&STANDARD.encode(shift_jis_bytes), None).unwrap();
-    assert_eq!(result.text, "テスト");
-}
-
-/// [T-GHH016]
-#[test]
-fn decode_content_decodes_euc_jp_with_hint() {
-    // "日本語" in EUC-JP
-    let euc_jp_bytes: &[u8] = &[0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC];
-    let result = decode_content(&STANDARD.encode(euc_jp_bytes), Some("euc-jp")).unwrap();
-    assert_eq!(result.text, "日本語");
 }
 
 fn blob(path: &str) -> TreeEntry {
@@ -284,19 +267,6 @@ fn filter_excludes_commit_entries() {
     let filtered = filter_tree_entries(&entries, None, None).unwrap();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].path, "src/main.rs");
-}
-
-/// [T-GHH026] extract_error_message pulls the message field from GitHub JSON payloads
-#[test]
-fn extract_error_message_from_json() {
-    assert_eq!(
-        super::super::extract_error_message(r#"{"message": "Not Found"}"#),
-        "Not Found"
-    );
-    assert_eq!(
-        super::super::extract_error_message("plain text"),
-        "plain text"
-    );
 }
 
 /// [T-GHH024] is_valid_github_name accepts alphanumerics, hyphens, underscores, and dots

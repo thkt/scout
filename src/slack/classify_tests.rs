@@ -99,37 +99,10 @@ fn api_temp_failure_codes_classify_as_temp_failure() {
     }
 }
 
-/// [T-SLC005]
-#[test]
-fn api_other_codes_classify_as_usage_error() {
-    for code in ["invalid_auth", "missing_scope", "not_authed"] {
-        let c = SlackError::Api {
-            error: code.to_owned(),
-        }
-        .classify();
-        assert_eq!(c.kind, ErrorCode::UsageError, "{code}");
-    }
-}
-
 /// [T-SLC006]
 #[test]
 fn rate_limited_is_temp_failure() {
     let c = SlackError::RateLimited { retry_after: None }.classify();
-    assert_eq!(c.kind, ErrorCode::TempFailure);
-}
-
-/// [T-SLC007] Network classifies as TempFailure (network-class hint).
-///
-/// Superseded in kind coverage by T-SLNET002, which also asserts the network
-/// hint; this fixture keeps the original connect-refused case so the
-/// `Network` variant's `From<reqwest::Error>` construction stays exercised
-/// under its own test id.
-#[tokio::test]
-async fn network_is_temp_failure() {
-    let Some(err) = connection_refused_error("network_is_temp_failure").await else {
-        return;
-    };
-    let c = SlackError::from(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
 }
 
@@ -186,7 +159,7 @@ async fn reqwest_connection_refused_classifies_as_temp_failure_with_network_hint
     let Some(err) = connection_refused_error("reqwest_connection_refused_classifies").await else {
         return;
     };
-    let c = SlackError::Network(err).classify();
+    let c = SlackError::from(err).classify();
     assert_eq!(c.kind, ErrorCode::TempFailure);
     assert!(
         c.next_step

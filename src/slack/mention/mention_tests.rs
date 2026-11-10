@@ -19,15 +19,6 @@ fn single_mention_yields_one_span_covering_its_bytes() {
     assert_eq!(&text[spans[0].start..spans[0].end], "<@U123>");
 }
 
-/// [T-SK017]
-#[test]
-fn labeled_mention_yields_the_user_id_without_the_label() {
-    let text = "cc <@U123|alice>";
-    let spans = parse_mentions(text);
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "U123");
-}
-
 /// [T-SK058]
 #[test]
 fn labeled_mention_captures_the_label() {

@@ -95,6 +95,8 @@ GitHub 経路 `decode_bytes` (`src/github/encoding.rs`):
 | 5    | strict UTF-8 検証 (実質到達不能の defensive backstop)                | AssumedUtf8 |
 | 6    | 全失敗で `NonUtf8` error + best-guess 再試行ヒント                   | —           |
 
+追補 (2026-11-10): 優先 5 の strict UTF-8 検証と `DetectionSource::AssumedUtf8` を削除した。chardetng は `Utf8Detection::Allow` のもとで有効な UTF-8 を必ず UTF-8 と推定し、UTF-8 は信頼ゲートを通るため、優先 4 で必ず返る。空・ASCII・多バイト UTF-8 が `Detected` の `utf-8` で返ることは `[T-GE019]` が検証する。優先 6 のヒントは、推定が信頼ゲートで試されずに捨てられた場合だけ推定値を名指しする (`[T-GE017]`、`[T-GE018]`)。
+
 共有ゲート `is_reliable_detection` (`src/charset.rs`): UTF-8, Shift_JIS, EUC-JP, ISO-2022-JP, Big5, GBK, GB18030, EUC-KR の 8 種のみ `true`。
 
 ### 使用 crate

@@ -214,10 +214,10 @@ async fn fetch_article_via_proxy(
     Some((result, handle))
 }
 
-/// [T-F081] Normal extraction strips language classes before conversion,
-/// unlike hand-authored converter fixtures.
+/// [T-F081] Normal extraction keeps the language class for the fence info
+/// string while dropping navigation chrome.
 #[tokio::test]
-async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
+async fn default_path_keeps_pre_class_language_and_drops_nav_without_raw_fallback() {
     let Some((result, handle)) = fetch_article_via_proxy(
         &article_page(
             "Understanding Rust Ownership",
@@ -237,9 +237,8 @@ async fn default_path_loses_pre_class_language_and_nav_without_raw_fallback() {
         page.markdown()
     );
     assert!(
-        !page.markdown().contains("```rust"),
-        "the default path strips the class attribute before conversion, so no \
-        `rust` fence info string should survive: {:?}",
+        page.markdown().contains("```rust\nfn main() {}\n```"),
+        "the `language-rust` class must reach the fence info string: {:?}",
         page.markdown()
     );
     assert!(

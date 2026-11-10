@@ -130,3 +130,43 @@ async fn proxied_mode_rejects_a_localhost_domain_url_with_internalhost() {
         "proxied mode must still reject a localhost domain, got: {result:?}"
     );
 }
+
+/// [T-FS028] A private IPv4 embedded in a NAT64 or 6to4 address is blocked;
+/// the same prefixes around a public IPv4 are allowed.
+#[test]
+fn validate_url_rechecks_ipv4_embedded_in_nat64_and_6to4() {
+    for url in [
+        "http://[64:ff9b::a00:1]/",     // NAT64 10.0.0.1
+        "http://[64:ff9b::7f00:1]/",    // NAT64 127.0.0.1
+        "http://[64:ff9b::a9fe:a9fe]/", // NAT64 169.254.169.254
+        "http://[2002:a00:1::1]/",      // 6to4 10.0.0.1
+        "http://[2002:c0a8:101::]/",    // 6to4 192.168.1.1
+    ] {
+        assert!(
+            matches!(validate_url_sync(url), Err(FetchError::InternalHost)),
+            "should block as InternalHost: {url}"
+        );
+    }
+    for url in [
+        "http://[64:ff9b::808:808]/", // NAT64 8.8.8.8
+        "http://[2002:808:808::1]/",  // 6to4 8.8.8.8
+        "http://[64:ff9c::a00:1]/",   // one above the NAT64 prefix
+        "http://[2003:a00:1::1]/",    // one above the 6to4 prefix
+    ] {
+        assert!(validate_url_sync(url).is_ok(), "should accept: {url}");
+    }
+}
+
+/// [T-FS030] The local-use NAT64 prefix `64:ff9b:1::/48` is rechecked like the
+/// well-known prefix.
+#[test]
+fn validate_url_rechecks_ipv4_embedded_in_local_use_nat64() {
+    assert!(
+        matches!(
+            validate_url_sync("http://[64:ff9b:1::a9fe:a9fe]/"),
+            Err(FetchError::InternalHost)
+        ),
+        "169.254.169.254 behind the local-use prefix must be blocked"
+    );
+    assert!(validate_url_sync("http://[64:ff9b:1::808:808]/").is_ok());
+}

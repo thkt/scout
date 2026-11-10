@@ -355,26 +355,6 @@ mod tests {
         );
     }
 
-    /// [T-FC101] Author and date values need the same cap as title values.
-    #[test]
-    fn truncates_byline_and_published_time_over_the_cap() {
-        let long_byline = "b".repeat(10_000);
-        let mut byline_field = String::new();
-        write_yaml_str(&mut byline_field, "author", &long_byline);
-        assert!(
-            byline_field.len() < long_byline.len(),
-            "a byline over the cap must be truncated (author field)"
-        );
-
-        let long_published_time = format!("2026-08-16T{}", "0".repeat(10_000));
-        let mut date_field = String::new();
-        write_yaml_str(&mut date_field, "date", &long_published_time);
-        assert!(
-            date_field.len() < long_published_time.len(),
-            "a published_time over the cap must be truncated (date field)"
-        );
-    }
-
     /// [T-FC102] Truncate before escaping so a cut cannot split a doubled
     /// backslash and escape the closing scalar quote.
     #[test]

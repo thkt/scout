@@ -79,9 +79,7 @@ fn decode_bytes_ascii_heavy_shift_jis_detected_before_utf8() {
 
     let result = decode_bytes(&bytes, None).unwrap();
 
-    // Source must be Detected (chardetng), not AssumedUtf8.
-    // If UTF-8 were tried first, the invalid bytes would cause it to fail
-    // and potentially produce a different source or error.
+    // chardetng must run ahead of any UTF-8 check: these bytes are not valid UTF-8.
     assert_eq!(
         result.source,
         DetectionSource::Detected,
@@ -270,4 +268,46 @@ fn decode_bom_that_decodes_cleanly_still_succeeds() {
 fn base64_encode(input: &[u8]) -> String {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     STANDARD.encode(input)
+}
+
+/// [T-GE017] A detected encoding that already failed to decode is not offered as the retry.
+#[test]
+fn decode_failure_does_not_suggest_the_encoding_that_just_failed() {
+    let text = "これは日本語のテキストです。".repeat(8);
+    let mut bytes = encoding_rs::SHIFT_JIS.encode(&text).0.into_owned();
+    bytes.push(0xFF);
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
+    detector.feed(&bytes, true);
+    let guess = detector.guess(None, chardetng::Utf8Detection::Allow);
+    assert_eq!(guess, encoding_rs::SHIFT_JIS, "fixture premise");
+
+    let Err(GitHubError::NonUtf8(message)) = decode_bytes(&bytes, None) else {
+        panic!("an invalid Shift_JIS byte must fail the decode");
+    };
+    assert!(!message.contains("Retry with"), "{message}");
+    assert!(message.contains("--encoding shift_jis"), "{message}");
+}
+
+/// [T-GE018] A detected encoding skipped as unreliable is offered as the retry.
+#[test]
+fn decode_failure_suggests_the_untried_single_byte_guess() {
+    let bytes = b"caf\xe9 cr\xe8me br\xfbl\xe9e \xe0 la fran\xe7aise, d\xe9j\xe0 vu";
+    let Err(GitHubError::NonUtf8(message)) = decode_bytes(bytes, None) else {
+        panic!("a single-byte guess must not be accepted");
+    };
+    assert!(
+        message.contains("Retry with --encoding windows-1252"),
+        "{message}"
+    );
+}
+
+/// [T-GE019] Empty, ASCII and multibyte UTF-8 content decode as detected UTF-8.
+#[test]
+fn valid_utf8_is_always_detected_as_utf8() {
+    for text in ["", "plain ascii\n", "日本語と emoji 🎉 と café"] {
+        let result = decode_bytes(text.as_bytes(), None).unwrap();
+        assert_eq!(result.text, text);
+        assert_eq!(result.encoding, "utf-8", "{text:?}");
+        assert_eq!(result.source, DetectionSource::Detected, "{text:?}");
+    }
 }

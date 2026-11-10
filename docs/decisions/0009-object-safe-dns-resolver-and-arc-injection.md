@@ -142,3 +142,9 @@ Consequences の「plugs the double into every fetch path without touching `tool
 ADR-0012 の `[T-F072]` はこの分離を前提にしていて、connect 時 resolver を差し替えるテストは `with_dns` ではなく `ScoutBuilder::with_fetch_http` の `.resolve()` 経由という別の入口を使う。
 
 つまり seam は 2 つある。事前 check 側は `with_dns`、connect 時側は `with_fetch_http`。この 2 つを 1 つにまとめるかどうかは未決で、まとめる場合は `build_default_clients` の呼び出し順を変えて `with_dns` の値を待つ形にする必要がある。
+
+## Addendum (2026-11-10): 消えた名前
+
+- 表と Confirmation にある `cdp_navigate` は、DR-0036 の CDP 接続の置き換えで `src/fetch/cdp/connection.rs` の `navigate` になった。resolver は接続の構築時に渡る
+- `with_rng` は存在しない。`with_dns` と並ぶ setter は `with_clock` と `with_token_source` で、可視性は `#[cfg(test)] pub(super)` である
+- 先例として挙げた ADR-0008 の `T-SB001`〜`T-SB003` は存在しない (ADR-0008 の 2026-11-10 追補)

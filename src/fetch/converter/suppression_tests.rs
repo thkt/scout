@@ -215,3 +215,17 @@ fn readability_failure_path_still_drops_script_content() {
         "a script body must not reach the output on the fallback path:\n{markdown}"
     );
 }
+
+/// [T-FC111] An XHTML self-closed `<template/>` must not swallow the rest of the body.
+#[test]
+fn body_after_a_self_closed_template_still_reaches_the_body() {
+    let article = article("<div><p>Before</p><template id=\"t\"/><p>After template</p></div>");
+
+    let result = to_fetch_result(&article, "https://example.com".into(), false);
+
+    assert!(
+        result.markdown().contains("After template"),
+        "{}",
+        result.markdown()
+    );
+}

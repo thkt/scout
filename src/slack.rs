@@ -111,7 +111,7 @@ impl SlackError {
             // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
             Self::Api { error } => match error.as_str() {
-                // Priority 1: USAGE_ERROR — closed auth list from ADR-0011 (T-SLC005).
+                // Priority 1: USAGE_ERROR — closed auth list from ADR-0011 (T-SLC012).
                 "access_denied"
                 | "accesslimited"
                 | "account_inactive"

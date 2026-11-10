@@ -74,25 +74,25 @@ fn assert_proxy_status_maps_to(
     assert_proxy_was_dialed_for_exit_code(&connection_count, &context);
 }
 
-// T-C020
+/// [T-C020]
 #[test]
 fn proxied_404_exits_66_not_found() {
     assert_proxy_status_maps_to(404, 66, "NOT_FOUND");
 }
 
-// T-C021
+/// [T-C021]
 #[test]
 fn proxied_403_exits_64_usage_error() {
     assert_proxy_status_maps_to(403, 64, "USAGE_ERROR");
 }
 
-// T-C022
+/// [T-C022]
 #[test]
 fn proxied_400_exits_65_data_error() {
     assert_proxy_status_maps_to(400, 65, "DATA_ERROR");
 }
 
-// T-C023
+/// [T-C023]
 #[test]
 fn proxied_500_exits_75_temp_failure() {
     assert_proxy_status_maps_to(500, 75, "TEMP_FAILURE");
@@ -131,8 +131,8 @@ fn proxy_response_slower_than_fetch_timeout_exits_124_timeout() {
     );
 }
 
-// T-C025: Malformed proxy bytes yield 104/UNKNOWN. This fixture classification
-// depends on reqwest; dependency upgrades may change the error category.
+/// [T-C025] Malformed proxy bytes yield 104/UNKNOWN. This fixture classification
+/// depends on reqwest; dependency upgrades may change the error category.
 #[test]
 fn non_http_proxy_response_exits_104_unknown() {
     let Some((proxy_url, connection_count, _handle)) = common::spawn_mock_proxy_raw_response(
@@ -147,8 +147,8 @@ fn non_http_proxy_response_exits_104_unknown() {
     assert_proxy_was_dialed_for_exit_code(&connection_count, "non-HTTP proxy response");
 }
 
-// T-C026: Invalid proxy configuration yields 74/IO_ERROR before dispatch.
-// Acceptance of this literal depends on reqwest.
+/// [T-C026] Invalid proxy configuration yields 74/IO_ERROR before dispatch.
+/// Acceptance of this literal depends on reqwest.
 #[test]
 fn unparsable_http_proxy_value_exits_74_io_error() {
     let output = run_scout_fetch(&[("HTTP_PROXY", "not a url with spaces")]);
@@ -164,3 +164,19 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
 #[cfg(all(unix, feature = "js-rendering"))]
 #[path = "exit_code_contract/browser_cleanup.rs"]
 mod browser_cleanup;
+
+/// [T-C053] `ALL_PROXY` alone selects proxied egress: the proxy is dialed and
+/// its 404 maps to exit 66.
+#[test]
+fn all_proxy_alone_routes_fetch_through_the_proxy() {
+    let Some((proxy_url, connection_count, _handle)) =
+        common::spawn_mock_proxy(404, Duration::ZERO, b"upstream response body")
+    else {
+        return;
+    };
+
+    let output = run_scout_fetch(&[("ALL_PROXY", &proxy_url), ("SCOUT_FETCH_TIMEOUT_SECS", "5")]);
+
+    assert_exits_with(&output, 66, "NOT_FOUND", "ALL_PROXY alone");
+    assert_proxy_was_dialed_for_exit_code(&connection_count, "ALL_PROXY alone");
+}

@@ -5,6 +5,8 @@ date: 2026-10-08
 
 # Close code fences at report body boundaries
 
+> Status note (2026-11-10): the project owner confirmed this record as accepted. Passages below that call this record or its neighbours "proposed" or "pending review" describe the state when they were written.
+
 ## Context and Problem Statement
 
 [Issue #481](https://github.com/thkt/scout/issues/481), split from

@@ -70,7 +70,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 brew install thkt/tap/scout
 ```
 
-Or build from source (requires Rust 1.96+):
+Or build from source (requires the Rust version named by `rust-version` in `Cargo.toml`):
 
 ```sh
 cargo install --path .
@@ -267,7 +267,7 @@ All GitHub commands accept `owner/repo`, full URLs (`https://github.com/denoland
 URL validation → DNS pre-check → Download (per-hop redirect SSRF check) → Post-redirect recheck → Readability → Markdown
 ```
 
-Literal private/loopback IPs are rejected at URL validation and on every redirect hop, in every mode. In the default direct-connection mode, scout resolves and dials the host itself and re-checks the connect-time IP, closing the DNS-rebinding gap between the pre-check and the actual connection. When a standard proxy environment variable (`HTTPS_PROXY` / `HTTP_PROXY`) is set, scout instead routes fetches through that proxy: it keeps rejecting literal private/loopback targets on every hop but skips its own DNS resolution and delegates name-resolution defenses (DNS rebinding included) to the proxy's egress control. Credentials are redacted from errors. See Limitations for size caps.
+Literal private/loopback IPs are rejected at URL validation and on every redirect hop, in every mode. In the default direct-connection mode, scout resolves and dials the host itself and re-checks the connect-time IP, closing the DNS-rebinding gap between the pre-check and the actual connection. When a standard proxy environment variable (`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`) is set, scout instead routes fetches through that proxy: it keeps rejecting literal private/loopback targets on every hop but skips its own DNS resolution and delegates name-resolution defenses (DNS rebinding included) to the proxy's egress control. Credentials are redacted from errors. See Limitations for size caps.
 
 **Search** — `GET https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` auth. The response's `web.results[]` is mapped 1:1 to `{url, title, description}` and emitted verbatim.
 
@@ -277,7 +277,8 @@ Literal private/loopback IPs are rejected at URL validation and on every redirec
 
 ```
 src/
-├── main.rs              CLI entry point (clap)
+├── main.rs              Binary entry point (calls lib.rs)
+├── lib.rs               CLI definition (clap) and command dispatch
 ├── tools/               Command handlers, params, error types
 ├── search/
 │   ├── engine.rs        Research engine (search + fetch + compile)
@@ -304,7 +305,7 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `
 | Code | Meaning                                                                  |
 | ---- | ------------------------------------------------------------------------ |
 | 0    | Success                                                                  |
-| 64   | Usage error (clap parse, missing API key, conflicts_with violation)      |
+| 64   | Usage error (clap parse, missing API key)                                |
 | 65   | Data error (invalid input, malformed format, encoding error, 4xx body)   |
 | 66   | Not found (repo/file not found, 404)                                     |
 | 70   | Internal (scout-side invariant violation, unexpected response schema)    |

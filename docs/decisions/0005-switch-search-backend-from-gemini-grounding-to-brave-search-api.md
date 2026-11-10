@@ -237,6 +237,6 @@ Decision Outcome の JSON schema block が `data.fetched_pages[]` の各要素�
 
 この設計は本 ADR より後 (issue #241) に決めたもので、事故ではない。取得の質に関する情報を data ではなく degradation channel へ集めると、consumer は `degraded` 1 つを見るだけで「本文をそのまま信用してよいか」を判断できる。ADR の schema block だけが元の形のまま残っていた。
 
-`jq '.data.fetched_pages[].used_raw_fallback'` と書いた consumer は `null` を受け取る。`degraded_reasons` に `READABILITY_FALLBACK` があるかで判定する。schema block を実装へ揃えたが、`data.fetched_pages[i]` の要素形を assert するテストは無い。`[T-TS028]` は `fetched_pages` が配列であることまでしか見ないため、この drift はテストでは検出できなかった。
+`jq '.data.fetched_pages[].used_raw_fallback'` と書いた consumer は `null` を受け取る。`degraded_reasons` に `READABILITY_FALLBACK` があるかで判定する。schema block を実装へ揃えたが、`data.fetched_pages[i]` の要素形を assert するテストは無い。`[T-TS029]` は `fetched_pages` が配列であることまでしか見ないため、この drift はテストでは検出できなかった。
 
-Design Refinements の research 出力セクション一覧に `Failed URLs` を足した。`format_report` は `format_failed_urls` を無条件に呼び、失敗した source があれば `## Failed URLs` を出す (`[T-SE014]`)。このセクションは Gemini から Brave への切り替えより前からあり、本 ADR の「2 セクションのみ」という書き方が引き写しの取りこぼしだった。
+Design Refinements の research 出力セクション一覧に `Failed URLs` を足した。`format_report` は `format_failed_urls` を無条件に呼び、失敗した source があれば `## Failed URLs` を出す (`[T-SE003]`)。このセクションは Gemini から Brave への切り替えより前からあり、本 ADR の「2 セクションのみ」という書き方が引き写しの取りこぼしだった。

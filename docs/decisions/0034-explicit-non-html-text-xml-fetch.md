@@ -5,6 +5,8 @@ date: 2026-10-08
 
 # 明示的な非HTML text/XML を一次ソース本文として返す
 
+> 状態の注記 (2026-11-10): プロジェクトオーナーが本記録を accepted と確認した。本文中で本記録や隣接 DR を「proposed」「承認待ち」とする記述は、執筆時点の状態を指す。
+
 ## Context and Problem Statement
 
 [Issue #491](https://github.com/thkt/scout/issues/491) は、受理済みの非HTML text/XMLについて、通常/raw・Markdown/JSONでタグ・属性・文字参照のリテラル・コード・改行を保持する要求を合意している。基準版は `a46fb3ea0c2469b599339136824cd8f690301002`（2026-10-08）。Issueのproxy観測では、XMLのタグと属性、Markdownのコードと改行がHTML変換で失われた。基準版の `fetch_page`（`src/fetch.rs`）でも、`OtherText` がHTML抽出へ進む分岐を確認できる。

@@ -60,3 +60,86 @@ fn matches_the_previous_converter_corpus() {
         assert_eq!(convert(&html), expected, "HTML: {html}");
     }
 }
+
+/// [T-HMD007] A block marker behind leading whitespace stays literal text.
+#[test]
+fn escapes_block_markers_after_leading_whitespace() {
+    for (html, expected) in [
+        ("<p> # not a heading</p>", r"\# not a heading"),
+        ("<p>\n  > not a quote</p>", r"\> not a quote"),
+        ("<p> - not an item</p>", r"\- not an item"),
+        ("<p> + not an item</p>", r"\+ not an item"),
+        ("<p> 1. not an item</p>", r"1\. not an item"),
+    ] {
+        assert_eq!(convert(html), expected, "HTML: {html}");
+    }
+}
+
+/// [T-HMD008] Text beside a `code` child inside `pre` becomes its own escaped
+/// paragraph; the code keeps its closed fence and language.
+#[test]
+fn fences_pre_once_when_code_has_sibling_text() {
+    assert_eq!(
+        convert("<pre>prefix<code>x</code>suffix</pre><p>after</p>"),
+        "prefix\n\n```\nx\n```\n\nsuffix\n\nafter"
+    );
+    assert_eq!(
+        convert(
+            "<pre><span># main.rs</span><code class=\"language-rust\">a\n</code><button>Copy</button></pre>"
+        ),
+        "\\# main.rs\n\n```rust\na\n```\n\nCopy"
+    );
+}
+
+/// [T-HMD009] Only http/https and scheme-less hrefs become links; any other
+/// scheme, including case and whitespace obfuscation, renders as inert text.
+#[test]
+fn renders_non_http_scheme_links_as_inert_text() {
+    for (html, expected) in [
+        (
+            r#"<a href="javascript:alert(1)">x</a>"#,
+            r"x (javascript:alert\(1\))",
+        ),
+        (
+            r#"<a href=" JaVa&#9;Script:alert(1)">x</a>"#,
+            r"x (JaVaScript:alert\(1\))",
+        ),
+        (
+            r#"<a href="data:text/html,hi">x</a>"#,
+            "x (data:text/html,hi)",
+        ),
+        (
+            r#"<a href="mailto:a@example.com">x</a>"#,
+            "x (mailto:a@example.com)",
+        ),
+        (r#"<a href="javascript:alert(1)"></a>"#, ""),
+        (
+            r#"<a href="x:<javascript:alert`1`>">t</a>"#,
+            "t (x:%3Cjavascript:alert%601%60%3E)",
+        ),
+        (
+            r#"<a href="HTTPS://example.com/">x</a>"#,
+            "[x](HTTPS://example.com/)",
+        ),
+        (r#"<a href="/docs/a:b">x</a>"#, "[x](/docs/a:b)"),
+        (r##"<a href="#frag">x</a>"##, "[x](#frag)"),
+    ] {
+        assert_eq!(convert(html), expected, "HTML: {html}");
+    }
+}
+
+/// [T-HMD010] A math span whose text could open a block, a link or HTML is
+/// rendered as ordinary escaped text.
+#[test]
+fn math_span_with_markdown_structure_is_escaped() {
+    assert_eq!(
+        convert(
+            "<p><span class=\"math math-inline\">x\n\n# H\n\n[c](javascript:alert(1))</span></p>"
+        ),
+        r"x # H \[c\](javascript:alert(1))"
+    );
+    assert_eq!(
+        convert(r#"<p><span class="math math-inline">a&lt;b&gt;c</span></p>"#),
+        r"a\<b>c"
+    );
+}

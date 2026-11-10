@@ -303,7 +303,7 @@ async fn unclassifiable_reqwest_error_is_unknown_across_backends() {
 /// `internal_error` must exhaust the retry loop and reach `ScoutError` as
 /// exit 75 (EX_TEMPFAIL) with the retry hint. The request count proves at
 /// least one retry actually ran.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn slack_persistent_internal_error_reaches_exit_code_75_via_scout_error() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};

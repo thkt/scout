@@ -50,7 +50,7 @@ Proxied を選ぶのは proxy env を明示設定した運用者であり、そ�
 
 ### Confirmation
 
-`src/fetch/ssrf/egress_tests.rs` の T-FS022, T-FS023, T-FS024, T-FS027 が `detect_egress_mode` の env→mode 写像を pin する (`HTTPS_PROXY` 優先、大文字優先、無ければ `Direct`)。`src/tools/builder_tests.rs` が Proxied で `fetch_http` が proxy 経由になり guard を持たないことを (ただし `build_default_clients` を呼ばず、production と同じ形の client を組み直して確かめる。production の呼び出しは `from_env` の実 egress と `for_test` の `Direct` の 2 箇所だけで、`Proxied` を渡す経路をテストは通らない)、`src/fetch/ssrf/tests.rs` と `src/fetch/fetch_page_tests.rs` が Proxied で literal reject を維持しつつ DNS 事前チェックを skip することを pin する。reqwest 更新時は `Proxy::all` が全 scheme を forward し、proxy env 検出精度が本 ADR の前提どおりかを再検証する。
+`src/fetch/ssrf/egress_tests.rs` の T-FS022, T-FS023, T-FS024, T-FS027, T-FS029 が `detect_egress_mode` の env→mode 写像を pin する (`HTTPS_PROXY` 優先、大文字優先、無ければ `Direct`)。`src/tools/builder_tests.rs` が Proxied で `fetch_http` が proxy 経由になり guard を持たないことを (ただし `build_default_clients` を呼ばず、production と同じ形の client を組み直して確かめる。production の呼び出しは `from_env` の実 egress と `for_test` の `Direct` の 2 箇所だけで、`Proxied` を渡す経路をテストは通らない)、`src/fetch/ssrf/tests.rs` と `src/fetch/fetch_page_tests.rs` が Proxied で literal reject を維持しつつ DNS 事前チェックを skip することを pin する。reqwest 更新時は `Proxy::all` が全 scheme を forward し、proxy env 検出精度が本 ADR の前提どおりかを再検証する。
 
 ## Pros and Cons of the Options
 
@@ -93,3 +93,22 @@ CDP 経路 (ADR-0021) は chromium を独立の loopback SOCKS5 proxy 経由で�
 - ADR-0001 (SSRF contract), ADR-0012 (Direct 経路の connect 時 IP guard。本 ADR が Proxied carve-out を足し、0012 に Addendum を追記した), ADR-0021 (CDP 経路の loopback SOCKS5 proxy と launch フラグ)
 - issue/branch: `fix/ssrf-proxy-env`
 - `src/fetch/ssrf.rs` (`EgressMode`, `detect_egress_mode`, `ssrf_check` の mode gate)、`src/tools/builder.rs` (`build_default_clients` の mode 分岐)
+
+## Addendum (2026-11-10): `ALL_PROXY` を検出し、Direct は reqwest の proxy 自動検出を切る
+
+`detect_egress_mode` が見るのは `HTTPS_PROXY` / `HTTP_PROXY` の大小 4 変数だけだった。reqwest は client に proxy を指定しないと自前の検出を行い、`ALL_PROXY` だけが設定された環境でも proxy へ dial する。そのとき scout は Direct と判定しているので、ADR-0012 の connect 時 guard は対象ではなく proxy のアドレスを検証していた。次の 2 点を変えた。
+
+- `detect_egress_mode` が `ALL_PROXY` / `all_proxy` も読む。優先順は `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY` で、各変数は大文字が先である
+- Direct の `fetch_http` に `.no_proxy()` を付ける (`src/tools/builder.rs` の `build_default_clients`)。scout が読まない供給源から reqwest が proxy を選ぶ経路を閉じる
+
+| 環境 | 変更前 | 変更後 |
+| --- | --- | --- |
+| `HTTPS_PROXY` / `HTTP_PROXY` を設定 | Proxied | Proxied (変更なし) |
+| `ALL_PROXY` だけを設定 | scout は Direct と判定し、reqwest は proxy へ dial | Proxied |
+| どの変数も無い | Direct。reqwest の自動検出は有効 | Direct。reqwest の自動検出は無効 |
+
+`.no_proxy()` だけを入れて `ALL_PROXY` を無視する案は採らなかった。Brave / GitHub / Slack 用の `http` client は reqwest の自動検出に従うので、`ALL_PROXY` だけが出口の環境では search と repo-* が成功し、fetch だけが直接接続で失敗する。
+
+`.no_proxy()` が閉じる経路として残るのは OS の proxy 設定だが、reqwest がそれを検出するかどうかも、この行がそれを無効にすることも確かめていない。この行を単独で検証するテストは無い。
+
+検証は `src/fetch/ssrf/egress_tests.rs` の `[T-FS029]` (大文字優先) と `[T-FS031]` (`ALL_PROXY` の検出と優先順)、`tests/exit_code_contract.rs` の `[T-C053]` (`ALL_PROXY` だけの環境で proxy へ接続が届く)。

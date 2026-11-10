@@ -320,44 +320,6 @@ async fn search_logs_warn_on_parse_failure() {
     );
 }
 
-/// [T-RC001] closure returning `Err(VarError::NotPresent)` must surface
-/// as `BraveError::ApiKeyNotSet` from `from_env_with`. Exercises the injectable
-/// env path that `from_env` delegates to. That path runs through the
-/// backend-agnostic `Redacted::from_env_var`, which does not know `BraveError`.
-#[test]
-fn from_env_with_returns_api_key_not_set_when_closure_errs() {
-    let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Err(env::VarError::NotPresent)
-    });
-    assert!(
-        matches!(result, Err(BraveError::ApiKeyNotSet)),
-        "expected ApiKeyNotSet, got: {result:?}"
-    );
-}
-
-/// [T-RC002] Whitespace-only keys are rejected by the injected env reader.
-#[test]
-fn from_env_with_rejects_whitespace_only_key() {
-    let result =
-        BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("   ".to_owned()));
-    assert!(
-        matches!(result, Err(BraveError::ApiKeyNotSet)),
-        "expected ApiKeyNotSet for whitespace-only key, got: {result:?}"
-    );
-}
-
-/// [T-RC003] from_env_with builds a client whose `api_key.expose()` returns the
-/// closure's key and whose `base_url` is `API_BASE`.
-#[test]
-fn from_env_with_constructs_client_with_api_base_and_exposed_key() {
-    let result = BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Ok("real-key".to_owned())
-    });
-    let client = result.expect("expected Ok(client) from valid key");
-    assert_eq!(client.api_key.expose(), "real-key");
-    assert_eq!(client.base_url, API_BASE);
-}
-
 /// [T-BC027] brave retries an API that answers HTTP 408 once and returns the second,
 /// successful response
 ///
@@ -407,16 +369,22 @@ fn response_too_large_is_not_retriable_via_classify() {
     );
 }
 
-/// [T-RC006] production constructor path must not enable the test-only HTTPS bypass.
-/// `skip_https_check` is a `#[cfg(test)]` field; under `cargo test` it exists and
-/// must be `false` when the client comes from `from_env_with`.
-#[test]
-fn from_env_with_does_not_set_skip_https_check() {
-    let client =
-        BraveClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("k".to_owned()))
-            .expect("expected Ok(client) from valid key");
+/// [T-BC029] A 400 carries the response body as its message; the status appears once.
+#[tokio::test]
+async fn search_400_message_is_the_body_without_a_second_status() {
+    let Some(server) = try_spawn_mock_server("brave::http_400_message").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad query"))
+        .mount(&server)
+        .await;
+
+    let client = BraveClient::with_base_url(Client::new(), &server.uri());
+    let err = client.search("foo", None).await.expect_err("400 must fail");
     assert!(
-        !client.skip_https_check,
-        "production constructor must not skip HTTPS check"
+        matches!(&err, BraveError::Api { code: 400, message } if message == "bad query"),
+        "got: {err:?}"
     );
+    assert_eq!(err.to_string().matches("400").count(), 1, "{err}");
 }

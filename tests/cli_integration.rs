@@ -91,7 +91,7 @@ fn slack_fetch_without_token_reports_usage_error() {
     assert_eq!(envelope["error"]["retryable"], false);
 }
 
-// T-C001
+/// [T-C001]
 #[test]
 fn help_exits_zero_and_contains_app_name() {
     let output = scout().arg("--help").output().expect("scout --help failed");
@@ -119,7 +119,7 @@ fn help_exits_zero_and_contains_app_name() {
     }
 }
 
-// T-C002
+/// [T-C002]
 #[test]
 fn version_exits_zero() {
     let output = scout()
@@ -134,7 +134,7 @@ fn version_exits_zero() {
     );
 }
 
-// T-C013
+/// [T-C013]
 #[test]
 fn version_points_coding_agents_at_help() {
     let output = scout()
@@ -153,7 +153,7 @@ fn version_points_coding_agents_at_help() {
     );
 }
 
-// T-C014
+/// [T-C014]
 #[cfg(unix)]
 #[test]
 fn non_utf8_argument_is_a_usage_error_not_a_panic() {
@@ -174,7 +174,27 @@ fn non_utf8_argument_is_a_usage_error_not_a_panic() {
     );
 }
 
-// T-C003
+/// [T-C052] A non-UTF-8 environment variable unrelated to scout does not abort startup.
+#[cfg(unix)]
+#[test]
+fn non_utf8_environment_variable_does_not_panic() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let output = scout()
+        .env("SCOUT_TEST_NON_UTF8", OsStr::from_bytes(b"\xff"))
+        .args(["fetch", "not-a-valid-url"])
+        .output()
+        .expect("scout fetch failed to run");
+    assert_eq!(
+        output.status.code(),
+        Some(65),
+        "the invalid URL must reach its own data-error path; got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// [T-C003]
 #[test]
 fn search_without_api_key_exits_64() {
     let output = scout()
@@ -194,7 +214,7 @@ fn search_without_api_key_exits_64() {
     );
 }
 
-// [T-C038] A whitespace-only Brave key exits 64 with the key name in stderr.
+/// [T-C038] A whitespace-only Brave key exits 64 with the key name in stderr.
 #[test]
 fn search_with_whitespace_only_api_key_exits_64() {
     let output = scout()
@@ -214,7 +234,7 @@ fn search_with_whitespace_only_api_key_exits_64() {
     );
 }
 
-// T-C004
+/// [T-C004]
 #[test]
 fn fetch_invalid_url_exits_65() {
     let output = scout()
@@ -233,7 +253,7 @@ fn fetch_invalid_url_exits_65() {
     );
 }
 
-// T-C005
+/// [T-C005]
 #[test]
 fn repo_tree_bad_format_exits_65() {
     let output = scout()
@@ -252,7 +272,7 @@ fn repo_tree_bad_format_exits_65() {
     );
 }
 
-// T-C006
+/// [T-C006]
 #[test]
 fn help_advertises_json_flag() {
     let output = scout().arg("--help").output().expect("scout --help failed");
@@ -263,7 +283,7 @@ fn help_advertises_json_flag() {
     );
 }
 
-// T-C007
+/// [T-C007]
 #[test]
 fn json_emits_envelope_on_error() {
     let output = scout()
@@ -302,7 +322,7 @@ fn json_emits_envelope_on_error() {
     );
 }
 
-// T-C008
+/// [T-C008]
 #[test]
 fn json_missing_api_key_emits_usage_error_with_next_step() {
     let output = scout()
@@ -328,7 +348,7 @@ fn json_missing_api_key_emits_usage_error_with_next_step() {
     );
 }
 
-// T-C010
+/// [T-C010]
 #[test]
 fn json_clap_parse_error_emits_envelope() {
     let output = scout()
@@ -370,7 +390,7 @@ fn assert_reject_envelope(output: &Output, form_name: &str) -> serde_json::Value
     value
 }
 
-// T-C017
+/// [T-C017]
 #[test]
 fn localhost_hostname_fetch_exits_65_data_error() {
     let mut cmd = scout();
@@ -383,15 +403,15 @@ fn localhost_hostname_fetch_exits_65_data_error() {
     assert_reject_envelope(&output, "localhost hostname");
 }
 
-// T-C019: Direct/proxied/JS forms reject loopback with identical guidance.
-// Without js-rendering, BrowserNotFound precedes SSRF checking. With it,
-// rejection precedes Chromium launch. cfg! avoids default-build unused-mut.
 struct LaunchForm {
     name: &'static str,
     args: Vec<&'static str>,
     env: Vec<(&'static str, &'static str)>,
 }
 
+/// [T-C019] Direct/proxied/JS forms reject loopback with identical guidance.
+/// Without js-rendering, BrowserNotFound precedes SSRF checking. With it,
+/// rejection precedes Chromium launch. cfg! avoids default-build unused-mut.
 #[test]
 fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_the_same_url() {
     let mut forms = vec![
@@ -446,7 +466,7 @@ fn direct_proxied_and_js_launch_forms_return_same_error_code_and_next_step_for_t
     }
 }
 
-// T-C009
+/// [T-C009]
 #[test]
 fn json_error_envelope_is_single_line() {
     let output = scout()
@@ -460,4 +480,81 @@ fn json_error_envelope_is_single_line() {
         1,
         "expected exactly one JSON envelope line, got: {json_lines:?}"
     );
+}
+
+fn stderr_of_invalid_fetch(extra_env: &[(&str, &str)]) -> String {
+    let mut cmd = scout();
+    cmd.env_clear();
+    common::forward_coverage_profile(&mut cmd);
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    let output = cmd
+        .args(["fetch", "not-a-valid-url"])
+        .output()
+        .expect("scout fetch failed to run");
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// [T-C054] A piped stderr receives log lines without ANSI escapes.
+#[test]
+fn piped_stderr_log_lines_carry_no_ansi_escapes() {
+    let stderr = stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3")]);
+    assert!(
+        stderr.contains("SCOUT_MAX_RETRIES override applied"),
+        "fixture premise: the override must be logged, got:\n{stderr}"
+    );
+    assert!(!stderr.contains('\u{1b}'), "got:\n{stderr:?}");
+}
+
+/// [T-C055] `RUST_LOG` lowers scout's own log level; unset, overrides log at INFO.
+#[test]
+fn rust_log_silences_scout_info_lines() {
+    for value in ["scout=error", "off"] {
+        let stderr = stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", value)]);
+        assert!(
+            !stderr.contains("override applied"),
+            "RUST_LOG={value} must silence INFO, got:\n{stderr}"
+        );
+    }
+}
+
+/// [T-C056] The version hint reaches stderr with logging turned off.
+#[test]
+fn version_hint_does_not_depend_on_the_log_level() {
+    let output = scout()
+        .env("RUST_LOG", "off")
+        .arg("--version")
+        .output()
+        .expect("scout --version failed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("coding agent"), "got:\n{stderr}");
+}
+
+/// [T-C057] A command that never searches does not report the missing Brave key.
+#[test]
+fn fetch_without_brave_key_logs_nothing_about_brave() {
+    let stderr = stderr_of_invalid_fetch(&[]);
+    assert!(!stderr.contains("Brave"), "got:\n{stderr}");
+}
+
+/// [T-C058] Root help lists every environment variable that selects credentials or egress.
+#[test]
+fn help_lists_github_cli_token_and_proxy_variables() {
+    let output = scout().arg("--help").output().expect("scout --help failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for name in ["GH_TOKEN", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+        assert!(
+            stdout.contains(name),
+            "help should name {name}, got:\n{stdout}"
+        );
+    }
+}
+
+/// [T-C059] A `RUST_LOG` that names only another crate leaves scout at INFO.
+#[test]
+fn rust_log_for_another_crate_keeps_scout_info_lines() {
+    let stderr =
+        stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", "reqwest=debug")]);
+    assert!(stderr.contains("override applied"), "got:\n{stderr}");
 }

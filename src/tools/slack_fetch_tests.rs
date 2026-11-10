@@ -1,7 +1,9 @@
 use super::*;
 use crate::envelope::{DegradedReason, ErrorCode};
+use crate::test_support::http_fixture::HttpFixture;
 use crate::test_support::{mount_users_info_resolving, try_spawn_mock_server};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -527,5 +529,82 @@ async fn fetch_slack_timeout_message_states_the_timeout_once() {
         message.matches("timed out").count(),
         1,
         "error.message should state the timeout once, got: {message}"
+    );
+}
+
+/// [T-SK092] `--js` and `--raw` on a Slack permalink are usage errors, reported
+/// before the Slack token is read.
+#[tokio::test]
+async fn fetch_slack_rejects_page_rendering_flags() {
+    let scout = ScoutBuilder::for_test().build();
+    for (js, raw, flag) in [(true, false, "--js"), (false, true, "--raw")] {
+        let err = scout
+            .fetch(FetchParams {
+                url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
+                js,
+                raw,
+            })
+            .await
+            .expect_err("a page-rendering flag has no meaning for a Slack permalink");
+        assert_eq!(err.error_kind(), ErrorCode::UsageError, "{flag}");
+        assert!(err.message().contains(flag), "{flag}: {}", err.message());
+    }
+}
+
+/// [T-SK057] Without a frontmatter terminator, the note opens the output
+/// and the fixture body remains present.
+#[test]
+fn insert_preamble_notes_prepends_when_frontmatter_absent() {
+    let out = super::query::insert_preamble_notes(
+        "a body with no frontmatter".to_owned(),
+        &["a cap note"],
+    );
+    assert!(
+        out.starts_with("> Note: a cap note\n\n"),
+        "absent frontmatter must fall back to a top prepend, got: {out}"
+    );
+    assert!(
+        out.contains("a body with no frontmatter"),
+        "the original body must be preserved after the prepended note, got: {out}"
+    );
+}
+
+/// [T-HP005] A reply permalink promotes its target and keeps context in source order.
+#[tokio::test]
+async fn slack_reply_permalink_preserves_target_and_context() {
+    let server = HttpFixture::start(&[
+        (
+            "/conversations.replies",
+            json!({"ok": true, "messages": [
+                {"user": "U1", "text": "Parent body", "ts": "1111111111.000000"},
+                {"user": "U1", "text": "Target body", "ts": "1111111111.222222"},
+                {"user": "U1", "text": "Last body", "ts": "1111111111.333333"}
+            ]}),
+            &[],
+        ),
+        (
+            "/conversations.info",
+            json!({"ok": true, "channel": {"name": "general"}}),
+            &[],
+        ),
+        (
+            "/users.info",
+            json!({"ok": true, "user": {"real_name": "Alice"}}),
+            &[],
+        ),
+    ])
+    .await;
+    let scout = ScoutBuilder::for_test()
+        .with_slack_endpoint(&server.uri)
+        .build();
+    let result = scout
+        .run(Command::Fetch(FetchParams::for_test(
+            "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1111111111.000000",
+        )))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.markdown(),
+        "---\nworkspace: \"team\"\nchannel: \"#general\"\nauthor: \"Alice\"\nts: \"1111111111.222222\"\ncontext_messages: 2\nurl: \"https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1111111111.000000\"\n---\n\nTarget body\n\n---\n\nAlice (1111111111.000000):\nParent body\n\n---\n\nAlice (1111111111.333333):\nLast body\n"
     );
 }

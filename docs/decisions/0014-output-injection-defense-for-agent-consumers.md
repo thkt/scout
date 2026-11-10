@@ -143,3 +143,9 @@ Decision Outcome の冒頭が中和の集約先を `src/markdown.rs` と `src/fe
 `shift_headings` の行に setext 見出しの ATX 書き換えと frontmatter block の読み飛ばしを足した。後者は YAML マーカーの境界そのものに乗る guard で、閉じの `---` が setext underline として読まれて block の終端が消える退行を `[T-MD026]` が pin している。
 
 `escape_yaml` の行に `truncate_field` を足した。backslash だけでできた値が末尾に単独の `\` を残すと、閉じ引用符を escape して YAML scalar が閉じなくなる。`write_yaml_str` が escape の前に `MAX_FIELD_BYTES` で切り詰めてこれを塞ぐ (`[T-FC102]`)。
+
+## Addendum (2026-11-10): `truncate_and_reneutralize` の呼び出し元と本文リンク
+
+中和点表と 2026-08-17 の追補は、`truncate_and_reneutralize` を fetch と research の 2 箇所から呼ぶと書いている。現行の呼び出し元は `src/tools.rs` の fetch だけである。research の取得ページと GitHub の README は、[DR-0031](0031-close-report-body-code-fences.md) が入れた `src/yaml.rs` の `finish_report_body` を通る (`src/search/engine.rs`、`src/github/format.rs`)。
+
+Decision Outcome の「http/https のみ clickable link」は、fetch 本文の `<a>` にも適用した。`src/fetch/converter/html.rs` の `render_link` は、http/https 以外の scheme を持つ href を `text (url)` の形で出す。scheme を持たない相対パスと fragment はリンクのまま残す。判定の前に ASCII の空白と制御文字を除くので、大小文字や空白による難読化も同じ扱いになる。検証は `[T-HMD009]`。

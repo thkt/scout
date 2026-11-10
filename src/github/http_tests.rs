@@ -61,7 +61,7 @@ async fn get_json_404_returns_not_found() {
 }
 
 /// [T-GH002]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn get_json_429_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
@@ -108,7 +108,7 @@ async fn get_json_429_without_retry_after_uses_ratelimit_reset() {
 }
 
 /// [T-GH003]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn get_json_403_with_zero_remaining_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
@@ -147,8 +147,37 @@ async fn get_json_403_with_remaining_returns_forbidden() {
     assert!(matches!(result, Err(GitHubError::Forbidden(ref msg)) if msg == "access denied"));
 }
 
-/// [T-GH010] 403 without x-ratelimit-remaining header maps to RateLimited (ADR-0004 Rule 1)
+/// [T-GH024] 403 carrying Retry-After maps to RateLimited even with remaining > 0
 #[tokio::test]
+async fn get_json_403_with_retry_after_and_remaining_returns_rate_limited() {
+    let Some(server) = try_spawn_mock_server("github::http").await else {
+        return;
+    };
+    mount_get(
+        &server,
+        "/repos/owner/repo",
+        ResponseTemplate::new(403)
+            .append_header("x-ratelimit-remaining", "50")
+            .append_header("retry-after", "7")
+            .set_body_json(serde_json::json!({"message": "secondary rate limit"})),
+    )
+    .await;
+
+    let client = GitHubClient::with_base_url(Client::new(), &server.uri());
+    let result: Result<RepoInfo, _> = client.get_json_once("/repos/owner/repo").await;
+    assert!(
+        matches!(
+            result,
+            Err(GitHubError::RateLimited {
+                retry_after: Some(7)
+            })
+        ),
+        "got: {result:?}"
+    );
+}
+
+/// [T-GH010] 403 without x-ratelimit-remaining header maps to RateLimited (ADR-0004 Rule 1)
+#[tokio::test(start_paused = true)]
 async fn get_json_403_with_missing_remaining_returns_rate_limited() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
@@ -212,7 +241,7 @@ async fn from_env_with_none_source_leaves_token_empty() {
 }
 
 /// [T-GH006]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn get_json_500_returns_api_error() {
     let Some(server) = try_spawn_mock_server("github::http").await else {
         return;
@@ -370,7 +399,7 @@ async fn get_json_2xx_oversized_body_returns_too_large() {
 /// The retryable status set must not be re-tabled in `is_retriable`: 408 is
 /// retried only because `Classification::from_http_status` calls it
 /// TempFailure.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn get_json_408_retries_once_then_succeeds() {
     let Some(server) = try_spawn_mock_server("github::http_408_retry").await else {
         return;
@@ -427,4 +456,14 @@ fn secs_until_ratelimit_reset_returns_none_when_header_missing() {
     let headers = HeaderMap::new();
     let clock = FixedClock(1000);
     assert_eq!(secs_until_ratelimit_reset(&headers, &clock), None);
+}
+
+/// [T-GHH026] extract_error_message pulls the message field from GitHub JSON payloads
+#[test]
+fn extract_error_message_from_json() {
+    assert_eq!(
+        extract_error_message(r#"{"message": "Not Found"}"#),
+        "Not Found"
+    );
+    assert_eq!(extract_error_message("plain text"), "plain text");
 }

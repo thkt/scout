@@ -112,3 +112,53 @@ fn a_title_over_the_cap_still_yields_a_closed_frontmatter_and_a_body() {
         "the body must survive a title that would otherwise fill the cap:\n{cut}"
     );
 }
+
+/// [T-FC109] A lone CR in a plain-text body cannot start a YAML document marker line.
+#[test]
+fn plain_text_lone_cr_cannot_start_a_yaml_marker_line() {
+    let result = plain_text_result(
+        "a\r--- evil: true\r\nb\r...\r",
+        "https://example.com".into(),
+        false,
+    );
+
+    assert_eq!(result.markdown(), "---\n---\n\na\n*** evil: true\nb\n***\n");
+}
+
+/// [T-FC110] A lone CR inside inline code cannot start a YAML document marker line.
+#[test]
+fn inline_code_lone_cr_cannot_start_a_yaml_marker_line() {
+    let result = to_fetch_result(
+        &article("<p><code>x&#13;--- evil: true</code></p>"),
+        "https://example.com".into(),
+        false,
+    );
+
+    let body = result.markdown().strip_prefix("---\n---\n\n").unwrap();
+    assert!(!body.contains('\r'), "{body:?}");
+    assert!(
+        !body.lines().any(|line| line.starts_with("---")),
+        "{body:?}"
+    );
+}
+
+/// [T-FC101] Author and date frontmatter values are capped like the title.
+#[test]
+fn frontmatter_caps_byline_and_published_time() {
+    let article = ExtractedArticle {
+        byline: Some("b".repeat(10_000)),
+        published_time: Some(format!("2026-08-16T{}", "0".repeat(10_000))),
+        ..article("<p>Text</p>")
+    };
+
+    let result = to_fetch_result(&article, "https://example.com".into(), false);
+
+    for key in ["author: ", "date: "] {
+        let line = result
+            .markdown()
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_else(|| panic!("frontmatter must carry {key}"));
+        assert!(line.len() < 10_000, "{key} is {} bytes", line.len());
+    }
+}

@@ -29,8 +29,7 @@ fn code_block_with_three_backticks_widens_fence_to_four() {
     );
 }
 
-/// [T-FC017] A language class supplies the fence info string. This fixture
-/// bypasses Readability; normal extraction strips classes (see `article`).
+/// [T-FC017] A language class supplies the fence info string.
 #[test]
 fn code_block_with_language_class_gets_language_info_string() {
     let article = article(r#"<pre><code class="language-rust">fn main() {}</code></pre>"#);

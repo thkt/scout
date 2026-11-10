@@ -20,7 +20,14 @@ pub(super) struct ExtractedArticle {
 }
 
 pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
-    let mut readability = match Readability::new(html, url, Some(Config::default())) {
+    // The converter reads `language-*` for the fence info string and the
+    // `math` classes for `$` delimiters. `classes_to_preserve` matches whole
+    // class names only, so it cannot name the open-ended `language-*` set.
+    let config = Config {
+        keep_classes: true,
+        ..Config::default()
+    };
+    let mut readability = match Readability::new(html, url, Some(config)) {
         Ok(r) => r,
         Err(e) => {
             warn!(url = %log_url(url), error = %e, "readability init failed, using raw fallback");
