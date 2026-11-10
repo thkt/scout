@@ -37,6 +37,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # A tag pushed without the version bump would ship a binary whose
+      # --version disagrees with the release and the Homebrew formula.
+      - name: Check tag matches Cargo.toml version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          manifest=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "${REF_NAME#v}" != "$manifest" ]; then
+            echo "::error::Tag $REF_NAME does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:

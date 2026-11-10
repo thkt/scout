@@ -1,7 +1,5 @@
 .DS_Store
-.yomu/
 .claude/
-.playwright-cli/
 /.dotagents.json
 /.venv/
 docs/*
