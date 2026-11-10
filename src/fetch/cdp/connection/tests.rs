@@ -287,3 +287,93 @@ async fn navigation_checks_subrequests_concurrently_before_allowing_them() {
     .expect("subrequest validation must progress concurrently");
     assert_eq!(html.unwrap(), "<p>Both assets loaded</p>");
 }
+
+/// [T-CDPW006] Close returns on its own reply and answers no paused request:
+/// neither a validation left running by an abandoned navigation nor one that
+/// arrives while closing. An unanswered interception, unparsable, binary and
+/// ping frames, and a page-session reply reusing the close command's id do not
+/// end the wait.
+#[tokio::test]
+async fn close_returns_on_its_reply_and_answers_no_paused_request() {
+    let (mut client, mut peer) = pair().await;
+    client.session = Some("page".into());
+    client.interceptions.insert(u64::MAX);
+    client.checks.push(Box::pin(async {
+        CheckedRequest {
+            request_id: "pending".into(),
+            url: "https://example.com".into(),
+            allowed: true,
+        }
+    }));
+    let close = client.close();
+    let server = async {
+        let request = receive(&mut peer, "Browser.close").await;
+        send(&mut peer, json!({"sessionId": "page", "method": "Fetch.requestPaused", "params": {"requestId": "late", "request": {"url": "https://example.com"}}})).await;
+        peer.send(Message::Text("not json".into())).await.unwrap();
+        peer.send(Message::Binary(vec![0].into())).await.unwrap();
+        peer.send(Message::Ping(vec![1].into())).await.unwrap();
+        send(&mut peer, json!({"sessionId": "page", "id": request["id"], "error": {"message": "not the close reply"}})).await;
+        reply(&mut peer, &request, json!({})).await;
+        // The pong is expected; a text frame would be a CDP command.
+        let mut commands = Vec::new();
+        while let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(200), peer.next()).await {
+            if frame.is_text() {
+                commands.push(frame);
+            }
+        }
+        commands
+    };
+    let (result, commands) = timeout(Duration::from_secs(5), async {
+        tokio::join!(close, server)
+    })
+    .await
+    .expect("close must return once its reply arrives");
+    result.expect("a browser that acknowledged the close has closed");
+    assert!(
+        commands.is_empty(),
+        "close must send no command after Browser.close, got: {commands:?}"
+    );
+}
+
+/// [T-CDPW007] An error reply to `Browser.close` surfaces as an error naming the command.
+#[tokio::test]
+async fn close_reports_an_error_reply() {
+    let (mut client, mut peer) = pair().await;
+    let close = client.close();
+    let server = async {
+        let request = receive(&mut peer, "Browser.close").await;
+        send(
+            &mut peer,
+            json!({"id": request["id"], "error": {"code": -32000, "message": "refused"}}),
+        )
+        .await;
+    };
+    let (result, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(close, server)
+    })
+    .await
+    .unwrap();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("CDP Browser.close")
+    );
+}
+
+/// [T-CDPW008] A connection dropped before the reply counts as a completed close.
+#[tokio::test]
+async fn close_treats_a_dropped_connection_as_closed() {
+    let (mut client, mut peer) = pair().await;
+    let close = client.close();
+    let server = async {
+        receive(&mut peer, "Browser.close").await;
+        drop(peer);
+    };
+    let (result, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(close, server)
+    })
+    .await
+    .unwrap();
+    result.expect("the browser going away is what close asked for");
+}

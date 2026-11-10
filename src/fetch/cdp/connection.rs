@@ -1,4 +1,5 @@
-//! A single CDP session; paused requests are serviced while awaiting command replies.
+//! A single CDP session; paused requests are serviced while awaiting command
+//! replies. `close` is the exception: it answers none.
 
 #[cfg(test)]
 mod tests;
@@ -234,10 +235,43 @@ impl Connection {
         Ok(html.outer_html)
     }
 
+    /// Returns on the reply to `Browser.close`, or when the browser drops the
+    /// connection, which is the outcome the command asks for.
+    ///
+    /// `command` is not used here: it waits for every interception to be
+    /// answered, and a navigation abandoned by a cancel or timeout can leave
+    /// some that the closing browser never answers. Validations still running
+    /// are dropped and frames other than the reply are ignored, so no paused
+    /// request is answered on a socket that is closing; such requests stay
+    /// paused, never allowed.
     pub(super) async fn close(&mut self) -> Result<(), BrowserError> {
-        self.command::<Value>("Browser.close", json!({}), false)
-            .await
-            .map(|_| ())
+        self.checks.clear();
+        self.interceptions.clear();
+        let id = self.send("Browser.close", json!({}), false).await?;
+        loop {
+            let text = match self.socket.next().await {
+                Some(Ok(Message::Text(text))) => text,
+                Some(Ok(Message::Ping(payload))) => {
+                    // A failed pong means the connection is going away; the
+                    // next read reports it.
+                    let _ = self.socket.send(Message::Pong(payload)).await;
+                    continue;
+                }
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return Ok(()),
+                Some(Ok(_)) => continue,
+            };
+            // Events carry no `id` and fail to parse as a reply.
+            let Ok(reply) = serde_json::from_str::<Reply>(&text) else {
+                continue;
+            };
+            if reply.id != id || reply.session_id.is_some() {
+                continue;
+            }
+            return match reply.error {
+                Some(error) => Err(failed(format!("CDP Browser.close: {error}"))),
+                None => Ok(()),
+            };
+        }
     }
 
     async fn send(&mut self, method: &str, params: Value, page: bool) -> Result<u64, BrowserError> {
