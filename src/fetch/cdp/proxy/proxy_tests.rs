@@ -12,7 +12,9 @@
 //! CI runs it via `--run-ignored all` (.github/workflows/ci.yml), so a missing
 //! chromium fails CI instead of leaving the tunnel unexercised.
 
-use std::net::IpAddr;
+use std::future::pending;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,11 +22,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::yield_now;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 use tracing_test::traced_test;
 
-use super::transport::dial_and_tunnel;
-use super::{first_blocked_ip, handle_conn, spawn_ssrf_proxy};
+use super::transport::{dial_and_tunnel, dial_first_reachable};
+use super::{dial_candidates, first_blocked_ip, handle_conn, spawn_ssrf_proxy};
 use crate::fetch::ssrf::{DnsResolver, StaticDnsResolver};
 
 /// SOCKS5 no-auth greeting: VER=5, one method (no-auth).
@@ -278,10 +280,6 @@ async fn refused_first_address_falls_back_to_the_next_validated_address() {
     const UPSTREAM_BYTES: &[u8] = b"upstream";
     const SUCCESS_REPLY_LEN: usize = 10;
 
-    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let refused_addr = closed.local_addr().unwrap();
-    drop(closed);
-
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
     let upstream_task = tokio::spawn(async move {
@@ -291,6 +289,13 @@ async fn refused_first_address_falls_back_to_the_next_validated_address() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+
+    // Freed after every other bind in this test, so none of them can be handed
+    // the refused port.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let refused_addr = closed.local_addr().unwrap();
+    drop(closed);
+
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _ = dial_and_tunnel(&mut stream, &[refused_addr, upstream_addr]).await;
@@ -411,5 +416,83 @@ async fn t201_16_partial_handshake_times_out_after_method_reply() {
         reply,
         vec![0x05, 0x00],
         "only the greeting method reply precedes the timeout"
+    );
+}
+
+fn candidate(last_octet: u8) -> SocketAddr {
+    SocketAddr::from(([203, 0, 113, last_octet], 443))
+}
+
+/// Stand-in dialer: `silent` addresses never answer, `refusing` ones fail at
+/// once, and any other address connects, yielding itself.
+async fn dial_stub(
+    addr: SocketAddr,
+    silent: &[SocketAddr],
+    refusing: &[SocketAddr],
+) -> io::Result<SocketAddr> {
+    if silent.contains(&addr) {
+        pending::<()>().await;
+    }
+    if refusing.contains(&addr) {
+        return Err(io::ErrorKind::ConnectionRefused.into());
+    }
+    Ok(addr)
+}
+
+/// [T-F089] A silent first address gives way to the next after half of the 10s
+/// budget when two addresses share it.
+#[tokio::test(start_paused = true)]
+async fn silent_first_address_gives_way_after_its_share_of_the_budget() {
+    let (first, second) = (candidate(1), candidate(2));
+    let started = Instant::now();
+
+    let silent = [first];
+    let dialed = dial_first_reachable(&[first, second], |addr| dial_stub(addr, &silent, &[])).await;
+
+    assert_eq!(dialed, Some(second));
+    assert_eq!(started.elapsed(), Duration::from_secs(5));
+}
+
+/// [T-F090] Time that refused addresses did not use passes to the remaining ones.
+#[tokio::test(start_paused = true)]
+async fn refused_addresses_leave_their_time_to_the_remaining_ones() {
+    let addrs = [candidate(1), candidate(2), candidate(3), candidate(4)];
+    let started = Instant::now();
+
+    let dialed =
+        dial_first_reachable(&addrs, |addr| dial_stub(addr, &addrs[2..3], &addrs[..2])).await;
+
+    assert_eq!(dialed, Some(addrs[3]));
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(5),
+        "the silent third address must get half of the untouched 10s, not a quarter"
+    );
+}
+
+/// [T-F091] With many records each attempt still waits 2s, and the whole list
+/// gives up at the 10s budget.
+#[tokio::test(start_paused = true)]
+async fn many_silent_addresses_keep_a_two_second_wait_and_stop_at_the_budget() {
+    let addrs: Vec<SocketAddr> = (1..=16).map(candidate).collect();
+
+    let started = Instant::now();
+    let dialed = dial_first_reachable(&addrs, |addr| dial_stub(addr, &addrs[..1], &[])).await;
+    assert_eq!(dialed, Some(addrs[1]));
+    assert_eq!(started.elapsed(), Duration::from_secs(2));
+
+    let started = Instant::now();
+    let dialed = dial_first_reachable(&addrs, |addr| dial_stub(addr, &addrs, &[])).await;
+    assert_eq!(dialed, None);
+    assert_eq!(started.elapsed(), Duration::from_secs(10));
+}
+
+/// [T-F092] Every validated IP becomes a dial candidate once, in resolver order.
+#[test]
+fn every_validated_ip_is_a_dial_candidate_once() {
+    let (a, b): (IpAddr, IpAddr) = ([203, 0, 113, 1].into(), [203, 0, 113, 2].into());
+    assert_eq!(
+        dial_candidates(&[a, a, b], 443),
+        [SocketAddr::new(a, 443), SocketAddr::new(b, 443)]
     );
 }
