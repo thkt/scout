@@ -165,38 +165,18 @@ fn unparsable_http_proxy_value_exits_74_io_error() {
 #[path = "exit_code_contract/browser_cleanup.rs"]
 mod browser_cleanup;
 
-/// [T-C053] `ALL_PROXY` alone leaves fetch in Direct mode and no connection
-/// reaches the proxy. The target is an IP literal in TEST-NET-3 so the DNS
-/// pre-check passes; the 1s fetch timeout bounds the unanswered direct dial.
+/// [T-C053] `ALL_PROXY` alone selects proxied egress: the proxy is dialed and
+/// its 404 maps to exit 66.
 #[test]
-fn all_proxy_alone_does_not_route_direct_fetch_through_a_proxy() {
-    use std::sync::atomic::Ordering;
-
+fn all_proxy_alone_routes_fetch_through_the_proxy() {
     let Some((proxy_url, connection_count, _handle)) =
-        common::spawn_mock_proxy(200, Duration::ZERO, b"<html><body>via proxy</body></html>")
+        common::spawn_mock_proxy(404, Duration::ZERO, b"upstream response body")
     else {
         return;
     };
 
-    let output = common::scout_with_clean_env()
-        .env("ALL_PROXY", &proxy_url)
-        .env("SCOUT_FETCH_TIMEOUT_SECS", "1")
-        .args(["--json", "fetch", "http://203.0.113.1/"])
-        .output()
-        .expect("scout --json fetch failed to run");
+    let output = run_scout_fetch(&[("ALL_PROXY", &proxy_url), ("SCOUT_FETCH_TIMEOUT_SECS", "5")]);
 
-    // A rejection before any dial would also leave the proxy untouched, so
-    // the exit code must be one a failed or unanswered direct dial produces.
-    let code = output.status.code();
-    assert!(
-        matches!(code, Some(124 | 75 | 104)),
-        "fetch must reach the direct dial, got exit {code:?}:\n{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert_eq!(
-        connection_count.load(Ordering::SeqCst),
-        0,
-        "Direct mode must not dial a proxy that egress detection did not select, got:\n{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+    assert_exits_with(&output, 66, "NOT_FOUND", "ALL_PROXY alone");
+    assert_proxy_was_dialed_for_exit_code(&connection_count, "ALL_PROXY alone");
 }

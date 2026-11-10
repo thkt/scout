@@ -543,7 +543,7 @@ fn fetch_without_brave_key_logs_nothing_about_brave() {
 fn help_lists_github_cli_token_and_proxy_variables() {
     let output = scout().arg("--help").output().expect("scout --help failed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for name in ["GH_TOKEN", "HTTPS_PROXY", "HTTP_PROXY"] {
+    for name in ["GH_TOKEN", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
         assert!(
             stdout.contains(name),
             "help should name {name}, got:\n{stdout}"

@@ -38,8 +38,9 @@ pub(crate) enum EgressMode {
 /// reads process env, so callers control the inputs and tests stay pure).
 ///
 /// Reads the same proxy vars reqwest users set. Precedence as pinned by the
-/// egress test scenarios: `HTTPS_PROXY` before `HTTP_PROXY`, uppercase before
-/// lowercase, first match wins; absence yields [`EgressMode::Direct`]. The case
+/// egress test scenarios: `HTTPS_PROXY` before `HTTP_PROXY` before `ALL_PROXY`,
+/// uppercase before lowercase, first match wins; absence yields
+/// [`EgressMode::Direct`]. The case
 /// order (upper before lower) is a chosen convention pinned by T-FS029; reqwest
 /// 0.13's own env-var precedence is undocumented on
 /// <https://docs.rs/reqwest/0.13/reqwest/struct.Proxy.html>, so agreement with
@@ -48,7 +49,14 @@ pub(crate) enum EgressMode {
 /// is a relative-URL parse error, so treating it as `Proxied("")` would fail
 /// client construction and take down every command, not just proxied fetches.
 pub(crate) fn detect_egress_mode(env: &HashMap<String, String>) -> EgressMode {
-    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
         if let Some(url) = env.get(key).filter(|u| !u.trim().is_empty()) {
             return EgressMode::Proxied(url.clone());
         }

@@ -79,8 +79,8 @@ Environment:
   GH_TOKEN                      Read when GITHUB_TOKEN is unset; `gh auth token` is
                                 tried after both
   SLACK_TOKEN                   Optional. User OAuth token (xoxp-…) required for Slack URLs
-  HTTPS_PROXY, HTTP_PROXY       Route fetch through this proxy (lowercase names also
-                                read). The proxy then resolves hostnames; scout
+  HTTPS_PROXY, HTTP_PROXY,      Route fetch through this proxy (lowercase names also
+  ALL_PROXY                     read). The proxy then resolves hostnames; scout
                                 still rejects literal private and loopback IPs
 
 Tuning (override built-in timeouts and retry budget):

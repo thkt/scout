@@ -92,10 +92,10 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         EgressMode::Proxied(url) => fetch_builder.proxy(
             Proxy::all(url).map_err(|e| ScoutError::io_error(format!("proxy init failed: {e}")))?,
         ),
-        // `no_proxy` turns off reqwest's own proxy discovery (`ALL_PROXY`, OS
-        // proxy settings). With it on, reqwest would dial a proxy that
-        // `detect_egress_mode` never saw and the guard below would validate the
-        // proxy address in place of the target.
+        // `no_proxy` turns off reqwest's own proxy discovery. With it on,
+        // reqwest could dial a proxy from a source `detect_egress_mode` does
+        // not read, and the guard below would validate the proxy address in
+        // place of the target.
         EgressMode::Direct => fetch_builder
             .no_proxy()
             .dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver))),
