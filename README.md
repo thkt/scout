@@ -70,7 +70,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 brew install thkt/tap/scout
 ```
 
-Or build from source (requires Rust 1.96+):
+Or build from source (requires the Rust version named by `rust-version` in `Cargo.toml`):
 
 ```sh
 cargo install --path .
@@ -277,7 +277,8 @@ Literal private/loopback IPs are rejected at URL validation and on every redirec
 
 ```
 src/
-├── main.rs              CLI entry point (clap)
+├── main.rs              Binary entry point (calls lib.rs)
+├── lib.rs               CLI definition (clap) and command dispatch
 ├── tools/               Command handlers, params, error types
 ├── search/
 │   ├── engine.rs        Research engine (search + fetch + compile)
@@ -304,7 +305,7 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `
 | Code | Meaning                                                                  |
 | ---- | ------------------------------------------------------------------------ |
 | 0    | Success                                                                  |
-| 64   | Usage error (clap parse, missing API key, conflicts_with violation)      |
+| 64   | Usage error (clap parse, missing API key)                                |
 | 65   | Data error (invalid input, malformed format, encoding error, 4xx body)   |
 | 66   | Not found (repo/file not found, 404)                                     |
 | 70   | Internal (scout-side invariant violation, unexpected response schema)    |

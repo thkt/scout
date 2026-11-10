@@ -60,7 +60,7 @@ scout research "Next.js App Router authentication best practices" --depth 5
 brew install thkt/tap/scout
 ```
 
-ソースからビルドする場合は、Rust 1.96+が必要です。
+ソースからビルドする場合は、`Cargo.toml` の `rust-version` 以上の Rust が必要です。
 
 ```sh
 cargo install --path .
@@ -92,7 +92,9 @@ export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch`
 
 ### オプション: JSレンダリング（SPA対応）
 
-`fetch` は JS 依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレス Chrome（CDP）でレンダリングします。Chrome/Chromium のローカルインストールと `js-rendering` feature が必要です。
+`fetch` は JS 依存ページ（React、Next.js、Vue、Nuxt）を自動検出し、ヘッドレス Chrome（CDP）でレンダリングします。Chrome または Chromium のローカルインストールが必要です。無い場合、自動検出されたページは元の HTML にフォールバックし、`--js` はエラーを返します。
+
+ビルド済みバイナリ（Homebrew、GitHub Releases）は `js-rendering` feature を有効にして配布しています。ソースからビルドする場合はインストール時に有効化します:
 
 ```sh
 cargo install --path . --features js-rendering
@@ -179,7 +181,7 @@ scout fetch https://react.dev/blog/2024/12/05/react-19
 | フラグ  | 説明                                                                 |
 | ------- | -------------------------------------------------------------------- |
 | `--js`  | CDP経由のJSレンダリングを強制（`js-rendering` feature + Chrome必要） |
-| `--raw` | Readabilityをスキップしてページ全体を変換                            |
+| `--raw` | Readabilityをスキップし、active HTML を除くページ全体を変換                            |
 
 ページのメタデータ（タイトル/著者/日付）は YAML フロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
@@ -256,7 +258,7 @@ Markdown出力のREADME本文の上限は見出し変換前の24,000バイトで
 ### Fetchパイプライン
 
 ```text
-URL検証 → DNS事前チェック → ダウンロード → リダイレクト後再チェック → Readability → Markdown
+URL検証 → DNS事前チェック → ダウンロード（リダイレクトの各ホップで SSRF チェック） → リダイレクト後再チェック → Readability → Markdown
 ```
 
 リテラルなプライベート/ループバック IP は URL 検証時と各リダイレクトホップで、全モード共通に拒否します。既定の直接接続モードでは、scout 自身がホストを解決・接続し、接続時の IP を再検証することで、事前チェックと実接続の間の DNS リバインディングの穴を塞ぎます。標準のプロキシ環境変数（`HTTPS_PROXY`/`HTTP_PROXY`）が設定されている場合は、そのプロキシ経由で fetch します。この場合もリテラルなプライベート/ループバック宛先は各ホップで拒否し続けますが、scout 自身の DNS 解決は行わず、名前解決に基づく防御（DNS リバインディングを含む）はプロキシの egress control へ委譲します。エラーメッセージ中のクレデンシャルは除去します。サイズ上限は Limitations を参照してください。
@@ -265,7 +267,8 @@ URL検証 → DNS事前チェック → ダウンロード → リダイレク�
 
 ```text
 src/
-├── main.rs              CLIエントリーポイント（clap）
+├── main.rs              バイナリのエントリーポイント（lib.rs を呼ぶ）
+├── lib.rs               CLI定義（clap）とコマンドの振り分け
 ├── tools/               コマンドハンドラー、パラメータ、エラー型
 ├── search/
 │   ├── engine.rs        リサーチエンジン（検索 + 取得 + まとめ）
@@ -292,7 +295,7 @@ src/
 | コード | 意味                                                                        |
 | ------ | --------------------------------------------------------------------------- |
 | 0      | 成功                                                                        |
-| 64     | 使い方エラー（clapパース失敗、APIキー未設定、`conflicts_with` 違反）        |
+| 64     | 使い方エラー（clapパース失敗、APIキー未設定）        |
 | 65     | データエラー（不正入力、フォーマット異常、エンコーディングエラー、4xx本文） |
 | 66     | Not Found（リポジトリ/ファイルが存在しない、404）                           |
 | 70     | 内部エラー（scout側の不変条件違反、想定外のレスポンススキーマ）             |
