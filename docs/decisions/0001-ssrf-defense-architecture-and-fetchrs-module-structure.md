@@ -118,7 +118,7 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade �
 
 IPv6 の IPv4 埋め込みは `to_ipv4` (`to_ipv4_mapped` ではない) で unwrap し、IPv4-mapped (`::ffff:a.b.c.d`) と IPv4-compatible (`::a.b.c.d`、例 `::7f00:1` = `::127.0.0.1`) の双方を再帰的に IPv4 判定へ通す。CGN は `is_cgn` が先頭 octet 100 かつ 2 番目 octet 64..=127 で判定する。`is_private_ip` は connect-time の `SsrfResolver` (ADR-0012) も同じ関数を共用するため、pre-flight と connect 時で blocklist が一致する。
 
-追補 (2026-11-10): NAT64 `64:ff9b::/96` (RFC 6052) と 6to4 `2002::/16` (RFC 3056) に埋め込まれた IPv4 も `translated_ipv4` で取り出して再判定する。mapped と compatible だけの判定では、NAT64 ゲートウェイを持つ IPv6 専用ネットワークで `64:ff9b::a00:1` が `10.0.0.1` に届いた。公開 IPv4 を埋め込んだアドレスは通す。検証は `[T-FS028]`。
+追補 (2026-11-10): NAT64 `64:ff9b::/96` (RFC 6052)、その local-use prefix `64:ff9b:1::/48` (RFC 8215)、6to4 `2002::/16` (RFC 3056) に埋め込まれた IPv4 も `translated_ipv4` で取り出して再判定する。mapped と compatible だけの判定では、NAT64 ゲートウェイを持つ IPv6 専用ネットワークで `64:ff9b::a00:1` が `10.0.0.1` に届いた。公開 IPv4 を埋め込んだアドレスは通す。Teredo `2001::/32` は対象外である。検証は `[T-FS028]` と `[T-FS030]`。
 
 ### CDP browser subrequest の scheme 判定 (downgrade 20、一次ソース `src/fetch/cdp/launch.rs` の `check_browser_request`)
 

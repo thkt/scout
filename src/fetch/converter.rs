@@ -216,7 +216,11 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 fn format_body(fields: &str, markdown: &str) -> String {
     // YAML reads a lone CR as a line break, while the marker scan splits on LF
     // only, so every line ending becomes LF first.
-    let markdown = markdown.replace("\r\n", "\n").replace('\r', "\n");
+    let markdown = if markdown.contains('\r') {
+        Cow::Owned(markdown.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(markdown)
+    };
     // Neutralize untrusted YAML boundaries; only closed fences preserve literal markers.
     let body = neutralize_yaml_markers_outside_fences(&markdown);
 

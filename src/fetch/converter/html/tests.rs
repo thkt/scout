@@ -75,16 +75,19 @@ fn escapes_block_markers_after_leading_whitespace() {
     }
 }
 
-/// [T-HMD008] Text beside a `code` child inside `pre` shares one closed fence.
+/// [T-HMD008] Text beside a `code` child inside `pre` becomes its own escaped
+/// paragraph; the code keeps its closed fence and language.
 #[test]
 fn fences_pre_once_when_code_has_sibling_text() {
     assert_eq!(
         convert("<pre>prefix<code>x</code>suffix</pre><p>after</p>"),
-        "```\nprefixxsuffix\n```\n\nafter"
+        "prefix\n\n```\nx\n```\n\nsuffix\n\nafter"
     );
     assert_eq!(
-        convert("<pre><span>1</span><code class=\"language-rust\">a\n</code></pre>"),
-        "```\n1a\n```"
+        convert(
+            "<pre><span># main.rs</span><code class=\"language-rust\">a\n</code><button>Copy</button></pre>"
+        ),
+        "\\# main.rs\n\n```rust\na\n```\n\nCopy"
     );
 }
 
@@ -111,6 +114,10 @@ fn renders_non_http_scheme_links_as_inert_text() {
         ),
         (r#"<a href="javascript:alert(1)"></a>"#, ""),
         (
+            r#"<a href="x:<javascript:alert`1`>">t</a>"#,
+            "t (x:%3Cjavascript:alert%601%60%3E)",
+        ),
+        (
             r#"<a href="HTTPS://example.com/">x</a>"#,
             "[x](HTTPS://example.com/)",
         ),
@@ -119,4 +126,20 @@ fn renders_non_http_scheme_links_as_inert_text() {
     ] {
         assert_eq!(convert(html), expected, "HTML: {html}");
     }
+}
+
+/// [T-HMD010] A math span whose text could open a block, a link or HTML is
+/// rendered as ordinary escaped text.
+#[test]
+fn math_span_with_markdown_structure_is_escaped() {
+    assert_eq!(
+        convert(
+            "<p><span class=\"math math-inline\">x\n\n# H\n\n[c](javascript:alert(1))</span></p>"
+        ),
+        r"x # H \[c\](javascript:alert(1))"
+    );
+    assert_eq!(
+        convert(r#"<p><span class="math math-inline">a&lt;b&gt;c</span></p>"#),
+        r"a\<b>c"
+    );
 }

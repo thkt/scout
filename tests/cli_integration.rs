@@ -550,3 +550,11 @@ fn help_lists_github_cli_token_and_proxy_variables() {
         );
     }
 }
+
+/// [T-C059] A `RUST_LOG` that names only another crate leaves scout at INFO.
+#[test]
+fn rust_log_for_another_crate_keeps_scout_info_lines() {
+    let stderr =
+        stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", "reqwest=debug")]);
+    assert!(stderr.contains("override applied"), "got:\n{stderr}");
+}

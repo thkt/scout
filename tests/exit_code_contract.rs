@@ -185,6 +185,14 @@ fn all_proxy_alone_does_not_route_direct_fetch_through_a_proxy() {
         .output()
         .expect("scout --json fetch failed to run");
 
+    // A rejection before any dial would also leave the proxy untouched, so
+    // the exit code must be one a failed or unanswered direct dial produces.
+    let code = output.status.code();
+    assert!(
+        matches!(code, Some(124 | 75 | 104)),
+        "fetch must reach the direct dial, got exit {code:?}:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     assert_eq!(
         connection_count.load(Ordering::SeqCst),
         0,

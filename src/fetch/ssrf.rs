@@ -274,12 +274,15 @@ fn is_private_ip(ip: IpAddr) -> bool {
 }
 
 /// The IPv4 address a translator or relay would forward this IPv6 address to:
-/// the low 32 bits under NAT64 `64:ff9b::/96` (RFC 6052), bits 16..48 under
-/// 6to4 `2002::/16` (RFC 3056).
+/// the low 32 bits under NAT64 `64:ff9b::/96` (RFC 6052) and its local-use
+/// prefix `64:ff9b:1::/48` (RFC 8215), bits 16..48 under 6to4 `2002::/16`
+/// (RFC 3056).
 fn translated_ipv4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
     let segments = v6.segments();
     let (high, low) = match segments {
-        [0x64, 0xff9b, 0, 0, 0, 0, high, low] => (high, low),
+        [0x64, 0xff9b, 0, 0, 0, 0, high, low] | [0x64, 0xff9b, 1, _, _, _, high, low] => {
+            (high, low)
+        }
         [0x2002, high, low, ..] => (high, low),
         _ => return None,
     };

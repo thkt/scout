@@ -219,10 +219,9 @@ impl GitHubClient {
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let told_to_retry =
-                    parse_retry_after(response.headers(), self.clock.as_ref()).is_some();
+                let retry_after_header = parse_retry_after(response.headers(), self.clock.as_ref());
                 match remaining {
-                    Some(r) if r > 0 && !told_to_retry => {
+                    Some(r) if r > 0 && retry_after_header.is_none() => {
                         // Bound diagnostic reads as well as successful payloads.
                         let raw = read_body_snippet(response, MAX_ERROR_BODY_BYTES)
                             .await
@@ -231,7 +230,9 @@ impl GitHubClient {
                         Err(GitHubError::Forbidden(message))
                     }
                     _ => {
-                        let retry_after = self.rate_limit_delay(response.headers());
+                        let retry_after = retry_after_header.or_else(|| {
+                            secs_until_ratelimit_reset(response.headers(), self.clock.as_ref())
+                        });
                         warn!(
                             retry_after_secs = retry_after,
                             "GitHub 403 with Retry-After or without remaining quota, treating as RateLimited (ADR-0004)"

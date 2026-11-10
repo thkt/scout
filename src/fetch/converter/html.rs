@@ -161,8 +161,13 @@ fn render_span(node: NodeRef<'_>, preformatted: bool) -> String {
             "math math-display" => Some("$$"),
             _ => None,
         };
-        if let Some(delimiter) = delimiter {
-            return format!("{delimiter}{}{delimiter}", parts[0].text());
+        // Math is emitted unescaped so TeX survives. Text that could open a
+        // block, a link, a code span or HTML takes the escaped path below.
+        let text = parts[0].text();
+        if let Some(delimiter) = delimiter
+            && !text.contains(['\n', '\r', '[', ']', '<', '`'])
+        {
+            return format!("{delimiter}{text}{delimiter}");
         }
     }
     let content = children(node, preformatted);
@@ -216,18 +221,22 @@ fn render_pre(node: NodeRef<'_>) -> String {
     if code_children == 0 {
         return block(&fenced(children(node, true).trim_matches('\n'), ""));
     }
-    // `render_code` fences the `code` child itself. Text beside that fence
-    // would sit on the fence lines and leave a fence open for the rest of the
-    // page, so a `pre` with anything else in it is fenced once as a whole.
-    let code_stands_alone = code_children == 1
-        && node
-            .children_it(false)
-            .all(|child| tag(child) == "code" || raw_text(child).trim().is_empty());
-    if code_stands_alone {
-        block(children(node, true).trim_matches('\n'))
-    } else {
-        block(&fenced(raw_text(node).trim_matches('\n'), ""))
-    }
+    // `render_code` fences each `code` child. Sibling content (a filename
+    // label, a line-number gutter, a copy button) would otherwise sit on the
+    // fence lines and leave a fence open for the rest of the page, so each
+    // sibling becomes its own escaped paragraph.
+    let parts: Vec<String> = node
+        .children_it(false)
+        .map(|child| {
+            if tag(child) == "code" {
+                render(child, true)
+            } else {
+                escape_text(trim(&collapse(&raw_text(child))))
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect();
+    block(&parts.join("\n\n"))
 }
 
 fn render_code(node: NodeRef<'_>) -> String {
@@ -302,7 +311,13 @@ fn render_link(node: NodeRef<'_>, preformatted: bool) -> String {
         return if empty {
             String::new()
         } else {
-            format!("{} ({}){trailing}", trim(&content), escape_md_inline(&href))
+            // `<…>` is a CommonMark autolink for any scheme and a backtick
+            // opens a code span, so neither may reach the body from an href.
+            let inert = escape_md_inline(&href)
+                .replace('<', "%3C")
+                .replace('>', "%3E")
+                .replace('`', "%60");
+            format!("{} ({inert}){trailing}", trim(&content))
         };
     }
     let destination = destination(&href);

@@ -156,3 +156,17 @@ fn validate_url_rechecks_ipv4_embedded_in_nat64_and_6to4() {
         assert!(validate_url_sync(url).is_ok(), "should accept: {url}");
     }
 }
+
+/// [T-FS030] The local-use NAT64 prefix `64:ff9b:1::/48` is rechecked like the
+/// well-known prefix.
+#[test]
+fn validate_url_rechecks_ipv4_embedded_in_local_use_nat64() {
+    assert!(
+        matches!(
+            validate_url_sync("http://[64:ff9b:1::a9fe:a9fe]/"),
+            Err(FetchError::InternalHost)
+        ),
+        "169.254.169.254 behind the local-use prefix must be blocked"
+    );
+    assert!(validate_url_sync("http://[64:ff9b:1::808:808]/").is_ok());
+}

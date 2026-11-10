@@ -107,16 +107,21 @@ struct Cli {
 
 /// Reuse an installed tracing subscriber when run is invoked again.
 ///
-/// `RUST_LOG` decides the levels when it parses. Unset, empty or unparsable,
-/// scout logs at INFO and other crates stay at the ERROR default. Colour is
-/// for a terminal only: an agent reading a piped stderr would receive the
-/// escape bytes as text.
+/// scout logs at INFO unless `RUST_LOG` sets scout's level itself, through a
+/// `scout…` directive or a bare global level such as `off`. A `RUST_LOG` that
+/// names only other crates keeps scout at INFO, so its warnings stay visible.
+/// Colour is for a terminal only: an agent reading a piped stderr would
+/// receive the escape bytes as text.
 fn init_tracing() {
-    let filter = env::var("RUST_LOG")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .and_then(|value| value.parse::<EnvFilter>().ok())
-        .unwrap_or_else(|| EnvFilter::new("scout=info"));
+    let sets_scout_level = env::var("RUST_LOG").is_ok_and(|value| {
+        value.split(',').map(str::trim).any(|directive| {
+            !directive.is_empty() && (!directive.contains('=') || directive.starts_with("scout"))
+        })
+    });
+    let mut filter = EnvFilter::from_default_env();
+    if !sets_scout_level {
+        filter = filter.add_directive("scout=info".parse().expect("static directive is valid"));
+    }
     let colour = stderr().is_terminal() && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
