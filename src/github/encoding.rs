@@ -17,8 +17,6 @@ pub(crate) enum DetectionSource {
     Bom,
     /// chardetng auto-detected the encoding.
     Detected,
-    /// chardetng was inconclusive but content is valid strict UTF-8.
-    AssumedUtf8,
 }
 
 /// Result of decoding raw bytes into Unicode text.
@@ -47,9 +45,9 @@ pub(super) fn decode_base64(encoded: &str) -> Result<Vec<u8>, GitHubError> {
 /// Detection priority (highest first; see ADR-0013 for rationale):
 /// 1. If `hint` is Some, use the explicit encoding
 /// 2. If a BOM is found, use the BOM-identified encoding
-/// 3. Run chardetng; accept a clean decode only through the reliability gate
-/// 4. Fall back to strict UTF-8 validation (AssumedUtf8)
-/// 5. If all fail, return NonUtf8 error with retry hint
+/// 3. Run chardetng; accept a clean decode only through the reliability gate.
+///    Valid UTF-8 always passes here: chardetng guesses UTF-8 for it
+/// 4. If all fail, return NonUtf8 error with retry hint
 pub(super) fn decode_bytes(bytes: &[u8], hint: Option<&str>) -> Result<DecodeResult, GitHubError> {
     if let Some(label) = hint {
         return decode_explicit(bytes, label);
@@ -140,22 +138,19 @@ fn decode_detect(bytes: &[u8]) -> Result<DecodeResult, GitHubError> {
         }
     }
 
-    // chardetng inconclusive or had errors; try strict UTF-8.
-    // Note: with `Utf8Detection::Allow`, chardetng already guesses UTF-8 for any
-    // valid-UTF-8 bytes, so this branch is unreachable in practice; it remains as a
-    // defensive backstop for the documented detection priority (ADR-0013).
-    if let Ok(s) = str::from_utf8(bytes) {
-        return Ok(DecodeResult {
-            text: s.to_owned(),
-            encoding: encoding_rs::UTF_8.name().to_ascii_lowercase(),
-            source: DetectionSource::AssumedUtf8,
-        });
-    }
-
+    // A reliable guess was decoded above and failed, so naming it would send
+    // the caller into the same failure through `decode_explicit`.
+    let retry = if is_reliable_detection(encoding) {
+        String::new()
+    } else {
+        format!(
+            "Retry with --encoding {}. ",
+            encoding.name().to_ascii_lowercase()
+        )
+    };
     Err(GitHubError::NonUtf8(format!(
-        "File encoding could not be decoded. Retry with --encoding {}. \
-        Use --encoding to specify the encoding (e.g., --encoding shift_jis, --encoding euc-jp).",
-        encoding.name().to_ascii_lowercase()
+        "File encoding could not be decoded. {retry}\
+        Use --encoding to specify the encoding (e.g., --encoding shift_jis, --encoding euc-jp)."
     )))
 }
 

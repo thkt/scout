@@ -43,6 +43,15 @@ impl Scout {
         let url = resolve_stdin_arg(params.url, "url", "<URL>").await?;
 
         if let Some(slack_url) = parse_slack_url(&url) {
+            // A Slack permalink is read through the Slack API, so there is no
+            // page for these flags to render.
+            for (set, flag) in [(params.js, "--js"), (params.raw, "--raw")] {
+                if set {
+                    return Err(ScoutError::user_error(format!(
+                        "{flag} does not apply to a Slack permalink; remove it"
+                    )));
+                }
+            }
             return self.fetch_slack(slack_url).await;
         }
 

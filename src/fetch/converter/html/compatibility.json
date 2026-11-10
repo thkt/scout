@@ -308,10 +308,6 @@
     "```rust\na\n```"
   ],
   [
-    "<pre>prefix<code>x</code>suffix</pre>",
-    "prefix```\nx\n```suffix"
-  ],
-  [
     "<pre><span>a</span><span>b</span></pre>",
     "```\nab\n```"
   ],

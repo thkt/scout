@@ -780,7 +780,7 @@ async fn fetch_message_keeps_dual_role_id_as_author_not_mention() {
 /// `Api` string table), so `is_retriable` must derive from `classify().kind`
 /// rather than a second, independently-maintained table that never listed the
 /// `Api` variant at all.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn api_error_internal_error_retries_once_then_succeeds() {
     let Some(server) = try_spawn_mock_server("slack::http").await else {
         return;
@@ -1005,7 +1005,7 @@ async fn users_info_500_returns_after_1_request_per_id() {
 /// [T-SK074] Even when conversations.info answers 500, the request is sent once
 ///
 /// Mirrors T-SK073 for `resolve_channel`, which shares the retry-amplification
-/// path and additionally blocks the `tokio::join!` in `fetch_message` for the
+/// path and additionally blocks the `tokio::try_join!` in `fetch_message` for the
 /// whole `Retry-After`.
 #[tokio::test(start_paused = true)]
 async fn conversations_info_500_returns_after_1_request() {

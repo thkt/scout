@@ -60,3 +60,63 @@ fn matches_the_previous_converter_corpus() {
         assert_eq!(convert(&html), expected, "HTML: {html}");
     }
 }
+
+/// [T-HMD007] A block marker behind leading whitespace stays literal text.
+#[test]
+fn escapes_block_markers_after_leading_whitespace() {
+    for (html, expected) in [
+        ("<p> # not a heading</p>", r"\# not a heading"),
+        ("<p>\n  > not a quote</p>", r"\> not a quote"),
+        ("<p> - not an item</p>", r"\- not an item"),
+        ("<p> + not an item</p>", r"\+ not an item"),
+        ("<p> 1. not an item</p>", r"1\. not an item"),
+    ] {
+        assert_eq!(convert(html), expected, "HTML: {html}");
+    }
+}
+
+/// [T-HMD008] Text beside a `code` child inside `pre` shares one closed fence.
+#[test]
+fn fences_pre_once_when_code_has_sibling_text() {
+    assert_eq!(
+        convert("<pre>prefix<code>x</code>suffix</pre><p>after</p>"),
+        "```\nprefixxsuffix\n```\n\nafter"
+    );
+    assert_eq!(
+        convert("<pre><span>1</span><code class=\"language-rust\">a\n</code></pre>"),
+        "```\n1a\n```"
+    );
+}
+
+/// [T-HMD009] Only http/https and scheme-less hrefs become links; any other
+/// scheme, including case and whitespace obfuscation, renders as inert text.
+#[test]
+fn renders_non_http_scheme_links_as_inert_text() {
+    for (html, expected) in [
+        (
+            r#"<a href="javascript:alert(1)">x</a>"#,
+            r"x (javascript:alert\(1\))",
+        ),
+        (
+            r#"<a href=" JaVa&#9;Script:alert(1)">x</a>"#,
+            r"x (JaVaScript:alert\(1\))",
+        ),
+        (
+            r#"<a href="data:text/html,hi">x</a>"#,
+            "x (data:text/html,hi)",
+        ),
+        (
+            r#"<a href="mailto:a@example.com">x</a>"#,
+            "x (mailto:a@example.com)",
+        ),
+        (r#"<a href="javascript:alert(1)"></a>"#, ""),
+        (
+            r#"<a href="HTTPS://example.com/">x</a>"#,
+            "[x](HTTPS://example.com/)",
+        ),
+        (r#"<a href="/docs/a:b">x</a>"#, "[x](/docs/a:b)"),
+        (r##"<a href="#frag">x</a>"##, "[x](#frag)"),
+    ] {
+        assert_eq!(convert(html), expected, "HTML: {html}");
+    }
+}

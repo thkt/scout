@@ -2,9 +2,13 @@ use super::*;
 use crate::clock::FixedClock;
 use crate::envelope::ErrorCode;
 use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
+use crate::redacted::Redacted;
 use crate::test_support::{join_server_thread, spawn_forward_proxy, try_spawn_mock_server};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -185,4 +189,29 @@ async fn scout_builder_with_egress_routes_proxied_fetch_through_proxy() {
     );
 
     join_server_thread(handle);
+}
+
+struct CountingTokenSource(Arc<AtomicUsize>);
+
+impl TokenSource for CountingTokenSource {
+    fn fetch(&self) -> Pin<Box<dyn Future<Output = Option<Redacted>> + Send + '_>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { None })
+    }
+}
+
+/// [T-SB007] The first GitHub call resolves the token through the injected
+/// source, and later calls reuse that client without resolving again.
+#[tokio::test]
+async fn github_client_resolves_the_injected_token_source_once() {
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let scout = ScoutBuilder::for_test()
+        .with_token_source(Arc::new(CountingTokenSource(fetches.clone())))
+        .build();
+    assert_eq!(fetches.load(Ordering::SeqCst), 0, "resolution must be lazy");
+
+    scout.github().await;
+    scout.github().await;
+
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
 }

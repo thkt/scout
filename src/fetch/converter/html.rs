@@ -10,7 +10,7 @@ use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ParseOpts, parse_document};
 
-use crate::markdown::fence_delimiter;
+use crate::markdown::{escape_md_inline, fence_delimiter};
 
 pub(super) fn convert(source: &str) -> String {
     let document = parse_document(
@@ -209,11 +209,24 @@ fn render_pre(node: NodeRef<'_>) -> String {
     {
         return inline_code(raw_text(node).trim_matches('\n'), false);
     }
-    let content = children(node, true);
-    if node.children_it(false).any(|child| tag(child) == "code") {
-        block(content.trim_matches('\n'))
+    let code_children = node
+        .children_it(false)
+        .filter(|child| tag(*child) == "code")
+        .count();
+    if code_children == 0 {
+        return block(&fenced(children(node, true).trim_matches('\n'), ""));
+    }
+    // `render_code` fences the `code` child itself. Text beside that fence
+    // would sit on the fence lines and leave a fence open for the rest of the
+    // page, so a `pre` with anything else in it is fenced once as a whole.
+    let code_stands_alone = code_children == 1
+        && node
+            .children_it(false)
+            .all(|child| tag(child) == "code" || raw_text(child).trim().is_empty());
+    if code_stands_alone {
+        block(children(node, true).trim_matches('\n'))
     } else {
-        block(&fenced(content.trim_matches('\n'), ""))
+        block(&fenced(raw_text(node).trim_matches('\n'), ""))
     }
 }
 
@@ -284,13 +297,38 @@ fn render_link(node: NodeRef<'_>, preformatted: bool) -> String {
     } else {
         None
     };
-    let destination = destination(&href);
     let trailing = &content[content.trim_end_matches([' ', '\n', '\t', '\r']).len()..];
+    if let Some(href) = non_http_scheme_href(&href) {
+        return if empty {
+            String::new()
+        } else {
+            format!("{} ({}){trailing}", trim(&content), escape_md_inline(&href))
+        };
+    }
+    let destination = destination(&href);
     format!(
         "[{}]({destination}{}){trailing}",
         trim(&content),
         title.unwrap_or_default()
     )
+}
+
+/// Returns the href with ASCII whitespace and control characters removed when
+/// it names a scheme other than http/https (DR-0014). Browsers ignore those
+/// characters when reading the scheme, so they are removed before the check.
+/// A scheme-less href (relative path, fragment) returns `None`.
+fn non_http_scheme_href(href: &str) -> Option<String> {
+    let cleaned: String = href
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && !ch.is_ascii_control())
+        .collect();
+    let scheme = &cleaned[..cleaned.find(':')?];
+    let named = scheme.starts_with(|ch: char| ch.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'));
+    let http = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    (named && !http).then_some(cleaned)
 }
 
 /// A line break in the title would let its next line open a CommonMark block,
@@ -400,18 +438,21 @@ fn collapse(text: &str) -> String {
 
 fn escape_text(text: &str) -> String {
     let mut out = String::new();
-    let first = text.chars().next();
-    let leading = match first {
+    // `children` drops a text node's leading spaces at a line start, so block
+    // markers are looked for behind them.
+    let indent = text.len() - text.trim_start_matches(' ').len();
+    let body = &text[indent..];
+    let leading = match body.chars().next() {
         Some('=' | '~' | '>') => true,
-        Some('-' | '+') => text.as_bytes().get(1) == Some(&b' '),
-        Some('#') => text.trim_start_matches('#').starts_with(' '),
+        Some('-' | '+') => body.as_bytes().get(1) == Some(&b' '),
+        Some('#') => body.trim_start_matches('#').starts_with(' '),
         _ => false,
     };
-    if leading {
-        out.push('\\');
-    }
-    let ordered = text.bytes().take_while(u8::is_ascii_digit).count();
+    let ordered = indent + body.bytes().take_while(u8::is_ascii_digit).count();
     for (offset, ch) in text.char_indices() {
+        if leading && offset == indent {
+            out.push('\\');
+        }
         let html = ch == '<'
             && text[offset + 1..]
                 .chars()
@@ -419,7 +460,7 @@ fn escape_text(text: &str) -> String {
                 .is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?'));
         if matches!(ch, '\\' | '*' | '_' | '`' | '[' | ']')
             || html
-            || (ordered > 0
+            || (ordered > indent
                 && offset == ordered
                 && ch == '.'
                 && text.as_bytes().get(offset + 1) == Some(&b' '))

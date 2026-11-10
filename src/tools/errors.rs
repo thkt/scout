@@ -59,7 +59,7 @@ impl ScoutError {
 
     /// scout-side invariant violation (e.g. a `serde_json::to_value` failure on
     /// a type scout itself controls). Maps to `ErrorCode::Internal` (exit 70
-    /// EX_SOFTWARE), the sibling of `io_error`/`unknown` named per ADR-0003 §104.
+    /// EX_SOFTWARE), the sibling of `io_error`.
     /// Lets handlers propagate serialize failures via `?` through the JSON error
     /// envelope instead of `.expect()` panicking and bypassing it.
     pub(super) fn internal_bug(msg: impl Into<String>) -> Self {
@@ -74,11 +74,6 @@ impl ScoutError {
         Self::new(ErrorCode::Timeout, msg)
     }
 
-    #[cfg(test)]
-    pub(super) fn not_found(msg: impl Into<String>) -> Self {
-        Self::new(ErrorCode::NotFound, msg)
-    }
-
     /// Build a `ScoutError` from a backend-emitted [`Classification`] paired
     /// with the variant's `Display` message. Used by `From<XxxError>` impls
     /// so the classification logic stays co-located with each error variant.
@@ -88,16 +83,7 @@ impl ScoutError {
         err
     }
 
-    /// Test-only builder for fixtures that construct `ScoutError` directly
-    /// without going through `From<XxxError>`; production paths attach
-    /// `next_step` via [`Classification`].
-    #[cfg(test)]
-    pub(super) fn with_next_step(mut self, hint: impl Into<String>) -> Self {
-        self.next_step = Some(hint.into());
-        self
-    }
-
-    /// Attach correction candidates per ADR-0002 `error.candidates` (e.g., typo suggestions).
+    /// Attach correction candidates per ADR-0010 `error.candidates` (e.g., typo suggestions).
     pub(super) fn with_candidates(mut self, candidates: Vec<String>) -> Self {
         self.candidates = candidates;
         self
@@ -175,7 +161,9 @@ pub(super) fn unwrap_or_degraded<T>(
         Err(e) => {
             let label = reason.label();
             warn!(%e, "failed to fetch {}", label);
-            degradation.push(format!("Could not fetch {label} ({e})"), reason);
+            // Fixed text: the note is rendered into Markdown, and a backend's
+            // error message could carry Markdown of its own (DR-0030).
+            degradation.push(format!("Could not fetch {label}"), reason);
             vec![]
         }
     }

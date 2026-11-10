@@ -10,14 +10,14 @@ fn io_error_kind_is_io_error() {
 /// [T-CD001]
 #[test]
 fn default_candidates_empty() {
-    let err = ScoutError::not_found("test");
+    let err = ScoutError::from(github::GitHubError::NotFound("test".into()));
     assert!(err.candidates().is_empty());
 }
 
 /// [T-CD002] with_candidates attaches correction suggestions
 #[test]
 fn with_candidates_attaches_list() {
-    let err = ScoutError::not_found("path not found")
+    let err = ScoutError::from(github::GitHubError::NotFound("path".into()))
         .with_candidates(vec!["README.md".into(), "REDAME.md".into()]);
     assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
 }
@@ -95,10 +95,13 @@ fn github_rate_limited_without_retry_after_suggests_token() {
 /// [T-NS008]
 #[test]
 fn display_includes_next_step() {
-    let err = ScoutError::user_error("Something is wrong").with_next_step("Try X");
+    let err = ScoutError::from(BraveError::ApiKeyNotSet);
+    let next_step = err
+        .next_step()
+        .expect("fixture premise: a missing key carries a next step");
     let display = err.to_string();
-    assert!(display.contains("Something is wrong"));
-    assert!(display.contains("Try X"));
+    assert!(display.contains(err.message()), "{display}");
+    assert!(display.contains(next_step), "{display}");
 }
 
 /// [T-NS009]

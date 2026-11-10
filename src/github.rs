@@ -53,7 +53,6 @@ const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
 /// Auth resolution order: `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` CLI → unauthenticated.
 /// Owner/repo parameters are safe for direct URL interpolation because `parse_repo`
 /// restricts them to `[a-zA-Z0-9._-]`.
-#[derive(Clone)]
 pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
@@ -211,16 +210,19 @@ impl GitHubClient {
                 // ADR-0004 Rule 1: 403 + missing `x-ratelimit-remaining` defaults to
                 // RateLimited (retry) because GitHub does not guarantee this header
                 // on all 403 responses (e.g., secondary rate limits). Only treat as
-                // Forbidden when the header is present and remaining > 0 (genuine
-                // auth misconfig).
+                // Forbidden when the header is present, remaining > 0, and the
+                // response carries no `Retry-After` (genuine auth misconfig). A
+                // `Retry-After` is an instruction to retry, which a permission
+                // failure never carries.
                 let remaining = response
                     .headers()
                     .get("x-ratelimit-remaining")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let retry_after = self.rate_limit_delay(response.headers());
+                let told_to_retry =
+                    parse_retry_after(response.headers(), self.clock.as_ref()).is_some();
                 match remaining {
-                    Some(r) if r > 0 => {
+                    Some(r) if r > 0 && !told_to_retry => {
                         // Bound diagnostic reads as well as successful payloads.
                         let raw = read_body_snippet(response, MAX_ERROR_BODY_BYTES)
                             .await
@@ -229,9 +231,10 @@ impl GitHubClient {
                         Err(GitHubError::Forbidden(message))
                     }
                     _ => {
+                        let retry_after = self.rate_limit_delay(response.headers());
                         warn!(
                             retry_after_secs = retry_after,
-                            "GitHub 403 with missing or zero rate-limit-remaining, treating as RateLimited (ADR-0004)"
+                            "GitHub 403 with Retry-After or without remaining quota, treating as RateLimited (ADR-0004)"
                         );
                         Err(GitHubError::RateLimited { retry_after })
                     }

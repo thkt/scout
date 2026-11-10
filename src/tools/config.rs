@@ -46,21 +46,15 @@ pub(super) struct RuntimeConfig {
     pub(super) max_retries: u32,
 }
 
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            fetch_timeout: Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECS),
-            research_timeout: Duration::from_secs(DEFAULT_RESEARCH_TIMEOUT_SECS),
-            slack_timeout: Duration::from_secs(DEFAULT_SLACK_TIMEOUT_SECS),
-            github_timeout: Duration::from_secs(DEFAULT_GITHUB_TIMEOUT_SECS),
-            max_retries: DEFAULT_MAX_RETRIES,
-        }
-    }
-}
-
 impl RuntimeConfig {
     pub(super) fn from_env() -> Result<Self, ScoutError> {
         Self::from_env_with(|k| env::var(k))
+    }
+
+    /// The built-in defaults, as `from_env` yields with no `SCOUT_*` variable set.
+    #[cfg(test)]
+    pub(super) fn for_test() -> Self {
+        Self::from_env_with(|_| Err(env::VarError::NotPresent)).expect("defaults are in range")
     }
 
     /// Wraps [`Self::from_env`] with a caller-supplied env reader so tests
@@ -361,18 +355,6 @@ mod tests {
         );
     }
 
-    /// [T-CFG020]
-    #[test]
-    fn default_matches_empty_env() {
-        let from_empty = RuntimeConfig::from_env_with(empty_env).unwrap();
-        let from_default = RuntimeConfig::default();
-        assert_eq!(from_empty.fetch_timeout, from_default.fetch_timeout);
-        assert_eq!(from_empty.research_timeout, from_default.research_timeout);
-        assert_eq!(from_empty.slack_timeout, from_default.slack_timeout);
-        assert_eq!(from_empty.github_timeout, from_default.github_timeout);
-        assert_eq!(from_empty.max_retries, from_default.max_retries);
-    }
-
     /// [T-CFG021] The github_timeout default exceeds the inner HTTP and candidate-fetch timeouts
     ///
     /// When the outer GitHub-command timeout is at or below the inner
@@ -384,7 +366,7 @@ mod tests {
         use crate::tools::builder::HTTP_TIMEOUT;
         use crate::tools::repo::CANDIDATE_FETCH_TIMEOUT;
 
-        let github = RuntimeConfig::default().github_timeout;
+        let github = RuntimeConfig::for_test().github_timeout;
         assert!(
             github > HTTP_TIMEOUT,
             "github_timeout ({github:?}) must exceed per-request HTTP_TIMEOUT"
@@ -410,7 +392,7 @@ mod tests {
         use crate::brave::client::REQUEST_TIMEOUT;
         use crate::search::engine::FETCH_TIMEOUT;
 
-        let research = RuntimeConfig::default().research_timeout;
+        let research = RuntimeConfig::for_test().research_timeout;
         assert!(
             research > REQUEST_TIMEOUT + FETCH_TIMEOUT,
             "research_timeout ({research:?}) must cover one Brave request \
@@ -431,7 +413,7 @@ mod tests {
     fn fetch_timeout_exceeds_one_cdp_stage() {
         use crate::fetch::CDP_TIMEOUT;
 
-        let fetch = RuntimeConfig::default().fetch_timeout;
+        let fetch = RuntimeConfig::for_test().fetch_timeout;
         assert!(
             fetch > CDP_TIMEOUT,
             "fetch_timeout ({fetch:?}) must exceed one CDP stage ({CDP_TIMEOUT:?})"

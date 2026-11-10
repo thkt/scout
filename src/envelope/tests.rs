@@ -282,6 +282,19 @@ fn degraded_reason_serializes_screaming_snake_case() {
             DegradedReason::BraveSearchFailed,
             r#""BRAVE_SEARCH_FAILED""#,
         ),
+        (
+            DegradedReason::SlackThreadTruncated,
+            r#""SLACK_THREAD_TRUNCATED""#,
+        ),
+        (DegradedReason::SlackUsersCapped, r#""SLACK_USERS_CAPPED""#),
+        (
+            DegradedReason::SlackOutputTruncated,
+            r#""SLACK_OUTPUT_TRUNCATED""#,
+        ),
+        (
+            DegradedReason::SlackLookupFailed,
+            r#""SLACK_LOOKUP_FAILED""#,
+        ),
         (DegradedReason::DecodeUncertain, r#""DECODE_UNCERTAIN""#),
     ];
     for (reason, expected) in pairs {

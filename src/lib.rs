@@ -22,7 +22,7 @@ mod yaml;
 const USER_AGENT: &str = concat!("scout/", env!("CARGO_PKG_VERSION"));
 
 use std::env;
-use std::io::{self, ErrorKind, Write, stderr, stdout};
+use std::io::{self, ErrorKind, IsTerminal, Write, stderr, stdout};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ use signals::{InterruptSignal, wait_for_signal};
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
+use tracing_subscriber::EnvFilter;
 
 /// Allow CDP close (5s) and subprocess cleanup, with a bounded interrupt delay.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7);
@@ -57,11 +58,11 @@ fn write_output<W: Write>(w: &mut W, output: &str) -> io::Result<()> {
 #[command(
     name = "scout",
     version,
-    about = "Web search, page fetching, and GitHub repository exploration",
+    about = "Web search, page and Slack thread fetching, and GitHub repository exploration",
     after_help = "\
 Exit codes (sysexits.h + GNU coreutils + POSIX signal convention):
   0    Success
-  64   Usage error (clap parse, missing API key, conflicts_with violation)
+  64   Usage error (clap parse, missing API key)
   65   Data error (invalid input, malformed format, encoding error, 4xx body)
   66   Not found (repo/file not found, 404)
   70   Internal (scout-side invariant violation, unexpected response schema)
@@ -75,7 +76,12 @@ Exit codes (sysexits.h + GNU coreutils + POSIX signal convention):
 Environment:
   BRAVE_SEARCH_API_KEY          Required for search and research commands
   GITHUB_TOKEN                  Optional for GitHub commands (higher rate limits)
+  GH_TOKEN                      Read when GITHUB_TOKEN is unset; `gh auth token` is
+                                tried after both
   SLACK_TOKEN                   Optional. User OAuth token (xoxp-…) required for Slack URLs
+  HTTPS_PROXY, HTTP_PROXY       Route fetch through this proxy (lowercase names also
+                                read). The proxy then resolves hostnames; scout
+                                still rejects literal private and loopback IPs
 
 Tuning (override built-in timeouts and retry budget):
   SCOUT_FETCH_TIMEOUT_SECS      fetch wall-clock budget per URL (default 95, range 1-600)
@@ -100,15 +106,22 @@ struct Cli {
 }
 
 /// Reuse an installed tracing subscriber when run is invoked again.
+///
+/// `RUST_LOG` decides the levels when it parses. Unset, empty or unparsable,
+/// scout logs at INFO and other crates stay at the ERROR default. Colour is
+/// for a terminal only: an agent reading a piped stderr would receive the
+/// escape bytes as text.
 fn init_tracing() {
+    let filter = env::var("RUST_LOG")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| value.parse::<EnvFilter>().ok())
+        .unwrap_or_else(|| EnvFilter::new("scout=info"));
+    let colour = stderr().is_terminal() && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let _ = tracing_subscriber::fmt()
         .with_writer(stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                // A parse fallback could silently widen INFO logging to all crates.
-                "scout=info".parse().expect("static directive is valid"),
-            ),
-        )
+        .with_ansi(colour)
+        .with_env_filter(filter)
         .try_init();
 }
 
@@ -205,8 +218,8 @@ fn render_json_error(err: &ScoutError) -> String {
     })
 }
 
-/// Version-only discovery must still point agents to help. Log on stderr to
-/// keep stdout parseable; init_tracing forces scout INFO even under RUST_LOG.
+/// Version-only discovery must still point agents to help. Written to stderr
+/// to keep stdout parseable, and not through tracing so `RUST_LOG` cannot hide it.
 const AGENT_HELP_HINT: &str = "If you are a coding agent, run `scout --help` and `scout <command> --help` before answering questions about scout or troubleshooting its errors. The help output is authoritative for the installed version.";
 
 /// Clap and write failures have no ScoutError; derive retryability from the
@@ -258,7 +271,7 @@ fn handle_parse_error(err: &clap::Error, json_mode: bool) -> ExitCode {
     match err.kind() {
         ErrorKind::DisplayVersion => {
             let _ = err.print();
-            tracing::info!("{AGENT_HELP_HINT}");
+            eprintln!("{AGENT_HELP_HINT}");
             ExitCode::SUCCESS
         }
         ErrorKind::DisplayHelp => {

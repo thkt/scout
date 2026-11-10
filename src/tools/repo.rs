@@ -124,7 +124,6 @@ impl Scout {
                 github::decode_content(&blob.content, hint)?
             };
         let encoding_label = match decode_result.source {
-            github::encoding::DetectionSource::AssumedUtf8 => None,
             github::encoding::DetectionSource::Detected if decode_result.encoding == "utf-8" => {
                 None
             }
@@ -222,7 +221,8 @@ pub(super) const CANDIDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const CANDIDATE_MAX_DISTANCE: usize = 3;
 const CANDIDATE_TOP_N: usize = 3;
 
-/// Omit hints on API failure, timeout, or tree/matching work-cap exhaustion.
+/// Omit hints on API failure, timeout, a truncated tree, or tree/matching
+/// work-cap exhaustion.
 async fn collect_path_candidates(
     github: &GitHubClient,
     owner: &str,
@@ -249,7 +249,7 @@ async fn collect_path_candidates(
             }
         };
         if tree.truncated {
-            warn!("candidate fetch: tree truncated (>100k entries); candidates may be incomplete");
+            return Vec::new();
         }
         // Count all entries, including directories, before the lazy blob filter:
         // otherwise an arbitrarily large directory-only tree is one sync scan.
@@ -281,7 +281,7 @@ async fn fetch_readme(
             if !matches!(e, github::GitHubError::NotFound(_)) {
                 warn!(%e, "failed to fetch README");
                 degradation.push(
-                    format!("Could not fetch README ({e})"),
+                    "Could not fetch README".to_owned(),
                     DegradedReason::ReadmeFetchFailed,
                 );
             }
@@ -297,7 +297,7 @@ async fn fetch_readme(
             Err(e) => {
                 warn!(%e, "failed to fetch README blob");
                 degradation.push(
-                    format!("README could not be fetched ({e})"),
+                    "README could not be fetched".to_owned(),
                     DegradedReason::ReadmeBlobFetchFailed,
                 );
                 None
@@ -310,7 +310,7 @@ async fn fetch_readme(
         Err(e) => {
             warn!(%e, "failed to decode README");
             degradation.push(
-                format!("README could not be decoded ({e})"),
+                "README could not be decoded".to_owned(),
                 DegradedReason::ReadmeDecodeFailed,
             );
             None
@@ -328,7 +328,8 @@ mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     /// [T-TS040] Repo-read preserves ranked small-tree hints and not-found output;
-    /// long-path work and raw tree limits (including directories) omit hints.
+    /// long-path work, raw tree limits (including directories) and a truncated
+    /// tree omit hints.
     #[tokio::test]
     async fn repo_read_not_found_preserves_contract_with_bounded_candidates() {
         let Some(server) = try_spawn_mock_server("repo_read_bounded_candidates").await else {
@@ -337,7 +338,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex(r"^/repos/owner/repo/contents/"))
             .respond_with(ResponseTemplate::new(404))
-            .expect(3)
+            .expect(4)
             .mount(&server)
             .await;
 
@@ -359,21 +360,23 @@ mod tests {
         );
 
         let scout = scout_with_github("http://localhost:0", &server.uri());
-        for (ref_, target, tree, candidates) in [
+        for (ref_, target, tree, truncated, candidates) in [
             (
                 "small",
                 "REDME.md",
-                small,
+                small.clone(),
+                false,
                 Some(vec!["README.md", "REDAME.md", "REDME.mx"]),
             ),
-            ("long", long_path.as_str(), long, None),
-            ("large", "REDME.md", large, None),
+            ("long", long_path.as_str(), long, false, None),
+            ("large", "REDME.md", large, false, None),
+            ("truncated", "REDME.md", small, true, None),
         ] {
             Mock::given(method("GET"))
                 .and(path(format!("/repos/owner/repo/git/trees/{ref_}")))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "tree": tree,
-                    "truncated": false
+                    "truncated": truncated
                 })))
                 .expect(1)
                 .mount(&server)
@@ -549,7 +552,9 @@ mod tests {
         // does not run and the test does not wait out two backoffs.
         Mock::given(method("GET"))
             .and(path_regex(r"^/repos/owner/repo/issues"))
-            .respond_with(ResponseTemplate::new(422))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "boom\n\n## Injected [x](http://evil.example)"
+            })))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -573,7 +578,8 @@ mod tests {
         )
     }
 
-    /// [T-TS037] Failed issues produce a Markdown note and a typed degradation reason.
+    /// [T-TS037] Failed issues produce a fixed Markdown note, without the
+    /// backend's error text, and a typed degradation reason.
     #[tokio::test]
     async fn repo_overview_states_a_failed_section_in_the_body() {
         let Some(result) = overview_with_failed_issues("tools::repo::degraded_note").await else {
@@ -581,8 +587,16 @@ mod tests {
         };
 
         assert!(
-            result.markdown().contains("> Note: Could not fetch issues"),
+            result
+                .markdown()
+                .lines()
+                .any(|line| line == "> Note: Could not fetch issues."),
             "the failed section must be stated in the body, got: {}",
+            result.markdown()
+        );
+        assert!(
+            !result.markdown().contains("Injected"),
+            "the backend's error text must stay out of the body, got: {}",
             result.markdown()
         );
         assert!(

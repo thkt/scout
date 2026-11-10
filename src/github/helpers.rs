@@ -23,7 +23,10 @@ const PATH_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'[')
     .add(b']')
     .add(b';')
-    .add(b'=');
+    .add(b'=')
+    // The `url` crate reads `\` as `/` in an https URL and then resolves `..`,
+    // which would step around `validate_path`.
+    .add(b'\\');
 
 pub(super) fn encode_path(s: &str) -> String {
     utf8_percent_encode(s, PATH_ENCODE_SET).to_string()

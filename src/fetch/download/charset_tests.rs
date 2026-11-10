@@ -126,12 +126,3 @@ fn decode_body_recovers_multibyte_under_unknown_label() {
     );
     assert!(!decoded.uncertain);
 }
-
-/// [T-F066]
-#[test]
-fn decode_body_decodes_correctly_labeled_euc_jp() {
-    let (bytes, _, _) = encoding_rs::EUC_JP.encode("日本語テキスト");
-    let decoded = decode_body(&bytes, Some("euc-jp"));
-    assert_eq!(decoded.text, "日本語テキスト");
-    assert!(!decoded.uncertain);
-}

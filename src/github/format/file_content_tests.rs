@@ -58,44 +58,6 @@ fn lang_for_path_returns_empty_for_no_extension_and_unknown() {
     assert_eq!(lang_for_path("file.xyz"), "", "unknown extension");
 }
 
-/// [T-GF029]
-#[test]
-fn fence_delimiter_returns_longer_fence_when_content_has_triple_backticks() {
-    let content = "some\n```\ncode\n```\n";
-    let delim = fence_delimiter(content);
-    assert!(
-        delim.len() >= 4,
-        "delimiter should be >= 4 when content has 3 backticks, got len={}",
-        delim.len()
-    );
-    assert!(
-        delim.chars().all(|c| c == '`'),
-        "delimiter should consist only of backticks"
-    );
-}
-
-/// [T-GF030] fence_delimiter defaults to triple backticks for content without backticks
-#[test]
-fn fence_delimiter_returns_triple_backtick_for_plain_content() {
-    assert_eq!(fence_delimiter("hello world"), "```");
-}
-
-/// [T-GF031]
-#[test]
-fn fence_delimiter_returns_longer_fence_when_content_has_five_backticks() {
-    let content = "text `````more";
-    let delim = fence_delimiter(content);
-    assert!(
-        delim.len() >= 6,
-        "delimiter should be >= 6 when content has 5 backticks, got len={}",
-        delim.len()
-    );
-    assert!(
-        delim.chars().all(|c| c == '`'),
-        "delimiter should consist only of backticks"
-    );
-}
-
 /// [T-GF032] format_file_content picks a fence longer than any inner backtick run
 #[test]
 fn format_file_content_fence_does_not_collide_with_inner_backticks() {

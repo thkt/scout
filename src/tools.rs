@@ -168,8 +168,8 @@ pub(crate) struct Scout {
     /// Injected retry randomness for lazy GitHub initialization.
     rng: Arc<dyn Rng>,
     /// GitHub bearer token resolver, awaited inside `github()` lazy init.
-    /// Held on `Scout` so tests can swap in a `StaticTokenSource` before any
-    /// API call spawns the production `gh auth token` subprocess.
+    /// `ScoutBuilder::for_test` sets a `StaticTokenSource` so no test spawns
+    /// the production `gh auth token` subprocess.
     token_source: Arc<dyn TokenSource>,
     /// DNS resolver consulted by the SSRF pre-check on every fetch. Held on
     /// `Scout` so tests can swap a scripted resolver before any real DNS

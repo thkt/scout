@@ -77,7 +77,9 @@ pub(crate) const RAW_FALLBACK_NOTE: &str =
 
 pub(crate) const DECODE_UNCERTAIN_NOTE: &str = "> Note: Character encoding could not be determined; the body is a best-effort decode and may be garbled.\n\n";
 
-const RAW_TEXT_TAGS: [&str; 6] = ["script", "style", "textarea", "iframe", "noscript", "title"];
+const RAW_TEXT_TAGS: [&str; 7] = [
+    "script", "style", "textarea", "iframe", "noscript", "title", "template",
+];
 
 /// Expand self-closed raw-text tags so HTML parsing of XHTML cannot swallow
 /// the remaining body into an element that suppression then removes.
@@ -212,8 +214,11 @@ fn format_with_frontmatter(article: &ExtractedArticle, markdown: &str) -> String
 }
 
 fn format_body(fields: &str, markdown: &str) -> String {
+    // YAML reads a lone CR as a line break, while the marker scan splits on LF
+    // only, so every line ending becomes LF first.
+    let markdown = markdown.replace("\r\n", "\n").replace('\r', "\n");
     // Neutralize untrusted YAML boundaries; only closed fences preserve literal markers.
-    let body = neutralize_yaml_markers_outside_fences(markdown);
+    let body = neutralize_yaml_markers_outside_fences(&markdown);
 
     let mut fm = String::from("---\n");
     fm.push_str(fields);

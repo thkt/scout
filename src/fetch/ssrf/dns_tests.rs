@@ -35,8 +35,8 @@ async fn ssrf_skips_dns_for_ip_literals() {
 /// [T-FS013]
 ///
 /// A domain resolving to zero addresses (NOERROR + empty A/AAAA) must fail
-/// closed: the `ValidatedUrl` "DNS-checked" invariant is unmet, so the
-/// for-loop being skipped must not yield `Ok`. T-FS007 above shows the IP
+/// closed: the `ValidatedUrl` "DNS-checked" invariant is unmet, so an
+/// empty address set must not yield `Ok`. T-FS007 above shows the IP
 /// literal path stays `Ok` with the same empty resolver.
 #[tokio::test]
 async fn ssrf_rejects_empty_dns_response() {

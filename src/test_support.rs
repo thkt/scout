@@ -743,5 +743,4 @@ mod tests {
 pub(crate) mod browser_fixture;
 
 #[cfg(feature = "js-rendering")]
-#[path = "test_support/browser_fixture_tests.rs"]
 mod browser_fixture_tests;

@@ -7,7 +7,6 @@ use std::time::Duration;
 use reqwest::redirect::Policy;
 use reqwest::{Client, Proxy};
 use tokio::sync::{OnceCell, watch};
-use tracing::warn;
 
 use crate::brave::client::BraveClient;
 use crate::clock::{Clock, SystemClock};
@@ -24,15 +23,15 @@ use crate::token_source::{GhCliSource, TokenSource};
 use super::{RuntimeConfig, Scout, ScoutError};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Per-request timeout for a single HTTP call. `pub(crate)` so the config
+/// Per-request timeout for a single HTTP call. `pub(super)` so the config
 /// invariant test can assert the outer `github_timeout` exceeds it.
 pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
 /// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
 /// `ScoutBuilder::from_env()?.build()`); tests use the `with_*` setters to
-/// inject `Clock` / `Rng` / `TokenSource` doubles or to point `Brave` /
-/// `GitHub` at wiremock endpoints without reaching into private fields.
+/// inject `Clock` / `DnsResolver` doubles or to point `Brave` / `GitHub` /
+/// `Slack` at wiremock endpoints without reaching into private fields.
 /// `build` is sync + infallible so fallibility stays in `from_env`.
 pub(super) struct ScoutBuilder {
     http: Client,
@@ -93,9 +92,13 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
         EgressMode::Proxied(url) => fetch_builder.proxy(
             Proxy::all(url).map_err(|e| ScoutError::io_error(format!("proxy init failed: {e}")))?,
         ),
-        EgressMode::Direct => {
-            fetch_builder.dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver)))
-        }
+        // `no_proxy` turns off reqwest's own proxy discovery (`ALL_PROXY`, OS
+        // proxy settings). With it on, reqwest would dial a proxy that
+        // `detect_egress_mode` never saw and the guard below would validate the
+        // proxy address in place of the target.
+        EgressMode::Direct => fetch_builder
+            .no_proxy()
+            .dns_resolver(Arc::new(SsrfResolver::new(TokioDnsResolver))),
     };
     let fetch_http = fetch_builder
         .build()
@@ -105,15 +108,18 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
 
 impl ScoutBuilder {
     /// Read `SCOUT_*` env vars, construct the two `reqwest::Client`s, and
-    /// probe Brave (best-effort). Defaults for `clock` / `rng` / `token_source`
-    /// match production behavior; tests override via `with_*`.
+    /// probe Brave (best-effort).
     pub(super) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
-        let egress = detect_egress_mode(&env::vars().collect());
+        // `env::vars()` panics on a non-UTF-8 entry; a proxy URL is UTF-8, so
+        // such entries cannot select a proxy and are skipped.
+        let utf8_env = env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect();
+        let egress = detect_egress_mode(&utf8_env);
         let (http, fetch_http) = build_default_clients(&egress)?;
-        let brave = BraveClient::from_env(http.clone(), config.max_retries)
-            .inspect_err(|e| warn!("Brave client not available: {e}"))
-            .ok();
+        // A missing key is reported by `Scout::brave` to the commands that search.
+        let brave = BraveClient::from_env(http.clone(), config.max_retries).ok();
         Ok(Self {
             http,
             fetch_http,
@@ -132,7 +138,7 @@ impl ScoutBuilder {
         })
     }
 
-    /// Test entry point. Uses `RuntimeConfig::default()` and does NOT read
+    /// Test entry point. Uses `RuntimeConfig::for_test()` and does NOT read
     /// `SCOUT_*` env vars so a stray `SCOUT_MAX_RETRIES=abc` in the developer
     /// environment cannot panic unrelated tests. `Client::builder().build()`
     /// only fails on TLS init, which would be a real bug — `.expect` is
@@ -156,7 +162,7 @@ impl ScoutBuilder {
             dns: Arc::new(TokioDnsResolver),
             egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
-            config: RuntimeConfig::default(),
+            config: RuntimeConfig::for_test(),
             github_endpoint: None,
             slack_endpoint: None,
         }
@@ -165,6 +171,12 @@ impl ScoutBuilder {
     #[cfg(test)]
     pub(super) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_token_source(mut self, token_source: Arc<dyn TokenSource>) -> Self {
+        self.token_source = token_source;
         self
     }
 

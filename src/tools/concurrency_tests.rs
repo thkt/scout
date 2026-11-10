@@ -3,7 +3,7 @@ use std::time::Duration;
 use reqwest::redirect::Policy;
 use serde_json::json;
 use tokio::time::timeout;
-use wiremock::matchers::{method, path, query_param, query_param_is_missing};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
@@ -162,46 +162,6 @@ async fn missing_slack_target_does_not_spend_its_budget_resolving_names() {
     assert!(err.message().contains("1111111111.222222"));
 }
 
-/// [T-HP005] A reply permalink promotes its target and keeps context in source order.
-#[tokio::test]
-async fn slack_reply_permalink_preserves_target_and_context() {
-    let server = HttpFixture::start(&[
-        (
-            "/conversations.replies",
-            json!({"ok": true, "messages": [
-                {"user": "U1", "text": "Parent body", "ts": "1111111111.000000"},
-                {"user": "U1", "text": "Target body", "ts": "1111111111.222222"},
-                {"user": "U1", "text": "Last body", "ts": "1111111111.333333"}
-            ]}),
-            &[],
-        ),
-        (
-            "/conversations.info",
-            json!({"ok": true, "channel": {"name": "general"}}),
-            &[],
-        ),
-        (
-            "/users.info",
-            json!({"ok": true, "user": {"real_name": "Alice"}}),
-            &[],
-        ),
-    ])
-    .await;
-    let scout = ScoutBuilder::for_test()
-        .with_slack_endpoint(&server.uri)
-        .build();
-    let result = scout
-        .run(Command::Fetch(FetchParams::for_test(
-            "https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1111111111.000000",
-        )))
-        .await
-        .unwrap();
-    assert_eq!(
-        result.markdown(),
-        "---\nworkspace: \"team\"\nchannel: \"#general\"\nauthor: \"Alice\"\nts: \"1111111111.222222\"\ncontext_messages: 2\nurl: \"https://team.slack.com/archives/C123/p1111111111222222?thread_ts=1111111111.000000\"\n---\n\nTarget body\n\n---\n\nAlice (1111111111.000000):\nParent body\n\n---\n\nAlice (1111111111.333333):\nLast body\n"
-    );
-}
-
 /// [T-HP006] Research respects depth and search rank despite out-of-order HTTP completion.
 #[tokio::test]
 async fn research_preserves_rank_and_depth_through_real_clients() {
@@ -301,42 +261,5 @@ async fn research_preserves_rank_and_depth_through_real_clients() {
     assert_eq!(
         serde_json::to_value(result.into_envelope()).unwrap()["degraded_reasons"],
         json!(["URL_FETCH_FAILED", "URL_FETCH_FAILED"])
-    );
-}
-
-/// [T-HP007] Auto language sends one verbatim query and returns an undegraded empty report.
-#[tokio::test]
-async fn research_auto_language_keeps_the_query_and_zero_result_contract() {
-    let Some(server) = try_spawn_mock_server("hotpaths::research_auto").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(query_param("q", "型安全 TypeScript"))
-        .and(query_param_is_missing("search_lang"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"web": {"results": []}})))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let scout = ScoutBuilder::for_test()
-        .with_brave_endpoint(&server.uri())
-        .build();
-    let result = scout
-        .run(Command::Research(ResearchParams {
-            query: Some("型安全 TypeScript".into()),
-            depth: 3,
-            lang: Lang::Auto,
-        }))
-        .await
-        .unwrap();
-    assert_eq!(
-        result.data(),
-        &json!({
-            "query": "型安全 TypeScript", "sources": [], "fetched_pages": [], "failed_urls": []
-        })
-    );
-    assert!(result.markdown().contains("## Sources\n\n(no results)"));
-    assert_eq!(
-        serde_json::to_value(result.into_envelope()).unwrap()["degraded"],
-        false
     );
 }

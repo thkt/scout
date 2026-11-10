@@ -75,3 +75,22 @@ fn detects_proxied_from_lowercase_https_proxy_when_uppercase_forms_are_absent() 
         EgressMode::Proxied("http://proxy.lower:3128".to_owned()),
     );
 }
+
+/// [T-FS029] With both cases of one variable set, the uppercase value is chosen.
+#[test]
+fn detects_proxied_with_the_uppercase_value_when_both_cases_are_set() {
+    let env = HashMap::from([
+        (
+            "https_proxy".to_owned(),
+            "http://proxy.lower:3128".to_owned(),
+        ),
+        (
+            "HTTPS_PROXY".to_owned(),
+            "http://proxy.upper:8443".to_owned(),
+        ),
+    ]);
+    assert_eq!(
+        detect_egress_mode(&env),
+        EgressMode::Proxied("http://proxy.upper:8443".to_owned()),
+    );
+}
