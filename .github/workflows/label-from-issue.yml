@@ -19,34 +19,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Parse bug.yml
-        id: parse-bug
+      # bug.yml and feature.yml declare the same Priority dropdown, and
+      # advanced-issue-labeler.yml maps both to one policy. The parser does not
+      # fail on a body written from the other form, so a parse/label pair per
+      # form ran both pairs on every issue. One pair covers both forms.
+      - name: Parse issue form
+        id: parse
         uses: stefanbuck/github-issue-parser@cb6e97157cbf851e3a393ff8d57c93a484cc323f # v3
         with:
           template-path: .github/ISSUE_TEMPLATE/bug.yml
         continue-on-error: true
 
-      - name: Apply labels for bug
-        if: steps.parse-bug.outcome == 'success'
+      - name: Apply priority label
+        if: steps.parse.outcome == 'success'
         uses: redhat-plumbers-in-action/advanced-issue-labeler@b80ae64e3e156e9c111b075bfa04b295d54e8e2e # v3.2.4
         with:
-          issue-form: ${{ steps.parse-bug.outputs.jsonString }}
+          issue-form: ${{ steps.parse.outputs.jsonString }}
           template: bug.yml
-          section: priority
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Parse feature.yml
-        id: parse-feature
-        uses: stefanbuck/github-issue-parser@cb6e97157cbf851e3a393ff8d57c93a484cc323f # v3
-        with:
-          template-path: .github/ISSUE_TEMPLATE/feature.yml
-        continue-on-error: true
-
-      - name: Apply labels for feature
-        if: steps.parse-feature.outcome == 'success'
-        uses: redhat-plumbers-in-action/advanced-issue-labeler@b80ae64e3e156e9c111b075bfa04b295d54e8e2e # v3.2.4
-        with:
-          issue-form: ${{ steps.parse-feature.outputs.jsonString }}
-          template: feature.yml
           section: priority
           token: ${{ secrets.GITHUB_TOKEN }}
