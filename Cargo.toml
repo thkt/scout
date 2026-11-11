@@ -57,12 +57,12 @@ chardetng = "1"
 fastrand = "2"
 httpdate = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"], optional = true }
-nix = { version = "0.31", features = ["signal"], optional = true }
+rustix = { version = "1", features = ["process"], optional = true }
 tempfile = { version = "3", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [features]
-js-rendering = ["tokio-tungstenite", "nix", "tempfile"]
+js-rendering = ["tokio-tungstenite", "rustix", "tempfile"]
 
 [dev-dependencies]
 # `Response::json` is banned in production (clippy.toml); only retry tests call it.

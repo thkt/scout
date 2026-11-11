@@ -9,8 +9,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use browser_fixture::{FakeBrowser, OwnedScout, wait_scout};
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use rustix::process::{Pid, Signal, kill_process};
 
 fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     // Explicit --js must launch the browser even for source-preserving media.
@@ -58,8 +57,8 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     );
     let started = Instant::now();
     if let Some(signal) = signal {
-        kill(
-            Pid::from_raw(i32::try_from(scout.0.id()).expect("scout PID")),
+        kill_process(
+            Pid::from_raw(i32::try_from(scout.0.id()).expect("scout PID")).expect("scout PID"),
             signal,
         )
         .expect("send interrupt to scout");
@@ -91,7 +90,7 @@ fn outer_fetch_timeout_reaps_browser_descendant_and_profile() {
 /// owned PIDs/profile after the 7s drain cutoff.
 #[test]
 fn signal_drain_cutoff_reaps_browser_descendant_and_profile() {
-    for (signal, code) in [(Signal::SIGINT, 130), (Signal::SIGTERM, 143)] {
+    for (signal, code) in [(Signal::INT, 130), (Signal::TERM, 143)] {
         run_cleanup(Some(signal), code);
     }
 }

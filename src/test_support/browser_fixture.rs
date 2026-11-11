@@ -9,9 +9,8 @@ use std::process::{Child, Command, ExitStatus, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, kill_process_group as killpg};
 use tempfile::{TempDir, tempdir};
 
 pub(crate) struct FakeBrowser {
@@ -106,6 +105,7 @@ touch "$record/ready"
                 .parse()
                 .expect("numeric PID"),
         )
+        .expect("positive PID")
     }
 
     pub(crate) fn profile(&self) -> PathBuf {
@@ -137,7 +137,7 @@ touch "$record/ready"
         let mut failures = Vec::new();
         if let Some(group) = self.recorded_pid("group") {
             if let Err(e) = kill(group)
-                && e != Errno::ESRCH
+                && e != Errno::SRCH
             {
                 failures.push(format!("kill owned fixture group {group}: {e}"));
             }
@@ -160,7 +160,7 @@ touch "$record/ready"
             .parse::<i32>()
             .ok()
             .filter(|&pid| pid > 0)
-            .map(Pid::from_raw)
+            .and_then(Pid::from_raw)
     }
 }
 
@@ -171,7 +171,7 @@ impl Drop for FakeBrowser {
         }
         // Independent backstop restricted to the recorded, positive group.
         let failures = self.cleanup_with(
-            |group| killpg(group, Signal::SIGKILL),
+            |group| killpg(group, Signal::KILL),
             |group, descendant| {
                 if wait_until(Duration::from_secs(3), || {
                     !pid_running(group) && !descendant.is_some_and(pid_running)

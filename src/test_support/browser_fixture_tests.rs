@@ -9,9 +9,8 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::Duration;
 
-use nix::errno::Errno;
-use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, kill_process_group as killpg};
 use tempfile::tempdir;
 
 /// [T-BGC008] Invalid group records cannot signal; cleanup aggregates OS failures.
@@ -52,13 +51,13 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
     let operations = RefCell::new(Vec::new());
     let failures = browser.cleanup_with(
         |group| {
-            assert_eq!(group, Pid::from_raw(42));
+            assert_eq!(group, Pid::from_raw(42).unwrap());
             operations.borrow_mut().push("kill");
-            Err(Errno::EPERM)
+            Err(Errno::PERM)
         },
         |group, descendant| {
-            assert_eq!(group, Pid::from_raw(42));
-            assert_eq!(descendant, Some(Pid::from_raw(43)));
+            assert_eq!(group, Pid::from_raw(42).unwrap());
+            assert_eq!(descendant, Some(Pid::from_raw(43).unwrap()));
             operations.borrow_mut().push("wait");
             Err("owned fixture group survived backstop SIGKILL".into())
         },
@@ -79,7 +78,7 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
     assert!(
         browser
             .cleanup_with(
-                |_| Err(Errno::ESRCH),
+                |_| Err(Errno::SRCH),
                 |_, _| Ok(()),
                 |_| Err(io::Error::from(io::ErrorKind::NotFound)),
             )
@@ -108,14 +107,14 @@ fn fixture_backstop_cleans_on_unwind() {
     struct KillOwnedGroup(Pid);
     impl Drop for KillOwnedGroup {
         fn drop(&mut self) {
-            if let Err(error) = killpg(self.0, Signal::SIGKILL)
-                && error != Errno::ESRCH
+            if let Err(error) = killpg(self.0, Signal::KILL)
+                && error != Errno::SRCH
             {
                 eprintln!("independent fixture group backstop failed: {error}");
             }
         }
     }
-    let backstop = KillOwnedGroup(Pid::from_raw(i32::try_from(parent.0.id()).unwrap()));
+    let backstop = KillOwnedGroup(Pid::from_raw(i32::try_from(parent.0.id()).unwrap()).unwrap());
     let (group, descendant) = browser.wait_ready();
     let failure = catch_unwind(AssertUnwindSafe(move || {
         let _browser = browser;
@@ -136,7 +135,7 @@ fn fixture_backstop_cleans_on_unwind() {
 /// [T-BGC012] ps failures establish neither readiness nor cleanup; absence/zombies stop waiting.
 #[test]
 fn fixture_liveness_distinguishes_absence_from_observation_failure() {
-    let pid = Pid::from_raw(42);
+    let pid = Pid::from_raw(42).unwrap();
     for (status, stdout, stderr, expected) in [
         (0, "", "", PidState::Stopped),
         (1 << 8, "\n", "", PidState::Stopped),
