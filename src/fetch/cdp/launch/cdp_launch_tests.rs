@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::browser_fixture::FakeBrowser;
-use futures::poll;
+use futures_util::poll;
 use std::cell::Cell;
 use std::future::{pending, ready};
 use std::io;
@@ -85,13 +85,13 @@ fn t201_8_launch_args_contain_ssrf_proxy_flags() {
 #[tokio::test(start_paused = true)]
 #[tracing_test::traced_test]
 async fn reap_preserves_fallback_on_os_errors() {
-    use nix::errno::Errno;
-    use nix::sys::signal::Signal;
+    use rustix::io::Errno;
+    use rustix::process::Signal;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
-    let pgid = Pid::from_raw(42);
-    for kill_result in [Ok(()), Err(Errno::ESRCH), Err(Errno::EPERM)] {
+    let pgid = Pid::from_raw(42).expect("positive PID");
+    for kill_result in [Ok(()), Err(Errno::SRCH), Err(Errno::PERM)] {
         let mut armed = true;
         let mut sent = Vec::new();
         let waited = Cell::new(false);
@@ -105,20 +105,20 @@ async fn reap_preserves_fallback_on_os_errors() {
             |pid, signal| {
                 assert_eq!(pid, pgid);
                 sent.push(signal);
-                if signal == Signal::SIGTERM {
-                    Err(Errno::EPERM)
+                if signal == Signal::TERM {
+                    Err(Errno::PERM)
                 } else {
                     kill_result
                 }
             },
         )
         .await;
-        assert_eq!(sent, [Signal::SIGTERM, Signal::SIGKILL]);
+        assert_eq!(sent, [Signal::TERM, Signal::KILL]);
         assert!(waited.get(), "wait must follow signal failure");
-        assert_eq!(armed, kill_result == Err(Errno::EPERM));
+        assert_eq!(armed, kill_result == Err(Errno::PERM));
         if armed {
             kill_group_with(pgid, &mut armed, |_, signal| {
-                assert_eq!(signal, Signal::SIGKILL);
+                assert_eq!(signal, Signal::KILL);
                 Ok(())
             });
             assert!(!armed, "successful fallback must disarm");
@@ -136,11 +136,11 @@ async fn reap_preserves_fallback_on_os_errors() {
         ready(Ok(ExitStatus::from_raw(0))),
         |_, signal| {
             sent.push(signal);
-            Err(Errno::ESRCH)
+            Err(Errno::SRCH)
         },
     )
     .await;
-    assert_eq!(sent, [Signal::SIGTERM], "gone group must not receive KILL");
+    assert_eq!(sent, [Signal::TERM], "gone group must not receive KILL");
     assert!(!armed);
 
     armed = true;

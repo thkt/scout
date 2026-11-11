@@ -13,12 +13,9 @@ use std::process::ExitStatus;
 use std::time::Duration;
 
 #[cfg(feature = "js-rendering")]
-use nix::unistd::Pid;
+use rustix::io::Errno;
 #[cfg(feature = "js-rendering")]
-use nix::{
-    errno::Errno,
-    sys::signal::{Signal, killpg},
-};
+use rustix::process::{Pid, Signal, kill_process_group};
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "js-rendering")]
@@ -133,11 +130,17 @@ pub(super) struct ChromiumProcess {
 impl ChromiumProcess {
     /// Completed paths retain bounded reap; cancellation invokes the Drop fallback.
     pub(super) async fn reap(&mut self) {
-        reap_group(self.pgid, &mut self.group_armed, self.child.wait(), killpg).await;
+        reap_group(
+            self.pgid,
+            &mut self.group_armed,
+            self.child.wait(),
+            kill_process_group,
+        )
+        .await;
     }
 
     fn kill_group(&mut self) {
-        kill_group_with(self.pgid, &mut self.group_armed, killpg);
+        kill_group_with(self.pgid, &mut self.group_armed, kill_process_group);
     }
 }
 
@@ -148,8 +151,8 @@ async fn reap_group(
     wait: impl Future<Output = io::Result<ExitStatus>>,
     mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
 ) {
-    match signal(pgid, Signal::SIGTERM) {
-        Err(Errno::ESRCH) => *armed = false,
+    match signal(pgid, Signal::TERM) {
+        Err(Errno::SRCH) => *armed = false,
         term => {
             if let Err(e) = term {
                 warn!(error = %e, pgid = %pgid, "killpg SIGTERM failed");
@@ -175,8 +178,8 @@ fn kill_group_with(
     armed: &mut bool,
     mut signal: impl FnMut(Pid, Signal) -> Result<(), Errno>,
 ) {
-    match signal(pgid, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => *armed = false,
+    match signal(pgid, Signal::KILL) {
+        Ok(()) | Err(Errno::SRCH) => *armed = false,
         Err(e) => warn!(error = %e, pgid = %pgid, "killpg SIGKILL failed"),
     }
 }
@@ -224,10 +227,10 @@ pub(super) fn spawn_chromium_pgroup(
     let pid = child
         .id()
         .ok_or_else(|| BrowserError::ProcessFailed("chromium pid unavailable".into()))?;
-    let pgid = Pid::from_raw(
-        i32::try_from(pid)
-            .map_err(|_| BrowserError::ProcessFailed("chromium pid out of i32 range".into()))?,
-    );
+    let pgid = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| BrowserError::ProcessFailed("chromium pid is not a positive i32".into()))?;
 
     // Capture the group before fallible stderr extraction, without an await.
     let mut process = ChromiumProcess {

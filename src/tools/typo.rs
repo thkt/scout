@@ -244,7 +244,7 @@ mod tests {
             let matching = closest_matches(&target, pool, 3, 3);
             let timed = timeout(Duration::from_secs(5), matching);
             tokio::pin!(timed);
-            assert_eq!(futures::poll!(timed.as_mut()), Poll::Pending);
+            assert_eq!(futures_util::poll!(timed.as_mut()), Poll::Pending);
             advance(Duration::from_secs(6)).await;
             assert!(timed.await.is_err());
         }

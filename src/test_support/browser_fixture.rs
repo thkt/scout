@@ -9,9 +9,8 @@ use std::process::{Child, Command, ExitStatus, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, kill_process_group};
 use tempfile::{TempDir, tempdir};
 
 pub(crate) struct FakeBrowser {
@@ -100,12 +99,7 @@ touch "$record/ready"
     }
 
     pub(crate) fn pid(&self, name: &str) -> Pid {
-        Pid::from_raw(
-            fs::read_to_string(self.dir.path().join(name))
-                .expect("recorded PID")
-                .parse()
-                .expect("numeric PID"),
-        )
+        self.recorded_pid(name).expect("recorded PID above 1")
     }
 
     pub(crate) fn profile(&self) -> PathBuf {
@@ -137,7 +131,7 @@ touch "$record/ready"
         let mut failures = Vec::new();
         if let Some(group) = self.recorded_pid("group") {
             if let Err(e) = kill(group)
-                && e != Errno::ESRCH
+                && e != Errno::SRCH
             {
                 failures.push(format!("kill owned fixture group {group}: {e}"));
             }
@@ -159,8 +153,10 @@ touch "$record/ready"
             .ok()?
             .parse::<i32>()
             .ok()
-            .filter(|&pid| pid > 0)
-            .map(Pid::from_raw)
+            // `kill_process_group` on PID 1 is `kill(-1)`: it signals every
+            // process the user owns. `Pid::from_raw` rejects only 0.
+            .filter(|&pid| pid > 1)
+            .and_then(Pid::from_raw)
     }
 }
 
@@ -169,9 +165,9 @@ impl Drop for FakeBrowser {
         if self.cleaned.get() {
             return;
         }
-        // Independent backstop restricted to the recorded, positive group.
+        // Independent backstop restricted to the recorded group above PID 1.
         let failures = self.cleanup_with(
-            |group| killpg(group, Signal::SIGKILL),
+            |group| kill_process_group(group, Signal::KILL),
             |group, descendant| {
                 if wait_until(Duration::from_secs(3), || {
                     !pid_running(group) && !descendant.is_some_and(pid_running)
