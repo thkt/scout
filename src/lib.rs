@@ -33,6 +33,7 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use tools::{Command, Scout, ScoutError};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{Directive, LevelFilter};
 
 /// Allow CDP close (5s) and subprocess cleanup, with a bounded interrupt delay.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(7);
@@ -107,19 +108,23 @@ struct Cli {
 
 /// Reuse an installed tracing subscriber when run is invoked again.
 ///
-/// scout logs at INFO unless `RUST_LOG` sets scout's level itself, through a
-/// `scout…` directive or a bare global level such as `off`. A `RUST_LOG` that
-/// names only other crates keeps scout at INFO, so its warnings stay visible.
+/// scout logs at INFO unless `RUST_LOG` sets the level of the whole crate
+/// (`sets_scout_level`). A `RUST_LOG` that names only other crates or a scout
+/// submodule keeps the rest of scout at INFO, so its warnings stay visible.
 /// Colour is for a terminal only: an agent reading a piped stderr would
 /// receive the escape bytes as text.
 fn init_tracing() {
-    let sets_scout_level = env::var("RUST_LOG").is_ok_and(|value| {
-        value.split(',').map(str::trim).any(|directive| {
-            !directive.is_empty() && (!directive.contains('=') || directive.starts_with("scout"))
-        })
-    });
-    let mut filter = EnvFilter::from_default_env();
-    if !sets_scout_level {
+    // Trimmed once, so the filter and `sets_scout_level` read the same directives.
+    let rust_log = env::var("RUST_LOG").unwrap_or_default();
+    let directives: Vec<&str> = rust_log
+        .split(',')
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .collect();
+    let mut filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::ERROR.into())
+        .parse_lossy(directives.join(","));
+    if !directives.iter().copied().any(sets_scout_level) {
         filter = filter.add_directive("scout=info".parse().expect("static directive is valid"));
     }
     let colour = stderr().is_terminal() && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
@@ -128,6 +133,23 @@ fn init_tracing() {
         .with_ansi(colour)
         .with_env_filter(filter)
         .try_init();
+}
+
+/// Whether one `RUST_LOG` directive fixes the level of every scout target: a
+/// bare global level such as `off`, or a directive whose target covers `scout`.
+///
+/// Follows how `EnvFilter` reads a directive. A bare token that is not a level
+/// names a target. A directive covers the targets that start with its own, so
+/// `sc=off` covers scout and `scout::fetch=trace` leaves the rest of scout
+/// unset. A directive that fails to parse is dropped.
+fn sets_scout_level(directive: &str) -> bool {
+    if directive.parse::<Directive>().is_err() {
+        return false;
+    }
+    match directive.split_once('=') {
+        Some((target, _)) => "scout".starts_with(target),
+        None => directive.parse::<LevelFilter>().is_ok() || "scout".starts_with(directive),
+    }
 }
 
 /// On interrupt, notify CDP cancellation and drain before dropping the command.
@@ -317,8 +339,8 @@ mod tests {
 
     use super::{
         CommandOutput, ErrorCode, InterruptSignal, Outcome, ScoutError, bare_error_line, drive,
-        emit_success, init_tracing, interrupted_line, render_json_success, write_failure_line,
-        write_output,
+        emit_success, init_tracing, interrupted_line, render_json_success, sets_scout_level,
+        write_failure_line, write_output,
     };
 
     /// [T-DRV001] A ready SIGINT beats a pending command and maps to exit 130.
@@ -396,6 +418,37 @@ mod tests {
     fn init_tracing_is_idempotent() {
         init_tracing();
         init_tracing();
+    }
+
+    /// [T-INIT002] A directive sets scout's level only as a global level or a
+    /// target covering `scout`. Other targets and unparsable directives do not.
+    #[test]
+    fn sets_scout_level_follows_env_filter_matching() {
+        for directive in [
+            "off",
+            "warn",
+            "WARN",
+            "3",
+            "scout",
+            "scout=debug",
+            "scout=",
+            "sc=off",
+            "s",
+        ] {
+            assert!(sets_scout_level(directive), "{directive:?} sets scout");
+        }
+        for directive in [
+            "hyper",
+            "warning",
+            "scout::fetch::cdp=trace",
+            "scoutx=debug",
+            "scout=garbage",
+            "scout[span]=debug",
+            "=debug",
+            "",
+        ] {
+            assert!(!sets_scout_level(directive), "{directive:?} leaves scout");
+        }
     }
 
     /// [T-W001]

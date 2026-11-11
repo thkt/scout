@@ -510,7 +510,14 @@ fn piped_stderr_log_lines_carry_no_ansi_escapes() {
 /// [T-C055] `RUST_LOG` lowers scout's own log level; unset, overrides log at INFO.
 #[test]
 fn rust_log_silences_scout_info_lines() {
-    for value in ["scout=error", "off"] {
+    for value in [
+        "scout=error",
+        "off",
+        "warn",
+        "sc=off",
+        "reqwest=debug,scout=error",
+        "reqwest=debug, off",
+    ] {
         let stderr = stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", value)]);
         assert!(
             !stderr.contains("override applied"),
@@ -557,4 +564,24 @@ fn rust_log_for_another_crate_keeps_scout_info_lines() {
     let stderr =
         stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", "reqwest=debug")]);
     assert!(stderr.contains("override applied"), "got:\n{stderr}");
+}
+
+/// [T-C060] A `RUST_LOG` that sets no level for the whole scout crate leaves scout at INFO.
+/// The values are another crate, a misspelt level, a scout submodule, a crate
+/// named `scoutx`, and an invalid level.
+#[test]
+fn rust_log_without_a_scout_crate_level_keeps_scout_info_lines() {
+    for value in [
+        "hyper",
+        "warning",
+        "scout::fetch::cdp=trace",
+        "scoutx=debug",
+        "scout=garbage",
+    ] {
+        let stderr = stderr_of_invalid_fetch(&[("SCOUT_MAX_RETRIES", "3"), ("RUST_LOG", value)]);
+        assert!(
+            stderr.contains("override applied"),
+            "RUST_LOG={value} must keep scout at INFO, got:\n{stderr}"
+        );
+    }
 }
