@@ -46,7 +46,7 @@ thiserror = "2"
 url = "2"
 # Not the `futures` facade: it adds `futures-executor` and `futures-io`,
 # which have no call site here.
-futures-util = { version = "0.3", default-features = false, features = ["std", "sink", "async-await"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 base64 = "0.23"
 globset = "0.4"
 percent-encoding = "2"
@@ -62,13 +62,15 @@ tempfile = { version = "3", optional = true }
 pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [features]
-js-rendering = ["tokio-tungstenite", "rustix", "tempfile"]
+js-rendering = ["tokio-tungstenite", "rustix", "tempfile", "futures-util/sink"]
 
 [dev-dependencies]
 # `Response::json` is banned in production (clippy.toml); only retry tests call it.
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
+# `poll!` in tests.
+futures-util = { version = "0.3", default-features = false, features = ["async-await"] }
 tracing-test = "0.2"
 wiremock = "0.6"
 flate2 = "1"
