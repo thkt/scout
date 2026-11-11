@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::browser_fixture::FakeBrowser;
-use futures::poll;
+use futures_util::poll;
 use std::cell::Cell;
 use std::future::{pending, ready};
 use std::io;

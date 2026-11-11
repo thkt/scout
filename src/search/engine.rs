@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream::{self, StreamExt};
+use futures_util::stream::{self, StreamExt};
 use reqwest::Client;
 use tokio::sync::watch;
 use tokio::time::timeout;

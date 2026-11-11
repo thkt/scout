@@ -7,9 +7,9 @@ mod tests;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
-use futures::stream::FuturesUnordered;
-use futures::{SinkExt, StreamExt};
+use futures_util::future::BoxFuture;
+use futures_util::stream::FuturesUnordered;
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};

@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
 
-use futures::stream::{self, StreamExt};
+use futures_util::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;

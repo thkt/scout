@@ -34,7 +34,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 url = "2"
-futures = "0.3"
+# Not the `futures` facade: it adds `futures-executor` and `futures-io`,
+# which have no call site here.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink", "async-await"] }
 base64 = "0.23"
 globset = "0.4"
 percent-encoding = "2"

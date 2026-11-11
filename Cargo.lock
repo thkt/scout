@@ -1785,7 +1785,7 @@ dependencies = [
  "encoding_rs",
  "fastrand",
  "flate2",
- "futures",
+ "futures-util",
  "globset",
  "html5ever",
  "httpdate",
