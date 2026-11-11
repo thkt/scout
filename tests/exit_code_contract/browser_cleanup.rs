@@ -57,11 +57,7 @@ fn run_cleanup(signal: Option<Signal>, expected_code: i32) {
     );
     let started = Instant::now();
     if let Some(signal) = signal {
-        kill_process(
-            Pid::from_raw(i32::try_from(scout.0.id()).expect("scout PID")).expect("scout PID"),
-            signal,
-        )
-        .expect("send interrupt to scout");
+        kill_process(Pid::from_child(&scout.0), signal).expect("send interrupt to scout");
     }
     let status = wait_scout(&mut scout.0);
     assert_eq!(

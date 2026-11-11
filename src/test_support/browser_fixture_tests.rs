@@ -25,7 +25,7 @@ fn fixture_cleanup_preserves_scope_and_collects_failures() {
         }
     }
     let _records = ClearGroup(browser.path().join("group"));
-    for record in [None, Some("0"), Some("-1"), Some("not-a-pid")] {
+    for record in [None, Some("0"), Some("1"), Some("-1"), Some("not-a-pid")] {
         if let Some(record) = record {
             fs::write(browser.path().join("group"), record).unwrap();
         }
@@ -114,7 +114,7 @@ fn fixture_backstop_cleans_on_unwind() {
             }
         }
     }
-    let backstop = KillOwnedGroup(Pid::from_raw(i32::try_from(parent.0.id()).unwrap()).unwrap());
+    let backstop = KillOwnedGroup(Pid::from_child(&parent.0));
     let (group, descendant) = browser.wait_ready();
     let failure = catch_unwind(AssertUnwindSafe(move || {
         let _browser = browser;

@@ -99,13 +99,7 @@ touch "$record/ready"
     }
 
     pub(crate) fn pid(&self, name: &str) -> Pid {
-        Pid::from_raw(
-            fs::read_to_string(self.dir.path().join(name))
-                .expect("recorded PID")
-                .parse()
-                .expect("numeric PID"),
-        )
-        .expect("positive PID")
+        self.recorded_pid(name).expect("recorded PID above 1")
     }
 
     pub(crate) fn profile(&self) -> PathBuf {
@@ -159,7 +153,9 @@ touch "$record/ready"
             .ok()?
             .parse::<i32>()
             .ok()
-            .filter(|&pid| pid > 0)
+            // `kill_process_group` on PID 1 is `kill(-1)`: it signals every
+            // process the user owns. `Pid::from_raw` rejects only 0.
+            .filter(|&pid| pid > 1)
             .and_then(Pid::from_raw)
     }
 }
@@ -169,7 +165,7 @@ impl Drop for FakeBrowser {
         if self.cleaned.get() {
             return;
         }
-        // Independent backstop restricted to the recorded, positive group.
+        // Independent backstop restricted to the recorded group above PID 1.
         let failures = self.cleanup_with(
             |group| kill_process_group(group, Signal::KILL),
             |group, descendant| {
