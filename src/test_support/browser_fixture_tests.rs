@@ -10,7 +10,7 @@ use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::Duration;
 
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, kill_process_group as killpg};
+use rustix::process::{Pid, Signal, kill_process_group};
 use tempfile::tempdir;
 
 /// [T-BGC008] Invalid group records cannot signal; cleanup aggregates OS failures.
@@ -107,7 +107,7 @@ fn fixture_backstop_cleans_on_unwind() {
     struct KillOwnedGroup(Pid);
     impl Drop for KillOwnedGroup {
         fn drop(&mut self) {
-            if let Err(error) = killpg(self.0, Signal::KILL)
+            if let Err(error) = kill_process_group(self.0, Signal::KILL)
                 && error != Errno::SRCH
             {
                 eprintln!("independent fixture group backstop failed: {error}");

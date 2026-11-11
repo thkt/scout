@@ -15,7 +15,7 @@ use std::time::Duration;
 #[cfg(feature = "js-rendering")]
 use rustix::io::Errno;
 #[cfg(feature = "js-rendering")]
-use rustix::process::{Pid, Signal, kill_process_group as killpg};
+use rustix::process::{Pid, Signal, kill_process_group};
 #[cfg(feature = "js-rendering")]
 use tempfile::{Builder, TempDir};
 #[cfg(feature = "js-rendering")]
@@ -130,11 +130,17 @@ pub(super) struct ChromiumProcess {
 impl ChromiumProcess {
     /// Completed paths retain bounded reap; cancellation invokes the Drop fallback.
     pub(super) async fn reap(&mut self) {
-        reap_group(self.pgid, &mut self.group_armed, self.child.wait(), killpg).await;
+        reap_group(
+            self.pgid,
+            &mut self.group_armed,
+            self.child.wait(),
+            kill_process_group,
+        )
+        .await;
     }
 
     fn kill_group(&mut self) {
-        kill_group_with(self.pgid, &mut self.group_armed, killpg);
+        kill_group_with(self.pgid, &mut self.group_armed, kill_process_group);
     }
 }
 

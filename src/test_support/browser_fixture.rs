@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, kill_process_group as killpg};
+use rustix::process::{Pid, Signal, kill_process_group};
 use tempfile::{TempDir, tempdir};
 
 pub(crate) struct FakeBrowser {
@@ -171,7 +171,7 @@ impl Drop for FakeBrowser {
         }
         // Independent backstop restricted to the recorded, positive group.
         let failures = self.cleanup_with(
-            |group| killpg(group, Signal::KILL),
+            |group| kill_process_group(group, Signal::KILL),
             |group, descendant| {
                 if wait_until(Duration::from_secs(3), || {
                     !pid_running(group) && !descendant.is_some_and(pid_running)
