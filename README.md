@@ -189,14 +189,21 @@ Downloads a page, extracts main content via Readability, converts to Markdown. W
 scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| Flag    | Description                                                           |
-| ------- | --------------------------------------------------------------------- |
-| `--js`  | Force JS rendering via CDP (requires `js-rendering` feature + Chrome) |
-| `--raw` | Skip Readability, convert the whole page except active HTML           |
+| Flag              | Description                                                                    |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `--js`            | Force JS rendering via CDP (requires `js-rendering` feature + Chrome)          |
+| `--raw`           | Skip Readability, convert the whole page except active HTML                    |
+| `--output <path>` | Save a PNG, JPEG, GIF, or WebP response to `<path>` instead of printing a body |
 
 Page metadata (title, author, date) is included as YAML frontmatter. The frontmatter block is always present; individual fields appear when the page provides them.
 
 Explicit accepted non-HTML text/XML responses (`text/*` except `text/html`, `application/xml`, and `application/*+xml` except `application/xhtml+xml`) bypass HTML extraction and conversion in both normal and `--raw` fetch. The decoded body preserves tags, attributes, literal character references, code, heading-like text, and line breaks (including trailing blank lines) in Markdown and JSON (`data.markdown`), with an empty frontmatter block. Initial YAML marker neutralization applies to both formats. The existing 100,000-byte output limit and YAML marker re-neutralization after truncation apply to Markdown output only. JSON `data.markdown` contains the body before that truncation, within the existing response download limit. Explicit non-HTML responses do not trigger automatic JS rendering; `--js` still explicitly requests browser output. HTML, XHTML, and missing, empty, or unreadable Content-Type retain the HTML path. Unsupported types such as `application/json` remain rejected.
+
+**Images** — `fetch <url> --output <path>` saves an `image/png`, `image/jpeg`, `image/gif`, or `image/webp` response to `<path>` byte for byte, so an agent can open the file as image input. stdout carries a frontmatter block with `path`, `url`, `content_type`, and `bytes`, and no body; `--json` puts the same four fields in `data`. scout compares the leading bytes with the declared type and rejects a mismatch with exit 65 before writing. An existing file is never replaced: an existing path, a missing directory, and a failed write exit 74, and a partly written file is removed. An image URL without `--output`, `--output` on any other response, and `--js` on an image exit 65. `image/svg+xml` and other image types remain rejected, `research` saves no images, and the 10 MB download limit applies. See [DR-0037](docs/decisions/0037-save-image-responses-to-a-caller-named-file.md).
+
+```sh
+scout fetch https://example.com/logo.png --output logo.png
+```
 
 **Slack permalinks** — `fetch` detects `*.slack.com/archives/{channel}/p{ts}` URLs and routes them to the Slack Web API instead of HTML scraping. Thread parent + replies are preserved with author/timestamp metadata. Requires `SLACK_TOKEN` (User OAuth token, `xoxp-…`). Each message’s open code fence is completed before the next reply; lone CR line endings become LF and trailing tabs on closing delimiters become spaces while content tabs and CRLF are retained; reply labels escape fence characters and fold line breaks. At the 100,000-byte output cut, any added closing delimiter fits within the body budget and precedes the truncation note. A fenced block is omitted from its opening line if its opening and closing delimiters cannot fit together. Notes and degradation preambles remain additional formatting overhead. Slack YAML markers are still neutralized inside code blocks. See [DR-0035](docs/decisions/0035-close-slack-message-and-truncation-fences.md).
 
@@ -309,7 +316,7 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `
 | 65   | Data error (invalid input, malformed format, encoding error, 4xx body)   |
 | 66   | Not found (repo/file not found, 404)                                     |
 | 70   | Internal (scout-side invariant violation, unexpected response schema)    |
-| 74   | IO error (external tool failure such as headless browser)                |
+| 74   | IO error (headless browser failure, `--output` file not writable)        |
 | 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)           |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
 | 124  | Timeout (request/transport timeout, retryable — longer backoff advised)  |

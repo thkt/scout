@@ -4,6 +4,7 @@ mod errors;
 mod params;
 mod query;
 mod repo;
+mod save;
 mod typo;
 
 pub(crate) use errors::ScoutError;

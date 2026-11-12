@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
 
 use crate::search::Lang;
@@ -68,6 +70,7 @@ Examples:
   scout fetch https://example.com
   scout fetch https://example.com --js
   scout fetch https://example.com --raw
+  scout fetch https://example.com/logo.png --output logo.png
   scout fetch https://acme.slack.com/archives/C123/p1700000000000000
   echo \"https://example.com\" | scout fetch
   scout fetch -
@@ -83,6 +86,9 @@ pub(crate) struct FetchParams {
     /// Skip Readability extraction and convert the whole page. Script, style and other active HTML still have their content dropped.
     #[arg(long)]
     pub(super) raw: bool,
+    /// Save a PNG, JPEG, GIF or WebP response to this file, byte for byte, and print its path, URL, media type and size instead of a body. Required for an image URL; fails if the file exists or the response is not one of those types.
+    #[arg(long, value_name = "PATH")]
+    pub(super) output: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -94,6 +100,7 @@ impl FetchParams {
             url: Some(url.to_owned()),
             js: false,
             raw: false,
+            output: None,
         }
     }
 }

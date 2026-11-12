@@ -51,6 +51,9 @@ fn data_errors_have_exit_code_65() {
         FetchError::Status(499).into(),
         FetchError::TooLarge.into(),
         FetchError::TooManyRedirects(10).into(),
+        FetchError::NotAnImage("text/html".into()).into(),
+        FetchError::ImageSignatureMismatch("image/png").into(),
+        FetchError::ImageWithJs.into(),
         BraveError::Api {
             code: 400,
             message: "err".into(),

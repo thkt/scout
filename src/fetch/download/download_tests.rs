@@ -180,27 +180,32 @@ async fn download_too_large_body_rejected() {
     assert!(matches!(result, Err(FetchError::TooLarge)));
 }
 
-/// [T-F012]
+/// [T-F012] The text download rejects binary types, images included, with the
+/// message research records as a failed URL's reason.
 #[tokio::test]
 async fn download_rejects_non_html_content_type() {
-    let Some(server) = try_spawn_mock_server("fetch::download").await else {
-        return;
-    };
-    Mock::given(method("GET"))
-        .and(path("/binary"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/pdf")
-                .set_body_bytes(b"fake pdf".to_vec()),
-        )
-        .mount(&server)
-        .await;
+    for content_type in ["application/pdf", "image/png"] {
+        let Some(server) = try_spawn_mock_server("fetch::download").await else {
+            return;
+        };
+        Mock::given(method("GET"))
+            .and(path("/binary"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", content_type)
+                    .set_body_bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            )
+            .mount(&server)
+            .await;
 
-    let result = download_default(&server.uri(), "/binary").await;
-    assert!(
-        matches!(result, Err(FetchError::UnsupportedContentType(ref ct)) if ct == "application/pdf"),
-        "got: {result:?}"
-    );
+        let err = download_default(&server.uri(), "/binary")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("unsupported content type: {content_type} (expected text/HTML)")
+        );
+    }
 }
 
 /// [T-F013]
@@ -395,5 +400,63 @@ async fn proxied_mode_blocks_a_redirect_hop_whose_location_is_a_literal_private_
     assert!(
         matches!(result, Err(FetchError::InternalHost)),
         "proxied mode must block a redirect hop to a literal private IP, got: {result:?}"
+    );
+}
+
+/// `open_image` then `read`, with the same defaults as `download_default`.
+async fn download_image_default(uri: &str, path: &str) -> Result<DownloadedImage, FetchError> {
+    let client = no_redirect_client();
+    open_image(
+        &client,
+        &validated(&format!("{uri}{path}")),
+        FETCH_MAX_REDIRECTS,
+        &public_resolver(),
+        &ssrf::EgressMode::Direct,
+    )
+    .await?
+    .read()
+    .await
+}
+
+/// [T-F093] An image body over the response cap is rejected as too large.
+#[tokio::test]
+async fn download_image_too_large_body_rejected() {
+    let mut oversized = b"\x89PNG\r\n\x1a\n".to_vec();
+    oversized.resize(MAX_RESPONSE_BYTES + 1, 0);
+    let Some(server) = try_spawn_mock_server("fetch::download").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/huge.png"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/png")
+                .set_body_bytes(oversized),
+        )
+        .mount(&server)
+        .await;
+
+    let result = download_image_default(&server.uri(), "/huge.png").await;
+    assert!(matches!(result, Err(FetchError::TooLarge)), "{result:?}");
+}
+
+/// [T-F094] The image path blocks a redirect to a literal private IP.
+#[tokio::test]
+async fn download_image_redirect_to_private_ip_blocked() {
+    let Some(server) = try_spawn_mock_server("fetch::download").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .and(path("/redir"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1/secret.png"),
+        )
+        .mount(&server)
+        .await;
+
+    let result = download_image_default(&server.uri(), "/redir").await;
+    assert!(
+        matches!(result, Err(FetchError::InternalHost)),
+        "redirect to 127.0.0.1 should be blocked, got: {result:?}"
     );
 }

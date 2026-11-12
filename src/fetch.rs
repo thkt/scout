@@ -30,7 +30,8 @@ use crate::envelope::ErrorCode;
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
 use converter::{FetchResult, plain_text_result, to_fetch_result};
-use download::{DownloadedPage, MediaType, download};
+pub(crate) use download::ImageFormat;
+use download::{DownloadedImage, DownloadedPage, MediaType, download, open_image};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
@@ -84,6 +85,21 @@ pub(crate) enum FetchError {
     #[error("response too large (>{} bytes)", MAX_RESPONSE_BYTES)]
     TooLarge,
 
+    /// `--output` met a response outside the four raster types. The payload is
+    /// the response's media type, empty when the header is absent or unreadable.
+    #[error(
+        "--output saves PNG, JPEG, GIF, or WebP only; response content type is {}",
+        if .0.is_empty() { "missing" } else { .0.as_str() }
+    )]
+    NotAnImage(String),
+
+    /// The body does not start with the signature of the declared media type.
+    #[error("response body is not {0} data")]
+    ImageSignatureMismatch(&'static str),
+
+    #[error("--js does not apply to an image")]
+    ImageWithJs,
+
     /// Payload names the operation and budget without repeating this error prefix.
     /// T-C024 and T-SE015 cover the fetch and research call sites.
     #[error("fetch timed out: {0}")]
@@ -110,8 +126,20 @@ impl FetchError {
                 .with_hint("URL must include scheme and host"),
             Self::InternalHost => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must point to an external host (private IPs are blocked)"),
+            Self::UnsupportedContentType(mime)
+                if ImageFormat::from_content_type(mime).is_some() =>
+            {
+                Classification::new(ErrorCode::DataError)
+                    .with_hint("pass --output <path> (without --js) to save this image")
+            }
             Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must serve HTML or text content"),
+            Self::NotAnImage(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("remove --output to fetch this URL as text"),
+            Self::ImageSignatureMismatch(_) => Classification::new(ErrorCode::DataError)
+                .with_hint("the server sent content that does not match its Content-Type"),
+            Self::ImageWithJs => Classification::new(ErrorCode::DataError)
+                .with_hint("remove --js; an image is saved as the server sent it"),
             Self::RedirectMissingLocation => Classification::new(ErrorCode::DataError),
             Self::TooLarge => {
                 Classification::new(ErrorCode::DataError).with_hint("fetch a smaller resource")
@@ -136,6 +164,49 @@ impl FetchError {
             Self::BrowserFailed(_) => Classification::new(ErrorCode::IoError),
         }
     }
+}
+
+/// An image downloaded for `fetch --output`, with the URL its bytes came from.
+#[derive(Debug)]
+pub(crate) struct FetchedImage {
+    pub(crate) url: String,
+    pub(crate) format: ImageFormat,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// Download `url` as one of the four raster types without decoding the body.
+/// SSRF validation and redirect handling are the ones [`fetch_page`] uses.
+/// Only `opts.js` and `opts.egress` apply: `raw` selects an HTML conversion.
+pub(crate) async fn fetch_image(
+    client: &Client,
+    url: &str,
+    opts: &FetchOptions,
+    resolver: Arc<dyn DnsResolver>,
+) -> Result<FetchedImage, FetchError> {
+    let validated = ssrf_check(url, resolver.as_ref(), &opts.egress).await?;
+    let response = open_image(
+        client,
+        &validated,
+        FETCH_MAX_REDIRECTS,
+        resolver.as_ref(),
+        &opts.egress,
+    )
+    .await?;
+    // Not earlier: `--js` on a page must report the page mismatch. Not later:
+    // a slow or oversized body would fail first and hide the flag conflict.
+    if opts.js {
+        return Err(FetchError::ImageWithJs);
+    }
+    let DownloadedImage {
+        url: final_url,
+        format,
+        bytes,
+    } = response.read().await?;
+    Ok(FetchedImage {
+        url: final_url.as_str().to_owned(),
+        format,
+        bytes,
+    })
 }
 
 /// Visible-text threshold for trying JS fallback on a thin extract.

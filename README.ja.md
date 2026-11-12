@@ -178,14 +178,21 @@ JSON エンベロープ: `data = {query, sources, fetched_pages, failed_urls}`�
 scout fetch https://react.dev/blog/2024/12/05/react-19
 ```
 
-| フラグ  | 説明                                                                 |
-| ------- | -------------------------------------------------------------------- |
-| `--js`  | CDP経由のJSレンダリングを強制（`js-rendering` feature + Chrome必要） |
-| `--raw` | Readabilityをスキップし、active HTML を除くページ全体を変換                            |
+| フラグ            | 説明                                                                 |
+| ----------------- | -------------------------------------------------------------------- |
+| `--js`            | CDP経由のJSレンダリングを強制（`js-rendering` feature + Chrome必要） |
+| `--raw`           | Readabilityをスキップし、active HTML を除くページ全体を変換          |
+| `--output <path>` | PNG・JPEG・GIF・WebP の応答を本文出力の代わりに `<path>` へ保存      |
 
 ページのメタデータ（タイトル/著者/日付）は YAML フロントマターとして付与されます。フロントマターブロックは常に出力され、各フィールドはページから取得できた場合に含まれます。
 
 明示的な受理済み非HTML text/XML 応答（`text/html` を除く `text/*`、`application/xml`、`application/xhtml+xml` を除く `application/*+xml`）では、通常・`--raw` とも HTML 抽出・変換を省きます。デコード済みの本文は、タグ・属性・文字参照のリテラル・コード・見出し風の文字列、末尾空行を含む改行を保持し、空のフロントマター付きで Markdown または JSON（`data.markdown`）へ届きます。初期の YAML マーカー中和は両形式に適用されます。既存の100,000バイトの出力上限と、切断後の YAML マーカー再中和は Markdown 出力だけに適用されます。JSON の `data.markdown` は、既存のレスポンス取得上限内の、出力切断前の本文を含みます。明示的な非HTML応答では JS レンダリングを自動実行しません。`--js` は引き続きブラウザー出力を明示的に要求します。HTML・XHTML、および Content-Type が欠落・空・読取り不能の場合は従来の HTML 経路を使います。`application/json` などの未対応媒体は引き続き拒否します。
+
+**画像** — `fetch <url> --output <path>` は、`image/png`・`image/jpeg`・`image/gif`・`image/webp` の応答をバイト列のまま `<path>` へ保存します。エージェントはそのファイルを画像入力として開けます。標準出力は `path`・`url`・`content_type`・`bytes` を持つフロントマターブロックだけで、本文は出しません。`--json` では同じ4項目が `data` に入ります。scout は本文の先頭バイトを Content-Type と照合し、一致しない応答を書き込み前に終了65で拒否します。既存のファイルは置き換えません。保存先が既にある場合、ディレクトリが無い場合、書き込みに失敗した場合は終了74になり、書きかけのファイルは削除します。`--output` の無い画像URL、画像以外の応答への `--output`、画像への `--js` は終了65です。`image/svg+xml` とその他の画像媒体は引き続き拒否し、`research` は画像を保存しません。ダウンロード上限の10MBも適用されます。[DR-0037](docs/decisions/0037-save-image-responses-to-a-caller-named-file.md)を参照してください。
+
+```sh
+scout fetch https://example.com/logo.png --output logo.png
+```
 
 **Slackパーマリンク** — `fetch` は `*.slack.com/archives/{channel}/p{ts}` 形式の URL を検出し、HTML スクレイピングではなく Slack Web API へルーティングします。スレッドの親メッセージとリプライが、著者・タイムスタンプのメタデータ付きで保持されます。`SLACK_TOKEN`（User OAuth トークン、`xoxp-…`）が必要です。 各メッセージの未閉鎖コードフェンスを次のリプライの前で閉じます。単独CR改行はLFへ、閉鎖行の終端tabは空白へ変換し、本文中のtabとCRLFは保持します。著者の表示行はフェンス文字をエスケープして改行を空白へ畳みます。100,000 byteでの出力打ち切り時は、追加の閉鎖フェンスも本文予算内に収め、打ち切り注記の前に置きます。開始・閉鎖フェンスを一緒に収められないコードブロックは開始行から省略します。注記とdegradationの前置きは従来どおり本文予算外です。SlackのYAMLマーカーはコード内も中和します。[DR-0035](docs/decisions/0035-close-slack-message-and-truncation-fences.md)を参照してください。
 
@@ -299,7 +306,7 @@ src/
 | 65     | データエラー（不正入力、フォーマット異常、エンコーディングエラー、4xx本文） |
 | 66     | Not Found（リポジトリ/ファイルが存在しない、404）                           |
 | 70     | 内部エラー（scout側の不変条件違反、想定外のレスポンススキーマ）             |
-| 74     | IOエラー（ヘッドレスブラウザなど外部ツールの失敗）                          |
+| 74     | IOエラー（ヘッドレスブラウザの失敗、`--output` のファイルに書き込めない）   |
 | 75     | 一時的失敗（レート制限、5xx、短時間バックオフで再試行可能）                 |
 | 104    | 不明（分類不能。発生率上昇は分類カテゴリ不足のシグナル）                    |
 | 124    | タイムアウト（リクエスト/転送タイムアウト、より長めのバックオフ推奨）       |

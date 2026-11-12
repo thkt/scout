@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::*;
 use crate::envelope::{DegradedReason, ErrorCode};
 use crate::test_support::http_fixture::HttpFixture;
@@ -532,20 +534,25 @@ async fn fetch_slack_timeout_message_states_the_timeout_once() {
     );
 }
 
-/// [T-SK092] `--js` and `--raw` on a Slack permalink are usage errors, reported
-/// before the Slack token is read.
+/// [T-SK092] `--js`, `--raw` and `--output` on a Slack permalink are usage
+/// errors, reported before the Slack token is read.
 #[tokio::test]
 async fn fetch_slack_rejects_page_rendering_flags() {
     let scout = ScoutBuilder::for_test().build();
-    for (js, raw, flag) in [(true, false, "--js"), (false, true, "--raw")] {
+    for (js, raw, output, flag) in [
+        (true, false, None, "--js"),
+        (false, true, None, "--raw"),
+        (false, false, Some("saved.png"), "--output"),
+    ] {
         let err = scout
             .fetch(FetchParams {
                 url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
                 js,
                 raw,
+                output: output.map(PathBuf::from),
             })
             .await
-            .expect_err("a page-rendering flag has no meaning for a Slack permalink");
+            .expect_err("a page or image flag has no meaning for a Slack permalink");
         assert_eq!(err.error_kind(), ErrorCode::UsageError, "{flag}");
         assert!(err.message().contains(flag), "{flag}: {}", err.message());
     }
