@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use super::*;
 use crate::envelope::{DegradedReason, ErrorCode};
 use crate::test_support::http_fixture::HttpFixture;
@@ -549,7 +547,7 @@ async fn fetch_slack_rejects_page_rendering_flags() {
                 url: Some("https://acme.slack.com/archives/C1/p1000000001".into()),
                 js,
                 raw,
-                output: output.map(PathBuf::from),
+                output: output.map(str::to_owned),
             })
             .await
             .expect_err("a page or image flag has no meaning for a Slack permalink");

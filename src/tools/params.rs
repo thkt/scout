@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::{Args, Subcommand};
 
 use crate::search::Lang;
@@ -87,8 +85,10 @@ pub(crate) struct FetchParams {
     #[arg(long)]
     pub(super) raw: bool,
     /// Save a PNG, JPEG, GIF or WebP response to this file, byte for byte, and print its path, URL, media type and size instead of a body. Required for an image URL; fails if the file exists or the response is not one of those types.
+    // `String`, not `PathBuf`: clap then rejects a non-UTF-8 path, which
+    // frontmatter and JSON could not report back unchanged.
     #[arg(long, value_name = "PATH")]
-    pub(super) output: Option<PathBuf>,
+    pub(super) output: Option<String>,
 }
 
 #[cfg(test)]

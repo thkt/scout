@@ -37,10 +37,13 @@ Chosen option: 「呼び出し側が `--output <path>` で指定したファイ�
 | 受理する媒体 | `ImageFormat::from_content_type`（`src/fetch/download.rs`）が認める `image/png`、`image/jpeg`、`image/gif`、`image/webp` の 4 種。`image/svg+xml` はマークアップであり、画像読み込みツールがラスタライズしないので含めない |
 | 取得 | `open_image` と `download` は `final_response` を共有する。リダイレクトごとの `ssrf_check` と成功ステータスの確認はこの 1 箇所にある。`open_image` はヘッダで媒体を判定し、`ImageResponse::read` が本文を `MAX_RESPONSE_BYTES` を上限に `read_body_capped` で読む。文字コードの変換はしない |
 | 中身の照合 | `ImageFormat::matches_signature` が本文の先頭バイトを Content-Type の形式と照合する。一致しなければ `FetchError::ImageSignatureMismatch`（終了 65）で、ファイルを作らない |
-| 書き出し | `save_new_file`（`src/tools/save.rs`）が `create_new` でファイルを開く。既存ファイル、親ディレクトリ不在、権限なし、書き込み途中の失敗は `ScoutError::io_error`（終了 74）になる。書き込み途中で失敗した場合は、その実行が作ったファイルを削除する |
-| 出力 | `Scout::fetch_image_to`（`src/tools/query.rs`）が `path`、`url`、`content_type`、`bytes` の frontmatter ブロックを出し、本文は出さない。`--json` は同じ 4 項目を `data` に持つ。`content_type` は `ImageFormat::mime` の固定文字列で、応答ヘッダの文字列を出力へ通さない。`path` と `url` は `write_yaml_str`（`src/yaml.rs`）でエスケープする |
+| 保存先の事前確認 | `ensure_new_file_can_be_created`（`src/tools/save.rs`）が取得の前に、保存先が既にあること、親ディレクトリが無いことを終了 74 で拒否する。書けない保存先のために最大 10,000,000 バイトを読まない |
+| 書き出し | `save_new_file` が `create_new` でファイルを開く。取得の間にファイルシステムが変わりうるので、上書きしないことを決めるのはこの操作である。既存ファイル、親ディレクトリ不在、権限なし、書き込みの失敗は `ScoutError::io_error`（終了 74）になる。書き込みの後に `sync_all` を呼び、キャッシュへの書き込みだけが成功して flush で失敗する場合を取りこぼさない。失敗した場合は、その実行が作ったファイルを削除する |
+| 保存先のパス | UTF-8 に限る。`FetchParams::output` を `String` にして、UTF-8 でないパスを clap に使用法エラー（終了 64）で拒否させる。frontmatter と JSON は UTF-8 でないバイト列を元のまま返せず、返したパスが実在しなくなる |
+| 割り込み | `Scout::fetch_image_to`（`src/tools/query.rs`）は取得の間 `cancel` を購読し、割り込みを受けていれば保存しない。`drive`（`src/lib.rs`）はシグナルの後もコマンドを `SHUTDOWN_DRAIN_TIMEOUT` まで走らせて結果を捨てるので、その間に書いたファイルは報告されず、同じパスでの再実行を終了 74 にする。購読が要るのは、`drive` が使う `watch::Sender::send` が受信側の無いときに値を保存しないためである |
+| 出力 | `Scout::fetch_image_to` が `path`、`url`、`content_type`、`bytes` の frontmatter ブロックを出し、本文は出さない。`--json` は同じ 4 項目を `data` に持つ。`content_type` は `ImageFormat::mime` の固定文字列で、応答ヘッダの文字列を出力へ通さない。`path` と `url` は `write_yaml_str_whole`（`src/yaml.rs`）でエスケープする。`write_yaml_str` は値を 450 バイトで切るので使わない。切られたパスは実在しない |
 | `--output` の無い画像 | `fetch_page` 側の `UnsupportedContentType` のままで、メッセージは変えない。分類の hint だけを `--output` の案内に替える |
-| 画像以外への `--output` | `FetchError::NotAnImage`（終了 65）。本文を読む前にヘッダで判定する。Slack permalink は取得前に使用法エラー（終了 64）にする |
+| 画像以外への `--output` | `FetchError::NotAnImage`（終了 65）。本文を読む前にヘッダで判定する。`--output` を外す案内を出すのは、`is_fetchable_as_text`（`src/fetch/download.rs`）が真の媒体だけである。SVG や JSON は text の取得も拒否するので、外しても同じ終了 65 になる。Slack permalink は取得前に使用法エラー（終了 64）にする |
 | 画像への `--js` | `FetchError::ImageWithJs`（終了 65）。`fetch_image` は `open_image` の後、`ImageResponse::read` の前で判定する。`open_image` より前に置くと、ページの URL に `--js --output` を付けた場合に原因である `NotAnImage` を報告できない。`read` より後に置くと、タイムアウト、サイズ超過、シグネチャの不一致が先に失敗し、`--js` を外す案内が出ない |
 | `--raw` | 画像には作用しない。HTML の変換方式を選ぶフラグであり、画像に変換は無い |
 | `research` | 変更しない。画像は従来と同じメッセージで `failed_urls` に載る |
@@ -59,11 +62,11 @@ Chosen option: 「呼び出し側が `--output <path>` で指定したファイ�
 
 ### Confirmation
 
-`tests/fetch_image.rs` は mock proxy を使い、SSRF を緩めずに実 CLI の取得から書き出しまでを通す。T-C061 は 4 形式のバイト列の一致と frontmatter、T-C062 は JSON の `data`、T-C063 は `--output` の無い画像、T-C064 はシグネチャの不一致、T-C065 は既存ファイル、T-C066 は親ディレクトリ不在、T-C067 は画像以外への `--output` を確認する。T-C068 は画像への `--js` を、PNG ではない本文でも `--js` を外す案内が出ることと合わせて確認する。T-C069 は、ページへの `--js --output` が `--output` を外す案内を出すことを確認する。
+`tests/fetch_image.rs` は mock proxy を使い、SSRF を緩めずに実 CLI の取得から書き出しまでを通す。T-C061 は 4 形式のバイト列の一致と frontmatter、T-C062 は JSON の `data`、T-C063 は `--output` の無い画像、T-C064 はシグネチャの不一致、T-C065 は既存ファイル、T-C066 は親ディレクトリ不在を、proxy を設定せずリクエストの前に拒否することと合わせて確認する。T-C067 は画像以外への `--output` と、`--output` を外す案内が text として取得できる媒体にだけ出ることを確認する。T-C068 は画像への `--js` を、PNG ではない本文でも `--js` を外す案内が出ることと合わせて確認する。T-C069 は、ページへの `--js --output` が `--output` を外す案内を出すことを確認する。T-C070 は 450 バイトを超える URL とパスが切られずに出ること、T-C071 は UTF-8 でない保存先が終了 64 になることを確認する。
 
-`src/fetch/download/download_tests.rs` の T-F012 は、text の取得が画像を従来のメッセージで拒否することを確認する。`research` が `failed_urls` に載せる理由はこのメッセージである。T-F093 は上限を超える画像、T-F094 は画像経路でのリダイレクト先の private IP 遮断を確認する。`src/tools/save/tests.rs` の T-TS043 は書き込み途中の失敗でファイルが残らないこと、`src/tools/slack_fetch_tests.rs` の T-SK092 は Slack permalink への `--output`、`src/tools/errors/exit_code_tests.rs` の T-ER001b は新しい 3 つのエラーの終了 65 を確認する。
+`src/fetch/download/download_tests.rs` の T-F012 は、text の取得が画像を従来のメッセージで拒否することを確認する。`research` が `failed_urls` に載せる理由はこのメッセージである。T-F093 は上限を超える画像、T-F094 は画像経路でのリダイレクト先の private IP 遮断を確認する。`src/tools/save/tests.rs` の T-TS043 は書き込み途中の失敗でファイルが残らないこと、T-TS044 は書き込みの時点で既存ファイルを置き換えないこと、T-TS045 は事前確認の判定を確認する。`src/tools/image_fetch_tests.rs` の T-TS046 は、取得中に届いた割り込みが保存を止めることを確認する。`sync_all` の失敗を起こすテストは無い。`src/tools/slack_fetch_tests.rs` の T-SK092 は Slack permalink への `--output`、`src/tools/errors/exit_code_tests.rs` の T-ER001b は新しい 3 つのエラーの終了 65 を確認する。
 
-実装前に `SCOUT_NETWORK_TESTS=1 cargo nextest run --test fetch_image` を実行し、T-C061 から T-C068 の 8 件が失敗することを確かめた。実装後に、シグネチャ照合、Slack の `--output` 判定、書きかけファイルの削除、`create_new` の 4 箇所を壊し、対応するテストが失敗することを確かめた。`--js` の判定は `read` の後と `open_image` の前へそれぞれ動かし、前者で T-C068、後者で T-C069 が失敗することを確かめた。
+実装前に `SCOUT_NETWORK_TESTS=1 cargo nextest run --test fetch_image` を実行し、T-C061 から T-C068 の 8 件が失敗することを確かめた。実装後に、シグネチャ照合、Slack の `--output` 判定、書きかけファイルの削除、`create_new` の 4 箇所を壊し、対応するテストが失敗することを確かめた。`--js` の判定は `read` の後と `open_image` の前へそれぞれ動かし、前者で T-C068、後者で T-C069 が失敗することを確かめた。割り込みは、購読を外した場合と判定を外した場合のどちらでも T-TS046 が失敗することを確かめた。T-C065、T-C066、T-C067、T-C070、T-C071 は、対応する修正の前に失敗することを確かめた。
 
 ## Pros and Cons of the Options
 
@@ -101,6 +104,8 @@ Chosen option: 「呼び出し側が `--output <path>` で指定したファイ�
 `.claude/OUTCOME.md` の Non-goals にある「ローカルファイル処理」は、ローカルファイルを入力として読むことを指す文へ直す。`.gitignore` が `.claude/` を無視しているので、その修正はこの変更に含まれない。
 
 `--js` の例外は 2026-11-12 に `/challenge` へ通した。判定は Conditional GO で、critic-design の 2 件はどちらも weakened だった。条件は、`--js` の判定を媒体の判定の直後かつ本文の読み込みの前に置くことと、その順序をテストで固定することの 2 つで、どちらも本変更で満たした。`--js` と `--output` を clap の排他指定にして取得前に拒否する案は、終了コードが 64 になり Issue #547 の合意（終了 65）と食い違うので採っていない。
+
+保存先の事前確認、`sync_all`、UTF-8 の制約、割り込み時の扱い、`write_yaml_str_whole`、`NotAnImage` の hint の分岐は、2026-11-12 のコードレビューの指摘を受けて加えた。Content-Type が無い応答や `application/octet-stream` の応答をシグネチャで画像と判定する案は、Issue #547 が合意した受理範囲の外なので採っていない。
 
 ### Reassessment Triggers
 

@@ -110,30 +110,29 @@ fn image_body_not_matching_its_content_type_is_rejected_without_a_file() {
     }
 }
 
-/// [T-C065] An existing file at `--output` fails with exit 74 and keeps its bytes.
+/// [T-C065] An existing file at `--output` fails with exit 74 before any
+/// request and keeps its bytes. No proxy is set, so a request would fail DNS
+/// with a different exit code.
 #[test]
-fn existing_output_file_is_not_overwritten() {
+fn existing_output_file_is_refused_before_any_request() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("saved.png");
     fs::write(&path, b"earlier content").expect("seed file");
-    let Some(output) = fetch("image/png", PNG, &["--output", path_str(&path)]) else {
-        return;
-    };
+    let output = fetch_without_network(&["--output", path_str(&path)]);
 
     assert_eq!(output.status.code(), Some(74), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(fs::read(&path).expect("seed file"), b"earlier content");
 }
 
-/// [T-C066] A missing parent directory fails with exit 74 and creates nothing.
+/// [T-C066] A missing parent directory fails with exit 74 before any request
+/// and creates nothing.
 #[test]
-fn output_path_in_a_missing_directory_fails_without_creating_it() {
+fn output_path_in_a_missing_directory_is_refused_before_any_request() {
     let dir = tempfile::tempdir().expect("temp dir");
     let parent = dir.path().join("absent");
     let path = parent.join("saved.png");
-    let Some(output) = fetch("image/png", PNG, &["--output", path_str(&path)]) else {
-        return;
-    };
+    let output = fetch_without_network(&["--output", path_str(&path)]);
 
     assert_eq!(output.status.code(), Some(74), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
@@ -141,16 +140,17 @@ fn output_path_in_a_missing_directory_fails_without_creating_it() {
 }
 
 /// [T-C067] `--output` with a response outside the four raster types fails
-/// with exit 65, prints no body and leaves no file.
+/// with exit 65, prints no body and leaves no file. The hint tells the caller
+/// to drop `--output` only for a type that fetch returns as text.
 #[test]
 fn non_image_response_with_output_is_rejected_without_a_file() {
-    for content_type in [
-        "text/html",
-        "text/plain",
-        "application/xml",
-        "image/svg+xml",
-        "image/bmp",
-        "application/json",
+    for (content_type, fetchable_as_text) in [
+        ("text/html", true),
+        ("text/plain", true),
+        ("application/xml", true),
+        ("image/svg+xml", false),
+        ("image/bmp", false),
+        ("application/json", false),
     ] {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("saved.bin");
@@ -165,6 +165,12 @@ fn non_image_response_with_output_is_rejected_without_a_file() {
         assert_eq!(output.status.code(), Some(65), "{content_type}: {output:?}");
         assert!(output.stdout.is_empty(), "{content_type}: {output:?}");
         assert!(!path.exists(), "{content_type}: file must not be created");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("remove --output"),
+            fetchable_as_text,
+            "{content_type}: {stderr}"
+        );
     }
 }
 
@@ -209,13 +215,74 @@ fn page_response_with_js_and_output_reports_the_media_type_mismatch() {
     assert!(!path.exists(), "file must not be created");
 }
 
+/// [T-C070] A URL and a path longer than the 450-byte frontmatter field
+/// budget are reported whole, so the reported path is the file that exists.
+#[test]
+fn long_url_and_path_are_reported_whole() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let parent = dir.path().join("d".repeat(200)).join("e".repeat(200));
+    fs::create_dir_all(&parent).expect("nested directories");
+    let path = parent.join(format!("{}.png", "f".repeat(100)));
+    assert!(
+        path_str(&path).len() > 450,
+        "fixture path must exceed the budget"
+    );
+    let url = format!("{URL}?signature={}", "s".repeat(500));
+    let Some(output) = fetch_url(&url, "image/png", PNG, &["--output", path_str(&path)]) else {
+        return;
+    };
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 output"),
+        format!(
+            "---\npath: \"{}\"\nurl: \"{url}\"\ncontent_type: \"image/png\"\nbytes: {}\n---\n",
+            path_str(&path),
+            PNG.len()
+        )
+    );
+    assert_eq!(fs::read(&path).expect("saved file"), PNG);
+}
+
+/// [T-C071] An `--output` path that is not UTF-8 is a usage error before any
+/// request: frontmatter and JSON could not report it back.
+#[cfg(unix)]
+#[test]
+fn non_utf8_output_path_is_a_usage_error() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let output = common::scout_with_clean_env()
+        .args(["fetch", URL, "--output"])
+        .arg(OsString::from_vec(b"saved-\xff.png".to_vec()))
+        .output()
+        .expect("scout should launch");
+
+    assert_eq!(output.status.code(), Some(64), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+}
+
 fn path_str(path: &Path) -> &str {
     path.to_str().expect("UTF-8 temp path")
+}
+
+/// Run `scout fetch` with no proxy, for a failure that must precede any
+/// request.
+fn fetch_without_network(args: &[&str]) -> Output {
+    common::scout_with_clean_env()
+        .args(["fetch", URL])
+        .args(args)
+        .output()
+        .expect("scout should launch")
 }
 
 /// Serve one response through the mock proxy and run `scout fetch` with the
 /// extra arguments. Returns None under the shared bind-skip policy.
 fn fetch(content_type: &str, body: &[u8], args: &[&str]) -> Option<Output> {
+    fetch_url(URL, content_type, body, args)
+}
+
+fn fetch_url(url: &str, content_type: &str, body: &[u8], args: &[&str]) -> Option<Output> {
     let mut response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
         body.len()
@@ -225,7 +292,7 @@ fn fetch(content_type: &str, body: &[u8], args: &[&str]) -> Option<Output> {
     let (proxy, connections, handle) = common::spawn_mock_proxy_raw_response(&response)?;
     let output = common::scout_with_clean_env()
         .env("HTTP_PROXY", &proxy)
-        .args(["fetch", URL])
+        .args(["fetch", url])
         .args(args)
         .output()
         .expect("scout should launch");

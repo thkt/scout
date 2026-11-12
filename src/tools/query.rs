@@ -13,10 +13,10 @@ use crate::fetch::converter::FetchResult;
 use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_image, fetch_page};
 use crate::search::engine;
 use crate::slack::{SlackError, SlackUrl, parse_slack_url, truncate_slack_output};
-use crate::yaml::write_yaml_str;
+use crate::yaml::write_yaml_str_whole;
 
 use super::params::{FetchParams, ResearchParams, SearchParams};
-use super::save::save_new_file;
+use super::save::{ensure_new_file_can_be_created, save_new_file};
 use super::{MAX_FETCH_OUTPUT_BYTES, Scout, ScoutError, format_fetch_output, resolve_stdin_arg};
 
 impl Scout {
@@ -72,7 +72,7 @@ impl Scout {
             egress: self.egress.clone(),
         };
         if let Some(path) = params.output {
-            return self.fetch_image_to(&url, &opts, &path).await;
+            return self.fetch_image_to(&url, &opts, Path::new(&path)).await;
         }
         let result = self
             .within_fetch_timeout(
@@ -112,21 +112,33 @@ impl Scout {
         opts: &FetchOptions,
         path: &Path,
     ) -> Result<CommandOutput, ScoutError> {
+        // Subscribed across the download: the interrupt handler signals with
+        // `send`, which stores the flag only while a receiver exists.
+        let interrupted = self.cancel.subscribe();
+        ensure_new_file_can_be_created(path)?;
         let image = self
             .within_fetch_timeout(
                 url,
                 fetch_image(&self.fetch_http, url, opts, self.dns.clone()),
             )
             .await?;
+        // An interrupt lets this command run on through the shutdown drain.
+        // Its result is discarded, so a file written now would be reported
+        // nowhere and would block the retry on the same path.
+        if *interrupted.borrow() {
+            return Err(ScoutError::io_error(
+                "interrupted before the image was saved",
+            ));
+        }
         save_new_file(path, &image.bytes)?;
         info!(url = %RedactedLogUrl(url), bytes = image.bytes.len(), "fetch complete (image saved)");
 
         let path = path.display().to_string();
         let content_type = image.format.mime();
         let mut markdown = String::from("---\n");
-        write_yaml_str(&mut markdown, "path", &path);
-        write_yaml_str(&mut markdown, "url", &image.url);
-        write_yaml_str(&mut markdown, "content_type", content_type);
+        write_yaml_str_whole(&mut markdown, "path", &path);
+        write_yaml_str_whole(&mut markdown, "url", &image.url);
+        write_yaml_str_whole(&mut markdown, "content_type", content_type);
         let _ = writeln!(markdown, "bytes: {}", image.bytes.len());
         markdown.push_str("---\n");
         let data = serde_json::json!({

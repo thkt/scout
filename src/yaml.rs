@@ -188,7 +188,13 @@ fn truncate_field(value: &str) -> Cow<'_, str> {
 /// Write an escaped, double-quoted scalar atomically so callers cannot omit
 /// half of the YAML breakout defense.
 pub(crate) fn write_yaml_str(out: &mut String, key: &str, value: &str) {
-    let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(&truncate_field(value)));
+    write_yaml_str_whole(out, key, &truncate_field(value));
+}
+
+/// [`write_yaml_str`] without the field budget, for a value the reader must
+/// get back exactly, such as the path of a saved file.
+pub(crate) fn write_yaml_str_whole(out: &mut String, key: &str, value: &str) {
+    let _ = writeln!(out, "{key}: \"{}\"", escape_yaml(value));
 }
 
 /// Escape a double-quoted scalar; callers use [`write_yaml_str`] to add the key

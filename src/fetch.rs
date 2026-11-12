@@ -30,8 +30,8 @@ use crate::envelope::ErrorCode;
 #[cfg(feature = "js-rendering")]
 use cdp::fetch_with_cdp;
 use converter::{FetchResult, plain_text_result, to_fetch_result};
-pub(crate) use download::ImageFormat;
-use download::{DownloadedImage, DownloadedPage, MediaType, download, open_image};
+pub(crate) use download::{DownloadedImage, ImageFormat};
+use download::{DownloadedPage, MediaType, download, is_fetchable_as_text, open_image};
 use extractor::{extract_article, extract_raw};
 
 /// Options for [`fetch_page`] that control rendering, output, and egress.
@@ -134,8 +134,14 @@ impl FetchError {
             }
             Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must serve HTML or text content"),
+            Self::NotAnImage(mime) if is_fetchable_as_text(mime) => {
+                Classification::new(ErrorCode::DataError)
+                    .with_hint("remove --output to fetch this URL as text")
+            }
+            // The text fetch rejects this type too, so dropping `--output`
+            // would only repeat the failure.
             Self::NotAnImage(_) => Classification::new(ErrorCode::DataError)
-                .with_hint("remove --output to fetch this URL as text"),
+                .with_hint("scout fetches text, XML, and PNG, JPEG, GIF or WebP images only"),
             Self::ImageSignatureMismatch(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("the server sent content that does not match its Content-Type"),
             Self::ImageWithJs => Classification::new(ErrorCode::DataError)
@@ -166,14 +172,6 @@ impl FetchError {
     }
 }
 
-/// An image downloaded for `fetch --output`, with the URL its bytes came from.
-#[derive(Debug)]
-pub(crate) struct FetchedImage {
-    pub(crate) url: String,
-    pub(crate) format: ImageFormat,
-    pub(crate) bytes: Vec<u8>,
-}
-
 /// Download `url` as one of the four raster types without decoding the body.
 /// SSRF validation and redirect handling are the ones [`fetch_page`] uses.
 /// Only `opts.js` and `opts.egress` apply: `raw` selects an HTML conversion.
@@ -182,7 +180,7 @@ pub(crate) async fn fetch_image(
     url: &str,
     opts: &FetchOptions,
     resolver: Arc<dyn DnsResolver>,
-) -> Result<FetchedImage, FetchError> {
+) -> Result<DownloadedImage, FetchError> {
     let validated = ssrf_check(url, resolver.as_ref(), &opts.egress).await?;
     let response = open_image(
         client,
@@ -197,16 +195,7 @@ pub(crate) async fn fetch_image(
     if opts.js {
         return Err(FetchError::ImageWithJs);
     }
-    let DownloadedImage {
-        url: final_url,
-        format,
-        bytes,
-    } = response.read().await?;
-    Ok(FetchedImage {
-        url: final_url.as_str().to_owned(),
-        format,
-        bytes,
-    })
+    response.read().await
 }
 
 /// Visible-text threshold for trying JS fallback on a thin extract.

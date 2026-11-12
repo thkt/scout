@@ -74,13 +74,14 @@ impl ImageFormat {
     }
 }
 
-/// Image bytes exactly as the final response sent them. Every redirect hop
-/// passed `ssrf_check`, and the body starts with `format`'s signature.
+/// Image bytes exactly as the final response sent them, with the URL they
+/// came from. Every redirect hop passed `ssrf_check`, and the body starts with
+/// `format`'s signature.
 #[derive(Debug)]
-pub(super) struct DownloadedImage {
-    pub(super) url: ValidatedUrl,
-    pub(super) format: ImageFormat,
-    pub(super) bytes: Vec<u8>,
+pub(crate) struct DownloadedImage {
+    pub(crate) url: String,
+    pub(crate) format: ImageFormat,
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Requires a client with [`reqwest::redirect::Policy::none()`]: automatic
@@ -178,7 +179,7 @@ impl ImageResponse {
             return Err(FetchError::ImageSignatureMismatch(self.format.mime()));
         }
         Ok(DownloadedImage {
-            url: self.url,
+            url: self.url.as_str().to_owned(),
             format: self.format,
             bytes,
         })
@@ -343,6 +344,11 @@ fn check_content_type(content_type: &str) -> Result<MediaType, FetchError> {
         "text/plain" => MediaType::PlainText,
         _ => MediaType::OtherText,
     })
+}
+
+/// Whether [`download`] would return a response of this type as text.
+pub(super) fn is_fetchable_as_text(content_type: &str) -> bool {
+    check_content_type(content_type).is_ok()
 }
 
 /// Media type without parameters, in the header's own spelling.

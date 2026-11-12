@@ -303,6 +303,8 @@ mod builder_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
+mod image_fetch_tests;
+#[cfg(test)]
 mod query_tests;
 #[cfg(test)]
 mod repo_io_tests;
