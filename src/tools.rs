@@ -4,6 +4,7 @@ mod errors;
 mod params;
 mod query;
 mod repo;
+mod save;
 mod typo;
 
 pub(crate) use errors::ScoutError;
@@ -301,6 +302,8 @@ fn format_fetch_output(result: &FetchResult) -> String {
 mod builder_tests;
 #[cfg(test)]
 mod concurrency_tests;
+#[cfg(test)]
+mod image_fetch_tests;
 #[cfg(test)]
 mod query_tests;
 #[cfg(test)]

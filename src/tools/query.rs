@@ -1,17 +1,22 @@
 //! `Scout` query commands: web search, page fetch (including Slack), research.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
+use std::future::Future;
+use std::path::Path;
 
 use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
 use crate::fetch::converter::FetchResult;
-use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_page};
+use crate::fetch::{FetchError, FetchOptions, RedactedLogUrl, fetch_image, fetch_page};
 use crate::search::engine;
 use crate::slack::{SlackError, SlackUrl, parse_slack_url, truncate_slack_output};
+use crate::yaml::write_yaml_str_whole;
 
 use super::params::{FetchParams, ResearchParams, SearchParams};
+use super::save::{ensure_new_file_can_be_created, save_new_file};
 use super::{MAX_FETCH_OUTPUT_BYTES, Scout, ScoutError, format_fetch_output, resolve_stdin_arg};
 
 impl Scout {
@@ -45,7 +50,11 @@ impl Scout {
         if let Some(slack_url) = parse_slack_url(&url) {
             // A Slack permalink is read through the Slack API, so there is no
             // page for these flags to render.
-            for (set, flag) in [(params.js, "--js"), (params.raw, "--raw")] {
+            for (set, flag) in [
+                (params.js, "--js"),
+                (params.raw, "--raw"),
+                (params.output.is_some(), "--output"),
+            ] {
                 if set {
                     return Err(ScoutError::user_error(format!(
                         "{flag} does not apply to a Slack permalink; remove it"
@@ -62,23 +71,15 @@ impl Scout {
             raw: params.raw,
             egress: self.egress.clone(),
         };
-        let fetch_timeout = self.config.fetch_timeout;
-        let result = timeout(
-            fetch_timeout,
-            fetch_page(&self.fetch_http, &url, opts, self.dns.clone(), &self.cancel),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            warn!(
-                url = %RedactedLogUrl(&url),
-                timeout_secs = fetch_timeout.as_secs(),
-                "fetch timed out"
-            );
-            Err(FetchError::Timeout(format!(
-                "no response within {}s",
-                fetch_timeout.as_secs()
-            )))
-        })?;
+        if let Some(path) = params.output {
+            return self.fetch_image_to(&url, &opts, Path::new(&path)).await;
+        }
+        let result = self
+            .within_fetch_timeout(
+                &url,
+                fetch_page(&self.fetch_http, &url, opts, self.dns.clone(), &self.cancel),
+            )
+            .await?;
 
         info!(url = %RedactedLogUrl(&url), "fetch complete");
         let markdown = format_fetch_output(&result);
@@ -101,6 +102,73 @@ impl Scout {
             );
         }
         Ok(CommandOutput::with_degradation(markdown, data, degradation))
+    }
+
+    /// Save an image response to `path` and report where it went. The body
+    /// never reaches stdout: a caller reads the pixels from the file.
+    async fn fetch_image_to(
+        &self,
+        url: &str,
+        opts: &FetchOptions,
+        path: &Path,
+    ) -> Result<CommandOutput, ScoutError> {
+        // Subscribed across the download: the interrupt handler signals with
+        // `send`, which stores the flag only while a receiver exists.
+        let interrupted = self.cancel.subscribe();
+        ensure_new_file_can_be_created(path)?;
+        let image = self
+            .within_fetch_timeout(
+                url,
+                fetch_image(&self.fetch_http, url, opts, self.dns.clone()),
+            )
+            .await?;
+        // An interrupt lets this command run on through the shutdown drain.
+        // Its result is discarded, so a file written now would be reported
+        // nowhere and would block the retry on the same path.
+        if *interrupted.borrow() {
+            return Err(ScoutError::io_error(
+                "interrupted before the image was saved",
+            ));
+        }
+        save_new_file(path, &image.bytes)?;
+        info!(url = %RedactedLogUrl(url), bytes = image.bytes.len(), "fetch complete (image saved)");
+
+        let path = path.display().to_string();
+        let content_type = image.format.mime();
+        let mut markdown = String::from("---\n");
+        write_yaml_str_whole(&mut markdown, "path", &path);
+        write_yaml_str_whole(&mut markdown, "url", &image.url);
+        write_yaml_str_whole(&mut markdown, "content_type", content_type);
+        let _ = writeln!(markdown, "bytes: {}", image.bytes.len());
+        markdown.push_str("---\n");
+        let data = serde_json::json!({
+            "path": path,
+            "url": image.url,
+            "content_type": content_type,
+            "bytes": image.bytes.len(),
+        });
+        Ok(CommandOutput::ok(markdown, data))
+    }
+
+    /// Bound one fetch by `SCOUT_FETCH_TIMEOUT_SECS`, mapping expiry to
+    /// `FetchError::Timeout`.
+    async fn within_fetch_timeout<T>(
+        &self,
+        url: &str,
+        fetch: impl Future<Output = Result<T, FetchError>>,
+    ) -> Result<T, FetchError> {
+        let fetch_timeout = self.config.fetch_timeout;
+        timeout(fetch_timeout, fetch).await.unwrap_or_else(|_| {
+            warn!(
+                url = %RedactedLogUrl(url),
+                timeout_secs = fetch_timeout.as_secs(),
+                "fetch timed out"
+            );
+            Err(FetchError::Timeout(format!(
+                "no response within {}s",
+                fetch_timeout.as_secs()
+            )))
+        })
     }
 
     async fn fetch_slack(&self, slack_url: SlackUrl) -> Result<CommandOutput, ScoutError> {

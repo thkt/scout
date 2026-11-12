@@ -30,6 +30,60 @@ pub(super) enum MediaType {
     OtherText,
 }
 
+/// Raster formats `fetch --output` saves. SVG is markup that an image reader
+/// does not rasterize, so `image/svg+xml` is not one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+}
+
+impl ImageFormat {
+    pub(super) fn from_content_type(content_type: &str) -> Option<Self> {
+        match essence(content_type).to_ascii_lowercase().as_str() {
+            "image/png" => Some(Self::Png),
+            "image/jpeg" => Some(Self::Jpeg),
+            "image/gif" => Some(Self::Gif),
+            "image/webp" => Some(Self::Webp),
+            _ => None,
+        }
+    }
+
+    /// Canonical media type. Output uses this rather than the server's header
+    /// text, so no response bytes reach the frontmatter through it.
+    pub(crate) fn mime(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Webp => "image/webp",
+        }
+    }
+
+    /// Whether `body` starts with this format's file signature.
+    fn matches_signature(self, body: &[u8]) -> bool {
+        match self {
+            Self::Png => body.starts_with(b"\x89PNG\r\n\x1a\n"),
+            Self::Jpeg => body.starts_with(b"\xff\xd8\xff"),
+            Self::Gif => body.starts_with(b"GIF87a") || body.starts_with(b"GIF89a"),
+            // RIFF container: bytes 4..8 hold the chunk size.
+            Self::Webp => body.starts_with(b"RIFF") && body.get(8..12) == Some(b"WEBP"),
+        }
+    }
+}
+
+/// Image bytes exactly as the final response sent them, with the URL they
+/// came from. Every redirect hop passed `ssrf_check`, and the body starts with
+/// `format`'s signature.
+#[derive(Debug)]
+pub(crate) struct DownloadedImage {
+    pub(crate) url: String,
+    pub(crate) format: ImageFormat,
+    pub(crate) bytes: Vec<u8>,
+}
+
 /// Requires a client with [`reqwest::redirect::Policy::none()`]: automatic
 /// redirects would bypass per-hop SSRF validation (ADR-0001). The starting URL
 /// must also be validated. Production clients supply scout's User-Agent.
@@ -40,6 +94,107 @@ pub(super) async fn download(
     resolver: &dyn DnsResolver,
     mode: &EgressMode,
 ) -> Result<DownloadedPage, FetchError> {
+    let (current_url, response) =
+        final_response(client, url, max_redirects, resolver, mode).await?;
+
+    let mut charset = None;
+    let mut media_type = MediaType::Unknown;
+    match response.headers().get(CONTENT_TYPE) {
+        None => {
+            debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
+        }
+        Some(ct) => match ct.to_str() {
+            Ok(ct_str) => {
+                media_type = check_content_type(ct_str)?;
+                charset = extract_charset(ct_str);
+            }
+            Err(_) => {
+                warn!(url = %RedactedLogUrl(current_url.as_str()), "Content-Type header is not valid ASCII, proceeding as text")
+            }
+        },
+    }
+
+    let body = read_body_capped(
+        response,
+        MAX_RESPONSE_BYTES,
+        || FetchError::TooLarge,
+        FetchError::from,
+    )
+    .await?;
+    let decoded = decode_body(&body, charset.as_deref());
+    Ok(DownloadedPage {
+        url: current_url,
+        text: decoded.text,
+        decode_uncertain: decoded.uncertain,
+        media_type,
+    })
+}
+
+/// A final response whose headers declare one of the four raster types, with
+/// its body still unread. A caller can reject the request on what the headers
+/// say without waiting for up to `MAX_RESPONSE_BYTES`.
+#[derive(Debug)]
+pub(super) struct ImageResponse {
+    url: ValidatedUrl,
+    format: ImageFormat,
+    response: reqwest::Response,
+}
+
+/// Same client and URL requirements as [`download`]. A response outside the
+/// four raster types is rejected on its headers.
+pub(super) async fn open_image(
+    client: &Client,
+    url: &ValidatedUrl,
+    max_redirects: usize,
+    resolver: &dyn DnsResolver,
+    mode: &EgressMode,
+) -> Result<ImageResponse, FetchError> {
+    let (url, response) = final_response(client, url, max_redirects, resolver, mode).await?;
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|ct| ct.to_str().ok())
+        .unwrap_or_default();
+    let Some(format) = ImageFormat::from_content_type(content_type) else {
+        return Err(FetchError::NotAnImage(essence(content_type).to_owned()));
+    };
+    Ok(ImageResponse {
+        url,
+        format,
+        response,
+    })
+}
+
+impl ImageResponse {
+    pub(super) async fn read(self) -> Result<DownloadedImage, FetchError> {
+        let bytes = read_body_capped(
+            self.response,
+            MAX_RESPONSE_BYTES,
+            || FetchError::TooLarge,
+            FetchError::from,
+        )
+        .await?;
+        if !self.format.matches_signature(&bytes) {
+            return Err(FetchError::ImageSignatureMismatch(self.format.mime()));
+        }
+        Ok(DownloadedImage {
+            url: self.url.as_str().to_owned(),
+            format: self.format,
+            bytes,
+        })
+    }
+}
+
+/// Follow redirects to the first non-redirect response, re-running
+/// `ssrf_check` on every hop, and require a success status.
+async fn final_response(
+    client: &Client,
+    url: &ValidatedUrl,
+    max_redirects: usize,
+    resolver: &dyn DnsResolver,
+    mode: &EgressMode,
+) -> Result<(ValidatedUrl, reqwest::Response), FetchError> {
     let mut current_url = url.clone();
 
     for _hop in 0..=max_redirects {
@@ -69,38 +224,7 @@ pub(super) async fn download(
         if !status.is_success() {
             return Err(FetchError::Status(status.as_u16()));
         }
-
-        let mut charset = None;
-        let mut media_type = MediaType::Unknown;
-        match response.headers().get(CONTENT_TYPE) {
-            None => {
-                debug!(url = %RedactedLogUrl(current_url.as_str()), "no Content-Type header, proceeding as text")
-            }
-            Some(ct) => match ct.to_str() {
-                Ok(ct_str) => {
-                    media_type = check_content_type(ct_str)?;
-                    charset = extract_charset(ct_str);
-                }
-                Err(_) => {
-                    warn!(url = %RedactedLogUrl(current_url.as_str()), "Content-Type header is not valid ASCII, proceeding as text")
-                }
-            },
-        }
-
-        let body = read_body_capped(
-            response,
-            MAX_RESPONSE_BYTES,
-            || FetchError::TooLarge,
-            FetchError::from,
-        )
-        .await?;
-        let decoded = decode_body(&body, charset.as_deref());
-        return Ok(DownloadedPage {
-            url: current_url,
-            text: decoded.text,
-            decode_uncertain: decoded.uncertain,
-            media_type,
-        });
+        return Ok((current_url, response));
     }
 
     // Redirect cap breaches are terminal DataError: retrying a loop or incorrect
@@ -203,10 +327,7 @@ fn detect_decode(bytes: &[u8]) -> Option<String> {
 /// Accept text and application XML, including RFC 6839 `+xml` suffixes.
 /// `image/svg+xml` remains excluded; an empty media type declares no restriction.
 fn check_content_type(content_type: &str) -> Result<MediaType, FetchError> {
-    let mime = content_type
-        .split_once(';')
-        .map_or(content_type, |(mime, _params)| mime)
-        .trim();
+    let mime = essence(content_type);
     // Media type tokens are case-insensitive (RFC 9110 section 8.3.1).
     // Keep `mime` for diagnostics so rejection still reports the actual header.
     let normalized = mime.to_ascii_lowercase();
@@ -223,6 +344,19 @@ fn check_content_type(content_type: &str) -> Result<MediaType, FetchError> {
         "text/plain" => MediaType::PlainText,
         _ => MediaType::OtherText,
     })
+}
+
+/// Whether [`download`] would return a response of this type as text.
+pub(super) fn is_fetchable_as_text(content_type: &str) -> bool {
+    check_content_type(content_type).is_ok()
+}
+
+/// Media type without parameters, in the header's own spelling.
+fn essence(content_type: &str) -> &str {
+    content_type
+        .split_once(';')
+        .map_or(content_type, |(mime, _params)| mime)
+        .trim()
 }
 
 #[cfg(test)]
