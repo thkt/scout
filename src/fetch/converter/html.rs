@@ -254,7 +254,7 @@ fn render_code(node: NodeRef<'_>) -> String {
                     .map(str::to_owned)
             })
             .unwrap_or_default();
-        return fenced(content.strip_suffix('\n').unwrap_or(&content), &language);
+        return fenced(content.trim_suffix('\n'), &language);
     }
     inline_code(&content.replace('\n', " "), true)
 }

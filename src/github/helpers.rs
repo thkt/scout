@@ -61,7 +61,7 @@ pub(crate) fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> 
         .or_else(|| repository.strip_prefix("http://github.com/"))
         .unwrap_or(repository)
         .trim_end_matches('/');
-    let repo_str = stripped.strip_suffix(".git").unwrap_or(stripped);
+    let repo_str = stripped.trim_suffix(".git");
 
     let parts: Vec<&str> = repo_str.splitn(3, '/').collect();
     if parts.len() < 2 || !is_valid_github_name(parts[0]) || !is_valid_github_name(parts[1]) {

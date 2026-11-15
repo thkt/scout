@@ -236,7 +236,7 @@ fn is_blocked_host(parsed: &url::Url) -> bool {
             // and `svc.internal.` reach here undotted-suffix-matched unless it
             // is stripped first. Both forms resolve to the same host.
             let lower = domain.to_ascii_lowercase();
-            let lower = lower.strip_suffix('.').unwrap_or(&lower);
+            let lower = lower.trim_suffix('.');
             lower == "localhost"
                 || lower.ends_with(".localhost")
                 || lower.ends_with(".local")
