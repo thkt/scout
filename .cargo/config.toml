@@ -1,0 +1,7 @@
+# Hold back crate versions younger than 7 days on `cargo update`, matching the
+# `minimumReleaseAge` that Renovate applies through github>thkt/renovate-config.
+# A full `cargo update` also downgrades locked versions still under 7 days old;
+# plain builds keep Cargo.lock as is.
+# Override one update with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow.
+[registry]
+global-min-publish-age = "7 days"
