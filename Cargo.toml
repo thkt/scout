@@ -22,7 +22,7 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 dom_smoothie = "0.19"
 # Keep the parser aligned with dom_query's TreeSink API.
-dom_query = { version = "0.29", default-features = false }
+dom_query = { version = "0.30", default-features = false }
 html5ever = "0.40.1"
 # `full` also pulls `fs` (no call site) and `parking_lot` (swaps tokio's
 # internal Mutex). The list below is what the crate actually calls; adding a
