@@ -58,15 +58,40 @@ pub(crate) async fn read_body_capped<E>(
     network: impl Fn(reqwest::Error) -> E,
 ) -> Result<Vec<u8>, E> {
     let content_length = response.content_length();
+    read_rest_capped(
+        response,
+        Vec::new(),
+        content_length,
+        cap,
+        too_large,
+        network,
+    )
+    .await
+}
+
+/// [`read_body_capped`] for a response whose leading bytes `head` the caller
+/// has already read. `content_length` is the response's value from before that
+/// read, and `cap` covers `head` as well as the rest.
+pub(crate) async fn read_rest_capped<E>(
+    response: reqwest::Response,
+    mut body: Vec<u8>,
+    content_length: Option<u64>,
+    cap: usize,
+    too_large: impl Fn() -> E,
+    network: impl Fn(reqwest::Error) -> E,
+) -> Result<Vec<u8>, E> {
     if let Some(len) = content_length
         && usize::try_from(len).unwrap_or(usize::MAX) > cap
     {
         return Err(too_large());
     }
+    if body.len() > cap {
+        return Err(too_large());
+    }
     let capacity = content_length.map_or(8192, |len| {
         usize::try_from(len).unwrap_or(usize::MAX).min(cap)
     });
-    let mut body = Vec::with_capacity(capacity);
+    body.reserve(capacity.saturating_sub(body.len()));
     let mut stream = response;
     while let Some(chunk) = stream.chunk().await.map_err(&network)? {
         body.extend_from_slice(&chunk);

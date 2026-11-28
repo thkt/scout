@@ -143,3 +143,59 @@ async fn read_body_snippet_returns_a_short_body_intact() {
 
     assert_eq!(body, b"nope");
 }
+
+/// [T-BL003] The leading bytes the caller already read come first in the
+/// result, and the cap counts them: head plus rest at cap returns whole, one
+/// byte more is rejected.
+#[tokio::test]
+async fn read_rest_capped_counts_the_head_against_the_cap() {
+    const CAP: usize = 16;
+    let Some(server) = try_spawn_mock_server("body_limit::rest_after_head").await else {
+        return; // loopback bind unavailable — skip
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; CAP - 4]))
+        .mount(&server)
+        .await;
+
+    for (head, expected) in [
+        (
+            b"head".to_vec(),
+            Ok([b"head".as_slice(), &[b'x'; CAP - 4]].concat()),
+        ),
+        (b"head!".to_vec(), Err("too_large")),
+    ] {
+        let resp = reqwest::Client::new()
+            .get(server.uri())
+            .send()
+            .await
+            .expect("send");
+        let result: Result<Vec<u8>, &str> =
+            read_rest_capped(resp, head, None, CAP, || "too_large", |_e| "network").await;
+        assert_eq!(result, expected);
+    }
+}
+
+/// [T-BL004] A head already longer than the cap is rejected without reading
+/// the rest.
+#[tokio::test]
+async fn read_rest_capped_rejects_a_head_over_the_cap() {
+    const CAP: usize = 4;
+    let Some((url, handle)) = spawn_declared_length_no_body_server(1) else {
+        return; // loopback bind unavailable — skip
+    };
+    let resp = reqwest::Client::new().get(&url).send().await.expect("send");
+
+    let result: Result<Vec<u8>, &str> = read_rest_capped(
+        resp,
+        vec![b'x'; CAP + 1],
+        None,
+        CAP,
+        || "too_large",
+        |_e| "network",
+    )
+    .await;
+
+    assert_eq!(result, Err("too_large"));
+    join_server_thread(handle);
+}
