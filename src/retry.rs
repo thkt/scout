@@ -101,13 +101,15 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Optio
         return Some(secs);
     }
     match httpdate::parse_http_date(raw) {
-        Ok(target) => match target.duration_since(UNIX_EPOCH) {
-            Ok(d) => Some(d.as_secs().saturating_sub(clock.now_secs())),
-            Err(e) => {
-                warn!(value = %raw, error = %e, "Retry-After HTTP-date is before Unix epoch");
-                None
-            }
-        },
+        // `httpdate` builds every parsed date as `UNIX_EPOCH + Duration`, so it
+        // is never before the epoch.
+        Ok(target) => Some(
+            target
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(clock.now_secs()),
+        ),
         Err(e) => {
             warn!(value = %raw, error = %e, "unparseable Retry-After header");
             None

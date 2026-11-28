@@ -62,10 +62,9 @@ pub(crate) enum SlackError {
     #[error("Slack request failed: {0}")]
     Network(#[source] reqwest::Error),
 
-    /// URL construction failure inside `client::api_get_once`. Unlike
-    /// `BraveError::ParseUrl` (DataError — Brave's `base_url` is caller-supplied),
-    /// Slack's `base_url` is a `const` (`client::API_BASE`), so this arm is
-    /// unreachable in production; a hit here is a scout-side bug, not a
+    /// URL construction failure inside `client::api_get_once`. Slack's
+    /// `base_url` is a `const` (`client::API_BASE`) outside tests, so this arm
+    /// is unreachable in production; a hit here is a scout-side bug, not a
     /// user-facing data problem.
     #[error("Invalid Slack API URL: {0}")]
     // Qualified `::url` (crate root), not `url`: the local `mod url` declared

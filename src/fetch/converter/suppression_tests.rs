@@ -201,7 +201,7 @@ fn readability_failure_path_still_drops_script_content() {
     // Avoid `_` in the leak marker: body text escapes it as `\_`, so a literal
     // substring assertion could then miss leaked script text.
     let html = "<script>SCRIPTMARKER</script>";
-    let article = extract_article(html, Some("https://example.com"));
+    let article = extract_article(html, "https://example.com");
     assert!(
         article.used_raw_fallback,
         "fixture must take the fallback for this test to cover that path"
