@@ -9,7 +9,8 @@ use super::GitHubError;
 use crate::charset::is_reliable_detection;
 
 /// How the encoding was determined.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum DetectionSource {
     /// User supplied `--encoding <label>`.
     Explicit,
@@ -20,7 +21,8 @@ pub(crate) enum DetectionSource {
 }
 
 /// Result of decoding raw bytes into Unicode text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct DecodeResult {
     pub(crate) text: String,
     /// The encoding label in lowercase (e.g. "shift_jis", "utf-8").

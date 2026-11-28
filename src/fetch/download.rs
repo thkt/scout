@@ -22,7 +22,8 @@ pub(super) struct DownloadedPage {
 
 /// Unknown headers retain the historical HTML path; only an explicit media
 /// type can suppress HTML's automatic rendering heuristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) enum MediaType {
     Unknown,
     Html,
@@ -32,7 +33,8 @@ pub(super) enum MediaType {
 
 /// Raster formats `fetch --output` saves. SVG is markup that an image reader
 /// does not rasterize, so `image/svg+xml` is not one of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum ImageFormat {
     Png,
     Jpeg,

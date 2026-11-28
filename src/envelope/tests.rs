@@ -339,3 +339,67 @@ fn success_envelope_surfaces_degraded_reasons() {
         "got: {json}"
     );
 }
+
+/// [T-EN017] The exit-code tables in README.md and README.ja.md list exactly
+/// 0 and the exit code of every `ErrorCode`, so a code added, removed or
+/// renumbered in the code fails until both tables follow.
+#[test]
+fn readme_exit_code_tables_list_every_error_code() {
+    let all = [
+        ErrorCode::UsageError,
+        ErrorCode::DataError,
+        ErrorCode::NotFound,
+        ErrorCode::Internal,
+        ErrorCode::IoError,
+        ErrorCode::TempFailure,
+        ErrorCode::Timeout,
+        ErrorCode::Unknown,
+        ErrorCode::InterruptedSigint,
+        ErrorCode::InterruptedSigterm,
+    ];
+    for code in all {
+        match code {
+            ErrorCode::UsageError
+            | ErrorCode::DataError
+            | ErrorCode::NotFound
+            | ErrorCode::Internal
+            | ErrorCode::IoError
+            | ErrorCode::TempFailure
+            | ErrorCode::Timeout
+            | ErrorCode::Unknown
+            | ErrorCode::InterruptedSigint
+            | ErrorCode::InterruptedSigterm => {}
+        }
+    }
+    let mut expected: Vec<u8> = all.iter().map(|code| code.exit_code()).collect();
+    expected.push(0);
+    expected.sort_unstable();
+
+    for (name, readme, heading) in [
+        (
+            "README.md",
+            include_str!("../../README.md"),
+            "## Exit codes",
+        ),
+        (
+            "README.ja.md",
+            include_str!("../../README.ja.md"),
+            "## 終了コード",
+        ),
+    ] {
+        let section = readme
+            .split_once(heading)
+            .unwrap_or_else(|| panic!("{name} has no {heading} section"))
+            .1;
+        let section = section
+            .split_once("\n## ")
+            .map_or(section, |(body, _)| body);
+        let mut listed: Vec<u8> = section
+            .lines()
+            .filter_map(|line| line.strip_prefix('|'))
+            .filter_map(|row| row.split('|').next()?.trim().parse().ok())
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(listed, expected, "{name}");
+    }
+}

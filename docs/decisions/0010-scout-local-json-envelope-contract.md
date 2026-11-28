@@ -202,3 +202,7 @@ ADR ギャップ監査 (`docs/audit/2026-06-24-020601-adr-gaps.md`、downgrade �
 exit code 130 / 143 は ADR-0017 の管轄で変えない。`ErrorCode::exit_code()` は同じ 2 値を `InterruptSignal` (`src/signals.rs`) とは別に持つ。`InterruptSignal::Sigterm` が `#[cfg(unix)]` である一方、`error.code` の値集合は platform で変わってはならないため、`ErrorCode` 側の 2 variant は無条件で定義する。2 つの table が食い違わないことは T-W009 が assert する。
 
 `retryable` は両方 false とし、Rule 1 の `matches!(self, TempFailure | Timeout)` は変えない。ADR-0017 が書く「130 で retry」は caller が exit code を見て選ぶ戦略であって、scout 側が transient と判定したという意味ではない。
+
+## Addendum (2026-11-28): Rule 2 の `code` の例を実在する値へ読み替える
+
+Rule 2 の表は `code` の用途の例に `code === "RATE_LIMIT"` を挙げているが、`ErrorCode`（`src/envelope.rs`）に `RateLimit` は無く、`RATE_LIMIT` は出力されない。レート制限（HTTP 429）は `Classification::from_http_status`（`src/classify.rs`）で `TEMP_FAILURE` になる。parser が分岐に使う値の例は `code === "TEMP_FAILURE"` と読む。`code` の値集合は `ErrorCode` の 10 variant が真実源である。

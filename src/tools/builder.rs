@@ -32,8 +32,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
-/// Test seam for `Scout`. Production goes through `Scout::new` (sugar for
-/// `ScoutBuilder::from_env()?.build()`); tests use the `with_*` setters to
+/// Test seam for `Scout`. Production goes through `Scout::new`, which calls
+/// `ScoutBuilder::from_env()?.build()` and then sets `not_found_candidates`
+/// from its argument; tests use the `with_*` setters to
 /// inject `Clock` / `DnsResolver` doubles or to point `Brave` / `GitHub` /
 /// `Slack` at wiremock endpoints without reaching into private fields.
 /// `build` is sync + infallible so fallibility stays in `from_env`.

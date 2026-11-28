@@ -27,7 +27,8 @@ const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// and carries the mode to `fetch_page` through `FetchOptions.egress`.
 /// `ssrf_check` takes `&EgressMode` to gate its DNS pre-check, which `Proxied`
 /// skips (the proxy resolves and dials, not scout).
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) enum EgressMode {
     #[default]
     Direct,

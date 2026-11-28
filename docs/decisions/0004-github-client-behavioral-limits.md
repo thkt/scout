@@ -108,7 +108,7 @@ secondary rate limit が `Retry-After` を返すという前提は GitHub の ra
 ### Confirmation
 
 - `src/github.rs` の `get_json_once` の 403 arm で 403 + header 不在の unit test (mock response)、`RateLimited` に分類されることを確認
-- `src/github.rs` の `PerPage::new` boundary test: `per_page=1` / `per_page=100` accept (T-GH011a)、`per_page=0` / `per_page=101` で panic 検証 (T-GH011b/c、`#[should_panic]`)
+- `src/github.rs` の `PerPage::new` の boundary test (`src/github/http_tests.rs`): `per_page=1` / `per_page=100` accept (T-GH011a)、`per_page=0` / `per_page=101` で panic 検証 (T-GH011b/c、`#[should_panic]`)
 - `src/github/helpers.rs` の `filter_tree_entries` で `filter_tree_entries(entries, None, Some("src/*.rs"))` が `src/foo.rs` を含むことの test
 - `src/github.rs` の `get_issues` / `get_pulls` / `get_releases` の list endpoint URL に `?page=` が含まれないこと、固定 query string (`state=open&sort=updated&direction=desc`) が caller の引数で変更されないことの compile-time enforcement (関数 signature が `per_page: PerPage` のみ受け取る)
 - `scout repo-overview --help` で list endpoint が "first N items" の semantics であることを README / `--help` で文書化

@@ -42,13 +42,12 @@ pub(crate) struct TreeResponse {
     pub(crate) truncated: bool,
 }
 
-/// Git object type. `Other` captures unknown types via `#[serde(other)]` for forward compat.
+/// Git object type. Only files are listed, so every other type, such as a
+/// `tree` directory or a `commit` submodule, reads as `Other`.
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EntryType {
     Blob,
-    Tree,
-    Commit,
     #[serde(other)]
     Other,
 }
