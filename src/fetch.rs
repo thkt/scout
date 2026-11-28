@@ -18,6 +18,7 @@ pub(crate) use ssrf::{
 #[cfg(test)]
 pub(crate) use ssrf::{FailingDnsResolver, StaticDnsResolver};
 
+use std::fmt;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -86,12 +87,9 @@ pub(crate) enum FetchError {
     TooLarge,
 
     /// `--output` met a response outside the four raster types. The payload is
-    /// the response's media type, empty when the header is absent or unreadable.
-    #[error(
-        "--output saves PNG, JPEG, GIF, or WebP only; response content type is {}",
-        if .0.is_empty() { "missing" } else { .0.as_str() }
-    )]
-    NotAnImage(String),
+    /// what the response's Content-Type header said.
+    #[error("--output saves PNG, JPEG, GIF, or WebP only; response content type is {0}")]
+    NotAnImage(DeclaredType),
 
     /// The body does not start with the signature of the declared media type.
     #[error("response body is not {0} data")]
@@ -110,6 +108,27 @@ pub(crate) enum FetchError {
 
     #[error("browser rendering failed: {0}")]
     BrowserFailed(String),
+}
+
+/// What a response's Content-Type header said about its media type.
+#[derive(Debug)]
+pub(crate) enum DeclaredType {
+    /// No header, or one whose media type is empty.
+    Missing,
+    /// A header whose value is not ASCII, so its media type cannot be read.
+    NotAscii,
+    /// The media type without parameters, in the header's own spelling.
+    Media(String),
+}
+
+impl fmt::Display for DeclaredType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => f.write_str("missing"),
+            Self::NotAscii => f.write_str("not valid ASCII"),
+            Self::Media(mime) => f.write_str(mime),
+        }
+    }
 }
 
 impl FetchError {
@@ -134,7 +153,13 @@ impl FetchError {
             }
             Self::UnsupportedContentType(_) => Classification::new(ErrorCode::DataError)
                 .with_hint("URL must serve HTML or text content"),
-            Self::NotAnImage(mime) if is_fetchable_as_text(mime) => {
+            // Without a readable media type the text fetch takes the HTML path,
+            // so dropping `--output` lets the fetch succeed.
+            Self::NotAnImage(DeclaredType::Missing | DeclaredType::NotAscii) => {
+                Classification::new(ErrorCode::DataError)
+                    .with_hint("remove --output to fetch this URL as text")
+            }
+            Self::NotAnImage(DeclaredType::Media(mime)) if is_fetchable_as_text(mime) => {
                 Classification::new(ErrorCode::DataError)
                     .with_hint("remove --output to fetch this URL as text")
             }

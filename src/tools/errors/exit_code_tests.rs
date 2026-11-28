@@ -1,4 +1,5 @@
 use super::*;
+use crate::fetch::DeclaredType;
 
 /// [T-ER001a] UsageError errors surface with exit 64 (EX_USAGE per ADR-0002)
 #[test]
@@ -51,7 +52,7 @@ fn data_errors_have_exit_code_65() {
         FetchError::Status(499).into(),
         FetchError::TooLarge.into(),
         FetchError::TooManyRedirects(10).into(),
-        FetchError::NotAnImage("text/html".into()).into(),
+        FetchError::NotAnImage(DeclaredType::Media("text/html".into())).into(),
         FetchError::ImageSignatureMismatch("image/png").into(),
         FetchError::ImageWithJs.into(),
         BraveError::Api {

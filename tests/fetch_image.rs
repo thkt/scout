@@ -394,7 +394,9 @@ fn untyped_non_image_body_is_rejected_without_a_file() {
 }
 
 /// [T-C076] A Content-Type header that is not ASCII is not a missing header:
-/// a PNG body behind it fails with exit 65 and leaves no file.
+/// a PNG body behind it fails with exit 65, leaves no file, and the error says
+/// the header is not ASCII rather than missing. The hint still points to the
+/// text fetch, which reads such a response as HTML.
 #[test]
 fn non_ascii_content_type_is_not_read_by_signature() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -411,6 +413,13 @@ fn non_ascii_content_type_is_not_read_by_signature() {
     assert_eq!(output.status.code(), Some(65), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(!path.exists(), "file must not be created");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("content type is not valid ASCII"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("missing"), "{stderr}");
+    assert!(stderr.contains("remove --output"), "{stderr}");
 }
 
 /// [T-C077] `--js` on an image found by its leading bytes fails with exit 65
