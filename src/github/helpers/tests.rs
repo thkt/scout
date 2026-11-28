@@ -16,8 +16,17 @@ fn parse_repo_valid_formats() {
         ("owner/repo.git", "owner", "repo"),
         ("user/user.github.io", "user", "user.github.io"),
     ] {
-        let (o, r) = parse_repo(input).unwrap_or_else(|_| panic!("should parse: {input}"));
-        assert_eq!((o, r), (owner, repo), "input: {input}");
+        let parsed = parse_repo(input).unwrap_or_else(|_| panic!("should parse: {input}"));
+        assert_eq!(
+            (parsed.owner(), parsed.name()),
+            (owner, repo),
+            "input: {input}"
+        );
+        assert_eq!(
+            parsed.to_string(),
+            format!("{owner}/{repo}"),
+            "input: {input}"
+        );
     }
 }
 

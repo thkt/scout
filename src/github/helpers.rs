@@ -1,3 +1,5 @@
+use std::fmt;
+
 use globset::Glob;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
@@ -52,10 +54,35 @@ fn is_valid_github_name(s: &str) -> bool {
         && s != "."
 }
 
-/// Parse a repository identifier into `(owner, repo)`.
+/// An owner and repository name that both passed [`is_valid_github_name`].
+/// `Display` renders `owner/repo`, which is safe to place in a request path
+/// without [`encode_path`]. Only [`parse_repo`] builds one.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RepoRef<'a> {
+    owner: &'a str,
+    name: &'a str,
+}
+
+impl<'a> RepoRef<'a> {
+    pub(crate) fn owner(self) -> &'a str {
+        self.owner
+    }
+
+    pub(crate) fn name(self) -> &'a str {
+        self.name
+    }
+}
+
+impl fmt::Display for RepoRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.owner, self.name)
+    }
+}
+
+/// Parse a repository identifier into a [`RepoRef`].
 ///
 /// Accepts `"owner/repo"`, full GitHub URLs, and `.git` suffixed URLs.
-pub(crate) fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> {
+pub(crate) fn parse_repo(repository: &str) -> Result<RepoRef<'_>, GitHubError> {
     let stripped = repository
         .strip_prefix("https://github.com/")
         .or_else(|| repository.strip_prefix("http://github.com/"))
@@ -67,7 +94,10 @@ pub(crate) fn parse_repo(repository: &str) -> Result<(&str, &str), GitHubError> 
     if parts.len() < 2 || !is_valid_github_name(parts[0]) || !is_valid_github_name(parts[1]) {
         return Err(GitHubError::InvalidRepo(repository.to_owned()));
     }
-    Ok((parts[0], parts[1]))
+    Ok(RepoRef {
+        owner: parts[0],
+        name: parts[1],
+    })
 }
 
 /// Validate a git ref (branch, tag, or SHA).
