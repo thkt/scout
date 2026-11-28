@@ -11,6 +11,7 @@ mod redacted;
 mod retry;
 mod rng;
 mod search;
+mod secret_source;
 mod signals;
 mod slack;
 #[cfg(test)]
@@ -75,11 +76,14 @@ Exit codes (sysexits.h + GNU coreutils + POSIX signal convention):
   143  Interrupted by SIGTERM (128 + 15; e.g. shell timeout, kill default)
 
 Environment:
-  BRAVE_SEARCH_API_KEY          Required for search and research commands
+  BRAVE_SEARCH_API_KEY          Required for search and research commands. When unset,
+                                macOS reads the Keychain item of this service name
   GITHUB_TOKEN                  Optional for GitHub commands (higher rate limits)
   GH_TOKEN                      Read when GITHUB_TOKEN is unset; `gh auth token` is
                                 tried after both
-  SLACK_TOKEN                   Optional. User OAuth token (xoxp-…) required for Slack URLs
+  SLACK_TOKEN                   Optional. User OAuth token (xoxp-…) required for Slack URLs.
+                                When unset, macOS reads the Keychain item of this service name
+  SCOUT_NO_KEYCHAIN             Set to 1 to skip the Keychain lookup
   HTTPS_PROXY, HTTP_PROXY,      Route fetch through this proxy (lowercase names also
   ALL_PROXY                     read). The proxy then resolves hostnames; scout
                                 still rejects literal private and loopback IPs
@@ -608,6 +612,10 @@ mod tests {
         assert!(
             help.contains("GITHUB_TOKEN"),
             "root help missing GITHUB_TOKEN"
+        );
+        assert!(
+            help.contains("SCOUT_NO_KEYCHAIN") && help.contains("Keychain item"),
+            "root help missing the Keychain lookup and SCOUT_NO_KEYCHAIN"
         );
         for code in [
             "64", "65", "66", "70", "74", "75", "104", "124", "130", "143",

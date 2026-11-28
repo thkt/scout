@@ -88,6 +88,15 @@ export SLACK_TOKEN="..."            # Optional: required for `fetch` on Slack pe
 
 `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` are all supported, in that order.
 
+On macOS, when `BRAVE_SEARCH_API_KEY` or `SLACK_TOKEN` is unset, scout reads the Keychain item whose service name is the env var's name. This covers an AI agent started by a GUI app, whose shell never sources `~/.zshrc`. Store each secret once. `-w` with no value prompts for it, and `-U` replaces an existing item:
+
+```sh
+security add-generic-password -s BRAVE_SEARCH_API_KEY -a "$USER" -U -w
+security add-generic-password -s SLACK_TOKEN -a "$USER" -U -w
+```
+
+Set `SCOUT_NO_KEYCHAIN=1` to skip the Keychain lookup.
+
 ### Tuning
 
 Override the built-in timeouts and retry budget. Invalid values fail with exit 64 (usage error) before any request is made.
