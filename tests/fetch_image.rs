@@ -262,6 +262,202 @@ fn non_utf8_output_path_is_a_usage_error() {
     assert!(output.stdout.is_empty(), "{output:?}");
 }
 
+/// Header lines for the responses whose format the leading bytes decide: no
+/// Content-Type, `application/octet-stream` in two spellings, and an empty
+/// media type with and without parameters.
+const UNTYPED_HEADERS: [&str; 5] = [
+    "",
+    "Content-Type: application/octet-stream\r\n",
+    "Content-Type: Application/Octet-Stream; charset=binary\r\n",
+    "Content-Type: \r\n",
+    "Content-Type: ; charset=binary\r\n",
+];
+
+/// [T-C072] A response with no or an empty Content-Type, or with
+/// `application/octet-stream`, is saved verbatim when its leading bytes are
+/// one of the four raster signatures, and reported with the canonical type.
+#[test]
+fn untyped_image_response_is_saved_by_its_signature() {
+    for headers in UNTYPED_HEADERS {
+        for (mime, body) in [
+            ("image/png", PNG),
+            ("image/jpeg", JPEG),
+            ("image/gif", GIF),
+            ("image/webp", WEBP),
+        ] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("saved.bin");
+            let Some(output) = fetch_with_headers(
+                URL,
+                headers.as_bytes(),
+                body,
+                &["--output", path_str(&path)],
+            ) else {
+                return;
+            };
+
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{headers:?} {mime}: {output:?}"
+            );
+            assert_eq!(
+                fs::read(&path).expect("saved file"),
+                body,
+                "{headers:?} {mime}"
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("UTF-8 output"),
+                format!(
+                    "---\npath: \"{}\"\nurl: \"{URL}\"\ncontent_type: \"{mime}\"\nbytes: {}\n---\n",
+                    path_str(&path),
+                    body.len()
+                ),
+                "{headers:?} {mime}"
+            );
+        }
+    }
+}
+
+/// [T-C073] A body shorter than 12 bytes is matched as far as it goes, so a
+/// bare JPEG signature with no Content-Type is saved.
+#[test]
+fn untyped_body_shorter_than_the_longest_signature_is_matched_whole() {
+    let body = b"\xff\xd8\xff";
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("saved.jpg");
+    let Some(output) = fetch_with_headers(URL, b"", body, &["--output", path_str(&path)]) else {
+        return;
+    };
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(fs::read(&path).expect("saved file"), body);
+}
+
+/// [T-C074] `image/jpg` is read as `image/jpeg`: the JPEG is saved with the
+/// canonical type, and without `--output` the hint names the flag.
+#[test]
+fn image_jpg_is_accepted_as_image_jpeg() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("saved.jpg");
+    let Some(output) = fetch("image/jpg", JPEG, &["--output", path_str(&path)]) else {
+        return;
+    };
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(fs::read(&path).expect("saved file"), JPEG);
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
+    assert!(stdout.contains("content_type: \"image/jpeg\""), "{stdout}");
+
+    let Some(output) = fetch("image/jpg", JPEG, &[]) else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(65), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("pass --output"), "{stderr}");
+}
+
+/// [T-C075] With no Content-Type or `application/octet-stream`, a body that
+/// starts with none of the four signatures fails with exit 65 and leaves no
+/// file. Only the missing header gets the hint to drop `--output`, because
+/// only that response is fetched as text.
+#[test]
+fn untyped_non_image_body_is_rejected_without_a_file() {
+    for (headers, fetchable_as_text) in [(UNTYPED_HEADERS[0], true), (UNTYPED_HEADERS[1], false)] {
+        for body in [
+            b"<html><body>not a picture</body></html>".as_slice(),
+            b"\x89PNG",
+            b"",
+        ] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("saved.bin");
+            let Some(output) = fetch_with_headers(
+                URL,
+                headers.as_bytes(),
+                body,
+                &["--output", path_str(&path)],
+            ) else {
+                return;
+            };
+
+            assert_eq!(output.status.code(), Some(65), "{headers:?}: {output:?}");
+            assert!(output.stdout.is_empty(), "{headers:?}: {output:?}");
+            assert!(!path.exists(), "{headers:?}: file must not be created");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                stderr.contains("remove --output"),
+                fetchable_as_text,
+                "{headers:?}: {stderr}"
+            );
+        }
+    }
+}
+
+/// [T-C076] A Content-Type header that is not ASCII is not a missing header:
+/// a PNG body behind it fails with exit 65 and leaves no file.
+#[test]
+fn non_ascii_content_type_is_not_read_by_signature() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("saved.png");
+    let Some(output) = fetch_with_headers(
+        URL,
+        b"Content-Type: image/png\xe9\r\n",
+        PNG,
+        &["--output", path_str(&path)],
+    ) else {
+        return;
+    };
+
+    assert_eq!(output.status.code(), Some(65), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(!path.exists(), "file must not be created");
+}
+
+/// [T-C077] `--js` on an image found by its leading bytes fails with exit 65
+/// and names the flag, even when the rest of the body exceeds the 10 MB
+/// download limit. A non-image body with `--js` reports the media type
+/// instead, as T-C069 does for a page.
+#[test]
+fn js_on_an_untyped_image_is_rejected_before_the_rest_of_the_body() {
+    let mut oversized = PNG.to_vec();
+    oversized.resize(10_000_001, 0);
+    for headers in [UNTYPED_HEADERS[0], UNTYPED_HEADERS[1]] {
+        for body in [PNG, oversized.as_slice()] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("saved.png");
+            let Some(output) = fetch_with_headers(
+                URL,
+                headers.as_bytes(),
+                body,
+                &["--js", "--output", path_str(&path)],
+            ) else {
+                return;
+            };
+
+            assert_eq!(output.status.code(), Some(65), "{headers:?}: {output:?}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("remove --js"), "{headers:?}: {stderr}");
+            assert!(!path.exists(), "{headers:?}: file must not be created");
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("saved.png");
+        let Some(output) = fetch_with_headers(
+            URL,
+            headers.as_bytes(),
+            b"<p>page</p>",
+            &["--js", "--output", path_str(&path)],
+        ) else {
+            return;
+        };
+        assert_eq!(output.status.code(), Some(65), "{headers:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("remove --js"), "{headers:?}: {stderr}");
+        assert!(stderr.contains("content type"), "{headers:?}: {stderr}");
+        assert!(!path.exists(), "{headers:?}: file must not be created");
+    }
+}
+
 fn path_str(path: &Path) -> &str {
     path.to_str().expect("UTF-8 temp path")
 }
@@ -283,11 +479,16 @@ fn fetch(content_type: &str, body: &[u8], args: &[&str]) -> Option<Output> {
 }
 
 fn fetch_url(url: &str, content_type: &str, body: &[u8], args: &[&str]) -> Option<Output> {
-    let mut response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
+    let header = format!("Content-Type: {content_type}\r\n");
+    fetch_with_headers(url, header.as_bytes(), body, args)
+}
+
+/// `headers` holds complete header lines, each ending in CRLF, apart from
+/// Content-Length; empty sends a response with no Content-Type.
+fn fetch_with_headers(url: &str, headers: &[u8], body: &[u8], args: &[&str]) -> Option<Output> {
+    let mut response = b"HTTP/1.1 200 OK\r\n".to_vec();
+    response.extend_from_slice(headers);
+    response.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
     response.extend_from_slice(body);
     let (proxy, connections, handle) = common::spawn_mock_proxy_raw_response(&response)?;
     let output = common::scout_with_clean_env()

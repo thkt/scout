@@ -7,7 +7,7 @@ use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
 use super::{FetchError, MAX_RESPONSE_BYTES};
-use crate::body_limit::read_body_capped;
+use crate::body_limit::{read_body_capped, read_rest_capped};
 use crate::charset::is_reliable_detection;
 
 /// Decoded final response. Every redirect hop passed `ssrf_check`; `url` is
@@ -44,7 +44,7 @@ impl ImageFormat {
     pub(super) fn from_content_type(content_type: &str) -> Option<Self> {
         match essence(content_type).to_ascii_lowercase().as_str() {
             "image/png" => Some(Self::Png),
-            "image/jpeg" => Some(Self::Jpeg),
+            "image/jpeg" | "image/jpg" => Some(Self::Jpeg),
             "image/gif" => Some(Self::Gif),
             "image/webp" => Some(Self::Webp),
             _ => None,
@@ -60,6 +60,14 @@ impl ImageFormat {
             Self::Gif => "image/gif",
             Self::Webp => "image/webp",
         }
+    }
+
+    /// The format whose signature `head` starts with. No two signatures share
+    /// a first byte, so at most one format matches.
+    fn from_signature(head: &[u8]) -> Option<Self> {
+        [Self::Png, Self::Jpeg, Self::Gif, Self::Webp]
+            .into_iter()
+            .find(|format| format.matches_signature(head))
     }
 
     /// Whether `body` starts with this format's file signature.
@@ -130,18 +138,27 @@ pub(super) async fn download(
     })
 }
 
-/// A final response whose headers declare one of the four raster types, with
-/// its body still unread. A caller can reject the request on what the headers
-/// say without waiting for up to `MAX_RESPONSE_BYTES`.
+/// Longest of the four signatures: WebP's `RIFF`, a 4-byte size, then `WEBP`.
+const SIGNATURE_PREFIX_BYTES: usize = 12;
+
+/// A final response known to be one of the four raster types, with at most
+/// its leading bytes read. A caller can reject the request on that without
+/// waiting for up to `MAX_RESPONSE_BYTES`.
 #[derive(Debug)]
 pub(super) struct ImageResponse {
     url: ValidatedUrl,
     format: ImageFormat,
+    head: Vec<u8>,
+    content_length: Option<u64>,
     response: reqwest::Response,
 }
 
-/// Same client and URL requirements as [`download`]. A response outside the
-/// four raster types is rejected on its headers.
+/// Same client and URL requirements as [`download`]. A response that declares
+/// one of the four raster types takes its format from the header. A response
+/// with no or an empty Content-Type, or with `application/octet-stream`, takes
+/// it from its first [`SIGNATURE_PREFIX_BYTES`] bytes. Every other response is
+/// rejected on its headers, including a Content-Type that is not ASCII: it is
+/// present, so it is not a missing header.
 pub(super) async fn open_image(
     client: &Client,
     url: &ValidatedUrl,
@@ -149,27 +166,53 @@ pub(super) async fn open_image(
     resolver: &dyn DnsResolver,
     mode: &EgressMode,
 ) -> Result<ImageResponse, FetchError> {
-    let (url, response) = final_response(client, url, max_redirects, resolver, mode).await?;
+    let (url, mut response) = final_response(client, url, max_redirects, resolver, mode).await?;
+    let content_length = response.content_length();
 
-    let content_type = response
+    let header = response
         .headers()
         .get(CONTENT_TYPE)
-        .and_then(|ct| ct.to_str().ok())
-        .unwrap_or_default();
-    let Some(format) = ImageFormat::from_content_type(content_type) else {
-        return Err(FetchError::NotAnImage(essence(content_type).to_owned()));
+        .map(|ct| ct.to_str().ok().map(str::to_owned));
+    let untyped = match &header {
+        None => true,
+        Some(Some(ct)) => {
+            let mime = essence(ct);
+            mime.is_empty() || mime.eq_ignore_ascii_case("application/octet-stream")
+        }
+        Some(None) => false,
+    };
+    let content_type = header.flatten().unwrap_or_default();
+
+    let mut head = Vec::new();
+    let format = if untyped {
+        while head.len() < SIGNATURE_PREFIX_BYTES {
+            match response.chunk().await? {
+                Some(chunk) => head.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+        ImageFormat::from_signature(&head)
+    } else {
+        ImageFormat::from_content_type(&content_type)
+    };
+    let Some(format) = format else {
+        return Err(FetchError::NotAnImage(essence(&content_type).to_owned()));
     };
     Ok(ImageResponse {
         url,
         format,
+        head,
+        content_length,
         response,
     })
 }
 
 impl ImageResponse {
     pub(super) async fn read(self) -> Result<DownloadedImage, FetchError> {
-        let bytes = read_body_capped(
+        let bytes = read_rest_capped(
             self.response,
+            self.head,
+            self.content_length,
             MAX_RESPONSE_BYTES,
             || FetchError::TooLarge,
             FetchError::from,
