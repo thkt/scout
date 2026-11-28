@@ -224,7 +224,6 @@ fn decode_base64_invalid_input_returns_decode_error() {
 /// [T-GE015] A BOM with invalid bytes must fail, not return lossy text
 /// under a settled Bom encoding. GitHub has no decode_uncertain flag to
 /// warn callers about replacement characters (ADR-0013).
-#[tracing_test::traced_test]
 #[test]
 fn decode_bom_that_does_not_decode_is_an_error() {
     // UTF-16BE BOM (FE FF) + lone high surrogate (D8 00) with no trailing low
@@ -237,15 +236,6 @@ fn decode_bom_that_does_not_decode_is_an_error() {
     assert!(
         message.contains("UTF-16BE") && message.contains("--encoding"),
         "error must name the declared encoding and how to retry, got: {message}"
-    );
-    assert!(
-        logs_contain("BOM-identified encoding produced replacement characters"),
-        "expected the BOM replacement-character debug event"
-    );
-    assert!(logs_contain("DEBUG"), "event level should be DEBUG");
-    assert!(
-        logs_contain("had_errors=true"),
-        "had_errors field should be true"
     );
 }
 

@@ -81,37 +81,6 @@ fn not_found_is_not_found_with_hint() {
     );
 }
 
-/// [T-GHC005]
-#[test]
-fn rate_limited_with_retry_after_embeds_seconds() {
-    let c = GitHubError::RateLimited {
-        retry_after: Some(42),
-    }
-    .classify();
-    assert_eq!(c.kind, ErrorCode::TempFailure);
-    assert!(
-        c.next_step
-            .as_deref()
-            .is_some_and(|h| h.contains("42 seconds")),
-        "expected 42 seconds in hint, got: {:?}",
-        c.next_step
-    );
-}
-
-/// [T-GHC006]
-#[test]
-fn rate_limited_without_retry_after_suggests_token() {
-    let c = GitHubError::RateLimited { retry_after: None }.classify();
-    assert_eq!(c.kind, ErrorCode::TempFailure);
-    assert!(
-        c.next_step
-            .as_deref()
-            .is_some_and(|h| h.contains("GITHUB_TOKEN")),
-        "expected GITHUB_TOKEN hint, got: {:?}",
-        c.next_step
-    );
-}
-
 /// [T-GHC008] Decode (schema drift) classifies as Internal per ADR-0011 priority 5.
 #[test]
 fn decode_is_internal() {

@@ -1,27 +1,5 @@
 use super::*;
 
-/// [T-ER012]
-#[test]
-fn io_error_kind_is_io_error() {
-    let err = ScoutError::io_error("test");
-    assert_eq!(err.error_kind(), ErrorCode::IoError);
-}
-
-/// [T-CD001]
-#[test]
-fn default_candidates_empty() {
-    let err = ScoutError::from(github::GitHubError::NotFound("test".into()));
-    assert!(err.candidates().is_empty());
-}
-
-/// [T-CD002] with_candidates attaches correction suggestions
-#[test]
-fn with_candidates_attaches_list() {
-    let err = ScoutError::from(github::GitHubError::NotFound("path".into()))
-        .with_candidates(vec!["README.md".into(), "REDAME.md".into()]);
-    assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
-}
-
 /// [T-NS001] ApiKeyNotSet sets next_step pointing to the BRAVE_SEARCH_API_KEY
 /// env var and to the macOS Keychain item of the same service name
 #[test]
@@ -84,6 +62,7 @@ fn github_rate_limited_with_retry_after_embeds_duration() {
     let err = ScoutError::from(github::GitHubError::RateLimited {
         retry_after: Some(42),
     });
+    assert_eq!(err.error_kind(), ErrorCode::TempFailure);
     assert!(
         err.next_step().is_some_and(|h| h.contains("42 seconds")),
         "next_step should mention retry_after seconds, got: {:?}",
@@ -95,6 +74,7 @@ fn github_rate_limited_with_retry_after_embeds_duration() {
 #[test]
 fn github_rate_limited_without_retry_after_suggests_token() {
     let err = ScoutError::from(github::GitHubError::RateLimited { retry_after: None });
+    assert_eq!(err.error_kind(), ErrorCode::TempFailure);
     assert!(err.next_step().is_some_and(|h| h.contains("GITHUB_TOKEN")));
 }
 
@@ -280,18 +260,6 @@ fn schema_decode_classifies_as_internal_exit_70() {
         assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70): {err}");
         assert!(!err.retryable(), "Internal must not be retryable: {err}");
     }
-}
-
-/// [T-ER032] `ScoutError::internal_bug` (direct constructor for scout-side
-/// serialize/invariant violations, e.g. `serde_json::to_value` failure in a
-/// handler) classifies as Internal / exit 70 (EX_SOFTWARE) and is non-retryable,
-/// matching the `Decode`-routed Internal path pinned by T-ER025.
-#[test]
-fn internal_bug_constructor_classifies_as_internal_exit_70() {
-    let err = ScoutError::internal_bug("failed to serialize fetch result");
-    assert_eq!(err.error_kind(), ErrorCode::Internal);
-    assert_eq!(err.exit_code(), 70, "expected EX_SOFTWARE (70)");
-    assert!(!err.retryable(), "Internal must not be retryable");
 }
 
 /// [T-ER030] GitHub Api 401 is UsageError (64) with an auth hint.

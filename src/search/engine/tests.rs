@@ -211,10 +211,13 @@ async fn source_fetch_timeout_states_the_timeout_once() {
     );
 }
 
-/// [T-SE019] Two hand-built pages retain eight fence delimiters, their code text,
-/// and the second page URL heading. Fence pairing and heading position are not asserted.
+/// [T-SE019] Two hand-built pages keep their four fenced blocks as four code
+/// blocks with their own text, and the second page's URL heading parses as a
+/// heading rather than as text inside the first page's fence.
 #[test]
 fn combined_research_output_keeps_each_pages_code_fences_independent() {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
     let page1 = FetchResult::for_test(
         "https://page1.example".into(),
         "intro\n\n```\nfence one\n```\n\nmiddle\n\n```\nfence two\n```\n".into(),
@@ -232,24 +235,45 @@ fn combined_research_output_keeps_each_pages_code_fences_independent() {
 
     let text = format_report(&report, "q");
 
+    let mut code_blocks = Vec::new();
+    let mut headings = Vec::new();
+    let mut current: Option<(bool, String)> = None;
+    for event in Parser::new(&text) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => current = Some((true, String::new())),
+            Event::Start(Tag::Heading { .. }) => current = Some((false, String::new())),
+            Event::Text(t) | Event::Code(t) => {
+                if let Some((_, buf)) = current.as_mut() {
+                    buf.push_str(&t);
+                }
+            }
+            Event::End(TagEnd::CodeBlock | TagEnd::Heading(_)) => {
+                if let Some((is_code, buf)) = current.take() {
+                    if is_code {
+                        code_blocks.push(buf);
+                    } else {
+                        headings.push(buf);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     assert_eq!(
-        text.matches("```").count(),
-        8,
-        "4 fenced code blocks across 2 pages must stay 8 well-paired fence \
-         delimiter lines in the combined output, got:\n{text}"
+        code_blocks,
+        [
+            "fence one\n",
+            "fence two\n",
+            "fence three\n",
+            "fence four\n"
+        ],
+        "{text}"
     );
     assert!(
-        text.contains("### https://page2.example"),
-        "the second page's heading must survive as a literal heading, not be \
-         swallowed inside the first page's fence, got:\n{text}"
+        headings.iter().any(|h| h == "https://page2.example"),
+        "the second page's URL must parse as a heading, got {headings:?}:\n{text}"
     );
-    for needle in ["fence one", "fence two", "fence three", "fence four"] {
-        assert_eq!(
-            text.matches(needle).count(),
-            1,
-            "{needle} must appear exactly once in the combined output, got:\n{text}"
-        );
-    }
 }
 
 /// [T-SE020] Preserve a heading inside a wider fence and shift the one after it.

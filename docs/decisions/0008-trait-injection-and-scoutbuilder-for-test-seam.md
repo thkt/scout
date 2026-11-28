@@ -136,3 +136,7 @@ stdin は 1 回だけ読み、最初に stdin を要する引数が内容を消�
 | setter は `with_clock` / `with_rng` / `with_token_source` / `with_brave_endpoint` / `with_github_endpoint` | `with_rng` は無い。`with_token_source` は 2026-11-10 の時点で無く、同日に追加した。ほかに `with_dns`、`with_egress`、`with_fetch_http`、`with_github_timeout`、`with_slack_timeout`、`with_slack_endpoint` がある (`src/tools/builder.rs`) |
 | `T-SB001`〜`T-SB003` が `Arc::ptr_eq` を assert する。`github_lazy_init_from_empty_cell` が env 分離を確かめる | どちらも存在しない。注入した `TokenSource` が `Scout::github()` の遅延初期化で 1 回だけ解決されることは `[T-SB007]` が、clock の注入は `[T-SB004]` が確かめる |
 | MSRV は `rust-version = "1.95"` | `Cargo.toml` の `rust-version` が一次ソースで、Renovate が更新する |
+
+## Addendum (2026-11-28): `SeededRng` の削除
+
+本文が `rng::Rng` の test double に挙げる `SeededRng(Mutex<fastrand::Rng>)` は削除した。使っていたのは `[T-R007]` だけで、同じ seed を 2 回引いて結果を比べる assert は、`jittered_backoff` が Rng を使わなくても通っていた。`[T-R007]` は `src/retry/tests.rs` の固定値の `FixedRng` で、backoff が基数の半分と Rng の値の和になることを確かめる。`rng::Rng` の trait と `FastrandRng` は変わらない。

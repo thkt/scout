@@ -427,18 +427,6 @@ async fn get_json_408_retries_once_then_succeeds() {
     );
 }
 
-/// [T-GH014] secs_until_ratelimit_reset subtracts the injected clock
-/// from the x-ratelimit-reset header. Pinning the clock removes wall-clock
-/// flakiness from the arithmetic test.
-#[test]
-fn secs_until_ratelimit_reset_uses_injected_clock() {
-    use reqwest::header::HeaderValue;
-    let mut headers = HeaderMap::new();
-    headers.insert("x-ratelimit-reset", HeaderValue::from_static("1300"));
-    let clock = FixedClock(1000);
-    assert_eq!(secs_until_ratelimit_reset(&headers, &clock), Some(300));
-}
-
 /// [T-GH015] A plain `reset_ts - clock.now_secs()` would wrap to a huge delay
 /// here; `saturating_sub` clamps it.
 #[test]

@@ -24,24 +24,6 @@ async fn browser_owner_cleans_interrupted_reap() {
     browser.assert_clean();
 }
 
-/// [T-F043]
-#[test]
-fn launch_args_include_egress_hardening_flags() {
-    let args = build_launch_args(0);
-    for flag in [
-        "--disable-webrtc",
-        "--disable-background-networking",
-        "--disable-features=DnsOverHttps",
-        "--disable-domain-reliability",
-        "--no-pings",
-    ] {
-        assert!(
-            args.iter().any(|a| a == flag),
-            "missing security flag: {flag}"
-        );
-    }
-}
-
 /// [T-F085] The nine non-proxy hardening flags match exactly, including order.
 #[test]
 fn launch_args_hardening_flags_match_exactly_in_order() {

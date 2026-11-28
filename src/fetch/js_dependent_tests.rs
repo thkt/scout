@@ -1,13 +1,16 @@
 use super::*;
 
-/// [T-F020]
+/// [T-F020] A thin body with any of the four app-root ids needs JS rendering,
+/// even without a `<script>` tag.
 #[test]
 fn all_spa_frameworks_detected() {
-    for id in SPA_ROOT_IDS {
-        let html = format!(
-            r#"<html><head><script src="app.js"></script></head>
-                <body><div {id}></div></body></html>"#
-        );
+    for id in [
+        r#"id="root""#,
+        r#"id="app""#,
+        r#"id="__next""#,
+        r#"id="__nuxt""#,
+    ] {
+        let html = format!("<html><body><div {id}></div></body></html>");
         assert!(is_js_dependent(&html), "should detect SPA with {id}");
     }
 }

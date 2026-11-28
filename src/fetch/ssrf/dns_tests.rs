@@ -97,11 +97,11 @@ fn redact_strips_userinfo() {
     assert!(safe.contains("example.com/path"));
 }
 
-/// [T-FS009]
+/// [T-FS009] A URL without userinfo is returned verbatim.
 #[test]
 fn redact_preserves_clean_url() {
     let url = "https://example.com/path";
-    assert!(matches!(redact_url_credentials(url), Cow::Borrowed(_)));
+    assert_eq!(redact_url_credentials(url), url);
 }
 
 /// [T-FS010] userinfo with a username and no password is still stripped

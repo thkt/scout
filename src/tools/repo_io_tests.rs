@@ -4,24 +4,22 @@ use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, ResponseTemplate};
 
-/// [T-TS017] repo_read: --encoding hint is passed to decode_content and
-/// used to decode non-UTF-8 content correctly.
+/// [T-TS017] repo_read: the --encoding hint reaches the decoder. Auto-detection
+/// rejects these windows-1252 bytes (T-GE018), so only the hint can decode them.
 #[tokio::test]
 async fn repo_read_decodes_with_encoding_hint() {
     let Some(server) = try_spawn_mock_server("tools::t_008").await else {
         return;
     };
 
-    // "テスト" in Shift_JIS ([0x83, 0x65, 0x83, 0x58, 0x83, 0x67]), base64-encoded.
-    // Without --encoding, chardetng auto-detects Shift_JIS for 6 bytes too.
-    // With --encoding shift_jis, decode_explicit is used (deterministic).
-    let shift_jis_b64 = "g2WDWINn";
+    // "café crème brûlée à la française, déjà vu" in windows-1252, base64-encoded.
+    let windows_1252_b64 = "Y2Fm6SBjcuhtZSBicvts6WUg4CBsYSBmcmFu52Fpc2UsIGTpauAgdnU=";
 
     Mock::given(method("GET"))
         .and(path_regex(r"^/repos/owner/repo/contents/"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "sha": "abc123",
-            "content": shift_jis_b64
+            "content": windows_1252_b64
         })))
         .mount(&server)
         .await;
@@ -32,16 +30,16 @@ async fn repo_read_decodes_with_encoding_hint() {
         path: Some("test.txt".into()),
         ref_: None,
         lines: None,
-        encoding: Some("shift_jis".into()),
+        encoding: Some("windows-1252".into()),
     };
 
     let result = s.repo_read(params).await.unwrap();
     assert!(
-        result.markdown().contains("テスト"),
-        "output should contain decoded Shift_JIS text, got: {result:?}"
+        result.markdown().contains("café crème brûlée"),
+        "output should contain the decoded windows-1252 text, got: {result:?}"
     );
     assert!(
-        result.markdown().contains("[encoding: shift_jis]"),
+        result.markdown().contains("[encoding: windows-1252]"),
         "header should include encoding label, got: {result:?}"
     );
 }
