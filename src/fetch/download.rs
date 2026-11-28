@@ -6,7 +6,7 @@ use reqwest::header::{CONTENT_TYPE, LOCATION};
 use tracing::{debug, warn};
 
 use super::ssrf::{DnsResolver, EgressMode, RedactedLogUrl, ValidatedUrl, ssrf_check};
-use super::{FetchError, MAX_RESPONSE_BYTES};
+use super::{DeclaredType, FetchError, MAX_RESPONSE_BYTES};
 use crate::body_limit::{read_body_capped, read_rest_capped};
 use crate::charset::is_reliable_detection;
 
@@ -183,7 +183,14 @@ pub(super) async fn open_image(
         }
         Some(None) => false,
     };
-    let content_type = header.flatten().unwrap_or_default();
+    let declared = match &header {
+        None => DeclaredType::Missing,
+        Some(None) => DeclaredType::NotAscii,
+        Some(Some(ct)) => match essence(ct) {
+            "" => DeclaredType::Missing,
+            mime => DeclaredType::Media(mime.to_owned()),
+        },
+    };
 
     let mut head = Vec::new();
     let format = if untyped {
@@ -195,10 +202,13 @@ pub(super) async fn open_image(
         }
         ImageFormat::from_signature(&head)
     } else {
-        ImageFormat::from_content_type(&content_type)
+        match &declared {
+            DeclaredType::Media(mime) => ImageFormat::from_content_type(mime),
+            DeclaredType::Missing | DeclaredType::NotAscii => None,
+        }
     };
     let Some(format) = format else {
-        return Err(FetchError::NotAnImage(essence(&content_type).to_owned()));
+        return Err(FetchError::NotAnImage(declared));
     };
     Ok(ImageResponse {
         url,
