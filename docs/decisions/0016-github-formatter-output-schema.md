@@ -43,7 +43,7 @@ Option B は token 予算を無制限にし、agent context overrun のリスク
 
 ### Confirmation
 
-`src/github/format/overview_tests.rs` の `[T-GF006..T-GF036]` が schema を網羅する。`[T-GF008]` は cap 超過で切り詰めが発火し shown bytes が cap 以下になること、`[T-GF020/T-GF021]` は cap 以下・cap ちょうどで切り詰めマーカーが付かないこと、`[T-GF022]` は最後の改行へ snap すること、`[T-GF023]` は改行が無くても panic しないこと、`[T-GF024/T-GF025]` は CJK が文字境界で切れること、`[T-GF036]` はマーカーが見出し shift の対象外であることを assert する。`MAX_README_BYTES` を変える際はこれらが回帰を検出する。
+`src/github/format/overview_tests.rs` の `[T-GF006..T-GF025]` と `[T-GF036]`、`src/github/format/file_content_tests.rs` の `[T-GF026..T-GF028]` と `[T-GF032..T-GF035]` が schema を網羅する。T-GF029 から T-GF031 は欠番である。`[T-GF008]` は cap 超過で切り詰めが発火し shown bytes が cap 以下になること、`[T-GF020/T-GF021]` は cap 以下・cap ちょうどで切り詰めマーカーが付かないこと、`[T-GF022]` は最後の改行へ snap すること、`[T-GF023]` は改行が無くても panic しないこと、`[T-GF024/T-GF025]` は CJK が文字境界で切れること、`[T-GF036]` はマーカーが見出し shift の対象外であることを assert する。`MAX_README_BYTES` を変える際はこれらが回帰を検出する。
 
 ## Pros and Cons of the Options
 
@@ -114,7 +114,8 @@ out.push_str(&shift_headings(&content[..end], 2)); // 見出し level を 2 下�
 ### 参照
 
 - `src/github/format.rs` の `MAX_README_BYTES` (24,000)、`format_overview` から `format_releases_section` までの整形一式
-- `src/github/format/overview_tests.rs` (T-GF006..036)
+- `src/github/format/overview_tests.rs` (T-GF006..025, T-GF036)
+- `src/github/format/file_content_tests.rs` (T-GF026..028, T-GF032..035)
 - ADR-0010 (JSON envelope 契約。本 ADR はテキスト整形契約で別レイヤ)
 - `src/github/types.rs` の `IssueInfo` の `pull_request` field の doc comment は `ADR-0010` を参照する (旧 `ADR-0065` 不在参照は差し替え済み)。JSON 出力契約は ADR-0010 が担う
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、候補 #8)

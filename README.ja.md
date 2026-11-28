@@ -122,7 +122,7 @@ graceful drainを行い、fetchのFutureが破棄される場合は、別の非�
 - `scout repo-overview owner/repo` — リポジトリ概要
 ```
 
-`CLAUDE.md` に記載すると、Claude Code は `WebFetch` や `WebSearch` の代わりに `scout` コマンドを使うようになります。MCP 設定は不要です。
+scout は CLI なので、MCP の設定は要りません。
 
 ## コマンド
 

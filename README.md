@@ -133,7 +133,7 @@ Add to your project's `CLAUDE.md`:
 - `scout repo-overview owner/repo` — repository overview
 ```
 
-Claude Code will pick up the commands naturally — no MCP configuration needed.
+scout is a CLI, so no MCP configuration is needed.
 
 ## Commands
 
