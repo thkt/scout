@@ -26,7 +26,7 @@ scout は `Redacted` newtype を導入し、全 secret をこの型で運ぶこ�
 
 ## Decision Outcome
 
-Chosen option: Option A。`Redacted` は内部 `String` を隠す newtype で、`Debug` impl は内容を出さず `[REDACTED]` のみを書く。構築は `Redacted::new(&str) -> Option<Self>` と `Redacted::from_env_var` の 2 つで、どちらも trim 後 empty/whitespace を弾く。前者は `None`、後者は caller の error 型を返す。平文取得は明示的な `expose(&self) -> &str` だけが許す。`Display`・`Deref`・`Serialize` は実装せず、暗黙の文字列化・serialize を型で禁じる。env var 読み取り (token_source / slack client / brave client) の境界で必ず `Redacted::new` を通す。
+Chosen option: Option A。`Redacted` は内部 `String` を隠す newtype で、`Debug` impl は内容を出さず `[REDACTED]` のみを書く。構築は `Redacted::new(&str) -> Option<Self>` だけで、trim 後 empty/whitespace なら `None` を返す。平文取得は明示的な `expose(&self) -> &str` だけが許す。`Display`・`Deref`・`Serialize` は実装せず、暗黙の文字列化・serialize を型で禁じる。env var と Keychain の読み取り (token_source / secret_source) の境界で必ず `Redacted::new` を通す。
 
 Option B は人間の規律に依存し、1 箇所の忘れが漏洩に直結するため却下。Option C は依存追加に対し scout の要件 (Debug マスク + 構築時 non-empty 検証) が自前 newtype で十分満たせるため YAGNI で却下。`zeroize` の drop-time 消去は脅威モデル (log 漏洩) に対する追加価値が薄い。
 
@@ -38,7 +38,7 @@ Option B は人間の規律に依存し、1 箇所の忘れが漏洩に直結す
 - Bad, because `Serialize` は未実装だが、誤って `.expose()` した値を serde に渡せば保護は効かない
 - Bad, because `Clone` は secret をメモリに複製し、drop 時の消去 (zeroize) は無い
 - Bad, because 境界での包み忘れは型で検出できず、平文 String のまま運ぶ経路を作れる (現状は全境界が `Redacted::new` 経由)
-- Neutral, because `Redacted::new` は汎用 secret carrier のため token 種別を知らず `xoxp-` prefix を検証しない。prefix 要求自体は `SlackClient::from_env_with` の構築時検証 (`SlackError::TokenWrongType`) で強制済み (ADR-0022)
+- Neutral, because `Redacted::new` は汎用 secret carrier のため token 種別を知らず `xoxp-` prefix を検証しない。prefix 要求自体は `SlackClient::from_secret` の構築時検証 (`SlackError::TokenWrongType`) で強制済み (ADR-0022)
 
 ### Confirmation
 
@@ -83,8 +83,8 @@ secret を境界で newtype に包み、Debug マスク + 構築時検証 + expo
 | secret        | 場所                                           | env var                                       |
 | ------------- | ---------------------------------------------- | --------------------------------------------- |
 | GitHub token  | src/token_source.rs (`resolve_from_env_or_gh`) | `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token` |
-| Slack token   | src/slack/client.rs (`from_env_with`)          | `SLACK_TOKEN`                                 |
-| Brave API key | src/brave/client.rs (`from_env_with`)          | `BRAVE_SEARCH_API_KEY`                        |
+| Slack token   | src/secret_source.rs (`resolve`)               | `SLACK_TOKEN` / macOS Keychain (DR-0039)      |
+| Brave API key | src/secret_source.rs (`resolve`)               | `BRAVE_SEARCH_API_KEY` / macOS Keychain (DR-0039) |
 
 ### 参照
 

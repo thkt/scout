@@ -78,6 +78,15 @@ export SLACK_TOKEN="..."            # 任意: Slackパーマリンクを `fetch`
 
 `GITHUB_TOKEN`/`GH_TOKEN`/`gh auth token` の順で認証されます。
 
+macOS では、`BRAVE_SEARCH_API_KEY` か `SLACK_TOKEN` が未設定のとき、環境変数と同じ名前を service 名に持つ Keychain の項目を読みます。GUI アプリから起動した AI エージェントの shell は `~/.zshrc` を読まないので、その場合も秘密を渡せます。秘密は 1 回だけ登録します。値を付けない `-w` は入力を求め、`-U` は既にある項目を上書きします。
+
+```sh
+security add-generic-password -s BRAVE_SEARCH_API_KEY -a "$USER" -U -w
+security add-generic-password -s SLACK_TOKEN -a "$USER" -U -w
+```
+
+`SCOUT_NO_KEYCHAIN=1` を設定すると Keychain を読みません。
+
 ### チューニング
 
 ビルトインのタイムアウトとリトライ予算を上書きできます。不正な値はリクエストを送る前に終了コード 64（使い方エラー）で失敗します。

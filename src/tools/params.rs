@@ -53,7 +53,8 @@ Examples:
   scout search -
 
 Environment:
-  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
+  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search. When unset,
+                        macOS reads the Keychain item of this service name.")]
 pub(crate) struct SearchParams {
     /// Search query
     pub(super) query: Option<String>,
@@ -74,7 +75,8 @@ Examples:
   scout fetch -
 
 Environment:
-  SLACK_TOKEN  Required when the URL is a Slack permalink. User OAuth token (xoxp-…).")]
+  SLACK_TOKEN  Required when the URL is a Slack permalink. User OAuth token (xoxp-…).
+               When unset, macOS reads the Keychain item of this service name.")]
 pub(crate) struct FetchParams {
     /// URL to fetch (must be HTTP or HTTPS)
     pub(super) url: Option<String>,
@@ -115,7 +117,8 @@ Examples:
   scout research -
 
 Environment:
-  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search.")]
+  BRAVE_SEARCH_API_KEY  Required. Brave Search API key for web search. When unset,
+                        macOS reads the Keychain item of this service name.")]
 pub(crate) struct ResearchParams {
     /// Research query
     pub(super) query: Option<String>,

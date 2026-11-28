@@ -11,7 +11,7 @@ use crate::classify::Classification;
 use crate::envelope::ErrorCode;
 
 mod client;
-pub(crate) use client::SlackClient;
+pub(crate) use client::{SlackClient, TOKEN_VAR};
 
 mod format;
 pub(crate) use format::truncate_slack_output;
@@ -36,7 +36,7 @@ pub(crate) enum SlackError {
     /// with the `xoxp-` prefix. A bot token (`xoxb-…`) or arbitrary string would
     /// otherwise pass construction and fail later with an opaque API error.
     /// The contract the `TokenNotSet` hint promises is enforced
-    /// at construction by [`client::SlackClient::from_env_with`].
+    /// at construction by [`client::SlackClient::from_secret`].
     #[error("SLACK_TOKEN must be a User OAuth token (xoxp-…)")]
     TokenWrongType,
 
@@ -106,8 +106,12 @@ impl SlackError {
     pub(crate) fn classify(&self) -> Classification {
         match self {
             // Priority 1: USAGE_ERROR
-            Self::TokenNotSet | Self::TokenWrongType => Classification::new(ErrorCode::UsageError)
-                .with_hint("Export a User OAuth token to SLACK_TOKEN (xoxp-…)"),
+            Self::TokenNotSet => Classification::new(ErrorCode::UsageError).with_hint(
+                "Export a User OAuth token (xoxp-…) to SLACK_TOKEN, or on macOS add it to the Keychain: security add-generic-password -s SLACK_TOKEN -a \"$USER\" -U -w",
+            ),
+            Self::TokenWrongType => Classification::new(ErrorCode::UsageError).with_hint(
+                "Replace SLACK_TOKEN (env var, or the macOS Keychain item of that service name) with a User OAuth token (xoxp-…)",
+            ),
             // Priority 2: DATA_ERROR (insecure URL — peer to BraveError::InsecureBaseUrl)
             Self::InsecureUrl => Classification::new(ErrorCode::DataError),
             Self::Api { error } => match error.as_str() {

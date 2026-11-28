@@ -150,9 +150,13 @@ pub(crate) fn set_coverage_profile(cmd: &mut Command, profile: Option<&str>) {
 }
 
 /// Take PATH explicitly so tests need no forbidden process-env mutation.
+/// `SCOUT_NO_KEYCHAIN` keeps a secret in the developer's macOS Keychain from
+/// standing in for the cleared env var.
 pub(crate) fn scout_with_env(path: &str) -> Command {
     let mut cmd = scout();
-    cmd.env_clear().env("PATH", path);
+    cmd.env_clear()
+        .env("PATH", path)
+        .env("SCOUT_NO_KEYCHAIN", "1");
     cmd
 }
 

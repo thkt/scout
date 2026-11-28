@@ -1,4 +1,3 @@
-use std::env;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +20,8 @@ use crate::rng::{FastrandRng, Rng};
 use super::types::{SearchResult, WebSearchResponse};
 
 const API_BASE: &str = "https://api.search.brave.com/res/v1/web/search";
+/// Env var, and Keychain service on macOS, that holds the Brave API key.
+pub(crate) const API_KEY_VAR: &str = "BRAVE_SEARCH_API_KEY";
 /// Per-request cap on one Brave call. `pub(crate)` so the config invariant test
 /// can assert `research_timeout` covers a search plus a page fetch, the way
 /// `HTTP_TIMEOUT` and `CDP_TIMEOUT` are read for their own commands.
@@ -88,9 +89,11 @@ impl BraveError {
         match self {
             // Priority 1: USAGE_ERROR / config
             Self::ApiKeyNotSet => Classification::new(ErrorCode::UsageError)
-                .with_hint("Set BRAVE_SEARCH_API_KEY environment variable"),
+                .with_hint(
+                "Set the BRAVE_SEARCH_API_KEY environment variable, or on macOS add it to the Keychain: security add-generic-password -s BRAVE_SEARCH_API_KEY -a \"$USER\" -U -w",
+            ),
             Self::Unauthorized => Classification::new(ErrorCode::UsageError).with_hint(
-                "Verify BRAVE_SEARCH_API_KEY at https://api-dashboard.search.brave.com/",
+                "Verify BRAVE_SEARCH_API_KEY (env var, or the macOS Keychain item of that service name) at https://api-dashboard.search.brave.com/",
             ),
             // Priority 2: DATA_ERROR (URL parse failure or insecure base URL)
             Self::ParseUrl(_) | Self::InsecureBaseUrl => Classification::new(ErrorCode::DataError),
@@ -138,19 +141,15 @@ impl fmt::Debug for BraveClient {
 }
 
 impl BraveClient {
-    pub(crate) fn from_env(http: Client, max_retries: u32) -> Result<Self, BraveError> {
-        Self::from_env_with(http, max_retries, |k| env::var(k))
-    }
-
-    /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
-    /// tests can exercise the env-not-set / whitespace branches without
-    /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, BraveError>
-    where
-        F: Fn(&str) -> Result<String, env::VarError>,
-    {
-        let api_key =
-            Redacted::from_env_var("BRAVE_SEARCH_API_KEY", get_var, || BraveError::ApiKeyNotSet)?;
+    /// Builds the client from the key a [`crate::secret_source::SecretSource`]
+    /// resolved for [`API_KEY_VAR`]; `None` means neither the env var nor the
+    /// Keychain held one.
+    pub(crate) fn from_secret(
+        http: Client,
+        max_retries: u32,
+        api_key: Option<Redacted>,
+    ) -> Result<Self, BraveError> {
+        let api_key = api_key.ok_or(BraveError::ApiKeyNotSet)?;
         Ok(Self {
             http,
             api_key,

@@ -1,4 +1,3 @@
-use std::env;
 use std::fmt;
 
 /// A secret value that hides its contents from `Debug` formatting.
@@ -21,20 +20,6 @@ impl Redacted {
 
     pub(crate) fn expose(&self) -> &str {
         &self.0
-    }
-
-    /// Unset and blank collapse to the same injected error, so callers cannot
-    /// tell the two apart from the error alone. Backend-specific prefix or shape
-    /// checks (e.g. Slack's `xoxp-` token prefix) stay at the call site, not here.
-    pub(crate) fn from_env_var<E>(
-        name: &str,
-        get_var: impl FnOnce(&str) -> Result<String, env::VarError>,
-        err: impl FnOnce() -> E,
-    ) -> Result<Self, E> {
-        get_var(name)
-            .ok()
-            .and_then(|raw| Self::new(&raw))
-            .ok_or_else(err)
     }
 }
 
@@ -106,23 +91,5 @@ mod tests {
 
         let https: Result<(), CallerError> = validate_https("https://ok.example", || CallerError);
         assert_eq!(https, Ok(()));
-    }
-
-    /// [T-RD006] An unset env var becomes the injected missing error
-    #[test]
-    fn unset_env_var_becomes_the_injected_missing_error() {
-        let get_var = |_: &str| Err(env::VarError::NotPresent);
-        let result: Result<Redacted, CallerError> =
-            Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
-        assert_eq!(result.err(), Some(CallerError));
-    }
-
-    /// [T-RD007] A whitespace-only env value becomes the same missing error
-    #[test]
-    fn whitespace_only_env_value_becomes_the_same_missing_error() {
-        let get_var = |_: &str| Ok("   ".to_owned());
-        let result: Result<Redacted, CallerError> =
-            Redacted::from_env_var("SOME_VAR", get_var, || CallerError);
-        assert_eq!(result.err(), Some(CallerError));
     }
 }

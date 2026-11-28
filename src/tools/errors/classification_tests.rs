@@ -22,13 +22,19 @@ fn with_candidates_attaches_list() {
     assert_eq!(err.candidates(), &["README.md", "REDAME.md"]);
 }
 
-/// [T-NS001] ApiKeyNotSet sets next_step pointing to BRAVE_SEARCH_API_KEY env var
+/// [T-NS001] ApiKeyNotSet sets next_step pointing to the BRAVE_SEARCH_API_KEY
+/// env var and to the macOS Keychain item of the same service name
 #[test]
 fn brave_api_key_not_set_has_next_step() {
     let err = ScoutError::from(BraveError::ApiKeyNotSet);
-    assert_eq!(
-        err.next_step(),
-        Some("Set BRAVE_SEARCH_API_KEY environment variable")
+    let next_step = err.next_step().expect("ApiKeyNotSet carries a next_step");
+    assert!(
+        next_step.contains("BRAVE_SEARCH_API_KEY environment variable"),
+        "{next_step}"
+    );
+    assert!(
+        next_step.contains("security add-generic-password -s BRAVE_SEARCH_API_KEY"),
+        "{next_step}"
     );
 }
 

@@ -25,7 +25,7 @@ impl Scout {
 
         info!(query = %query, "search");
 
-        let brave = self.brave()?;
+        let brave = self.brave().await?;
         let search_lang = params.lang.to_brave_param();
         let sources = brave.search(&query, search_lang).await?;
 
@@ -243,7 +243,7 @@ impl Scout {
 
         info!(query = %query, depth = params.depth, "research");
 
-        let brave = self.brave()?;
+        let brave = self.brave().await?;
         let req = engine::ResearchRequest {
             query: &query,
             depth: params.depth,

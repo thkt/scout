@@ -8,12 +8,16 @@ use reqwest::redirect::Policy;
 use reqwest::{Client, Proxy};
 use tokio::sync::{OnceCell, watch};
 
+#[cfg(test)]
 use crate::brave::client::BraveClient;
 use crate::clock::{Clock, SystemClock};
 use crate::fetch::{DnsResolver, EgressMode, SsrfResolver, TokioDnsResolver, detect_egress_mode};
 #[cfg(test)]
 use crate::github::GitHubClient;
 use crate::rng::{FastrandRng, Rng};
+#[cfg(test)]
+use crate::secret_source::StaticSecretSource;
+use crate::secret_source::{EnvThenKeychain, SecretSource};
 #[cfg(test)]
 use crate::slack::SlackClient;
 #[cfg(test)]
@@ -36,10 +40,10 @@ const MAX_REDIRECTS: usize = 5;
 pub(super) struct ScoutBuilder {
     http: Client,
     fetch_http: Client,
-    brave: Option<BraveClient>,
     clock: Arc<dyn Clock>,
     rng: Arc<dyn Rng>,
     token_source: Arc<dyn TokenSource>,
+    secret_source: Arc<dyn SecretSource>,
     dns: Arc<dyn DnsResolver>,
     /// Egress mode detected from the environment in `from_env`. Shapes
     /// `fetch_http` (via `build_default_clients`) and is copied into `Scout` so
@@ -52,6 +56,11 @@ pub(super) struct ScoutBuilder {
     /// `from_env_with_source`. `None` (production) preserves lazy init.
     #[cfg(test)]
     github_endpoint: Option<String>,
+    /// Pre-init `Scout.brave` (`OnceCell`) with a test client pointed at this
+    /// base URL so `Scout::brave()` returns it without resolving the key.
+    /// `None` (production) preserves lazy init. Mirrors `github_endpoint`.
+    #[cfg(test)]
+    brave_endpoint: Option<String>,
     /// Pre-init `Scout.slack` (`OnceCell`) with a test client pointed at this
     /// base URL so `Scout::slack()` returns it without reading `SLACK_TOKEN`.
     /// `None` (production) preserves lazy init. Mirrors `github_endpoint`.
@@ -107,8 +116,9 @@ fn build_default_clients(egress: &EgressMode) -> Result<(Client, Client), ScoutE
 }
 
 impl ScoutBuilder {
-    /// Read `SCOUT_*` env vars, construct the two `reqwest::Client`s, and
-    /// probe Brave (best-effort).
+    /// Read `SCOUT_*` env vars and construct the two `reqwest::Client`s. The
+    /// Brave key, Slack token, and GitHub token stay unresolved until a command
+    /// needs them.
     pub(super) fn from_env() -> Result<Self, ScoutError> {
         let config = RuntimeConfig::from_env()?;
         // `env::vars()` panics on a non-UTF-8 entry; a proxy URL is UTF-8, so
@@ -118,21 +128,21 @@ impl ScoutBuilder {
             .collect();
         let egress = detect_egress_mode(&utf8_env);
         let (http, fetch_http) = build_default_clients(&egress)?;
-        // A missing key is reported by `Scout::brave` to the commands that search.
-        let brave = BraveClient::from_env(http.clone(), config.max_retries).ok();
         Ok(Self {
             http,
             fetch_http,
-            brave,
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(GhCliSource),
+            secret_source: Arc::new(EnvThenKeychain),
             dns: Arc::new(TokioDnsResolver),
             egress,
             cancel: watch::channel(false).0,
             config,
             #[cfg(test)]
             github_endpoint: None,
+            #[cfg(test)]
+            brave_endpoint: None,
             #[cfg(test)]
             slack_endpoint: None,
         })
@@ -155,17 +165,27 @@ impl ScoutBuilder {
         Self {
             http,
             fetch_http,
-            brave: None,
             clock: Arc::new(SystemClock),
             rng: Arc::new(FastrandRng),
             token_source: Arc::new(StaticTokenSource(None)),
+            secret_source: Arc::new(StaticSecretSource(None)),
             dns: Arc::new(TokioDnsResolver),
             egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
             config: RuntimeConfig::for_test(),
             github_endpoint: None,
+            brave_endpoint: None,
             slack_endpoint: None,
         }
+    }
+
+    /// `for_test` never reads the real env var or Keychain; a test that wants a
+    /// Brave key or Slack token resolved through `Scout::brave()` or
+    /// `Scout::slack()` injects its own source here.
+    #[cfg(test)]
+    pub(super) fn with_secret_source(mut self, secret_source: Arc<dyn SecretSource>) -> Self {
+        self.secret_source = secret_source;
+        self
     }
 
     #[cfg(test)]
@@ -235,7 +255,7 @@ impl ScoutBuilder {
     /// (avoids spawning a second `reqwest` connection pool per test).
     #[cfg(test)]
     pub(super) fn with_brave_endpoint(mut self, endpoint: &str) -> Self {
-        self.brave = Some(BraveClient::with_base_url(self.http.clone(), endpoint));
+        self.brave_endpoint = Some(endpoint.to_owned());
         self
     }
 
@@ -274,9 +294,15 @@ impl ScoutBuilder {
                     .with_rng(self.rng.clone()),
             );
         }
-        let brave = self
-            .brave
-            .map(|c| c.with_clock(self.clock.clone()).with_rng(self.rng.clone()));
+        let brave = OnceCell::new();
+        #[cfg(test)]
+        if let Some(endpoint) = self.brave_endpoint.as_deref() {
+            let _ = brave.set(
+                BraveClient::with_base_url(self.http.clone(), endpoint)
+                    .with_clock(self.clock.clone())
+                    .with_rng(self.rng.clone()),
+            );
+        }
         Scout {
             http: self.http,
             fetch_http: self.fetch_http,
@@ -288,6 +314,7 @@ impl ScoutBuilder {
             clock: self.clock,
             rng: self.rng,
             token_source: self.token_source,
+            secret_source: self.secret_source,
             dns: self.dns,
             egress: self.egress,
             not_found_candidates: true,
