@@ -4,6 +4,7 @@
 mod table;
 #[cfg(test)]
 mod tests;
+pub(super) mod xhtml;
 
 use dom_query::{Document, NodeRef};
 use html5ever::tendril::TendrilSink;
@@ -12,7 +13,10 @@ use html5ever::{ParseOpts, parse_document};
 
 use crate::markdown::{escape_md_inline, fence_delimiter};
 
+/// Convert the extracted article HTML to the Markdown body. Self-closed
+/// raw-text tags are closed first, so XHTML input converts like HTML.
 pub(super) fn convert(source: &str) -> String {
+    let source = xhtml::close_self_closed_raw_text_tags(source);
     let document = parse_document(
         Document::default(),
         ParseOpts {
@@ -23,7 +27,7 @@ pub(super) fn convert(source: &str) -> String {
             ..Default::default()
         },
     )
-    .one(source);
+    .one(&*source);
     children(document.root(), false)
         .trim_matches('\n')
         .trim_end_matches([' ', '\t', '\r'])
@@ -38,7 +42,7 @@ fn tag(node: NodeRef<'_>) -> String {
 
 fn suppressed(node: NodeRef<'_>) -> bool {
     match tag(node).as_str() {
-        "script" | "style" | "noscript" | "textarea" | "iframe" | "title" | "template" => true,
+        name if xhtml::RAW_TEXT_TAGS.contains(&name) => true,
         "desc" => node
             .qual_name_ref()
             .is_some_and(|name| &*name.ns == "http://www.w3.org/2000/svg"),

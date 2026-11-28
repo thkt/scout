@@ -1,3 +1,4 @@
+use super::html::xhtml::close_self_closed_raw_text_tags;
 use super::test_helpers::article;
 use super::*;
 use crate::fetch::extractor::extract_article;

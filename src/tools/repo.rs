@@ -193,18 +193,16 @@ impl Scout {
             markdown.push_str(".\n");
         }
 
-        // GitHub's issues endpoint also returns PRs.
-        let real_issues = github::types::real_issues(&issues);
         let data = serde_json::json!({
             "repository": repo_info,
             "readme": readme_content,
-            "issues": real_issues,
+            "issues": issues,
             "pulls": pulls,
             "releases": releases,
         });
 
         info!(
-            issues = real_issues.len(),
+            issues = issues.len(),
             pulls = pulls.len(),
             releases = releases.len(),
             has_readme = readme_content.is_some(),

@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserInfo, real_issues};
+use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserInfo};
 use crate::markdown::{
     escape_md_inline, fence_delimiter, md_link, shift_headings, truncation_note,
 };
@@ -177,12 +177,11 @@ fn author_suffix(user: Option<&UserInfo>) -> String {
 }
 
 fn format_issues_section(issues: &[IssueInfo], out: &mut String) {
-    let real_issues = real_issues(issues);
-    if real_issues.is_empty() {
+    if issues.is_empty() {
         return;
     }
     out.push_str("## Recent Issues\n\n");
-    for issue in &real_issues {
+    for issue in issues {
         let labels = if issue.labels.is_empty() {
             String::new()
         } else {

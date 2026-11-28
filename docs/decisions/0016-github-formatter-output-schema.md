@@ -43,7 +43,7 @@ Option B は token 予算を無制限にし、agent context overrun のリスク
 
 ### Confirmation
 
-`src/github/format/overview_tests.rs` の `[T-GF006..T-GF025]` と `[T-GF036]`、`src/github/format/file_content_tests.rs` の `[T-GF026..T-GF028]` と `[T-GF032..T-GF035]` が schema を網羅する。T-GF029 から T-GF031 は欠番である。`[T-GF008]` は cap 超過で切り詰めが発火し shown bytes が cap 以下になること、`[T-GF020/T-GF021]` は cap 以下・cap ちょうどで切り詰めマーカーが付かないこと、`[T-GF022]` は最後の改行へ snap すること、`[T-GF023]` は改行が無くても panic しないこと、`[T-GF024/T-GF025]` は CJK が文字境界で切れること、`[T-GF036]` はマーカーが見出し shift の対象外であることを assert する。`MAX_README_BYTES` を変える際はこれらが回帰を検出する。
+`src/github/format/overview_tests.rs` の `[T-GF006..T-GF025]` と `[T-GF036]`、`src/github/format/file_content_tests.rs` の `[T-GF026..T-GF028]` と `[T-GF032..T-GF035]` が schema を網羅する。T-GF009 と T-GF029 から T-GF031 は欠番である。`[T-GF008]` は cap 超過で切り詰めが発火し shown bytes が cap 以下になること、`[T-GF020/T-GF021]` は cap 以下・cap ちょうどで切り詰めマーカーが付かないこと、`[T-GF022]` は最後の改行へ snap すること、`[T-GF023]` は改行が無くても panic しないこと、`[T-GF024/T-GF025]` は CJK が文字境界で切れること、`[T-GF036]` はマーカーが見出し shift の対象外であることを assert する。`MAX_README_BYTES` を変える際はこれらが回帰を検出する。
 
 ## Pros and Cons of the Options
 
