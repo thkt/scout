@@ -43,7 +43,7 @@ Option B は telemetry / prefetch / WebRTC を放置し scout の egress 制御�
 
 ### Confirmation
 
-`src/fetch/cdp/launch/cdp_launch_tests.rs` がフラグ集合を pin する。`[T-F043]` は launch 引数に hardening フラグ (`--disable-webrtc` / `--disable-background-networking` / `--disable-features=DnsOverHttps` / `--disable-domain-reliability` ほか) が含まれることを assert する。`[T-201-8]` は SOCKS5 `--proxy-server=socks5://127.0.0.1:{port}` と `--proxy-bypass-list=<-loopback>` / `--disable-quic` が含まれることを assert する。chromium / CDP ライブラリを更新する際はこれらと実起動 smoke でフラグが依然有効かを再検証し、egress 可能な新フラグを足す際は proxy-bypass との整合を評価する。
+`src/fetch/cdp/launch/cdp_launch_tests.rs` がフラグ集合を pin する。`[T-F085]` は proxy 以外の hardening フラグ 9 個 (`--disable-webrtc` / `--disable-background-networking` / `--disable-features=DnsOverHttps` / `--disable-domain-reliability` ほか) が過不足なく並ぶことを assert する。`[T-201-8]` は SOCKS5 `--proxy-server=socks5://127.0.0.1:{port}` と `--proxy-bypass-list=<-loopback>` / `--disable-quic` が含まれることを assert する。chromium / CDP ライブラリを更新する際はこれらと実起動 smoke でフラグが依然有効かを再検証し、egress 可能な新フラグを足す際は proxy-bypass との整合を評価する。
 
 ## Pros and Cons of the Options
 

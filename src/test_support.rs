@@ -317,18 +317,18 @@ fn collect_occurrences(
     extract: fn(&str) -> Vec<String>,
     occurrences: &mut Vec<ScannedToken>,
 ) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot scan {}: {e}", dir.display()));
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|e| panic!("cannot scan {}: {e}", dir.display()))
+            .path();
         if path.is_dir() {
             collect_occurrences(&path, extract, occurrences);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let Ok(contents) = fs::read_to_string(&path) else {
-                continue;
-            };
+            let contents = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
             for token in extract(&contents) {
                 occurrences.push(ScannedToken {
                     file: path.clone(),
@@ -678,9 +678,22 @@ mod tests {
         );
     }
 
-    /// [T-SUP009] Scanning the real `src/` and `tests/` finds no test-id violations
+    /// [T-SUP009] Scanning the real `src/` and `tests/` finds no test-id
+    /// violations. The scan of `src/` must find this test's own ID, so a
+    /// scanner that reads nothing cannot pass.
     #[test]
     fn scanning_src_and_tests_finds_no_violations() {
+        let mut occurrences = Vec::new();
+        collect_occurrences(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+            extract_bracketed_test_ids,
+            &mut occurrences,
+        );
+        assert!(
+            occurrences.iter().any(|o| o.token == "SUP009"),
+            "the scan of src/ must find T-SUP009 in this file"
+        );
+
         let violations = scan_test_id_violations();
 
         assert!(

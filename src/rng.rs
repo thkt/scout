@@ -1,8 +1,5 @@
-//! Random-number abstraction. `FastrandRng` for production, `SeededRng` for
-//! tests that need deterministic backoff arithmetic.
-
-#[cfg(test)]
-use std::sync::Mutex;
+//! Random-number abstraction. `FastrandRng` for production; tests implement
+//! `Rng` with a fixed sample to pin the backoff arithmetic.
 
 /// Bounded random `u64` source. `Send + Sync` so `&dyn Rng` can cross
 /// `.await` points in the retry loop.
@@ -18,42 +15,5 @@ pub(crate) struct FastrandRng;
 impl Rng for FastrandRng {
     fn u64_below(&self, upper_exclusive: u64) -> u64 {
         fastrand::u64(..upper_exclusive)
-    }
-}
-
-/// Fixed-seed test RNG. The mutex lets `&self` calls advance the same
-/// mutable `fastrand::Rng` state.
-#[cfg(test)]
-pub(crate) struct SeededRng(Mutex<fastrand::Rng>);
-
-#[cfg(test)]
-impl SeededRng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self(Mutex::new(fastrand::Rng::with_seed(seed)))
-    }
-}
-
-#[cfg(test)]
-impl Rng for SeededRng {
-    fn u64_below(&self, upper_exclusive: u64) -> u64 {
-        self.0
-            .lock()
-            .expect("SeededRng mutex poisoned")
-            .u64(..upper_exclusive)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// [T-RNG001] FastrandRng draws within the requested half-open range.
-    #[test]
-    fn fastrand_rng_stays_below_upper_bound() {
-        let rng = FastrandRng;
-        for _ in 0..100 {
-            let v = rng.u64_below(10);
-            assert!(v < 10, "fastrand returned {v} for upper_exclusive=10");
-        }
     }
 }

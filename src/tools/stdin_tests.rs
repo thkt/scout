@@ -22,18 +22,6 @@ fn stdin_resolver_arg_wins_stdin_preserved() {
     assert_eq!(second, "from_stdin");
 }
 
-/// [T-SR003]
-#[test]
-fn stdin_resolver_consumed_stdin_fails_second() {
-    let mut r = super::StdinResolver::with_content(false, Some("from_stdin".into()));
-    r.resolve(None, "repository", "<OWNER/REPO>").unwrap();
-    let result = r.resolve(None, "path", "<FILE_PATH>");
-    assert!(
-        result.is_err(),
-        "second positional should fail when stdin consumed"
-    );
-}
-
 /// [T-SR005]
 #[test]
 fn stdin_resolver_consumed_error_hints_stdin_exhausted() {

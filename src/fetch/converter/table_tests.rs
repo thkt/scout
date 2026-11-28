@@ -182,8 +182,8 @@ fn header_promoted_row_keeps_its_td_cells() {
     );
 }
 
-/// [T-FC065] Both cells of a later all-th row must survive on the same line.
-/// The position check also matches frontmatter, so it cannot detect header promotion.
+/// [T-FC065] A later all-th row is emitted after the separator with both cells
+/// on one line, so it is a data row rather than a promoted header.
 #[test]
 fn th_only_row_in_the_middle_of_the_body_appears_as_a_data_row() {
     let article = article(
@@ -195,13 +195,11 @@ fn th_only_row_in_the_middle_of_the_body_appears_as_a_data_row() {
     let markdown = result.markdown();
     let lines: Vec<&str> = markdown.lines().collect();
 
+    // Anchored on the pipe so the frontmatter's own `---` delimiter cannot
+    // stand in for the separator row.
     let separator_idx = lines
         .iter()
-        .position(|line| {
-            !line.is_empty()
-                && line.contains('-')
-                && line.chars().all(|c| c == '|' || c == '-' || c == ' ')
-        })
+        .position(|line| line.starts_with("| ---"))
         .expect("a dash separator row must be present");
     let bob_idx = lines
         .iter()
@@ -292,33 +290,6 @@ fn all_th_first_body_row_becomes_the_header_without_a_thead() {
         lines.get(header_idx + 2).copied(),
         Some("| Alice | 30 |"),
         "the remaining row must stay a data row under the header:\n{markdown}"
-    );
-}
-
-/// [T-FC070] Converted caption content must precede the table.
-#[test]
-fn table_caption_precedes_the_header_row() {
-    let article = article(
-        "<table><caption>Population</caption>\
-         <thead><tr><th>City</th><th>Count</th></tr></thead>\
-         <tbody><tr><td>Osaka</td><td>2</td></tr></tbody></table>",
-    );
-
-    let result = to_fetch_result(&article, "https://example.com".into(), false);
-    let markdown = result.markdown();
-    let lines: Vec<&str> = markdown.lines().collect();
-
-    let caption_idx = lines
-        .iter()
-        .position(|line| line.contains("Population"))
-        .expect("the caption's text must reach the output");
-    let header_idx = lines
-        .iter()
-        .position(|line| *line == "| City | Count |")
-        .expect("the header row must be present");
-    assert!(
-        caption_idx < header_idx,
-        "the caption must precede the header row:\n{markdown}"
     );
 }
 

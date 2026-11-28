@@ -524,32 +524,44 @@ mod tests {
         );
     }
 
-    /// [T-W007] Interruption JSON names the fixture signal and its error code,
-    /// with retryable=false.
+    /// [T-W007] Interruption JSON names the signal and its error code, with
+    /// retryable=false.
     #[test]
     fn interruption_is_an_envelope_under_json() {
-        for (sig, code) in interrupt_signal_codes() {
+        for (sig, code, message) in interrupt_signal_literals() {
             let line = interrupted_line(sig, true);
             let parsed: serde_json::Value = serde_json::from_str(&line)
                 .unwrap_or_else(|e| panic!("interruption must be valid JSON under --json: {e}"));
-            assert_eq!(parsed["error"]["code"], serde_json::to_value(code).unwrap());
-            assert_eq!(parsed["error"]["retryable"], false);
-            assert!(
-                parsed["error"]["message"]
-                    .as_str()
-                    .is_some_and(|m| m.contains(&sig.to_string())),
-                "the message names the signal, got: {line}"
-            );
+            assert_eq!(parsed["error"]["code"], code, "{line}");
+            assert_eq!(parsed["error"]["retryable"], false, "{line}");
+            assert_eq!(parsed["error"]["message"], message, "{line}");
         }
     }
 
     /// [T-W008] without `--json` a signal interruption stays a plain line
     #[test]
     fn interruption_is_a_plain_line_without_json() {
-        for (sig, _) in interrupt_signal_codes() {
-            let line = interrupted_line(sig, false);
-            assert_eq!(line, format!("error: interrupted ({sig})"));
+        for (sig, _, message) in interrupt_signal_literals() {
+            assert_eq!(interrupted_line(sig, false), format!("error: {message}"));
         }
+    }
+
+    /// Every `InterruptSignal` with the JSON code and message its interruption
+    /// line carries, written out rather than derived from the code under test.
+    fn interrupt_signal_literals() -> Vec<(InterruptSignal, &'static str, &'static str)> {
+        vec![
+            (
+                InterruptSignal::Sigint,
+                "INTERRUPTED_SIGINT",
+                "interrupted (SIGINT)",
+            ),
+            #[cfg(unix)]
+            (
+                InterruptSignal::Sigterm,
+                "INTERRUPTED_SIGTERM",
+                "interrupted (SIGTERM)",
+            ),
+        ]
     }
 
     /// [T-W009] Separately defined signal and JSON exit codes must agree.

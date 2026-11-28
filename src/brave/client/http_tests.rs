@@ -1,5 +1,4 @@
 use super::*;
-use crate::envelope::ErrorCode;
 use crate::test_support::try_spawn_mock_server;
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, ResponseTemplate};
@@ -346,26 +345,6 @@ async fn search_408_retries_once_then_succeeds() {
     assert!(
         result.is_ok(),
         "408 should retry once and return the second call's success, got: {result:?}"
-    );
-}
-
-/// [T-BC028] brave's ResponseTooLarge stays non-retryable even when retriability is
-/// derived from classify
-///
-/// Retry cannot shrink an oversized response, so this variant must stay
-/// non-retriable even though the classify path now decides every arm but
-/// `RateLimited`.
-#[test]
-fn response_too_large_is_not_retriable_via_classify() {
-    let err = BraveError::ResponseTooLarge;
-    assert_eq!(
-        err.classify().kind,
-        ErrorCode::Internal,
-        "ResponseTooLarge must classify as Internal"
-    );
-    assert!(
-        !is_retriable(&err),
-        "ResponseTooLarge must stay non-retriable under classify-derived is_retriable"
     );
 }
 

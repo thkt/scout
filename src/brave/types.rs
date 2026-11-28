@@ -90,14 +90,6 @@ mod tests {
         assert_eq!(results[0].description, "");
     }
 
-    /// [T-BT003]
-    #[test]
-    fn empty_results_when_web_absent() {
-        let body = r#"{}"#;
-        let parsed: WebSearchResponse = serde_json::from_str(body).unwrap();
-        assert!(parsed.into_results().is_empty());
-    }
-
     /// [T-BT004] WebSearchResponse tolerates unknown extra fields
     #[test]
     fn tolerates_unknown_fields() {

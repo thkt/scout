@@ -6,7 +6,7 @@ use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
 use crate::clock::FixedClock;
-use crate::rng::{FastrandRng, SeededRng};
+use crate::rng::{FastrandRng, Rng};
 use crate::test_support::{
     join_server_thread, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
@@ -183,18 +183,27 @@ async fn max_retries_zero_runs_once_without_retry() {
     );
 }
 
-/// [T-R007] Same seed → identical sample, proving the Rng seam threads through to
-/// jittered_backoff. The envelope check guards the half + jitter formula
-/// (attempt=0 → half=500, jitter ∈ [0,500), result ∈ [500,1000)).
+/// [T-R007] The backoff is half the exponential base plus the Rng's sample
+/// below that half: attempt 0 gives 500 ms plus the jitter, attempt 1 gives
+/// 1000 ms plus the jitter.
 #[test]
-fn jittered_backoff_is_deterministic_with_seeded_rng() {
-    let first = jittered_backoff(0, &SeededRng::new(42));
-    let second = jittered_backoff(0, &SeededRng::new(42));
-    assert_eq!(first, second, "same seed must reproduce identical backoff");
-    assert!(
-        (500..1000).contains(&first),
-        "jittered_backoff(0) should fall in [500, 1000), got {first}"
-    );
+fn jittered_backoff_adds_the_rng_sample_to_half_the_base() {
+    assert_eq!(jittered_backoff(0, &FixedRng(0)), 500);
+    assert_eq!(jittered_backoff(0, &FixedRng(123)), 623);
+    assert_eq!(jittered_backoff(1, &FixedRng(123)), 1123);
+}
+
+/// Returns one sample, which must fall below the bound the caller passes.
+struct FixedRng(u64);
+
+impl Rng for FixedRng {
+    fn u64_below(&self, upper_exclusive: u64) -> u64 {
+        assert!(
+            self.0 < upper_exclusive,
+            "sample outside the requested bound"
+        );
+        self.0
+    }
 }
 
 /// [T-R014] The `None` arm of `retry_after_or_backoff` (exponential backoff)

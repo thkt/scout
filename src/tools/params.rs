@@ -445,13 +445,12 @@ mod tests {
             cmd: super::Command,
         }
 
-        let result = Cli::try_parse_from(["scout", "search"]);
-        assert!(result.is_ok(), "parse should succeed with query omitted");
-        if let Ok(cli) = result
-            && let super::Command::Search(p) = cli.cmd
-        {
-            assert!(p.query.is_none(), "query should be None when omitted");
-        }
+        let cli = Cli::try_parse_from(["scout", "search"])
+            .expect("parse should succeed with query omitted");
+        let super::Command::Search(p) = cli.cmd else {
+            panic!("`scout search` must parse as the search command");
+        };
+        assert!(p.query.is_none(), "query should be None when omitted");
     }
 
     /// [T-S002] ARG wins over piped stdin when both are present
