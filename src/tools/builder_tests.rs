@@ -334,3 +334,17 @@ async fn repo_and_non_slack_fetch_never_resolve_a_secret() {
         asked_names(&asked)
     );
 }
+
+/// [T-SB012] `for_test` resolves no Brave key or Slack token, so a test that
+/// does not inject an endpoint or a source never sees the developer's env var
+/// or Keychain.
+#[tokio::test]
+async fn for_test_resolves_no_secret() {
+    let scout = ScoutBuilder::for_test().build();
+
+    let brave = scout.brave().await.map(|_| ()).unwrap_err();
+    let slack = scout.slack().await.map(|_| ()).unwrap_err();
+
+    assert_eq!(brave.error_kind(), ErrorCode::UsageError);
+    assert_eq!(slack.error_kind(), ErrorCode::UsageError);
+}

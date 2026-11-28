@@ -127,7 +127,7 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
-    use tokio::time::sleep;
+    use std::future::{Ready, pending, ready};
 
     use super::*;
 
@@ -142,8 +142,11 @@ mod tests {
         })
     }
 
-    async fn security_must_not_run() -> io::Result<Output> {
-        panic!("the security subprocess must not be reached on this path")
+    /// A Keychain that holds `stdout` for every service. The tests that must not
+    /// read the Keychain pass one too, and their assertions show its value was
+    /// not used.
+    fn keychain_holding(stdout: &'static str) -> impl FnOnce(&str) -> Ready<io::Result<Output>> {
+        move |_| ready(security_output(0, stdout, ""))
     }
 
     fn env_of(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
@@ -154,9 +157,12 @@ mod tests {
     /// [T-KC001] An env value wins, and the Keychain is never read.
     #[tokio::test]
     async fn env_value_is_used_without_reading_the_keychain() {
-        let secret = resolve(NAME, env_of(&[(NAME, "from-env")]), true, |_| {
-            security_must_not_run()
-        })
+        let secret = resolve(
+            NAME,
+            env_of(&[(NAME, "from-env")]),
+            true,
+            keychain_holding("from-keychain\n"),
+        )
         .await;
 
         assert_eq!(secret.as_ref().map(Redacted::expose), Some("from-env"));
@@ -180,9 +186,12 @@ mod tests {
     /// [T-KC003] A whitespace-only env value counts as unset.
     #[tokio::test]
     async fn whitespace_only_env_falls_back_to_the_keychain() {
-        let secret = resolve(NAME, env_of(&[(NAME, "   ")]), true, |_| async {
-            security_output(0, "from-keychain\n", "")
-        })
+        let secret = resolve(
+            NAME,
+            env_of(&[(NAME, "   ")]),
+            true,
+            keychain_holding("from-keychain\n"),
+        )
         .await;
 
         assert_eq!(secret.as_ref().map(Redacted::expose), Some("from-keychain"));
@@ -221,11 +230,7 @@ mod tests {
     /// `start_paused` advances the clock rather than waiting the real 5s.
     #[tokio::test(start_paused = true)]
     async fn lookup_past_the_timeout_yields_no_secret() {
-        let secret = resolve(NAME, env_of(&[]), true, |_| async {
-            sleep(KEYCHAIN_TIMEOUT * 2).await;
-            security_output(0, "too-late\n", "")
-        })
-        .await;
+        let secret = resolve(NAME, env_of(&[]), true, |_| pending()).await;
 
         assert!(secret.is_none());
     }
@@ -233,10 +238,7 @@ mod tests {
     /// [T-KC007] An empty stdout on success is no secret, not an empty one.
     #[tokio::test]
     async fn blank_keychain_value_yields_no_secret() {
-        let secret = resolve(NAME, env_of(&[]), true, |_| async {
-            security_output(0, " \n", "")
-        })
-        .await;
+        let secret = resolve(NAME, env_of(&[]), true, keychain_holding(" \n")).await;
 
         assert!(secret.is_none());
     }
@@ -244,9 +246,12 @@ mod tests {
     /// [T-KC008] `SCOUT_NO_KEYCHAIN=1` skips the Keychain.
     #[tokio::test]
     async fn no_keychain_var_skips_the_keychain() {
-        let secret = resolve(NAME, env_of(&[(NO_KEYCHAIN_VAR, "1")]), true, |_| {
-            security_must_not_run()
-        })
+        let secret = resolve(
+            NAME,
+            env_of(&[(NO_KEYCHAIN_VAR, "1")]),
+            true,
+            keychain_holding("from-keychain\n"),
+        )
         .await;
 
         assert!(secret.is_none());
@@ -256,7 +261,13 @@ mod tests {
     /// never read.
     #[tokio::test]
     async fn unsupported_os_never_reads_the_keychain() {
-        let secret = resolve(NAME, env_of(&[]), false, |_| security_must_not_run()).await;
+        let secret = resolve(
+            NAME,
+            env_of(&[]),
+            false,
+            keychain_holding("from-keychain\n"),
+        )
+        .await;
 
         assert!(secret.is_none());
     }
