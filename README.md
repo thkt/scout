@@ -312,11 +312,11 @@ Following [`sysexits.h`](https://man.openbsd.org/sysexits), with GNU coreutils `
 | Code | Meaning                                                                  |
 | ---- | ------------------------------------------------------------------------ |
 | 0    | Success                                                                  |
-| 64   | Usage error (clap parse, missing API key)                                |
-| 65   | Data error (invalid input, malformed format, encoding error, 4xx body)   |
+| 64   | Usage error (clap parse, missing API key, HTTP 401/403, browser not found) |
+| 65   | Data error (invalid input, malformed format, encoding error, other 4xx)  |
 | 66   | Not found (repo/file not found, 404)                                     |
 | 70   | Internal (scout-side invariant violation, unexpected response schema)    |
-| 74   | IO error (headless browser failure, `--output` file not writable)        |
+| 74   | IO error (browser rendering failure, `--output` file not writable)       |
 | 75   | Temporary failure (rate limit, 5xx, retryable — short backoff)           |
 | 104  | Unknown (unclassifiable failure; rising rate signals classification gap) |
 | 124  | Timeout (request/transport timeout, retryable — longer backoff advised)  |
