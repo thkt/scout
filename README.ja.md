@@ -94,6 +94,7 @@ security add-generic-password -s SLACK_TOKEN -a "$USER" -U -w
 | 環境変数                      | デフォルト | 範囲   | 効果                                                                    |
 | ----------------------------- | ---------- | ------ | ----------------------------------------------------------------------- |
 | `SCOUT_FETCH_TIMEOUT_SECS`    | 95         | 1〜600 | `fetch` のURLごとの実時間予算                                           |
+| `SCOUT_SEARCH_TIMEOUT_SECS`   | 45         | 1〜600 | `search` の実時間予算                                                   |
 | `SCOUT_RESEARCH_TIMEOUT_SECS` | 45         | 1〜600 | `research` の実時間予算                                                 |
 | `SCOUT_SLACK_TIMEOUT_SECS`    | 60         | 1〜600 | Slackパーマリンク `fetch` の実時間予算                                  |
 | `SCOUT_GITHUB_TIMEOUT_SECS`   | 180        | 1〜600 | `repo-tree` / `repo-read` / `repo-overview` ごとの実時間予算            |

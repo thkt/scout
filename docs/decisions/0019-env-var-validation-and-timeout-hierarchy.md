@@ -101,3 +101,9 @@ audit の downgrade 候補 (env 検証の散在) は本 ADR に統合した。�
 - ADR-0017 (drain timeout。中断時の別系統の上限)
 - ADR-0018 (token resolve timeout)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (本 ADR の根拠 audit、downgrade を統合)
+
+## Addendum (2026-11-28): `SCOUT_SEARCH_TIMEOUT_SECS` を足し、`search` にも外側の上限を置く
+
+`search` だけがコマンド全体の上限を持たなかった。Brave の 1 回の要求は `REQUEST_TIMEOUT` (20s、`src/brave/client.rs`) で切れるが、既定の 2 回の再試行と、rate limit の `Retry-After` (1 回あたり最大 300s) の待ちが重なると、全体では約 660s まで待つ。scout を呼ぶ AI エージェントのシェル実行は、それより先に打ち切ることが多い。打ち切られた scout は envelope を出さずに終わり、呼び出し側は時間切れだったのか再試行してよいのかを判断できない。
+
+`SCOUT_SEARCH_TIMEOUT_SECS` (既定 45、範囲 1..=600、範囲外は exit 64) を足した。`Scout::run` の `with_command_timeout` が、GitHub の 3 コマンドと同じく `search` 全体を縛り、超えると `TIMEOUT` (exit 124) を返す。既定の 45s は `research` と同じで、Brave の要求 2 回分 (40s) を上回り、3 回目以降の再試行と長い rate limit の待ちは切る。`[T-CFG028]` がこの関係を、`[T-TS047]` が `run` での打ち切りを確かめる。

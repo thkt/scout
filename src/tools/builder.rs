@@ -243,6 +243,14 @@ impl ScoutBuilder {
         self
     }
 
+    /// The `search` counterpart of `with_github_timeout`: a test forces the
+    /// `run()`-level guard to trip against a delayed Brave response.
+    #[cfg(test)]
+    pub(super) fn with_search_timeout(mut self, timeout: Duration) -> Self {
+        self.config.search_timeout = timeout;
+        self
+    }
+
     /// The `fetch_slack` counterpart of `with_github_timeout`: a test forces the
     /// `tokio::time::timeout` around `fetch_message` to trip against a delayed
     /// wiremock response instead of waiting the production 60s.

@@ -104,6 +104,7 @@ Override the built-in timeouts and retry budget. Invalid values fail with exit 6
 | Env var                       | Default | Range | Effect                                                                                |
 | ----------------------------- | ------- | ----- | ------------------------------------------------------------------------------------- |
 | `SCOUT_FETCH_TIMEOUT_SECS`    | 95      | 1–600 | Per-URL wall-clock budget for `fetch`                                                 |
+| `SCOUT_SEARCH_TIMEOUT_SECS`   | 45      | 1–600 | Wall-clock budget for `search`                                                        |
 | `SCOUT_RESEARCH_TIMEOUT_SECS` | 45      | 1–600 | Wall-clock budget for `research`                                                      |
 | `SCOUT_SLACK_TIMEOUT_SECS`    | 60      | 1–600 | Wall-clock budget for Slack permalink `fetch`                                         |
 | `SCOUT_GITHUB_TIMEOUT_SECS`   | 180     | 1–600 | Wall-clock budget per `repo-tree` / `repo-read` / `repo-overview` command             |

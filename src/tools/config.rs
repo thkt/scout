@@ -8,6 +8,7 @@ use crate::retry::DEFAULT_MAX_RETRIES;
 use super::errors::ScoutError;
 
 const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 95;
+const DEFAULT_SEARCH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_RESEARCH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_SLACK_TIMEOUT_SECS: u64 = 60;
 /// Outer GitHub-command budget, intentionally shorter than repeated inner
@@ -16,6 +17,7 @@ const DEFAULT_SLACK_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_GITHUB_TIMEOUT_SECS: u64 = 180;
 
 const ENV_FETCH_TIMEOUT: &str = "SCOUT_FETCH_TIMEOUT_SECS";
+const ENV_SEARCH_TIMEOUT: &str = "SCOUT_SEARCH_TIMEOUT_SECS";
 const ENV_RESEARCH_TIMEOUT: &str = "SCOUT_RESEARCH_TIMEOUT_SECS";
 const ENV_SLACK_TIMEOUT: &str = "SCOUT_SLACK_TIMEOUT_SECS";
 const ENV_GITHUB_TIMEOUT: &str = "SCOUT_GITHUB_TIMEOUT_SECS";
@@ -29,8 +31,8 @@ const TIMEOUT_MAX_SECS: u64 = 600;
 /// The cap does not bound wall-clock on its own: `jittered_backoff` doubles from
 /// `INITIAL_BACKOFF_MS` and each sleep is capped at `MAX_RETRY_AFTER_SECS` (300),
 /// so ten retries can sleep for roughly 800s in total. What cuts a run short is
-/// the surrounding per-command budget — `fetch_timeout`, `research_timeout`,
-/// `slack_timeout`, `github_timeout` — each overridable via its `SCOUT_*_SECS`
+/// the surrounding per-command budget — `fetch_timeout`, `search_timeout`,
+/// `research_timeout`, `slack_timeout`, `github_timeout` — each overridable via its `SCOUT_*_SECS`
 /// variable and itself capped at `TIMEOUT_MAX_SECS`.
 const RETRIES_CAP: u32 = 10;
 
@@ -40,6 +42,7 @@ const RETRIES_CAP: u32 = 10;
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RuntimeConfig {
     pub(super) fetch_timeout: Duration,
+    pub(super) search_timeout: Duration,
     pub(super) research_timeout: Duration,
     pub(super) slack_timeout: Duration,
     pub(super) github_timeout: Duration,
@@ -66,6 +69,11 @@ impl RuntimeConfig {
     {
         let config = Self {
             fetch_timeout: parse_timeout(&get_var, ENV_FETCH_TIMEOUT, DEFAULT_FETCH_TIMEOUT_SECS)?,
+            search_timeout: parse_timeout(
+                &get_var,
+                ENV_SEARCH_TIMEOUT,
+                DEFAULT_SEARCH_TIMEOUT_SECS,
+            )?,
             research_timeout: parse_timeout(
                 &get_var,
                 ENV_RESEARCH_TIMEOUT,
@@ -92,6 +100,12 @@ impl RuntimeConfig {
             info!(
                 fetch_timeout_secs = self.fetch_timeout.as_secs(),
                 "{ENV_FETCH_TIMEOUT} override applied"
+            );
+        }
+        if self.search_timeout.as_secs() != DEFAULT_SEARCH_TIMEOUT_SECS {
+            info!(
+                search_timeout_secs = self.search_timeout.as_secs(),
+                "{ENV_SEARCH_TIMEOUT} override applied"
             );
         }
         if self.research_timeout.as_secs() != DEFAULT_RESEARCH_TIMEOUT_SECS {
@@ -208,6 +222,7 @@ mod tests {
     fn defaults_when_no_env_set() {
         let cfg = RuntimeConfig::from_env_with(empty_env).unwrap();
         assert_eq!(cfg.fetch_timeout, Duration::from_secs(95));
+        assert_eq!(cfg.search_timeout, Duration::from_secs(45));
         assert_eq!(cfg.research_timeout, Duration::from_secs(45));
         assert_eq!(cfg.slack_timeout, Duration::from_secs(60));
         assert_eq!(cfg.github_timeout, Duration::from_secs(180));
@@ -234,6 +249,30 @@ mod tests {
         assert_eq!(cfg.research_timeout, Duration::from_secs(30));
         assert_eq!(cfg.fetch_timeout, Duration::from_secs(95));
         assert_eq!(cfg.max_retries, 2);
+    }
+
+    /// [T-CFG027] The SCOUT_SEARCH_TIMEOUT_SECS override changes search_timeout and
+    /// leaves research_timeout, the other Brave-backed budget, on its default
+    #[test]
+    fn search_timeout_override() {
+        let cfg =
+            RuntimeConfig::from_env_with(single_env("SCOUT_SEARCH_TIMEOUT_SECS", "120")).unwrap();
+        assert_eq!(cfg.search_timeout, Duration::from_secs(120));
+        assert_eq!(cfg.research_timeout, Duration::from_secs(45));
+    }
+
+    /// [T-CFG028] The search_timeout default covers one Brave request and its first
+    /// retry, so a single slow attempt is not cut, while further retries that
+    /// keep hanging are
+    #[test]
+    fn search_timeout_covers_one_brave_request_and_one_retry() {
+        use crate::brave::client::REQUEST_TIMEOUT;
+
+        let search = RuntimeConfig::for_test().search_timeout;
+        assert!(
+            search > REQUEST_TIMEOUT * 2,
+            "search_timeout ({search:?}) must cover two Brave requests ({REQUEST_TIMEOUT:?} each)"
+        );
     }
 
     /// [T-CFG004] The SCOUT_SLACK_TIMEOUT_SECS override changes slack_timeout and leaves

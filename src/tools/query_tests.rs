@@ -1,4 +1,5 @@
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::fetch::converter::plain_text_result;
 use serde::ser::Error as _;
@@ -530,4 +531,32 @@ async fn research_auto_language_keeps_the_query_and_zero_result_contract() {
         serde_json::to_value(result.into_envelope()).unwrap()["degraded"],
         false
     );
+}
+
+/// [T-TS047] run() caps `search` with the outer search_timeout: a Brave response
+/// that never arrives within the budget exits 124 instead of waiting it out.
+#[tokio::test]
+async fn run_search_times_out_on_slow_brave() {
+    let Some(server) = try_spawn_mock_server("tools::search_timeout").await else {
+        return;
+    };
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&server)
+        .await;
+
+    let s = ScoutBuilder::for_test()
+        .with_brave_endpoint(&server.uri())
+        .with_search_timeout(Duration::from_millis(200))
+        .build();
+    let err = s
+        .run(Command::Search(SearchParams {
+            query: Some("rust".into()),
+            lang: Lang::Auto,
+        }))
+        .await
+        .expect_err("a slow Brave must trip the outer search_timeout");
+
+    assert_eq!(err.message(), "search timed out after 0s");
+    assert_eq!(err.exit_code(), 124);
 }

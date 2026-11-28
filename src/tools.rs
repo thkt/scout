@@ -248,43 +248,62 @@ impl Scout {
             .await
     }
 
-    /// Cap the whole GitHub command: several calls can each exhaust their
-    /// HTTP timeout and retry budget, otherwise taking minutes in total.
-    async fn with_github_timeout<F>(&self, label: &str, fut: F) -> Result<CommandOutput, ScoutError>
+    /// Cap a whole command: each HTTP call can exhaust its own timeout and
+    /// retry budget, and rate-limit waits run up to `MAX_RETRY_AFTER_SECS`, so
+    /// without this a command could take minutes in total.
+    async fn with_command_timeout<F>(
+        &self,
+        label: &str,
+        budget: Duration,
+        fut: F,
+    ) -> Result<CommandOutput, ScoutError>
     where
         F: Future<Output = Result<CommandOutput, ScoutError>>,
     {
-        timeout(self.config.github_timeout, fut)
-            .await
-            .unwrap_or_else(|_| {
-                warn!(
-                    command = label,
-                    timeout_secs = self.config.github_timeout.as_secs(),
-                    "github command timed out"
-                );
-                Err(ScoutError::timeout(format!(
-                    "{label} timed out after {}s",
-                    self.config.github_timeout.as_secs()
-                )))
-            })
+        timeout(budget, fut).await.unwrap_or_else(|_| {
+            warn!(
+                command = label,
+                timeout_secs = budget.as_secs(),
+                "command timed out"
+            );
+            Err(ScoutError::timeout(format!(
+                "{label} timed out after {}s",
+                budget.as_secs()
+            )))
+        })
     }
 
     pub(crate) async fn run(&self, cmd: Command) -> Result<CommandOutput, ScoutError> {
         match cmd {
-            Command::Search(params) => self.search(params).await,
+            Command::Search(params) => {
+                self.with_command_timeout("search", self.config.search_timeout, self.search(params))
+                    .await
+            }
             Command::Fetch(params) => self.fetch(params).await,
             Command::Research(params) => self.research(params).await,
             Command::RepoTree(params) => {
-                self.with_github_timeout("repo-tree", self.repo_tree(params))
-                    .await
+                self.with_command_timeout(
+                    "repo-tree",
+                    self.config.github_timeout,
+                    self.repo_tree(params),
+                )
+                .await
             }
             Command::RepoRead(params) => {
-                self.with_github_timeout("repo-read", self.repo_read(params))
-                    .await
+                self.with_command_timeout(
+                    "repo-read",
+                    self.config.github_timeout,
+                    self.repo_read(params),
+                )
+                .await
             }
             Command::RepoOverview(params) => {
-                self.with_github_timeout("repo-overview", self.repo_overview(params))
-                    .await
+                self.with_command_timeout(
+                    "repo-overview",
+                    self.config.github_timeout,
+                    self.repo_overview(params),
+                )
+                .await
             }
         }
     }

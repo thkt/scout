@@ -90,6 +90,7 @@ Environment:
 
 Tuning (override built-in timeouts and retry budget):
   SCOUT_FETCH_TIMEOUT_SECS      fetch wall-clock budget per URL (default 95, range 1-600)
+  SCOUT_SEARCH_TIMEOUT_SECS     search wall-clock budget (default 45, range 1-600)
   SCOUT_RESEARCH_TIMEOUT_SECS   research wall-clock budget (default 45, range 1-600)
   SCOUT_SLACK_TIMEOUT_SECS      slack fetch wall-clock budget (default 60, range 1-600)
   SCOUT_GITHUB_TIMEOUT_SECS     repo-tree/repo-read/repo-overview wall-clock budget
@@ -673,6 +674,7 @@ mod tests {
         let help = super::Cli::command().render_long_help().to_string();
         for var in [
             "SCOUT_FETCH_TIMEOUT_SECS",
+            "SCOUT_SEARCH_TIMEOUT_SECS",
             "SCOUT_RESEARCH_TIMEOUT_SECS",
             "SCOUT_SLACK_TIMEOUT_SECS",
             "SCOUT_GITHUB_TIMEOUT_SECS",
