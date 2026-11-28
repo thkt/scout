@@ -12,13 +12,6 @@ pub(super) const MAX_POOL_ENTRIES: usize = 4_096;
 const MAX_PATH_CHARS: usize = 512;
 const MAX_DISTANCE_CELLS: usize = 1_000_000;
 
-#[cfg(test)]
-async fn osa_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    osa_distance_chars(&a, &b).await
-}
-
 async fn osa_distance_chars(a: &[char], b: &[char]) -> usize {
     let m = a.len();
     let n = b.len();
@@ -122,37 +115,45 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    /// [T-TY001]
+    /// Whether `closest_matches` finds `candidate` for `target` at exactly
+    /// `distance`: within that distance, but not within one less.
+    async fn matches_at_exactly(target: &str, candidate: &str, distance: usize) -> bool {
+        let within =
+            |d| async move { !closest_matches(target, [candidate], d, 1).await.is_empty() };
+        within(distance).await && (distance == 0 || !within(distance - 1).await)
+    }
+
+    /// [T-TY001] Identical strings match at distance 0.
     #[tokio::test]
     async fn identical_strings_have_distance_zero() {
-        assert_eq!(osa_distance("README.md", "README.md").await, 0);
-        assert_eq!(osa_distance("", "").await, 0);
+        assert!(matches_at_exactly("README.md", "README.md", 0).await);
+        assert!(matches_at_exactly("", "", 0).await);
     }
 
-    /// [T-TY002] osa_distance: empty input returns the other's length
+    /// [T-TY002] An empty string is as far from another as that one is long.
     #[tokio::test]
     async fn empty_input_returns_length() {
-        assert_eq!(osa_distance("", "hello").await, 5);
-        assert_eq!(osa_distance("hello", "").await, 5);
+        assert!(matches_at_exactly("", "hello", 5).await);
+        assert!(matches_at_exactly("hello", "", 5).await);
     }
 
-    /// [T-TY003]
+    /// [T-TY003] Swapping two adjacent characters costs 1.
     #[tokio::test]
     async fn transposition_counts_as_one() {
-        assert_eq!(osa_distance("REDAME", "README").await, 1);
-        assert_eq!(osa_distance("ab", "ba").await, 1);
+        assert!(matches_at_exactly("REDAME", "README", 1).await);
+        assert!(matches_at_exactly("ab", "ba", 1).await);
     }
 
-    /// [T-TY004]
+    /// [T-TY004] Replacing one character costs 1.
     #[tokio::test]
     async fn substitution_counts_as_one() {
-        assert_eq!(osa_distance("kitten", "sitten").await, 1);
+        assert!(matches_at_exactly("kitten", "sitten", 1).await);
     }
 
-    /// [T-TY005] osa_distance: classic kitten/sitting case is 3
+    /// [T-TY005] The classic kitten/sitting pair is at distance 3.
     #[tokio::test]
     async fn kitten_sitting_distance_three() {
-        assert_eq!(osa_distance("kitten", "sitting").await, 3);
+        assert!(matches_at_exactly("kitten", "sitting", 3).await);
     }
 
     /// [T-TY006] closest_matches: returns top-N filtered by max_distance

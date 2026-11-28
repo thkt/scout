@@ -33,8 +33,8 @@ pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 
 /// Test seam for `Scout`. Production goes through `Scout::new`, which calls
-/// `ScoutBuilder::from_env()?.build()` and then sets `not_found_candidates`
-/// from its argument; tests use the `with_*` setters to
+/// `ScoutBuilder::from_env()?.with_not_found_candidates(..).build()`; tests use
+/// the `with_*` setters to
 /// inject `Clock` / `DnsResolver` doubles or to point `Brave` / `GitHub` /
 /// `Slack` at wiremock endpoints without reaching into private fields.
 /// `build` is sync + infallible so fallibility stays in `from_env`.
@@ -52,6 +52,7 @@ pub(super) struct ScoutBuilder {
     egress: EgressMode,
     cancel: watch::Sender<bool>,
     config: RuntimeConfig,
+    not_found_candidates: bool,
     /// Pre-initialize `Scout.github` (`OnceCell`) with a test client pointed at
     /// this base URL so `Scout::github()` returns it without ever calling
     /// `from_env_with_source`. `None` (production) preserves lazy init.
@@ -140,6 +141,7 @@ impl ScoutBuilder {
             egress,
             cancel: watch::channel(false).0,
             config,
+            not_found_candidates: true,
             #[cfg(test)]
             github_endpoint: None,
             #[cfg(test)]
@@ -174,6 +176,7 @@ impl ScoutBuilder {
             egress: EgressMode::Direct,
             cancel: watch::channel(false).0,
             config: RuntimeConfig::for_test(),
+            not_found_candidates: true,
             github_endpoint: None,
             brave_endpoint: None,
             slack_endpoint: None,
@@ -230,6 +233,13 @@ impl ScoutBuilder {
     #[cfg(test)]
     pub(super) fn with_fetch_http(mut self, client: Client) -> Self {
         self.fetch_http = client;
+        self
+    }
+
+    /// Whether a not-found `repo-read` looks up path candidates. Only the JSON
+    /// envelope renders them, so the Markdown path turns the lookup off.
+    pub(super) fn with_not_found_candidates(mut self, enabled: bool) -> Self {
+        self.not_found_candidates = enabled;
         self
     }
 
@@ -326,7 +336,7 @@ impl ScoutBuilder {
             secret_source: self.secret_source,
             dns: self.dns,
             egress: self.egress,
-            not_found_candidates: true,
+            not_found_candidates: self.not_found_candidates,
         }
     }
 }

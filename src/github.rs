@@ -113,6 +113,15 @@ impl GitHubClient {
         }
     }
 
+    /// Point a client built by `from_env_with_source` at a test server and keep
+    /// the token it resolved, so a test can see what the request carries.
+    #[cfg(test)]
+    pub(crate) fn at_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.to_owned();
+        self.skip_https_check = true;
+        self
+    }
+
     pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
