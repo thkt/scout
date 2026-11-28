@@ -317,18 +317,17 @@ fn collect_occurrences(
     extract: fn(&str) -> Vec<String>,
     occurrences: &mut Vec<ScannedToken>,
 ) {
-    let entries =
-        fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot scan {}: {e}", dir.display()));
+    let entries = fs::read_dir(dir).expect("the scan must read every directory it visits");
 
     for entry in entries {
         let path = entry
-            .unwrap_or_else(|e| panic!("cannot scan {}: {e}", dir.display()))
+            .expect("the scan must read every directory entry")
             .path();
         if path.is_dir() {
             collect_occurrences(&path, extract, occurrences);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let contents = fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            let contents =
+                fs::read_to_string(&path).expect("the scan must read every .rs file it finds");
             for token in extract(&contents) {
                 occurrences.push(ScannedToken {
                     file: path.clone(),
