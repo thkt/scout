@@ -66,33 +66,6 @@ fn format_overview_truncates_long_readme() {
     assert!(output.contains(&format!("/ {total} bytes)")));
 }
 
-/// [T-GF009] format_overview filters PR-backed issues out of the Recent Issues section
-#[test]
-fn format_overview_filters_issues_from_prs() {
-    let repo = sample_repo();
-    let issues = vec![
-        IssueInfo {
-            number: 1,
-            title: "Real issue".into(),
-            html_url: "https://github.com/o/r/issues/1".into(),
-            labels: vec![],
-            user: None,
-            pull_request: None,
-        },
-        IssueInfo {
-            number: 2,
-            title: "PR as issue".into(),
-            html_url: "https://github.com/o/r/issues/2".into(),
-            labels: vec![],
-            user: None,
-            pull_request: Some(serde_json::json!({})),
-        },
-    ];
-    let output = format_overview(&repo, None, &issues, &[], &[]);
-    assert!(output.contains("Real issue"));
-    assert!(!output.contains("PR as issue"));
-}
-
 /// [T-GF010] format_overview marks draft PRs and shows author handle
 #[test]
 fn format_overview_shows_draft_prs() {

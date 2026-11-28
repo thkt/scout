@@ -149,3 +149,7 @@ Decision Outcome の冒頭が中和の集約先を `src/markdown.rs` と `src/fe
 中和点表と 2026-08-17 の追補は、`truncate_and_reneutralize` を fetch と research の 2 箇所から呼ぶと書いている。現行の呼び出し元は `src/tools.rs` の fetch だけである。research の取得ページと GitHub の README は、[DR-0031](0031-close-report-body-code-fences.md) が入れた `src/yaml.rs` の `finish_report_body` を通る (`src/search/engine.rs`、`src/github/format.rs`)。
 
 Decision Outcome の「http/https のみ clickable link」は、fetch 本文の `<a>` にも適用した。`src/fetch/converter/html.rs` の `render_link` は、http/https 以外の scheme を持つ href を `text (url)` の形で出す。scheme を持たない相対パスと fragment はリンクのまま残す。判定の前に ASCII の空白と制御文字を除くので、大小文字や空白による難読化も同じ扱いになる。検証は `[T-HMD009]`。
+
+## Addendum (2026-11-28): raw-text タグの一覧を 1 箇所にまとめる
+
+変換層の除去 (`src/fetch/converter/html.rs` の `suppressed`) と、自己終了記法を開始タグと終了タグの対へ書き換える前処理 (`close_self_closed_raw_text_tags`) は、同じ 7 タグを別々の一覧に持っていた。片方にだけタグを足すと、そのタグの自己終了記法を含む XHTML で、以降の本文が黙って消える。一覧は `src/fetch/converter/html/xhtml.rs` の `RAW_TEXT_TAGS` 1 つにし、`suppressed` と前処理の両方がそれを読む。前処理は `html::convert` の先頭で走るので、呼び出し側が先に呼ぶ必要は無い。SVG 名前空間の `desc` は前処理の対象外で、`suppressed` だけが扱う。

@@ -316,16 +316,24 @@ impl GitHubClient {
             .await
     }
 
+    /// Open issues, most recently updated first. GitHub's issues endpoint also
+    /// returns pull requests; they are dropped here, so the result may hold
+    /// fewer than `per_page` entries.
     pub(crate) async fn get_issues(
         &self,
         owner: &str,
         repo: &str,
         per_page: PerPage,
     ) -> Result<Vec<IssueInfo>, GitHubError> {
-        self.get_json(&format!(
-            "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
-        ))
-        .await
+        let issues: Vec<IssueInfo> = self
+            .get_json(&format!(
+                "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
+            ))
+            .await?;
+        Ok(issues
+            .into_iter()
+            .filter(|issue| issue.pull_request.is_none())
+            .collect())
     }
 
     pub(crate) async fn get_pulls(
