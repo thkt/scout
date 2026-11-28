@@ -65,3 +65,7 @@ CDPの模擬通信は `src/fetch/cdp/connection/tests.rs` のT-CDPW001からT-CD
 - [tokio-tungstenite](https://github.com/snapview/tokio-tungstenite)
 
 DR-0014のHTML本文の抑制規則、DR-0025のpre内の改行、DR-0026のDOMからのコード本文取得、DR-0027の改行仕様を引き継ぐ。これらの文書にある `htmd` のAPIや内部処理の説明は、移行前の実装記録となる。
+
+## Addendum (2026-11-28): `dom_query 0.30` と `dom_smoothie 0.20` への更新
+
+#560 で `dom_query` を 0.30 に、`dom_smoothie` を 0.20 に上げた。上の Decision Outcome と Consequences にある `dom_query 0.29` と `dom_smoothie 0.19.0` は、この更新の前の版である。`dom_smoothie 0.20.0` は `dom_query 0.30` を使うので、DOM 系の依存は引き続き 1 系列にそろう。`html5ever` は 0.40.1 のままで、`cargo tree -i html5ever` が示す版は 1 つだけである。
