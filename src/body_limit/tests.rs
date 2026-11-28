@@ -148,7 +148,7 @@ async fn read_body_snippet_returns_a_short_body_intact() {
 /// result, and the cap counts them: head plus rest at cap returns whole, one
 /// byte more is rejected.
 #[tokio::test]
-async fn read_rest_capped_counts_the_head_against_the_cap() {
+async fn bytes_already_read_count_toward_the_download_limit() {
     const CAP: usize = 16;
     let Some(server) = try_spawn_mock_server("body_limit::rest_after_head").await else {
         return; // loopback bind unavailable — skip
@@ -179,7 +179,7 @@ async fn read_rest_capped_counts_the_head_against_the_cap() {
 /// [T-BL004] A head already longer than the cap is rejected without reading
 /// the rest.
 #[tokio::test]
-async fn read_rest_capped_rejects_a_head_over_the_cap() {
+async fn bytes_already_read_over_the_limit_are_rejected_without_reading_more() {
     const CAP: usize = 4;
     let Some((url, handle)) = spawn_declared_length_no_body_server(1) else {
         return; // loopback bind unavailable — skip

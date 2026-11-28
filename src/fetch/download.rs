@@ -155,9 +155,10 @@ pub(super) struct ImageResponse {
 
 /// Same client and URL requirements as [`download`]. A response that declares
 /// one of the four raster types takes its format from the header. A response
-/// with no Content-Type or with `application/octet-stream` takes it from its
-/// first [`SIGNATURE_PREFIX_BYTES`] bytes. Every other response is rejected
-/// on its headers.
+/// with no or an empty Content-Type, or with `application/octet-stream`, takes
+/// it from its first [`SIGNATURE_PREFIX_BYTES`] bytes. Every other response is
+/// rejected on its headers, including a Content-Type that is not ASCII: it is
+/// present, so it is not a missing header.
 pub(super) async fn open_image(
     client: &Client,
     url: &ValidatedUrl,
@@ -168,15 +169,19 @@ pub(super) async fn open_image(
     let (url, mut response) = final_response(client, url, max_redirects, resolver, mode).await?;
     let content_length = response.content_length();
 
-    // A header that is not ASCII reads as empty, which is not a missing header.
-    let content_type = response
+    let header = response
         .headers()
         .get(CONTENT_TYPE)
-        .map(|ct| ct.to_str().unwrap_or_default().to_owned());
-    let untyped = content_type
-        .as_deref()
-        .is_none_or(|ct| essence(ct).eq_ignore_ascii_case("application/octet-stream"));
-    let content_type = content_type.unwrap_or_default();
+        .map(|ct| ct.to_str().ok().map(str::to_owned));
+    let untyped = match &header {
+        None => true,
+        Some(Some(ct)) => {
+            let mime = essence(ct);
+            mime.is_empty() || mime.eq_ignore_ascii_case("application/octet-stream")
+        }
+        Some(None) => false,
+    };
+    let content_type = header.flatten().unwrap_or_default();
 
     let mut head = Vec::new();
     let format = if untyped {

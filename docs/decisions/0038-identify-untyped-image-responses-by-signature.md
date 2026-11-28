@@ -31,13 +31,13 @@ Chosen option: 「本文の先頭 12 バイトだけを読み、4 形式のシ�
 
 | 項目 | 決定 |
 | --- | --- |
-| シグネチャで判定する応答 | Content-Type ヘッダが無い応答と、essence が `application/octet-stream` の応答。大文字小文字とパラメータは問わない |
+| シグネチャで判定する応答 | Content-Type ヘッダが無い応答、essence が空の応答、essence が `application/octet-stream` の応答。大文字小文字とパラメータは問わない。空の essence を含めるのは、`check_content_type` によるテキストの取得経路が空のヘッダをヘッダ無しと同じく扱うためである |
 | ASCII でない Content-Type ヘッダ | ヘッダが無い応答とは扱わず、従来どおり `NotAnImage` で拒否する。ヘッダはあるので、配信側は何かを宣言している |
 | `image/jpg` | `ImageFormat::from_content_type` が `image/jpeg` の別表記として受け付ける。保存結果の `content_type` は `ImageFormat::mime` の `image/jpeg` になる。`--output` の無い fetch の `UnsupportedContentType` の hint も、`--output` の案内になる |
 | 先頭バイトの読み込み | `open_image` が `SIGNATURE_PREFIX_BYTES`（12）以上たまるか EOF まで chunk を読み、`ImageFormat::from_signature` で照合する。4 形式のシグネチャは先頭バイトが互いに異なるので、合う形式は高々 1 つである |
 | どの形式にも合わない場合 | `NotAnImage` で拒否し、ファイルを作らない。payload は essence（ヘッダが無いときは空文字）のままなので、`--output` を外す案内はヘッダが無い応答にだけ出る |
 | 残りの本文 | `ImageResponse::read` が `read_rest_capped`（`src/body_limit.rs`）で読む。上限は読み済みの先頭バイトを含めた全体に掛かる。Content-Length の事前確認には、先頭バイトを読む前に取った値を使う |
-| `--js` | `fetch_image`（`src/fetch.rs`）の判定の位置は変えない。`open_image` が先頭バイトで画像と決めた後、`ImageResponse::read` の前に `ImageWithJs` で拒否する。本文が上限を超える画像でも、上限超過より先にこの拒否を返す |
+| `--js` | `fetch_image`（`src/fetch.rs`）の判定の位置は変えない。`open_image` が先頭バイトで画像と決めた後、`ImageResponse::read` の前に `ImageWithJs` で拒否する。本文が上限を超える画像でも、上限超過より先にこの拒否を返す。ただし先頭 12 バイトが届く前に本文が止まると、この拒否より先にタイムアウトになる |
 
 Content-Type が 4 種の画像を名乗る応答の経路は変わらない。`open_image` は本文を読まず、`ImageResponse::read` が本文全体を読んでから `ImageFormat::matches_signature` で照合する。`--output` の無い fetch の挙動も、`image/jpg` の hint を除いて変わらない。
 
@@ -45,12 +45,12 @@ Content-Type が 4 種の画像を名乗る応答の経路は変わらない。`
 
 - Good, because Content-Type を付けない配信や `application/octet-stream` で配る画像も、変換せずに保存できる。
 - Good, because シグネチャで判定する応答でも、`--js` の拒否が本文全体の読み込みより前に来る。
-- Bad, because `open_image` がヘッダだけで判定を終えない経路ができ、判定のためにネットワークから最大 1 chunk を読む。
+- Bad, because `open_image` がヘッダだけで判定を終えない経路ができ、判定のために 12 バイト以上たまるまで chunk を読む。12 バイトを超えて読む量は最後の 1 chunk の分に限られる。
 - Bad, because ヘッダが無い応答は、`--output` の有無で扱いが分かれる。`--output` があれば画像として判定し、無ければ従来どおり HTML として変換する。
 
 ### Confirmation
 
-`tests/fetch_image.rs` の T-C072 から T-C077 で、ヘッダ無しと `application/octet-stream` の 4 形式の保存、12 バイトに満たない本文、`image/jpg`、画像でない本文の拒否と hint、ASCII でない Content-Type、`--js` の拒否と上限を超える本文を確かめる。既存の T-C061 から T-C071 は変更しない。`src/body_limit/tests.rs` の T-BL003 と T-BL004 で、読み済みの先頭バイトが上限に数えられることを確かめる。
+`tests/fetch_image.rs` の T-C072 から T-C077 で、ヘッダ無し、空の Content-Type、`application/octet-stream` の 4 形式の保存、12 バイトに満たない本文、`image/jpg`、画像でない本文の拒否と hint、ASCII でない Content-Type、`--js` の拒否と上限を超える本文を確かめる。既存の T-C061 から T-C071 は変更しない。`src/body_limit/tests.rs` の T-BL003 と T-BL004 で、読み済みの先頭バイトが上限に数えられることを確かめる。
 
 ## More Information
 

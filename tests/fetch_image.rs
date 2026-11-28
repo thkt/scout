@@ -262,16 +262,19 @@ fn non_utf8_output_path_is_a_usage_error() {
     assert!(output.stdout.is_empty(), "{output:?}");
 }
 
-/// Header lines for the two responses whose format the leading bytes decide:
-/// no Content-Type, and `application/octet-stream` in two spellings.
-const UNTYPED_HEADERS: [&str; 3] = [
+/// Header lines for the responses whose format the leading bytes decide: no
+/// Content-Type, `application/octet-stream` in two spellings, and an empty
+/// media type with and without parameters.
+const UNTYPED_HEADERS: [&str; 5] = [
     "",
     "Content-Type: application/octet-stream\r\n",
     "Content-Type: Application/Octet-Stream; charset=binary\r\n",
+    "Content-Type: \r\n",
+    "Content-Type: ; charset=binary\r\n",
 ];
 
-/// [T-C072] A response with no Content-Type or with
-/// `application/octet-stream` is saved verbatim when its leading bytes are
+/// [T-C072] A response with no or an empty Content-Type, or with
+/// `application/octet-stream`, is saved verbatim when its leading bytes are
 /// one of the four raster signatures, and reported with the canonical type.
 #[test]
 fn untyped_image_response_is_saved_by_its_signature() {

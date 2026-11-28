@@ -191,7 +191,8 @@ pub(crate) async fn fetch_image(
     )
     .await?;
     // Not earlier: `--js` on a page must report the page mismatch. Not later:
-    // a slow or oversized body would fail first and hide the flag conflict.
+    // a slow or oversized rest of the body would fail first and hide the flag
+    // conflict. An untyped response has its first 12 bytes read by now.
     if opts.js {
         return Err(FetchError::ImageWithJs);
     }
