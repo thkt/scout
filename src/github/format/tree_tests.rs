@@ -1,4 +1,5 @@
 use super::*;
+use crate::github::parse_repo;
 use crate::github::types::EntryType;
 
 /// [T-GF004] format_tree renders owner/repo header and entry sizes
@@ -17,7 +18,7 @@ fn format_tree_basic() {
         },
     ];
     let refs: Vec<&TreeEntry> = entries.iter().collect();
-    let output = format_tree("owner", "repo", "main", &refs, false);
+    let output = format_tree(parse_repo("owner/repo").unwrap(), "main", &refs, false);
     assert!(output.contains("owner/repo (ref: main)"));
     assert!(output.contains("files: 2"));
     assert!(output.contains("src/main.rs (1.0 KB)"));
@@ -27,7 +28,7 @@ fn format_tree_basic() {
 /// [T-GF005] format_tree emits truncation notice when GitHub marks tree truncated
 #[test]
 fn format_tree_truncated() {
-    let output = format_tree("o", "r", "main", &[], true);
+    let output = format_tree(parse_repo("o/r").unwrap(), "main", &[], true);
     assert!(output.contains("truncated"));
 }
 
@@ -46,7 +47,7 @@ fn format_tree_keeps_link_syntax_in_paths_verbatim() {
         size: None,
     }];
     let refs: Vec<&TreeEntry> = entries.iter().collect();
-    let output = format_tree("owner", "repo", "main", &refs, false);
+    let output = format_tree(parse_repo("owner/repo").unwrap(), "main", &refs, false);
 
     assert!(
         output.contains("docs/[draft](old).md"),
@@ -75,7 +76,7 @@ fn format_tree_fence_outgrows_backticks_in_a_path() {
         size: None,
     }];
     let refs: Vec<&TreeEntry> = entries.iter().collect();
-    let output = format_tree("owner", "repo", "main", &refs, false);
+    let output = format_tree(parse_repo("owner/repo").unwrap(), "main", &refs, false);
 
     assert!(
         output.contains("````\nweird/```name.md"),

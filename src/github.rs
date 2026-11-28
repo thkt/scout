@@ -23,7 +23,7 @@ use crate::token_source::TokenSource;
 
 use helpers::encode_path;
 pub(crate) use helpers::{
-    apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
+    RepoRef, apply_line_range, decode_content, filter_tree_entries, parse_line_range, parse_repo,
     validate_path, validate_ref,
 };
 use types::{
@@ -51,8 +51,8 @@ const MAX_GITHUB_RESPONSE_BYTES: usize = 10_000_000;
 /// HTTP client for the GitHub REST API v3.
 ///
 /// Auth resolution order: `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` CLI → unauthenticated.
-/// Owner/repo parameters are safe for direct URL interpolation because `parse_repo`
-/// restricts them to `[a-zA-Z0-9._-]`.
+/// Every `get_*` takes a [`RepoRef`], whose `owner/repo` is safe for direct URL
+/// interpolation because `parse_repo` restricts both halves to `[a-zA-Z0-9._-]`.
 pub(crate) struct GitHubClient {
     http: Client,
     token: Option<Redacted>,
@@ -254,21 +254,18 @@ impl GitHubClient {
         }
     }
 
-    pub(crate) async fn get_repo(&self, owner: &str, repo: &str) -> Result<RepoInfo, GitHubError> {
-        self.get_json(&format!("/repos/{owner}/{repo}")).await
+    pub(crate) async fn get_repo(&self, repo: RepoRef<'_>) -> Result<RepoInfo, GitHubError> {
+        self.get_json(&format!("/repos/{repo}")).await
     }
 
     pub(crate) async fn get_tree(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         ref_: &str,
     ) -> Result<TreeResponse, GitHubError> {
         let ref_ = encode_path(ref_);
-        self.get_json(&format!(
-            "/repos/{owner}/{repo}/git/trees/{ref_}?recursive=1"
-        ))
-        .await
+        self.get_json(&format!("/repos/{repo}/git/trees/{ref_}?recursive=1"))
+            .await
     }
 
     /// The contents endpoint answers with an object for a file and an array for
@@ -279,8 +276,7 @@ impl GitHubClient {
     /// paths to the user in the first place.
     pub(crate) async fn get_contents(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         path: &str,
         ref_: Option<&str>,
     ) -> Result<ContentsResponse, GitHubError> {
@@ -289,7 +285,7 @@ impl GitHubClient {
             .map(|r| format!("?ref={}", encode_path(r)))
             .unwrap_or_default();
         match self
-            .get_json(&format!("/repos/{owner}/{repo}/contents/{encoded}{query}"))
+            .get_json(&format!("/repos/{repo}/contents/{encoded}{query}"))
             .await?
         {
             ContentsPayload::File(contents) => Ok(contents),
@@ -299,21 +295,18 @@ impl GitHubClient {
 
     pub(crate) async fn get_blob(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         sha: &str,
     ) -> Result<BlobResponse, GitHubError> {
-        self.get_json(&format!("/repos/{owner}/{repo}/git/blobs/{sha}"))
+        self.get_json(&format!("/repos/{repo}/git/blobs/{sha}"))
             .await
     }
 
     pub(crate) async fn get_readme(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
     ) -> Result<ContentsResponse, GitHubError> {
-        self.get_json(&format!("/repos/{owner}/{repo}/readme"))
-            .await
+        self.get_json(&format!("/repos/{repo}/readme")).await
     }
 
     /// Open issues, most recently updated first. GitHub's issues endpoint also
@@ -321,13 +314,12 @@ impl GitHubClient {
     /// fewer than `per_page` entries.
     pub(crate) async fn get_issues(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         per_page: PerPage,
     ) -> Result<Vec<IssueInfo>, GitHubError> {
         let issues: Vec<IssueInfo> = self
             .get_json(&format!(
-                "/repos/{owner}/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
+                "/repos/{repo}/issues?state=open&sort=updated&direction=desc&per_page={per_page}"
             ))
             .await?;
         Ok(issues
@@ -338,26 +330,22 @@ impl GitHubClient {
 
     pub(crate) async fn get_pulls(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         per_page: PerPage,
     ) -> Result<Vec<PullInfo>, GitHubError> {
         self.get_json(&format!(
-            "/repos/{owner}/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={per_page}"
+            "/repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={per_page}"
         ))
         .await
     }
 
     pub(crate) async fn get_releases(
         &self,
-        owner: &str,
-        repo: &str,
+        repo: RepoRef<'_>,
         per_page: PerPage,
     ) -> Result<Vec<ReleaseInfo>, GitHubError> {
-        self.get_json(&format!(
-            "/repos/{owner}/{repo}/releases?per_page={per_page}"
-        ))
-        .await
+        self.get_json(&format!("/repos/{repo}/releases?per_page={per_page}"))
+            .await
     }
 }
 

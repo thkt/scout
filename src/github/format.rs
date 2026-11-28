@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use super::RepoRef;
 use super::types::{IssueInfo, PullInfo, ReleaseInfo, RepoInfo, TreeEntry, UserInfo};
 use crate::markdown::{
     escape_md_inline, fence_delimiter, md_link, shift_headings, truncation_note,
@@ -71,13 +72,12 @@ pub(crate) fn format_file_content(
 /// Fence API-provided paths without escaping: escaped paths would break repo-read.
 /// `parse_repo` and `validate_ref` reject link syntax in header inputs.
 pub(crate) fn format_tree(
-    owner: &str,
-    repo: &str,
+    repo: RepoRef<'_>,
     ref_: &str,
     entries: &[&TreeEntry],
     truncated: bool,
 ) -> String {
-    let mut out = format!("{owner}/{repo} (ref: {ref_})\n");
+    let mut out = format!("{repo} (ref: {ref_})\n");
     let _ = write!(out, "files: {}", entries.len());
     if truncated {
         out.push_str(" (tree truncated by GitHub — repository exceeds API limits)");

@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::envelope::{CommandOutput, Degradation, DegradedReason};
-use crate::github::{self, GitHubClient, PerPage};
+use crate::github::{self, GitHubClient, PerPage, RepoRef};
 
 use super::errors::unwrap_or_degraded;
 use super::params::{RepoOverviewParams, RepoReadParams, RepoTreeParams};
@@ -23,7 +23,7 @@ impl Scout {
     ) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        let (owner, repo) = github::parse_repo(&repository)?;
+        let repo = github::parse_repo(&repository)?;
 
         info!(repository = %repository, "repo_tree");
 
@@ -39,10 +39,10 @@ impl Scout {
 
         let ref_ = match params.ref_ {
             Some(r) => r,
-            None => github.get_repo(owner, repo).await?.default_branch,
+            None => github.get_repo(repo).await?.default_branch,
         };
 
-        let tree = github.get_tree(owner, repo, &ref_).await?;
+        let tree = github.get_tree(repo, &ref_).await?;
 
         let filtered = github::filter_tree_entries(
             &tree.tree,
@@ -50,10 +50,10 @@ impl Scout {
             params.pattern.as_deref(),
         )?;
 
-        let markdown = github::format::format_tree(owner, repo, &ref_, &filtered, tree.truncated);
+        let markdown = github::format::format_tree(repo, &ref_, &filtered, tree.truncated);
         let data = serde_json::json!({
-            "owner": owner,
-            "repo": repo,
+            "owner": repo.owner(),
+            "repo": repo.name(),
             "ref": ref_,
             "entries": filtered,
             "truncated": tree.truncated,
@@ -78,7 +78,7 @@ impl Scout {
         let repository = resolver.resolve(params.repository, "repository", "<OWNER/REPO>")?;
         let path = resolver.resolve(params.path, "path", "<FILE_PATH>")?;
 
-        let (owner, repo) = github::parse_repo(&repository)?;
+        let repo = github::parse_repo(&repository)?;
 
         info!(repository = %repository, path = %path, "repo_read");
 
@@ -96,7 +96,7 @@ impl Scout {
         let github = self.github().await;
 
         let contents = match github
-            .get_contents(owner, repo, &path, params.ref_.as_deref())
+            .get_contents(repo, &path, params.ref_.as_deref())
             .await
         {
             Ok(c) => c,
@@ -104,8 +104,7 @@ impl Scout {
                 let mut err = ScoutError::from(github::GitHubError::NotFound(path.clone()));
                 if self.not_found_candidates {
                     let candidates =
-                        collect_path_candidates(github, owner, repo, params.ref_.as_deref(), &path)
-                            .await;
+                        collect_path_candidates(github, repo, params.ref_.as_deref(), &path).await;
                     if !candidates.is_empty() {
                         err = err.with_candidates(candidates);
                     }
@@ -120,7 +119,7 @@ impl Scout {
             if let Some(encoded) = contents.content.as_ref().filter(|c| !c.is_empty()) {
                 github::decode_content(encoded, hint)?
             } else {
-                let blob = github.get_blob(owner, repo, &contents.sha).await?;
+                let blob = github.get_blob(repo, &contents.sha).await?;
                 github::decode_content(&blob.content, hint)?
             };
         let encoding_label = match decode_result.source {
@@ -154,20 +153,20 @@ impl Scout {
     ) -> Result<CommandOutput, ScoutError> {
         let repository = resolve_stdin_arg(params.repository, "repository", "<OWNER/REPO>").await?;
 
-        let (owner, repo) = github::parse_repo(&repository)?;
+        let repo = github::parse_repo(&repository)?;
 
         info!(repository = %repository, "repo_overview");
 
         let github = self.github().await;
 
         // Verify repo exists first: a 404 here avoids 4 wasted parallel API calls.
-        let repo_info = github.get_repo(owner, repo).await?;
+        let repo_info = github.get_repo(repo).await?;
 
         let ((readme_content, mut degradation), issues, pulls, releases) = tokio::join!(
-            fetch_readme(github, owner, repo),
-            github.get_issues(owner, repo, OVERVIEW_ITEMS),
-            github.get_pulls(owner, repo, OVERVIEW_ITEMS),
-            github.get_releases(owner, repo, OVERVIEW_RELEASES),
+            fetch_readme(github, repo),
+            github.get_issues(repo, OVERVIEW_ITEMS),
+            github.get_pulls(repo, OVERVIEW_ITEMS),
+            github.get_releases(repo, OVERVIEW_RELEASES),
         );
 
         let issues =
@@ -223,15 +222,14 @@ const CANDIDATE_TOP_N: usize = 3;
 /// work-cap exhaustion.
 async fn collect_path_candidates(
     github: &GitHubClient,
-    owner: &str,
-    repo: &str,
+    repo: RepoRef<'_>,
     ref_: Option<&str>,
     target: &str,
 ) -> Vec<String> {
     let fut = async {
         let resolved_ref = match ref_ {
             Some(r) => r.to_owned(),
-            None => match github.get_repo(owner, repo).await {
+            None => match github.get_repo(repo).await {
                 Ok(info) => info.default_branch,
                 Err(e) => {
                     warn!(%e, "candidate fetch: get_repo failed");
@@ -239,7 +237,7 @@ async fn collect_path_candidates(
                 }
             },
         };
-        let tree = match github.get_tree(owner, repo, &resolved_ref).await {
+        let tree = match github.get_tree(repo, &resolved_ref).await {
             Ok(t) => t,
             Err(e) => {
                 warn!(%e, "candidate fetch: get_tree failed");
@@ -267,13 +265,9 @@ async fn collect_path_candidates(
 }
 
 /// Fetch, recover the blob body and decode in one branch of the overview join.
-async fn fetch_readme(
-    github: &GitHubClient,
-    owner: &str,
-    repo: &str,
-) -> (Option<String>, Degradation) {
+async fn fetch_readme(github: &GitHubClient, repo: RepoRef<'_>) -> (Option<String>, Degradation) {
     let mut degradation = Degradation::default();
-    let entry = match github.get_readme(owner, repo).await {
+    let entry = match github.get_readme(repo).await {
         Ok(r) => Some(r),
         Err(e) => {
             if !matches!(e, github::GitHubError::NotFound(_)) {
@@ -290,7 +284,7 @@ async fn fetch_readme(
     let encoded = match entry {
         None => None,
         Some(r) if r.content.as_ref().is_some_and(|c| !c.is_empty()) => r.content,
-        Some(r) => match github.get_blob(owner, repo, &r.sha).await {
+        Some(r) => match github.get_blob(repo, &r.sha).await {
             Ok(blob) => Some(blob.content).filter(|c| !c.is_empty()),
             Err(e) => {
                 warn!(%e, "failed to fetch README blob");

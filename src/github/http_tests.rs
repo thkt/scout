@@ -32,7 +32,7 @@ async fn get_contents_on_a_directory_is_a_data_error_not_internal() {
 
     let client = GitHubClient::with_base_url(Client::new(), &server.uri());
     let err = client
-        .get_contents("owner", "repo", "src", None)
+        .get_contents(parse_repo("owner/repo").unwrap(), "src", None)
         .await
         .expect_err("a directory path cannot yield file contents");
 
