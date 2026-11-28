@@ -178,12 +178,14 @@ fn blob(path: &str) -> TreeEntry {
     }
 }
 
+/// An entry of the given git object type, read from the JSON GitHub sends.
+fn entry_of_type(path: &str, git_type: &str) -> TreeEntry {
+    serde_json::from_value(serde_json::json!({ "path": path, "type": git_type }))
+        .expect("tree entry JSON")
+}
+
 fn tree(path: &str) -> TreeEntry {
-    TreeEntry {
-        path: path.into(),
-        entry_type: EntryType::Tree,
-        size: None,
-    }
+    entry_of_type(path, "tree")
 }
 
 /// [T-GHH017] filter_tree_entries keeps entries matching a directory path prefix
@@ -256,14 +258,7 @@ fn filter_excludes_tree_entries() {
 /// [T-GHH022] filter_tree_entries excludes submodule commit entries
 #[test]
 fn filter_excludes_commit_entries() {
-    let entries = vec![
-        blob("src/main.rs"),
-        TreeEntry {
-            path: "submodule".into(),
-            entry_type: EntryType::Commit,
-            size: None,
-        },
-    ];
+    let entries = vec![blob("src/main.rs"), entry_of_type("submodule", "commit")];
     let filtered = filter_tree_entries(&entries, None, None).unwrap();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].path, "src/main.rs");

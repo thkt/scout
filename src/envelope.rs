@@ -3,7 +3,8 @@
 use serde::Serialize;
 
 /// Typed JSON degradation reasons; callers need not parse free-form notes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum DegradedReason {
     IssuesFetchFailed,
@@ -140,7 +141,8 @@ impl CommandOutput {
 /// JSON error classification (ADR-0010). `Internal` denotes scout invariants;
 /// `Unknown` denotes unclassified failures (ADR-0011). `Timeout` is separate
 /// from temporary failures so callers can choose a longer backoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ErrorCode {
     UsageError,

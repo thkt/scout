@@ -3,7 +3,8 @@ use std::fmt;
 /// Interrupt signal observed by `wait_for_signal`. Maps to a POSIX exit
 /// convention so shell pipeline callers can distinguish user-initiated
 /// interruption from internal errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum InterruptSignal {
     Sigint,
     #[cfg(unix)]

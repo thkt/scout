@@ -5,7 +5,8 @@ use tracing::warn;
 ///
 /// `description` is the search engine snippet (not an LLM-generated summary)
 /// and is included to help AI agents pre-filter results before fetching.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct SearchResult {
     pub(crate) url: String,
     pub(crate) title: String,
