@@ -197,9 +197,9 @@ pub(crate) struct Scout {
 impl Scout {
     /// Construct clients synchronously; token subprocesses remain lazy.
     pub(crate) fn new(not_found_candidates: bool) -> Result<Self, ScoutError> {
-        let mut scout = ScoutBuilder::from_env()?.build();
-        scout.not_found_candidates = not_found_candidates;
-        Ok(scout)
+        Ok(ScoutBuilder::from_env()?
+            .with_not_found_candidates(not_found_candidates)
+            .build())
     }
 
     /// Share shutdown state with `lib::run` without borrowing `Scout`.

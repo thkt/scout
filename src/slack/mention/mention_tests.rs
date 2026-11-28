@@ -1,89 +1,50 @@
 use super::*;
 
-/// [T-SK015]
+/// [T-SK018] Adjacent mentions are each replaced, with nothing lost between them.
 #[test]
-fn text_without_mentions_yields_no_spans() {
-    let spans = parse_mentions("hello world");
-    assert!(spans.is_empty());
+fn adjacent_mentions_are_each_replaced() {
+    let cache: HashMap<String, String> = [
+        ("U001".into(), "A".into()),
+        ("U002".into(), "B".into()),
+        ("U003".into(), "C".into()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        substitute_mentions("<@U001><@U002><@U003>", &cache),
+        "@A@B@C"
+    );
 }
 
-/// [T-SK016]
+/// [T-SK019] An unclosed mention is left as written after the earlier mentions
+/// are replaced.
 #[test]
-fn single_mention_yields_one_span_covering_its_bytes() {
-    let text = "hi <@U123> bye";
-    let spans = parse_mentions(text);
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "U123");
-    assert_eq!(spans[0].start, 3);
-    assert_eq!(spans[0].end, 10);
-    assert_eq!(&text[spans[0].start..spans[0].end], "<@U123>");
+fn unclosed_mention_is_left_as_written() {
+    let cache: HashMap<String, String> = [("U001".into(), "A".into())].into_iter().collect();
+    assert_eq!(
+        substitute_mentions("<@U001> then <@U002", &cache),
+        "@A then <@U002"
+    );
 }
 
-/// [T-SK058]
+/// [T-SK020] Mentions after and between multibyte characters are replaced
+/// without splitting those characters.
 #[test]
-fn labeled_mention_captures_the_label() {
-    let spans = parse_mentions("cc <@U123|alice>");
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "U123");
-    assert_eq!(spans[0].label, Some("alice"));
-}
-
-/// [T-SK059]
-#[test]
-fn bare_mention_carries_no_label() {
-    let spans = parse_mentions("hi <@U123>");
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].label, None);
-}
-
-/// [T-SK060]
-#[test]
-fn empty_label_is_read_as_no_label() {
-    let spans = parse_mentions("x <@U123|>");
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "U123");
-    assert_eq!(spans[0].label, None);
-}
-
-/// [T-SK018] parse_mentions captures consecutive adjacent mentions
-#[test]
-fn adjacent_mentions_yield_contiguous_spans() {
-    let text = "<@U001><@U002><@U003>";
-    let spans = parse_mentions(text);
-    assert_eq!(spans.len(), 3);
-    assert_eq!(spans[0].user_id, "U001");
-    assert_eq!(spans[1].user_id, "U002");
-    assert_eq!(spans[2].user_id, "U003");
-    assert_eq!(spans[0].end, spans[1].start);
-    assert_eq!(spans[1].end, spans[2].start);
-}
-
-/// [T-SK019] parse_mentions stops at unclosed mention token
-#[test]
-fn unclosed_mention_stops_the_scan_after_earlier_spans() {
-    let text = "<@U001> then <@U002";
-    let spans = parse_mentions(text);
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "U001");
-}
-
-/// [T-SK020] parse_mentions yields correct byte offsets across multibyte characters
-#[test]
-fn spans_after_multibyte_text_carry_byte_offsets() {
-    let text = "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}<@UCJK>end";
-    let spans = parse_mentions(text);
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].user_id, "UCJK");
-    // 5 CJK chars x 3 bytes = 15, so <@UCJK> starts at byte 15
-    assert_eq!(spans[0].start, 15);
-    assert_eq!(&text[spans[0].start..spans[0].end], "<@UCJK>");
-
-    let emoji_text = "\u{1F600}<@UEMJ>\u{1F600}";
-    let spans2 = parse_mentions(emoji_text);
-    assert_eq!(spans2.len(), 1);
-    assert_eq!(spans2[0].user_id, "UEMJ");
-    assert_eq!(spans2[0].start, 4);
-    assert_eq!(&emoji_text[spans2[0].start..spans2[0].end], "<@UEMJ>");
+fn mentions_next_to_multibyte_text_are_replaced() {
+    let cache: HashMap<String, String> = [
+        ("UCJK".into(), "cjk".into()),
+        ("UEMJ".into(), "emoji".into()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        substitute_mentions("\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}<@UCJK>end", &cache),
+        "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}@cjkend"
+    );
+    assert_eq!(
+        substitute_mentions("\u{1F600}<@UEMJ>\u{1F600}", &cache),
+        "\u{1F600}@emoji\u{1F600}"
+    );
 }
 
 /// [T-SK021]

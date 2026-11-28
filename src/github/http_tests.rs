@@ -6,6 +6,7 @@ use crate::envelope::ErrorCode;
 use crate::test_support::{
     join_server_thread, mount_get, spawn_mid_stream_drop_server, try_spawn_mock_server,
 };
+use crate::token_source::{StaticTokenSource, TokenSource};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -216,28 +217,54 @@ fn per_page_new_panics_on_over_100() {
     let _ = super::PerPage::new(101);
 }
 
-/// [T-GH018] Proves the injected `TokenSource` reaches the constructor without spawning `gh auth token`.
+/// [T-GH018] A token from the injected `TokenSource` is sent as the bearer
+/// token, without spawning `gh auth token`.
 #[tokio::test]
 async fn from_env_with_static_source_installs_token() {
-    use crate::token_source::StaticTokenSource;
     let source = StaticTokenSource(Some(
         Redacted::new("injected-token").expect("static literal is non-empty"),
     ));
-    let client = GitHubClient::from_env_with_source(Client::new(), 0, &source).await;
-    assert_eq!(
-        client.token.as_ref().map(Redacted::expose),
-        Some("injected-token")
-    );
+
+    let Some(authorization) = authorization_sent_with(&source).await else {
+        return; // loopback bind unavailable — skip
+    };
+
+    assert_eq!(authorization.as_deref(), Some("Bearer injected-token"));
 }
 
-/// [T-GH019] A None source lets callers simulate the unauthenticated path
-/// without env-var manipulation.
+/// [T-GH019] A None source sends requests without an Authorization header.
 #[tokio::test]
 async fn from_env_with_none_source_leaves_token_empty() {
-    use crate::token_source::StaticTokenSource;
-    let client =
-        GitHubClient::from_env_with_source(Client::new(), 0, &StaticTokenSource(None)).await;
-    assert!(client.token.is_none());
+    let Some(authorization) = authorization_sent_with(&StaticTokenSource(None)).await else {
+        return; // loopback bind unavailable — skip
+    };
+
+    assert_eq!(authorization, None);
+}
+
+/// The Authorization header of the one request a client built from `source`
+/// sends, or `None` under the shared bind-skip policy. The response is a 404,
+/// so the call itself fails.
+async fn authorization_sent_with(source: &dyn TokenSource) -> Option<Option<String>> {
+    let server = try_spawn_mock_server("github::authorization").await?;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let client = GitHubClient::from_env_with_source(Client::new(), 0, source)
+        .await
+        .at_base_url(&server.uri());
+
+    let _ = client.get_repo(parse_repo("owner/repo").unwrap()).await;
+
+    let requests = server.received_requests().await.expect("recording is on");
+    assert_eq!(requests.len(), 1);
+    Some(
+        requests[0]
+            .headers
+            .get("authorization")
+            .map(|v| v.to_str().expect("ASCII header").to_owned()),
+    )
 }
 
 /// [T-GH006]

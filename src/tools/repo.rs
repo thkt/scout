@@ -315,6 +315,7 @@ async fn fetch_readme(github: &GitHubClient, repo: RepoRef<'_>) -> (Option<Strin
 mod tests {
     use super::*;
     use crate::test_support::try_spawn_mock_server;
+    use crate::tools::ScoutBuilder;
     use crate::tools::test_helpers::{mount_repo_info, scout_with_github};
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
@@ -439,8 +440,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut scout = scout_with_github("http://localhost:0", &server.uri());
-        scout.not_found_candidates = false;
+        let scout = ScoutBuilder::for_test()
+            .with_github_endpoint(&server.uri())
+            .with_not_found_candidates(false)
+            .build();
         let err = scout
             .run(super::super::Command::RepoRead(RepoReadParams {
                 repository: Some("owner/repo".into()),
