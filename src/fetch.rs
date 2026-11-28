@@ -301,7 +301,7 @@ pub(crate) async fn fetch_page(
     let article = if opts.raw {
         extract_raw(&html)
     } else {
-        extract_article(&html, Some(final_url.as_str()))
+        extract_article(&html, final_url.as_str())
     };
 
     let need_thin_fallback = !opts.raw && !need_js && is_thin_extract(&article);
@@ -310,7 +310,7 @@ pub(crate) async fn fetch_page(
         warn!(url = %RedactedLogUrl(final_url.as_str()), "extraction yielded too little content, trying JS rendering fallback");
         match fetch_with_cdp(&final_url, Arc::clone(&resolver), cancel).await {
             Ok(js_html) => {
-                let re_extracted = extract_article(&js_html, Some(final_url.as_str()));
+                let re_extracted = extract_article(&js_html, final_url.as_str());
                 // CDP re-decoded the page from its own response handling, so the
                 // original label/detection uncertainty no longer applies.
                 decode_uncertain = false;

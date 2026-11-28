@@ -4,12 +4,6 @@ use tracing::warn;
 
 use super::RedactedLogUrl;
 
-/// Render an optional source URL for logging with credentials redacted.
-/// `url` is `None` only in tests; production fetch paths always pass `Some`.
-fn log_url(url: Option<&str>) -> String {
-    url.map_or_else(|| "(none)".to_owned(), |u| RedactedLogUrl(u).to_string())
-}
-
 pub(super) struct ExtractedArticle {
     pub(super) title: Option<String>,
     pub(super) byline: Option<String>,
@@ -19,7 +13,7 @@ pub(super) struct ExtractedArticle {
     pub(super) used_raw_fallback: bool,
 }
 
-pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle {
+pub(super) fn extract_article(html: &str, url: &str) -> ExtractedArticle {
     // The converter reads `language-*` for the fence info string and the
     // `math` classes for `$` delimiters. `classes_to_preserve` matches whole
     // class names only, so it cannot name the open-ended `language-*` set.
@@ -27,10 +21,10 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
         keep_classes: true,
         ..Config::default()
     };
-    let mut readability = match Readability::new(html, url, Some(config)) {
+    let mut readability = match Readability::new(html, Some(url), Some(config)) {
         Ok(r) => r,
         Err(e) => {
-            warn!(url = %log_url(url), error = %e, "readability init failed, using raw fallback");
+            warn!(url = %RedactedLogUrl(url), error = %e, "readability init failed, using raw fallback");
             return raw_fallback(html);
         }
     };
@@ -48,7 +42,7 @@ pub(super) fn extract_article(html: &str, url: Option<&str>) -> ExtractedArticle
             }
         }
         Err(e) => {
-            warn!(url = %log_url(url), error = %e, "readability parse failed, using raw fallback");
+            warn!(url = %RedactedLogUrl(url), error = %e, "readability parse failed, using raw fallback");
             raw_fallback(html)
         }
     }
@@ -134,7 +128,7 @@ mod tests {
     /// [T-FX001]
     #[test]
     fn extracts_article_content() {
-        let result = extract_article(BLOG_HTML, None);
+        let result = extract_article(BLOG_HTML, "https://example.com");
 
         assert!(!result.used_raw_fallback);
         assert_eq!(result.title.as_deref(), Some("Test Blog Post"));
@@ -155,7 +149,7 @@ mod tests {
     #[test]
     fn uses_parsed_result_for_minimal_html() {
         let minimal = "<html><body><p>hi</p></body></html>";
-        let result = extract_article(minimal, None);
+        let result = extract_article(minimal, "https://example.com");
 
         assert!(!result.used_raw_fallback);
         assert!(result.content_html.contains("hi"));
@@ -196,7 +190,7 @@ mod tests {
     #[test]
     fn extracts_title_from_minimal_html() {
         let html = "<html><head><title>Minimal Page</title></head><body><p>hi</p></body></html>";
-        let result = extract_article(html, None);
+        let result = extract_article(html, "https://example.com");
 
         assert!(!result.used_raw_fallback);
         assert_eq!(result.title, Some("Minimal Page".to_owned()));
@@ -279,7 +273,7 @@ mod tests {
     /// A library upgrade returning the whole page must fail this contract.
     #[test]
     fn readability_removes_nav_and_footer() {
-        let result = extract_article(BLOG_HTML, None);
+        let result = extract_article(BLOG_HTML, "https://example.com");
 
         assert!(
             !result.used_raw_fallback,
@@ -305,7 +299,7 @@ mod tests {
     #[test]
     fn fallback_logs_warn_with_redacted_url() {
         // Empty HTML drives readability into the fallback path.
-        let result = extract_article("", Some("https://user:s3cret@example.com/page"));
+        let result = extract_article("", "https://user:s3cret@example.com/page");
 
         assert!(result.used_raw_fallback);
         assert!(
@@ -323,24 +317,6 @@ mod tests {
         );
     }
 
-    /// [T-FX012] the fallback `url` field renders a placeholder when
-    /// no source URL is available, instead of leaking a Rust `None` debug form.
-    #[tracing_test::traced_test]
-    #[test]
-    fn fallback_logs_placeholder_when_url_absent() {
-        let result = extract_article("", None);
-
-        assert!(result.used_raw_fallback);
-        assert!(
-            logs_contain("using raw fallback"),
-            "expected the fallback WARN event"
-        );
-        assert!(
-            logs_contain("url=(none)"),
-            "absent url should render as the (none) placeholder"
-        );
-    }
-
     /// [T-FX017]
     ///
     /// dom_smoothie returns `GrabFailed` when it finds no article to grab, and
@@ -350,7 +326,7 @@ mod tests {
     fn parse_failure_on_non_empty_html_falls_back_with_the_content_intact() {
         let html = "<script>SCRIPTMARKER</script>";
 
-        let result = extract_article(html, Some("https://example.com"));
+        let result = extract_article(html, "https://example.com");
 
         assert!(
             result.used_raw_fallback,
@@ -372,7 +348,7 @@ mod tests {
     fn relative_document_url_falls_back_at_init() {
         let html = "<article><p>body</p></article>";
 
-        let result = extract_article(html, Some("/relative"));
+        let result = extract_article(html, "/relative");
 
         assert!(
             result.used_raw_fallback,

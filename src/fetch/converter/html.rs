@@ -5,7 +5,7 @@ mod table;
 #[cfg(test)]
 mod tests;
 
-use dom_query::{Document, NodeData, NodeRef};
+use dom_query::{Document, NodeRef};
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ParseOpts, parse_document};
@@ -82,13 +82,7 @@ fn render(node: NodeRef<'_>, preformatted: bool) -> String {
         return String::new();
     }
     if !node.is_element() {
-        return if node.query_or(false, |node| {
-            matches!(node.data, NodeData::Document | NodeData::Fragment)
-        }) {
-            children(node, preformatted)
-        } else {
-            String::new()
-        };
+        return String::new();
     }
     let name = tag(node);
     match name.as_str() {
