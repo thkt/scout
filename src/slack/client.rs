@@ -3,7 +3,6 @@
 //! structs are defined directly above the method that deserializes into them.
 
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::sync::Arc;
 
 use futures_util::stream::{self, StreamExt};
@@ -82,12 +81,14 @@ pub(crate) struct SlackClient {
 }
 
 const API_BASE: &str = "https://slack.com/api";
+/// Env var, and Keychain service on macOS, that holds the Slack user token.
+pub(crate) const TOKEN_VAR: &str = "SLACK_TOKEN";
 
 /// Slack User OAuth token strings begin with `xoxp-`; bot (`xoxb-`), app-level
 /// (`xapp-`), workflow (`xwfp-`), and config tokens do not. scout requires a
 /// user token so the channels, threads, and users it resolves match the human's
 /// own workspace visibility (a bot token only sees channels its app was added
-/// to). `from_env_with` rejects any other prefix up front instead of letting it
+/// to). `from_secret` rejects any other prefix up front instead of letting it
 /// fail later with an opaque API error. Verified against
 /// <https://api.slack.com/concepts/token-types#user> (2026-06).
 const USER_TOKEN_PREFIX: &str = "xoxp-";
@@ -127,19 +128,15 @@ impl SlackClient {
         }
     }
 
-    pub(crate) fn from_env(http: Client, max_retries: u32) -> Result<Self, SlackError> {
-        Self::from_env_with(http, max_retries, |k| env::var(k))
-    }
-
-    /// Wraps [`Self::from_env`] with a caller-supplied env reader so unit
-    /// tests can exercise the token-not-set / whitespace branches without
-    /// `unsafe { std::env::set_var(...) }` (forbidden by `unsafe_code = "forbid"`).
-    /// Mirrors [`crate::brave::client::BraveClient::from_env_with`] (ADR-0007).
-    fn from_env_with<F>(http: Client, max_retries: u32, get_var: F) -> Result<Self, SlackError>
-    where
-        F: Fn(&str) -> Result<String, env::VarError>,
-    {
-        let token = Redacted::from_env_var("SLACK_TOKEN", get_var, || SlackError::TokenNotSet)?;
+    /// Builds the client from the token a [`crate::secret_source::SecretSource`]
+    /// resolved for [`TOKEN_VAR`], whether it came from the env var or the
+    /// Keychain. Mirrors [`crate::brave::client::BraveClient::from_secret`].
+    pub(crate) fn from_secret(
+        http: Client,
+        max_retries: u32,
+        token: Option<Redacted>,
+    ) -> Result<Self, SlackError> {
+        let token = token.ok_or(SlackError::TokenNotSet)?;
         if !token.expose().starts_with(USER_TOKEN_PREFIX) {
             return Err(SlackError::TokenWrongType);
         }

@@ -22,44 +22,27 @@ async fn client_with_base_url_reaches_that_server() {
     assert!(result.is_ok());
 }
 
-/// [T-SK033] from_env_with surfaces a closure `Err(VarError::NotPresent)` as
-/// `SlackError::TokenNotSet` — the token-unset path that `unsafe_code = "forbid"`
-/// blocks from being reached via `env::set_var` (ADR-0007). That path runs
-/// through the backend-agnostic `Redacted::from_env_var`, which does
-/// not know `SlackError`.
+/// [T-SK033] A token neither the env var nor the Keychain held surfaces as
+/// `SlackError::TokenNotSet`.
 #[test]
-fn unset_token_env_is_rejected_as_token_not_set() {
+fn missing_token_is_rejected_as_token_not_set() {
     // `.map(|_| ())` drops the `SlackClient` (no `Debug`) so the failure
     // message can format the `Result`.
-    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Err(env::VarError::NotPresent)
-    })
-    .map(|_| ());
+    let result = SlackClient::from_secret(Client::new(), DEFAULT_MAX_RETRIES, None).map(|_| ());
     assert!(
         matches!(result, Err(SlackError::TokenNotSet)),
         "expected TokenNotSet, got: {result:?}"
     );
 }
 
-/// [T-SK034] from_env_with rejects a whitespace-only token as `TokenNotSet`
-/// (parity with `Redacted::new` rejecting blank secrets).
-#[test]
-fn whitespace_only_token_is_rejected_as_token_not_set() {
-    let result =
-        SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| Ok("   ".to_owned()))
-            .map(|_| ());
-    assert!(
-        matches!(result, Err(SlackError::TokenNotSet)),
-        "expected TokenNotSet for whitespace-only token, got: {result:?}"
-    );
-}
-
 /// [T-SK035]
 #[test]
 fn user_token_builds_a_client_on_the_slack_api_base() {
-    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Ok("xoxp-real".to_owned())
-    });
+    let result = SlackClient::from_secret(
+        Client::new(),
+        DEFAULT_MAX_RETRIES,
+        Redacted::new("xoxp-real"),
+    );
     let client = result.expect("expected Ok(client) from valid token");
     assert_eq!(client.token.expose(), "xoxp-real");
     assert_eq!(client.base_url, API_BASE);
@@ -67,12 +50,14 @@ fn user_token_builds_a_client_on_the_slack_api_base() {
 
 /// [T-SK065] The `SLACK_TOKEN must be a User OAuth token` contract is enforced
 /// at construction, so a bot token cannot pass through to fail later with an
-/// opaque API error.
+/// opaque API error. A token read from the Keychain goes through the same check.
 #[test]
 fn bot_token_is_rejected_as_wrong_type() {
-    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Ok("xoxb-bot-token".to_owned())
-    })
+    let result = SlackClient::from_secret(
+        Client::new(),
+        DEFAULT_MAX_RETRIES,
+        Redacted::new("xoxb-bot-token"),
+    )
     .map(|_| ());
     assert!(
         matches!(result, Err(SlackError::TokenWrongType)),
@@ -80,15 +65,14 @@ fn bot_token_is_rejected_as_wrong_type() {
     );
 }
 
-/// [T-SK066] from_env_with rejects an arbitrary non-`xoxp-` string as
+/// [T-SK066] from_secret rejects an arbitrary non-`xoxp-` string as
 /// `TokenWrongType` — the prefix check covers any string outside Slack's
 /// user-token taxonomy, not just bot tokens.
 #[test]
 fn token_without_user_prefix_is_rejected_as_wrong_type() {
-    let result = SlackClient::from_env_with(Client::new(), DEFAULT_MAX_RETRIES, |_| {
-        Ok("garbage".to_owned())
-    })
-    .map(|_| ());
+    let result =
+        SlackClient::from_secret(Client::new(), DEFAULT_MAX_RETRIES, Redacted::new("garbage"))
+            .map(|_| ());
     assert!(
         matches!(result, Err(SlackError::TokenWrongType)),
         "expected TokenWrongType for arbitrary string, got: {result:?}"

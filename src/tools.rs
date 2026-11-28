@@ -27,14 +27,15 @@ use tracing::warn;
 
 use params::resolve_input;
 
-use crate::brave::client::{BraveClient, BraveError};
+use crate::brave::client::{API_KEY_VAR as BRAVE_KEY_VAR, BraveClient};
 use crate::clock::Clock;
 use crate::envelope::CommandOutput;
 use crate::fetch::converter::{DECODE_UNCERTAIN_NOTE, FetchResult, RAW_FALLBACK_NOTE};
 use crate::fetch::{DnsResolver, EgressMode};
 use crate::github::GitHubClient;
 use crate::rng::Rng;
-use crate::slack::SlackClient;
+use crate::secret_source::SecretSource;
+use crate::slack::{SlackClient, TOKEN_VAR as SLACK_TOKEN_VAR};
 use crate::token_source::TokenSource;
 use crate::yaml::truncate_and_reneutralize;
 
@@ -149,7 +150,10 @@ pub(crate) struct Scout {
     /// HTTP client with redirect following disabled for SSRF-safe fetching.
     /// Used by `fetch_page` which handles redirects manually with per-hop SSRF checks.
     fetch_http: Client,
-    brave: Option<BraveClient>,
+    /// Lazy-initialized on first search or research. Other commands never read
+    /// the Brave key, so they never run the Keychain lookup (DR-0039). Tests
+    /// pre-set the cell via `ScoutBuilder::with_brave_endpoint`.
+    brave: OnceCell<BraveClient>,
     /// Lazy-initialized on first GitHub API call. Non-GitHub commands
     /// (search, fetch, research) never pay the `gh auth token` cost.
     github: OnceCell<GitHubClient>,
@@ -172,6 +176,10 @@ pub(crate) struct Scout {
     /// `ScoutBuilder::for_test` sets a `StaticTokenSource` so no test spawns
     /// the production `gh auth token` subprocess.
     token_source: Arc<dyn TokenSource>,
+    /// Brave key and Slack token resolver, awaited inside the `brave()` and
+    /// `slack()` lazy inits. `ScoutBuilder::for_test` sets a
+    /// `StaticSecretSource` so no test reads the real env var or Keychain.
+    secret_source: Arc<dyn SecretSource>,
     /// DNS resolver consulted by the SSRF pre-check on every fetch. Held on
     /// `Scout` so tests can swap a scripted resolver before any real DNS
     /// lookup runs.
@@ -214,10 +222,17 @@ impl Scout {
             .await
     }
 
-    fn brave(&self) -> Result<&BraveClient, ScoutError> {
+    /// Defer the Brave key read, and its Keychain lookup, until the first
+    /// search or research.
+    async fn brave(&self) -> Result<&BraveClient, ScoutError> {
         self.brave
-            .as_ref()
-            .ok_or_else(|| ScoutError::from(BraveError::ApiKeyNotSet))
+            .get_or_try_init(|| async {
+                let api_key = self.secret_source.fetch(BRAVE_KEY_VAR).await;
+                BraveClient::from_secret(self.http.clone(), self.config.max_retries, api_key)
+                    .map(|c| c.with_clock(self.clock.clone()).with_rng(self.rng.clone()))
+                    .map_err(ScoutError::from)
+            })
+            .await
     }
 
     /// Defer the fallible Slack token read until the first Slack fetch.
@@ -225,7 +240,8 @@ impl Scout {
     async fn slack(&self) -> Result<&SlackClient, ScoutError> {
         self.slack
             .get_or_try_init(|| async {
-                SlackClient::from_env(self.http.clone(), self.config.max_retries)
+                let token = self.secret_source.fetch(SLACK_TOKEN_VAR).await;
+                SlackClient::from_secret(self.http.clone(), self.config.max_retries, token)
                     .map(|c| c.with_clock(self.clock.clone()).with_rng(self.rng.clone()))
                     .map_err(ScoutError::from)
             })

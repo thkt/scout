@@ -3,11 +3,14 @@ use crate::clock::FixedClock;
 use crate::envelope::ErrorCode;
 use crate::fetch::{EgressMode, FailingDnsResolver, StaticDnsResolver};
 use crate::redacted::Redacted;
+use crate::search::Lang;
+use crate::secret_source::SecretSource;
 use crate::test_support::{join_server_thread, spawn_forward_proxy, try_spawn_mock_server};
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -104,8 +107,8 @@ async fn github_rate_limit_beyond_budget_fails_without_retries() {
 /// `fetch` (slack permalink) → `fetch_slack` → `slack()`. Because `build()`
 /// pre-sets `slack()`'s `OnceCell`, the injected client is used even with
 /// `SLACK_TOKEN` unset, so the call reaches `conversations.history` and returns
-/// the body. When the injection is not wired, `from_env` answers `TokenNotSet`
-/// and the test fails.
+/// the body. When the injection is not wired, `for_test`'s empty secret source
+/// answers `TokenNotSet` and the test fails.
 #[tokio::test]
 async fn scout_builder_slack_endpoint_reaches_fetch_slack_via_seam() {
     let Some(server) = try_spawn_mock_server("tools::scout_builder_slack_seam").await else {
@@ -214,4 +217,134 @@ async fn github_client_resolves_the_injected_token_source_once() {
     scout.github().await;
 
     assert_eq!(fetches.load(Ordering::SeqCst), 1);
+}
+
+/// Records every secret name it is asked for and answers each with `value`.
+struct RecordingSecretSource {
+    asked: Arc<Mutex<Vec<String>>>,
+    value: Option<Redacted>,
+}
+
+impl RecordingSecretSource {
+    fn new(value: Option<&str>) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let source = Arc::new(Self {
+            asked: asked.clone(),
+            value: value.and_then(Redacted::new),
+        });
+        (source, asked)
+    }
+}
+
+impl SecretSource for RecordingSecretSource {
+    fn fetch<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<Redacted>> + Send + 'a>> {
+        self.asked.lock().expect("asked lock").push(name.to_owned());
+        let value = self.value.clone();
+        Box::pin(async move { value })
+    }
+}
+
+fn asked_names(asked: &Mutex<Vec<String>>) -> Vec<String> {
+    asked.lock().expect("asked lock").clone()
+}
+
+/// [T-SB008] The first search builds the Brave client from the key the
+/// injected source resolves for `BRAVE_SEARCH_API_KEY`, and later calls reuse
+/// that client without resolving again.
+#[tokio::test]
+async fn brave_client_resolves_its_key_through_the_secret_source_once() {
+    let (source, asked) = RecordingSecretSource::new(Some("key-from-source"));
+    let scout = ScoutBuilder::for_test().with_secret_source(source).build();
+    assert!(asked_names(&asked).is_empty(), "resolution must be lazy");
+
+    scout
+        .brave()
+        .await
+        .expect("a resolved key builds the client");
+    scout.brave().await.expect("the cached client is reused");
+
+    assert_eq!(asked_names(&asked), ["BRAVE_SEARCH_API_KEY"]);
+}
+
+/// [T-SB009] A search whose source resolves no key fails with the usage error
+/// that names `BRAVE_SEARCH_API_KEY`.
+#[tokio::test]
+async fn search_without_a_resolved_key_is_a_usage_error() {
+    let (source, asked) = RecordingSecretSource::new(None);
+    let scout = ScoutBuilder::for_test().with_secret_source(source).build();
+
+    let err = scout
+        .run(Command::Search(SearchParams {
+            query: Some("rust".into()),
+            lang: Lang::Auto,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.error_kind(), ErrorCode::UsageError);
+    assert_eq!(asked_names(&asked), ["BRAVE_SEARCH_API_KEY"]);
+}
+
+/// [T-SB010] The first Slack fetch builds the client from the token the
+/// injected source resolves for `SLACK_TOKEN`, and the `xoxp-` check applies
+/// to it.
+#[tokio::test]
+async fn slack_client_resolves_its_token_through_the_secret_source() {
+    let (source, asked) = RecordingSecretSource::new(Some("xoxp-from-source"));
+    let scout = ScoutBuilder::for_test().with_secret_source(source).build();
+    scout.slack().await.expect("a user token builds the client");
+    assert_eq!(asked_names(&asked), ["SLACK_TOKEN"]);
+
+    let (bot_source, _) = RecordingSecretSource::new(Some("xoxb-from-source"));
+    let scout = ScoutBuilder::for_test()
+        .with_secret_source(bot_source)
+        .build();
+    let err = scout.slack().await.map(|_| ()).unwrap_err();
+    assert_eq!(err.error_kind(), ErrorCode::UsageError);
+}
+
+/// [T-SB011] `repo-overview` and a non-Slack `fetch` never ask for a secret, so
+/// they never run the Keychain lookup.
+#[tokio::test]
+async fn repo_and_non_slack_fetch_never_resolve_a_secret() {
+    let (source, asked) = RecordingSecretSource::new(Some("unused"));
+    let scout = ScoutBuilder::for_test()
+        .with_secret_source(source)
+        .with_dns(Arc::new(StaticDnsResolver::single("10.0.0.1")))
+        .with_github_endpoint("http://127.0.0.1:1")
+        .build();
+
+    let _ = scout
+        .run(Command::Fetch(FetchParams::for_test(
+            "https://example.com/page",
+        )))
+        .await;
+    let _ = scout
+        .run(Command::RepoOverview(RepoOverviewParams {
+            repository: Some("owner/repo".into()),
+        }))
+        .await;
+
+    assert!(
+        asked_names(&asked).is_empty(),
+        "asked: {:?}",
+        asked_names(&asked)
+    );
+}
+
+/// [T-SB012] `for_test` resolves no Brave key or Slack token, so a test that
+/// does not inject an endpoint or a source never sees the developer's env var
+/// or Keychain.
+#[tokio::test]
+async fn for_test_resolves_no_secret() {
+    let scout = ScoutBuilder::for_test().build();
+
+    let brave = scout.brave().await.map(|_| ()).unwrap_err();
+    let slack = scout.slack().await.map(|_| ()).unwrap_err();
+
+    assert_eq!(brave.error_kind(), ErrorCode::UsageError);
+    assert_eq!(slack.error_kind(), ErrorCode::UsageError);
 }

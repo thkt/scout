@@ -86,3 +86,7 @@ rustls + self-signed cert across `brave/client.rs` (~8), `slack.rs` (~4), `githu
 - `BraveError::InsecureBaseUrl` proves to be dead code over six months. Re-evaluate whether the validation belongs at construction time instead of request time.
 - The generalization the original trigger anticipated already happened on the check side, not the flag side: `validate_https<E>` (`src/redacted.rs`) is generic over the caller's error type and all three clients call it. What remains per client is a `#[cfg(test)]` bool.
 - The `#[cfg(test)]` bool that each of the three clients carries grows past a single flag, or a fourth client needs the same shape. Approach A was rejected because `for_wiremock` renames the bypass and `InsecureBaseUrl` stays dead in production; neither reason moves with the client count, so the count alone is not the trigger.
+
+### Amended by DR-0039
+
+[DR-0039](0039-read-brave-and-slack-secrets-from-the-macos-keychain.md) replaces `BraveClient::from_env` and `from_env_with<F>` with `BraveClient::from_secret`, which takes the key that `src/secret_source.rs` resolved from the env var or the macOS Keychain. The env reader stays injectable there, so the test seam this record chose still holds. The HTTPS check is unchanged.

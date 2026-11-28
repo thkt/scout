@@ -16,8 +16,9 @@ fn token_not_set_is_usage_error_with_token_hint() {
     assert!(
         c.next_step
             .as_deref()
-            .is_some_and(|h| h.contains("SLACK_TOKEN")),
-        "expected SLACK_TOKEN hint, got: {:?}",
+            .is_some_and(|h| h.contains("SLACK_TOKEN")
+                && h.contains("security add-generic-password -s SLACK_TOKEN")),
+        "expected SLACK_TOKEN env and Keychain hint, got: {:?}",
         c.next_step
     );
 }

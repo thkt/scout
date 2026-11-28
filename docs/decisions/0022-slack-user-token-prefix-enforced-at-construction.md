@@ -98,3 +98,7 @@ service/config token は長命の user token として `xoxp-` を共有する�
 - ADR-0015 (Redacted secret carrier。prefix 未検証の sibling)
 - ADR-0019 (env 検証の fail-fast 方針)
 - `docs/audit/2026-06-24-020601-adr-gaps.md` (candidate 7、本 ADR が解決)
+
+### DR-0039 による変更
+
+[DR-0039](0039-read-brave-and-slack-secrets-from-the-macos-keychain.md) で、`SlackClient::from_env_with` は `SlackClient::from_secret` に替わった。`from_secret` は、`src/secret_source.rs` が環境変数か macOS の Keychain から解決した token を受け取り、本記録の `xoxp-` の検査をそのまま掛ける。`TokenNotSet` と `TokenWrongType` のヒントは分かれ、`TokenNotSet` は Keychain への登録方法を、`TokenWrongType` は環境変数か Keychain の値を User OAuth token に替えることを案内する。
